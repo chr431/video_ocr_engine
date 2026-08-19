@@ -108,4 +108,9 @@ python -m pytest tests/ -v
 
 ## 许可证
 
-GPL-3.0-or-later（自 RaceVideoToLog 拆分，继承其 GPLv3）。
+**Apache-2.0**。本引擎是独立通用库：不依赖 Qt/GUI 组件，无 copyleft 传染，
+可自由用于开源与商业项目（其依赖 decord / PP-OCRv6 亦为宽松或兼容许可）。
+
+> 来源说明：引擎由 RaceVideoToLog（GPL-3.0）拆分而来，代码为原作者原创作品，
+> 拆分时已重新授权为 Apache-2.0。RaceVideoToLog 本身因依赖
+> PySide6-Fluent-Widgets（GPLv3）仍保持 GPL-3.0，但可自由包含本引擎（submodule）。
