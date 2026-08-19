@@ -86,6 +86,10 @@ for seg in result.segments:
 python text_extract_cli.py subtitle_ep.mkv --roi 10 850 1910 940 \
     --start-frame 0 --end-frame 3000 -o subtitles.csv
 
+# 分频采样：字幕等慢更新内容只处理每个第 3 帧（快速验证用）
+python text_extract_cli.py subtitle_ep.mkv --roi 10 850 1910 940 \
+    --sample-stride 3 -o subtitles.csv
+
 # pip 安装后
 ocr-text-extract subtitle_ep.mkv --roi 10 850 1910 940 -o subtitles.csv
 ```
@@ -100,6 +104,18 @@ ocr-text-extract subtitle_ep.mkv --roi 10 850 1910 940 -o subtitles.csv
 - `time_sec`：段代表帧（识别帧）在视频中的实际秒数（绝对帧号 / 引擎自测 fps，
   四舍五入到秒）。
 - `text`：OCR 原始文本，**原样输出**（不做速度解析 / 过滤 / 规整）。
+
+### 分频采样（`--sample-stride N`，默认 1）
+
+字幕等 ROI 内容更新较慢时，可用 `sample_stride > 1` **只处理每个第 N 帧**，
+显著降低解码/分段/OCR 压力（`FieldExtractor(sample_stride=N)`，引擎与 CLI
+均可设置）。时间戳仍取真实帧号（绝对帧 / fps），准确度基本不变。
+
+- 需要 decord fork 的**等差步长快速路径**（顺序流式解码 + 帧间丢弃，避免逐索引
+  seek）：在 decord 仓库 `D:\Repo\decord` 的 master（v0.7.12+）中已实现
+  `GetBatch` 等差数列路径；旧版 decord 会退化为逐索引 seek（仍正确，但稀疏
+  seek 在 AV1/HEVC 上更慢）。
+- `stride=1`（默认）走原路径，行为与 RaceVideoToLog 完全兼容（零改动）。
 
 ## 识别链
 

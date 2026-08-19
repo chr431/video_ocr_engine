@@ -72,10 +72,12 @@ def test_parse_args_defaults_and_override():
     assert a.start_frame == 0
     assert a.end_frame is None
     assert a.output is None
+    assert a.sample_stride == 1
 
     b = m.parse_args(["v.mp4", "--roi", "1", "2", "3", "4",
-                      "--start-frame", "100", "--end-frame", "200", "-o", "x.csv"])
-    assert (b.start_frame, b.end_frame, b.output) == (100, 200, "x.csv")
+                      "--start-frame", "100", "--end-frame", "200",
+                      "--sample-stride", "3", "-o", "x.csv"])
+    assert (b.start_frame, b.end_frame, b.sample_stride, b.output) == (100, 200, 3, "x.csv")
 
 
 def test_main_missing_video_returns_2(capsys):

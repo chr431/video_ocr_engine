@@ -69,8 +69,11 @@ class FieldExtractor:
 
     构造参数（识别链用）：video_path / roi / frame_start / frame_end /
     force_aspect / decode_backend / ocr_backend / buffer_size / fill_width /
-    progress_cb / cancel_check / gray_output / yuv_output。
+    sample_stride / progress_cb / cancel_check / gray_output / yuv_output。
     分段阈值 C 取自 engine_config.SEG_C；引擎不含速度后处理参数。
+    sample_stride：分频采样步长（默认 1 = 逐帧处理，与 RaceVideoToLog 完全
+    兼容）。>1 时只解码/分段每个第 N 帧（字幕等慢更新内容可显著降低处理压力；
+    需要 decord fork ≥0.7.12 的等差步长快速路径，否则退化为逐索引 seek）。
     """
 
     def __init__(self, video_path: str, roi: tuple, *, frame_start=None,
@@ -78,6 +81,7 @@ class FieldExtractor:
                  decode_backend: str = "auto", ocr_backend: str = "auto",
                  buffer_size: int | None = None, fill_width: int | None = None,
                  C: float | None = None, fps: float | None = None,
+                 sample_stride: int = config.DEFAULT_SAMPLE_STRIDE,
                  progress_cb=None, cancel_check=None, gray_output: bool = False,
                  yuv_output: bool = False):
         self._video_path = Path(video_path)
@@ -98,6 +102,7 @@ class FieldExtractor:
         self._fill_width = (fill_width if fill_width is not None
                             else config.DEFAULT_FILL_WIDTH)
         self._C = (C if C is not None else config.SEG_C)  # 分段聚类阈值
+        self._sample_stride = max(1, int(sample_stride))
         self._gray_output = gray_output
         self._yuv_output = yuv_output
         self._color_range = 0            # run 时从 decoder get_color_range 读取
@@ -513,7 +518,7 @@ class FieldExtractor:
         end = min(self._frame_end or total, total)
         if self._frame_start > 0:
             vr.seek_accurate(self._frame_start)
-        frames = list(range(self._frame_start, end))
+        frames = list(range(self._frame_start, end, self._sample_stride))
         DECODE_BATCH = config.DECODE_BATCH_SIZE
         crops = {}
         grays = {}
@@ -561,7 +566,12 @@ class FieldExtractor:
                 raise err[0]
         else:
             for k, fi in enumerate(frames):
-                c = vr.next_roi(x1, y1, x2 + 1, y2 + 1).asnumpy()
+                if self._sample_stride > 1:
+                    # 分频采样（串行参考路径）：单帧 get_batch（等差数列长度为
+                    # 1 走通用 seek 路径），保证 crops[fi] 对应真实采样帧号。
+                    c = vr.get_batch([fi], roi=(x1, y1, x2 + 1, y2 + 1)).asnumpy()[0]
+                else:
+                    c = vr.next_roi(x1, y1, x2 + 1, y2 + 1).asnumpy()
                 if not self._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
                     c = c[y1:y2 + 1, x1:x2 + 1]
                 crops[fi] = c
@@ -644,21 +654,34 @@ class FieldExtractor:
         end = min(self._frame_end or total, total)
         if self._frame_start > 0:
             vr.seek_accurate(self._frame_start)
-        frames = list(range(self._frame_start, end))
+        frames = list(range(self._frame_start, end, self._sample_stride))
         self._prof_end('producer', 'open_and_fps', _t_open)
         calib_n = min(config.SEG_CALIB_FRAMES, len(frames))
         calib: list = []
         _t_cal = time.perf_counter()
-        for k in range(calib_n):
-            _t_p = time.perf_counter()
-            c = vr.next_roi(x1, y1, x2 + 1, y2 + 1).asnumpy()
-            self._prof_end('producer', 'calib_decode', _t_p)
-            if not self._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
-                c = c[y1:y2 + 1, x1:x2 + 1]
-            _t_p = time.perf_counter()
-            g = self._crop_luma(c)
-            self._prof_end('producer', 'calib_gray', _t_p)
-            calib.append((frames[k], c, g, float(g.std())))
+        if self._sample_stride > 1:
+            # 分频采样：校准帧也按 stride 抽取（真实帧号 = frames[k]）——用
+            # get_batch 的等差步长快速路径（decord fork ≥0.7.12）顺序流式取，
+            # 校准帧与后续流水线帧号一致，避免 next_roi（逐帧）与采样不匹配。
+            _calib_crops = vr.get_batch(frames[:calib_n],
+                                        roi=(x1, y1, x2 + 1, y2 + 1)).asnumpy()
+            for k in range(calib_n):
+                c = _calib_crops[k]
+                if not self._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
+                    c = c[y1:y2 + 1, x1:x2 + 1]
+                g = self._crop_luma(c)
+                calib.append((frames[k], c, g, float(g.std())))
+        else:
+            for k in range(calib_n):
+                _t_p = time.perf_counter()
+                c = vr.next_roi(x1, y1, x2 + 1, y2 + 1).asnumpy()
+                self._prof_end('producer', 'calib_decode', _t_p)
+                if not self._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
+                    c = c[y1:y2 + 1, x1:x2 + 1]
+                _t_p = time.perf_counter()
+                g = self._crop_luma(c)
+                self._prof_end('producer', 'calib_gray', _t_p)
+                calib.append((frames[k], c, g, float(g.std())))
         ths = [_otsu(g) for _fi, _c, g, _s in calib]
         th = int(np.median(ths)) if ths else config.OTSU_FALLBACK_THRESH
         self._bin_thresh = th

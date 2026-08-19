@@ -71,6 +71,12 @@ DEFAULT_FILL_WIDTH: int = 224          # OCR 输入 pad 宽度下限（引擎 _r
                                        # ——test5/6 的 raw 提升被 DP 吸收，test2 宽
                                        # pad 引入混杂邻域 DP 拉中间值（纠错 5）。
                                        # GUI 可调 160-320，默认 224
+DEFAULT_SAMPLE_STRIDE: int = 1         # 分频采样步长（默认 1 = 逐帧，与
+                                       # RaceVideoToLog 完全兼容）。>1 时只
+                                       # 解码/分段/OCR 每个第 N 帧（字幕等慢
+                                       # 更新内容显著降低处理压力，时间戳仍取
+                                       # 真实帧号）。需 decord fork ≥0.7.12 的
+                                       # 等差步长快速路径，否则退化为逐索引 seek
 OCR_GAMMA: float = 2.0                 # OCR 预处理灰度 gamma 增强指数（正式预处理：
                                        # 白字黄底等背景色块场景放大高段分离；灰度
                                        # 先于 gamma——RGB 逐通道 gamma 视觉差异小、

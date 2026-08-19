@@ -92,6 +92,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="开始帧号（默认 0）")
     p.add_argument("--end-frame", dest="end_frame", type=int, default=None,
                    help="结束帧号（默认到视频末尾；0 视为末尾）")
+    p.add_argument("--sample-stride", dest="sample_stride", type=int, default=1,
+                   help="分频采样步长（默认 1=逐帧；>1 时只处理每个第 N 帧，"
+                        "适合字幕等慢更新内容降低解码/处理压力）")
     p.add_argument("-o", "--output", default=None,
                    help="输出 CSV 路径（默认 <视频名>_ocr.csv）")
     return p.parse_args(argv)
@@ -115,6 +118,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.start_frame < 0:
         print("错误: --start-frame 不能为负数", file=sys.stderr)
         return 2
+    if args.sample_stride < 1:
+        print("错误: --sample-stride 必须 >= 1", file=sys.stderr)
+        return 2
     end = None if (args.end_frame is None or args.end_frame <= 0) else args.end_frame
     if end is not None and end <= args.start_frame:
         print("错误: --end-frame 必须大于 --start-frame", file=sys.stderr)
@@ -126,10 +132,11 @@ def main(argv: list[str] | None = None) -> int:
     ex = FieldExtractor(
         str(video), tuple(args.roi),
         frame_start=args.start_frame, frame_end=end,
+        sample_stride=args.sample_stride,
         decode_backend="auto", ocr_backend="cpu",
         progress_cb=_progress,
     )
-    print(f"解码+分段+OCR: {video}  roi={args.roi}  frames=[{args.start_frame},{end if end is not None else 'end'}]",
+    print(f"解码+分段+OCR: {video}  roi={args.roi}  frames=[{args.start_frame},{end if end is not None else 'end'}]  sample_stride={args.sample_stride}",
           file=sys.stderr)
     result = ex.extract()
     rows = build_rows(result)
