@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "video-ocr-engine"
+version = "0.1.0"
+description = "通用视频文本提取引擎：解码 → 像素分段 → 代表帧 → OCR 文本（含置信度）。速度数字识别、字幕提取等通用场景。"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "GPL-3.0-or-later" }
+dependencies = [
+    "numpy>=2",
+    "onnxruntime>=1.28",  # CPU OCR 后端
+    "psutil>=6",
+]
+# 说明：decord（自建 fork chr431/decord）、cuda-python / TensorRT 为运行时
+# 可选依赖（GPU 解码 / TRT OCR），不在 PyPI 依赖中（fork 仅 GitHub 分发）。
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools]
+packages = ["video_ocr_engine"]
+py-modules = [
+    "engine_config",
+    "gpu_setup",
+    "hybrid_decode",
+    "ocr_native",
+    "ocr_trt",
+    "segmentation",
+    "video_utils",
+]
+
+[tool.setuptools.data-files]
+# 模型资产随包分发：安装后 _models_dir() 由 ocr_native.__file__ 解析到
+# site-packages/assets/ocr_models（与 frozen/source 布局一致）。
+"assets/ocr_models" = [
+    "assets/ocr_models/PP-OCRv6_rec_small.onnx",
+    "assets/ocr_models/ppocrv6_dict.txt",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

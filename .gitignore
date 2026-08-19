@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# 运行缓存（引擎目录内生成；子模块方式挂载时避免弄脏引擎提交）
+ocr_engines/
+logs/
+index/
+
+# 视频/大产物不入库
+*.mp4
+*.mkv
+*.avi
+*_log.csv
+*_output.csv
