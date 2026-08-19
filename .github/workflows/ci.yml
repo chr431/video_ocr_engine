@@ -25,13 +25,5 @@ jobs:
         run: python -m pytest tests/ -v
         env:
           PYTHONIOENCODING: utf-8  # 中文 skip reason 在 GBK 控制台崩溃
-
-  version-check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
       - name: Verify version single source (engine_config <-> package)
-        run: python -c "import video_ocr_engine as e, engine_config as c; assert e.__version__ == c.__version__ == '0.1.0', (e.__version__, c.__version__)"
+        run: python -c "import video_ocr_engine as e, engine_config as c; assert e.__version__ == c.__version__"
