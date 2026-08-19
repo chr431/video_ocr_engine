@@ -74,48 +74,18 @@ for seg in result.segments:
 | `timing` | 各阶段耗时 |
 | `meta` | `backend / ocr_backend / codec / n_segments` |
 
-## 示例 CLI（text_extract_cli）
+## 分频采样（sample_stride 参数）
 
-仓库自带一个**仅 CLI** 的文本提取测试程序（`text_extract_cli.py`；pip 安装后可
-通过 `ocr-text-extract` 命令调用）。只暴露基本参数（视频 / ROI / 开始帧 / 结束帧 /
-输出文件），解码与 OCR 后端用演示默认（decode=auto 自动 GPU/CPU、OCR=cpu 走 ONNX），
-适合快速验证引擎在字幕等场景的识别结果。
+`FieldExtractor(sample_stride=N)`（默认 1）：`>1` 时只解码/分段/OCR 每个第 N 帧——
+字幕等 ROI 更新较慢时显著降低处理压力，时间戳仍取真实帧号（准确度基本不变）。
+需 decord fork ≥v0.7.12 的 `GetBatch` 等差步长快速路径（顺序流式跳帧）；旧版退化
+为逐索引 seek（仍正确但 AV1/HEVC 上更慢）。`stride=1`（默认）与 RaceVideoToLog
+完全兼容（零改动）。
 
-```bash
-# 源码方式（仓库根目录即源码根）
-python text_extract_cli.py subtitle_ep.mkv --roi 10 850 1910 940 \
-    --start-frame 0 --end-frame 3000 -o subtitles.csv
-
-# 分频采样：字幕等慢更新内容只处理每个第 3 帧（快速验证用）
-python text_extract_cli.py subtitle_ep.mkv --roi 10 850 1910 940 \
-    --sample-stride 3 -o subtitles.csv
-
-# pip 安装后
-ocr-text-extract subtitle_ep.mkv --roi 10 850 1910 940 -o subtitles.csv
-```
-
-输出两列 CSV（`utf-8-sig`，对中文/含逗号文本自动加引号）：
-
-| time_sec | text |
-|---|---|
-| 12 | 你好，世界 |
-| 15 | 我们继续 |
-
-- `time_sec`：段代表帧（识别帧）在视频中的实际秒数（绝对帧号 / 引擎自测 fps，
-  四舍五入到秒）。
-- `text`：OCR 原始文本，**原样输出**（不做速度解析 / 过滤 / 规整）。
-
-### 分频采样（`--sample-stride N`，默认 1）
-
-字幕等 ROI 内容更新较慢时，可用 `sample_stride > 1` **只处理每个第 N 帧**，
-显著降低解码/分段/OCR 压力（`FieldExtractor(sample_stride=N)`，引擎与 CLI
-均可设置）。时间戳仍取真实帧号（绝对帧 / fps），准确度基本不变。
-
-- 需要 decord fork 的**等差步长快速路径**（顺序流式解码 + 帧间丢弃，避免逐索引
-  seek）：在 decord 仓库 `D:\Repo\decord` 的 master（v0.7.12+）中已实现
-  `GetBatch` 等差数列路径；旧版 decord 会退化为逐索引 seek（仍正确，但稀疏
-  seek 在 AV1/HEVC 上更慢）。
-- `stride=1`（默认）走原路径，行为与 RaceVideoToLog 完全兼容（零改动）。
+> 面向字幕提取的完整 CLI 应用已拆到独立仓库
+> [chr431/video_subtitle_extractor](https://github.com/chr431/video_subtitle_extractor)：
+> 提供 `--roi`/`--start-frame`/`--end-frame`/`--sample-stride` 等参数，输出
+> `time_sec,text` 两列 CSV。本引擎仓库保持为通用引擎（不携带具体场景 CLI）。
 
 ## 识别链
 
