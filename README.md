@@ -74,6 +74,33 @@ for seg in result.segments:
 | `timing` | 各阶段耗时 |
 | `meta` | `backend / ocr_backend / codec / n_segments` |
 
+## 示例 CLI（text_extract_cli）
+
+仓库自带一个**仅 CLI** 的文本提取测试程序（`text_extract_cli.py`；pip 安装后可
+通过 `ocr-text-extract` 命令调用）。只暴露基本参数（视频 / ROI / 开始帧 / 结束帧 /
+输出文件），解码与 OCR 后端用演示默认（decode=auto 自动 GPU/CPU、OCR=cpu 走 ONNX），
+适合快速验证引擎在字幕等场景的识别结果。
+
+```bash
+# 源码方式（仓库根目录即源码根）
+python text_extract_cli.py subtitle_ep.mkv --roi 10 850 1910 940 \
+    --start-frame 0 --end-frame 3000 -o subtitles.csv
+
+# pip 安装后
+ocr-text-extract subtitle_ep.mkv --roi 10 850 1910 940 -o subtitles.csv
+```
+
+输出两列 CSV（`utf-8-sig`，对中文/含逗号文本自动加引号）：
+
+| time_sec | text |
+|---|---|
+| 12 | 你好，世界 |
+| 15 | 我们继续 |
+
+- `time_sec`：段代表帧（识别帧）在视频中的实际秒数（绝对帧号 / 引擎自测 fps，
+  四舍五入到秒）。
+- `text`：OCR 原始文本，**原样输出**（不做速度解析 / 过滤 / 规整）。
+
 ## 识别链
 
 1. 校准：前 `SEG_CALIB_FRAMES` 帧 Otsu 求二值化阈值（仅在变化显著时切段）。

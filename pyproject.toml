@@ -21,6 +21,10 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 
+[project.scripts]
+# 简易文本提取 CLI（通用引擎演示）：视频 + ROI + 帧范围 → 时间戳,OCR文本 CSV
+ocr-text-extract = "text_extract_cli:main"
+
 [tool.setuptools]
 packages = ["video_ocr_engine"]
 py-modules = [
@@ -30,6 +34,7 @@ py-modules = [
     "ocr_native",
     "ocr_trt",
     "segmentation",
+    "text_extract_cli",
     "video_utils",
 ]
 
