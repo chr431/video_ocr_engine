@@ -65,13 +65,18 @@
 | CPU 解码 + CPU OCR + gray 输出 | ~17.8s |
 
 结论：
-- 标清 h264 + 宽 ROI + 跳帧场景，**CPU 软解比 NVDEC 更快**（GPU 解码的 ROI/跳帧
-  路径收益不明显）。
+- 标清 h264 + 宽 ROI + 跳帧场景，在本机（16 物理核）上 **CPU 软解比 NVDEC 更快**。
+- **机制**：NVDEC 的 h264 解码器有约 **2Gp/s 上限**；FFmpeg CPU 解码器最多可利用
+  约 **13 个核心**。因此 16 核 CPU 上 h264 软解能显著超过 NVDEC。
+- **但这个结论不可泛化**：
+  - 用户 CPU 较弱时，NVDEC 依然更好；
+  - HEVC / AV1 即使在本机上也是 NVDEC 更好（CPU 软解只有 NVDEC 的 1/3~1/5）。
 - `gray_output=True` 能再省约 6-8%：解码直接出单通道，省掉 RGB→灰度转换与数据量。
 - 高段数视频（如新三国03，约 6500 段）TensorRT OCR 优势巨大：
   CPU+CPU gray ~60s，CPU+TRT gray ~28s。
-- 因此 `video_subtitle_extractor` 的默认已调整为 `decode_backend="cpu"` +
-  `gray_output=True`；`auto`/`nvdec` 仍保留给用户。
+- 因此 `video_subtitle_extractor` **默认仍保持 `decode_backend="auto"`**：
+  auto 逻辑 = 优先 NVDEC，不可用则回退 CPU。`gray_output=True` 保留为默认优化；
+  强多核 CPU + h264 用户可手动选择 `cpu` 获得更好性能。
 
 ---
 
