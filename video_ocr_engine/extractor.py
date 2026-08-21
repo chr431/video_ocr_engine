@@ -151,6 +151,10 @@ class FieldExtractor:
         if self._profile_enabled:
             self._prof_lock = threading.Lock()
         self._validate_params()
+        roi_w = max(1, self._roi[2] - self._roi[0] + 1)
+        roi_h = max(1, self._roi[3] - self._roi[1] + 1)
+        self._merge_max_changed_pixels = max(
+            32, int(roi_w * roi_h * config.SEG_MERGE_MAX_CHANGED_RATIO))
         # 后处理参数由子类（SegmentPipeline）在构造时设置；引擎识别链不读。
 
     def _validate_params(self) -> None:
@@ -171,6 +175,20 @@ class FieldExtractor:
             raise ValueError(
                 f"frame_end 必须大于 frame_start（或为 0/None 表示到末尾）: "
                 f"start={self._frame_start}, end={self._frame_end}")
+
+    def _segments_similar(self, a, b) -> bool:
+        """相似段判定：平均绝对差小 且 显著变化像素占比也小。
+
+        只用平均绝对差会把宽 ROI 中的单字短字幕（如“在”“不”）误判为噪声：
+        大部分区域未变，均值被稀释。因此额外限制 abs(diff)>10 的像素数。
+        """
+        if a is None or b is None or a.shape != b.shape:
+            return False
+        diff = np.abs(a.astype(np.float32) - b.astype(np.float32))
+        if float(diff.mean()) > self._merge_similar_threshold:
+            return False
+        changed = int(np.sum(diff > 10))
+        return changed <= self._merge_max_changed_pixels
 
     def extract(self):
         """通用文本提取：解码∥分段∥OCR → 结构化结果（每段原始文本+置信度）。
@@ -953,8 +971,7 @@ class FieldExtractor:
                         seg = frames[s:k]
                         similar = (
                             self._merge_similar and segs
-                            and _gray_mean_abs_diff(last_rep_gray, rep_gray)
-                                <= self._merge_similar_threshold)
+                            and self._segments_similar(last_rep_gray, rep_gray))
                         if similar:
                             # 同一视觉内容被噪声切成多段：并入前一段，
                             # 不产生新的 OCR 任务，保留前一段代表帧/文本。
@@ -992,8 +1009,7 @@ class FieldExtractor:
             seg = frames[s:]
             similar = (
                 self._merge_similar and segs
-                and _gray_mean_abs_diff(last_rep_gray, rep_gray)
-                    <= self._merge_similar_threshold)
+                and self._segments_similar(last_rep_gray, rep_gray))
             if similar:
                 segs[-1].extend(seg)
             else:

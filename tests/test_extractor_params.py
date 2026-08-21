@@ -95,3 +95,19 @@ def test_gray_mean_abs_diff():
     assert _gray_mean_abs_diff(a, b) == pytest.approx(10.0 / 20)
     assert _gray_mean_abs_diff(a, None) == float("inf")
     assert _gray_mean_abs_diff(a, np.zeros((3, 5), dtype=np.uint8)) == float("inf")
+
+
+def test_segments_similar_requires_small_changed_area():
+    # _make 的 ROI=(0,0,100,50)，面积 5050，max_changed=50
+    ex = _make(merge_similar=True)
+    a = np.zeros((50, 100), dtype=np.uint8)
+    b_small = a.copy()
+    b_small[:10, :10] = 200          # 100 像素显著变化 > 50 -> 不相似
+    assert not ex._segments_similar(a, b_small)
+    b_tiny = a.copy()
+    b_tiny[:5, :5] = 200             # 25 像素显著变化 <= 50 -> 相似
+    assert ex._segments_similar(a, b_tiny)
+    # 平均差超阈值也判不相似
+    b_mean = a.copy()
+    b_mean[:, :] = 30                # 整体抬升，平均差 30 > 3
+    assert not ex._segments_similar(a, b_mean)

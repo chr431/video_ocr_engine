@@ -109,6 +109,9 @@ SEG_C: float = 5.0              # 分段聚类阈值：max 3×3 窗口和 < C �
 # 视为同一视觉内容（如噪声把同一条字幕切成多段），合并后只 OCR 一次。
 # 默认关闭（速度数字场景不能合并）；video_subtitle_extractor 可显式开启。
 SEG_MERGE_SIMILAR_THRESHOLD: float = 3.0
+# 相似段合并的“显著变化像素”上限（ROI 面积比例）：即使平均绝对差很小，若
+# 变化像素占比超过该比例，仍视为真实内容变化（防止宽 ROI 中单字短字幕被误合并）。
+SEG_MERGE_MAX_CHANGED_RATIO: float = 0.01
 SEG_WIN: int = 30               # 段级检测带宽窗口（换算成帧：×中位段间距，上限 120 帧）
 SEG_MULT: float = 2.0           # 检测门限倍率：|值-中值| > 带宽×mult ⇒ suspect
 SEG_MIN_DEV: float = 6.0        # 纠正最小偏差：|插值-当前| > 此值才改
