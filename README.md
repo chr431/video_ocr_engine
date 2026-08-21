@@ -66,6 +66,11 @@ for seg in result.segments:
         print(f"frames {seg.start}-{seg.end}  text={seg.text!r}  conf={seg.confidence:.4f}")
 ```
 
+`decode_backend="auto"` 的默认逻辑：**优先 NVDEC，不可用时回退 CPU**。在强多核
+CPU 且片源为 h264 时，可手动选 `"cpu"` 获得更高软解吞吐（NVDEC h264 解码器约
+2Gp/s 上限，FFmpeg CPU 解码器最多可利用约 13 核）；弱 CPU / HEVC / AV1 场景仍
+建议保持 `auto` 或 `nvdec`。
+
 `result` 为 `ExtractionResult`：
 
 | 字段 | 含义 |
