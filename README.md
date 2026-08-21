@@ -114,6 +114,11 @@ for seg in result.segments:
 | `RVTOL_SEG_GAMMA` | 分段灰度 gamma（默认 0=raw） |
 | `RVTOL_OCR_GAMMA` | OCR 预处理 gamma（默认 2.0） |
 
+## 文档
+
+- [性能调优记录](docs/PERFORMANCE.md) —— 性能基线、后端矩阵、线程预算、已锁定参数、已验证死路。
+- [依赖与运行环境](docs/DEPENDENCIES.md) —— decord fork / TensorRT / onnxruntime 版本与注意事项。
+
 ## 测试
 
 ```bash
