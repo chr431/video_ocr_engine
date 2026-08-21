@@ -177,6 +177,16 @@
 - **多预处理自动选择 / 窗口重 OCR 自动化 / scipy 连通域**：均已被现有方案覆盖或净负。
 - **onnxruntime 1.29 新增参数**（`ORT_INTRA/INTER_OP_NUM_THREADS`、parallel
   执行、spin off）：全部无收益，保持现状。
+- **stride>1 跳过 B 帧（AVDISCARD_NONREF）加速解码（2026-08 尝试，已封板）**：
+  在 decord `GetBatch` 等差步长快速路径中，对非采样帧设置
+  `AVDISCARD_NONREF` 跳过 B 帧，并按 packet 计数推进帧号。初步速度提升明显
+  （3000 帧 stride=8 从 ~0.63s 降到 ~0.12s），但正确性失败：
+  - 与 `seek_accurate` 真值对比大量采样帧 `maxdiff=255`；
+  - FFmpeg h264 报 `missing picture in access unit`；
+  - 即使只在“目标是参考帧”时启用、并对跳过参考帧做显式排空，仍然错帧。
+  结论：当前 decord 的 FFmpeg 多线程解码架构下，动态切换 `AVDISCARD_NONREF`
+  不可靠。要安全跳过 B 帧需要更底层、独立的同步解码循环，不能直接复用现有
+  threaded decoder 的 `skip_frame` 切换。
 - **三级流水线（OCR 专职 preprocess 线程 ×2）**：严格单跑 A/B 无净收益，回滚；
   当前两段式（主循环 flush 内 preprocess 与 infer 线程并行）已是最优近似。
 
