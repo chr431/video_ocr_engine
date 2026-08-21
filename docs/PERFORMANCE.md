@@ -78,6 +78,21 @@
   auto 逻辑 = 优先 NVDEC，不可用则回退 CPU。`gray_output=True` 保留为默认优化；
   强多核 CPU + h264 用户可手动选择 `cpu` 获得更好性能。
 
+### 相似段合并（subtitle 场景的大幅加速，2026-08）
+
+高分段/高噪声字幕视频中，同一条字幕常被噪声切成大量短段，导致 OCR 重复执行。
+`FieldExtractor(merge_similar=True, merge_similar_threshold=3.0)` 会在 OCR 前比较
+相邻段代表帧灰度平均绝对差；≤ 阈值时合并为同一段，只 OCR 一次。
+
+实测（新三国03，stride=8，CPU+TRT gray）：
+- 原始段数 6506 → 合并后约 1165 段（OCR 次数 -82%）
+- CPU+TRT gray：约 29.4s → **16.1s**
+- CPU+CPU gray：约 60s → **20.5s**
+- 输出字幕条数基本不变（606 → 602，差异为同一条字幕的重复/空格变体被合并）
+
+该功能默认关闭，避免影响速度数字等需要逐段精确 OCR 的场景；
+`video_subtitle_extractor` 默认开启，并可用 `--no-merge-similar` 关闭。
+
 ---
 
 ## 3. 线程预算与分核规则
