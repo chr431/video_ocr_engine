@@ -1,9 +1,11 @@
 """FieldExtractor 参数校验与内存选项测试（无需解码器/视频）。"""
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from video_ocr_engine import FieldExtractor
+from video_ocr_engine.extractor import _gray_mean_abs_diff
 
 
 def _make(**kwargs):
@@ -74,3 +76,22 @@ def test_extract_keep_frames_false(monkeypatch):
     assert all(seg.frames == () for seg in result.segments)
     # rep_crop 默认仍保留
     assert result.segments[0].rep_crop == "crop1"
+
+
+def test_merge_similar_default_off_and_custom():
+    ex = _make()
+    assert ex._merge_similar is False
+    assert ex._merge_similar_threshold == 3.0
+    ex2 = _make(merge_similar=True, merge_similar_threshold=5.0)
+    assert ex2._merge_similar is True
+    assert ex2._merge_similar_threshold == 5.0
+
+
+def test_gray_mean_abs_diff():
+    a = np.zeros((4, 5), dtype=np.uint8)
+    b = a.copy()
+    assert _gray_mean_abs_diff(a, b) == 0.0
+    b[0, 0] = 10
+    assert _gray_mean_abs_diff(a, b) == pytest.approx(10.0 / 20)
+    assert _gray_mean_abs_diff(a, None) == float("inf")
+    assert _gray_mean_abs_diff(a, np.zeros((3, 5), dtype=np.uint8)) == float("inf")

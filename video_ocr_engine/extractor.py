@@ -39,6 +39,15 @@ def _ocr_batch_size() -> int:
     return config.OCR_BATCH_SIZE
 
 
+def _gray_mean_abs_diff(a, b) -> float:
+    """两帧分段灰度 ROI 的平均绝对差；形状不一致时视为不相似。"""
+    if a is None or b is None:
+        return float("inf")
+    if a.shape != b.shape:
+        return float("inf")
+    return float(np.mean(np.abs(a.astype(np.float32) - b.astype(np.float32))))
+
+
 @dataclass
 class ExtractedSegment:
     """引擎输出的单个文本字段段（原有字段区间 + 代表帧 + 原始文本）。"""
@@ -68,7 +77,8 @@ class FieldExtractor:
 
     构造参数（识别链用）：video_path / roi / frame_start / frame_end /
     force_aspect / decode_backend / ocr_backend / buffer_size / fill_width /
-    sample_stride / progress_cb / cancel_check / gray_output / yuv_output。
+    sample_stride / progress_cb / cancel_check / gray_output / yuv_output /
+    keep_crops / keep_frames / merge_similar / merge_similar_threshold。
     分段阈值 C 取自 engine_config.SEG_C；引擎不含速度后处理参数。
     sample_stride：分频采样步长（默认 1 = 逐帧处理，与 RaceVideoToLog 完全
     兼容）。>1 时只解码/分段每个第 N 帧（字幕等慢更新内容可显著降低处理压力；
@@ -83,7 +93,8 @@ class FieldExtractor:
                  sample_stride: int = config.DEFAULT_SAMPLE_STRIDE,
                  progress_cb=None, cancel_check=None, gray_output: bool = False,
                  yuv_output: bool = False, keep_crops: bool = True,
-                 keep_frames: bool = True):
+                 keep_frames: bool = True, merge_similar: bool = False,
+                 merge_similar_threshold: float | None = None):
         self._video_path = Path(video_path)
         self._roi = tuple(roi)
         # fps 强制自测：open decoder 后从 get_avg_fps/get_fps 读，忽略外部
@@ -107,6 +118,11 @@ class FieldExtractor:
         self._yuv_output = yuv_output
         self._keep_crops = bool(keep_crops)
         self._keep_frames = bool(keep_frames)
+        self._merge_similar = bool(merge_similar)
+        self._merge_similar_threshold = (
+            float(merge_similar_threshold)
+            if merge_similar_threshold is not None
+            else float(config.SEG_MERGE_SIMILAR_THRESHOLD))
         self._color_range = 0            # run 时从 decoder get_color_range 读取
         self._codec = ""                 # run 时从 decoder get_codec 探测
         self._hybrid_codec = ""
@@ -921,6 +937,8 @@ class FieldExtractor:
         rep_frame = frames[0]
         rep_crop = None
         rep_sharp = -1.0
+        rep_gray = None
+        last_rep_gray = None
         prev_b = None
         t0 = time.perf_counter()
         consumer_ok = [False]
@@ -933,38 +951,60 @@ class FieldExtractor:
                     self._prof_end('producer', 'segmentation', _t_seg)
                     if changed:
                         seg = frames[s:k]
-                        segs.append(seg)
-                        _t_push = time.perf_counter()
-                        _put_ocr((seg_idx, rep_frame, rep_crop, k / max(len(frames), 1)))
-                        self._prof_end('producer', 'q_put_block', _t_push)
-                        if self._keep_crops:
-                            rep_crops[rep_frame] = rep_crop
-                        seg_idx += 1
+                        similar = (
+                            self._merge_similar and segs
+                            and _gray_mean_abs_diff(last_rep_gray, rep_gray)
+                                <= self._merge_similar_threshold)
+                        if similar:
+                            # 同一视觉内容被噪声切成多段：并入前一段，
+                            # 不产生新的 OCR 任务，保留前一段代表帧/文本。
+                            segs[-1].extend(seg)
+                        else:
+                            segs.append(seg)
+                            _t_push = time.perf_counter()
+                            _put_ocr((seg_idx, rep_frame, rep_crop,
+                                      k / max(len(frames), 1)))
+                            self._prof_end('producer', 'q_put_block', _t_push)
+                            if self._keep_crops:
+                                rep_crops[rep_frame] = rep_crop
+                            seg_idx += 1
+                            last_rep_gray = rep_gray
                         s = k
                         rep_frame = fi
                         rep_crop = c
                         rep_sharp = sharp
+                        rep_gray = g
                     elif sharp > rep_sharp:
                         rep_sharp = sharp
                         rep_frame = fi
                         rep_crop = c
+                        rep_gray = g
                 else:
                     rep_frame = fi
                     rep_crop = c
                     rep_sharp = sharp
+                    rep_gray = g
                 prev_b = b
                 if k % 100 == 0:
                     self._cancel()
                 if k % 500 == 0:
                     self._progress(f'[{self._backend}] 解码+分段: {k}/{len(frames)}', 3 + k / max(len(frames), 1) * 55)
             seg = frames[s:]
-            segs.append(seg)
-            _t_push = time.perf_counter()
-            _put_ocr((seg_idx, rep_frame, rep_crop, 1.0))
-            self._prof_end('producer', 'q_put_block', _t_push)
-            if self._keep_crops:
-                rep_crops[rep_frame] = rep_crop
-            seg_idx += 1
+            similar = (
+                self._merge_similar and segs
+                and _gray_mean_abs_diff(last_rep_gray, rep_gray)
+                    <= self._merge_similar_threshold)
+            if similar:
+                segs[-1].extend(seg)
+            else:
+                segs.append(seg)
+                _t_push = time.perf_counter()
+                _put_ocr((seg_idx, rep_frame, rep_crop, 1.0))
+                self._prof_end('producer', 'q_put_block', _t_push)
+                if self._keep_crops:
+                    rep_crops[rep_frame] = rep_crop
+                seg_idx += 1
+                last_rep_gray = rep_gray
             consumer_ok[0] = True
         finally:
             _t_consume_end = time.perf_counter()

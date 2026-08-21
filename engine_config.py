@@ -105,6 +105,10 @@ SEG_GAMMA: float = 0.0             # 分段/代表帧选择的灰度 gamma 增�
                                    # >0 = 255*(g/255)^g 增强后分段（与 OCR 预处理
                                    # 对齐实验，env RVTOL_SEG_GAMMA 可覆盖）。
 SEG_C: float = 5.0              # 分段聚类阈值：max 3×3 窗口和 < C ⇒ 显示未变
+# 相似段合并（subtitle 场景可选）：连续两段代表帧灰度平均绝对差 ≤ 该阈值时，
+# 视为同一视觉内容（如噪声把同一条字幕切成多段），合并后只 OCR 一次。
+# 默认关闭（速度数字场景不能合并）；video_subtitle_extractor 可显式开启。
+SEG_MERGE_SIMILAR_THRESHOLD: float = 3.0
 SEG_WIN: int = 30               # 段级检测带宽窗口（换算成帧：×中位段间距，上限 120 帧）
 SEG_MULT: float = 2.0           # 检测门限倍率：|值-中值| > 带宽×mult ⇒ suspect
 SEG_MIN_DEV: float = 6.0        # 纠正最小偏差：|插值-当前| > 此值才改
