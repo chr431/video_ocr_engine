@@ -185,8 +185,17 @@
   - FFmpeg h264 报 `missing picture in access unit`；
   - 即使只在“目标是参考帧”时启用、并对跳过参考帧做显式排空，仍然错帧。
   结论：当前 decord 的 FFmpeg 多线程解码架构下，动态切换 `AVDISCARD_NONREF`
-  不可靠。要安全跳过 B 帧需要更底层、独立的同步解码循环，不能直接复用现有
-  threaded decoder 的 `skip_frame` 切换。
+  不可靠。
+- **stride>1 跳过 B 帧（packet 级过滤，2026-08 二次尝试，已封板）**：
+  不依赖 `skip_frame`，改为在 `PushNextFiltered()` 中按 `pict_type` 直接把 B 帧
+  packet 丢弃、只把参考帧 packet 推给 decoder。结果仍然：
+  - 大量 `missing picture in access unit`；
+  - 与 `seek_accurate` 真值对比仍有多帧 `maxdiff=255`。
+  根因：H.264 High profile 中部分 B 帧本身是参考帧，仅按 `pict_type==B` 丢弃会
+  丢掉解码依赖；要正确过滤必须解析 slice header 的 `reference` 标记，复杂度接近
+  重写一个跳帧解码器。
+  结论：在现有 decord/FFmpeg 架构内，安全跳过 B 帧加速 stride>1 解码的成本和风险
+  都过高，暂不继续。
 - **三级流水线（OCR 专职 preprocess 线程 ×2）**：严格单跑 A/B 无净收益，回滚；
   当前两段式（主循环 flush 内 preprocess 与 infer 线程并行）已是最优近似。
 
