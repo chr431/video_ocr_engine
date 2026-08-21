@@ -47,15 +47,15 @@ DEFAULT_DECODE_BACKEND: str = "auto"   # 解码后端 (auto / cpu / nvdec)
 DECODE_BACKEND_KEYS: list[str] = ["auto", "cpu", "nvdec"]
 DECODE_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU",
                                          "nvdec": "NVDEC"}
-# 实验性 CPU+NVDEC 混合解码开关（不暴露给 GUI/CLI 参数）：
+# CPU+NVDEC 混合解码开关（**已弃用**，不暴露给 GUI/CLI 参数，仅兼容保留）：
 # 环境变量置 1/true/yes/on 后，GPU 模式（auto / nvdec）内部改走
-# CPU+NVDEC 双解码器并行（CPU 前段 + GPU 后段，见 _open_hybrid_vrs）；
-# 默认关闭（纯 GPU 足够好，混合收益不确定且增加复杂度）。
+# CPU+NVDEC 双解码器并行（CPU 前段 + GPU 后段，见 _open_hybrid_vrs）。
+# subtitle 场景 CPU+CPU 与 GPU+TRT 速度已可比，混合收益不确定且增加复杂度，
+# 不再推荐使用；代码保留以免破坏旧实验/测试。
 HYBRID_DECODE_ENV: str = "RVTOL_HYBRID_DECODE"
-# 实验性 OCR 混合开关（不暴露给 GUI/CLI 参数）：置 1/true/yes/on 后
-# OCR 同时用 TensorRT（GPU）+ onnxruntime（CPU）双引擎并发处理段批
-# （OCR 无状态约束，结果按段索引聚合，顺序无关 → 实现简单）。
-# 默认关闭（TRT 可用时 OCR 已隐藏于解码阶段之下，非瓶颈）。
+# TRT+ONNX 混合 OCR 开关（**已弃用**，不暴露给 GUI/CLI 参数，仅兼容保留）：
+# OCR 同时用 TensorRT（GPU）+ onnxruntime（CPU）双引擎并发处理段批。
+# TRT 可用时 auto 已最优，混合仅对强制 OCR=cpu 有意义；不再推荐使用。
 HYBRID_OCR_ENV: str = "RVTOL_HYBRID_OCR"
 DEFAULT_OCR_BACKEND: str = "auto"      # OCR 推理后端 (auto / cpu / tensorrt)
 OCR_BACKEND_KEYS: list[str] = ["auto", "cpu", "tensorrt"]

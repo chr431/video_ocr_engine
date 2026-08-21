@@ -116,8 +116,8 @@ CPU 且片源为 h264 时，可手动选 `"cpu"` 获得更高软解吞吐（NVDE
 | `RVTOL_OCR_THREADS` | OCR 推理线程数覆盖（默认全物理核） |
 | `RVTOL_OCR_BATCH` | OCR 批大小覆盖（默认 16） |
 | `RVTOL_DUAL_ONNX` | `0` 关闭双 ONNX 实例（CPU 核数≥8 默认开） |
-| `RVTOL_HYBRID_DECODE` | `1` 开启 CPU+NVDEC 混合解码 |
-| `RVTOL_HYBRID_OCR` | `1` 开启 TRT+ONNX 混合 OCR |
+| `RVTOL_HYBRID_DECODE` | `1` 开启 CPU+NVDEC 混合解码（**已弃用**，仅兼容保留） |
+| `RVTOL_HYBRID_OCR` | `1` 开启 TRT+ONNX 混合 OCR（**已弃用**，仅兼容保留） |
 | `RVTOL_SEG_GAMMA` | 分段灰度 gamma（默认 0=raw） |
 | `RVTOL_OCR_GAMMA` | OCR 预处理 gamma（默认 2.0） |
 
