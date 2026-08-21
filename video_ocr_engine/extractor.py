@@ -4,8 +4,7 @@
 应用完成（RaceVideoToLog 的 SegmentPipeline 继承本类并叠加后处理）。
 
 方法体最初由 RaceVideoToLog 的 tools/archive/_gen_engine_extractor.py 从
-segment_flow.py 抽取（见 _methods_body.py，保留来源参考）；独立成仓后随
-引擎维护，不再依赖 RaceVideoToLog。
+segment_flow.py 抽取；独立成仓后随引擎维护，不再依赖 RaceVideoToLog。
 """
 import csv
 import logging
@@ -83,7 +82,8 @@ class FieldExtractor:
                  C: float | None = None, fps: float | None = None,
                  sample_stride: int = config.DEFAULT_SAMPLE_STRIDE,
                  progress_cb=None, cancel_check=None, gray_output: bool = False,
-                 yuv_output: bool = False):
+                 yuv_output: bool = False, keep_crops: bool = True,
+                 keep_frames: bool = True):
         self._video_path = Path(video_path)
         self._roi = tuple(roi)
         # fps 强制自测：open decoder 后从 get_avg_fps/get_fps 读，忽略外部
@@ -105,6 +105,8 @@ class FieldExtractor:
         self._sample_stride = max(1, int(sample_stride))
         self._gray_output = gray_output
         self._yuv_output = yuv_output
+        self._keep_crops = bool(keep_crops)
+        self._keep_frames = bool(keep_frames)
         self._color_range = 0            # run 时从 decoder get_color_range 读取
         self._codec = ""                 # run 时从 decoder get_codec 探测
         self._hybrid_codec = ""
@@ -132,7 +134,27 @@ class FieldExtractor:
         self._prof_lock = None
         if self._profile_enabled:
             self._prof_lock = threading.Lock()
+        self._validate_params()
         # 后处理参数由子类（SegmentPipeline）在构造时设置；引擎识别链不读。
+
+    def _validate_params(self) -> None:
+        """构造期静态参数校验（帧范围相对视频总长在打开解码器后校验）。"""
+        if len(self._roi) != 4:
+            raise ValueError(
+                f"roi 必须为 (x1, y1, x2, y2) 四元组，收到 {len(self._roi)} 个元素")
+        x1, y1, x2, y2 = self._roi
+        if x1 < 0 or y1 < 0 or x2 < 0 or y2 < 0:
+            raise ValueError(f"roi 坐标不能为负: {self._roi}")
+        if x2 <= x1 or y2 <= y1:
+            raise ValueError(
+                f"roi 必须满足 x2 > x1 且 y2 > y1: {self._roi}")
+        if self._frame_start < 0:
+            raise ValueError(f"frame_start 不能为负: {self._frame_start}")
+        if (self._frame_end is not None and self._frame_end != 0
+                and self._frame_end <= self._frame_start):
+            raise ValueError(
+                f"frame_end 必须大于 frame_start（或为 0/None 表示到末尾）: "
+                f"start={self._frame_start}, end={self._frame_end}")
 
     def extract(self):
         """通用文本提取：解码∥分段∥OCR → 结构化结果（每段原始文本+置信度）。
@@ -144,17 +166,22 @@ class FieldExtractor:
         识别层不解析文本含义（速度/数值由上层应用处理）。ffis 强制自测。
         """
         frames, segs, texts, confs, rep_frames = self._run_pipelined()
+        self._frames = frames
         segments = [
             ExtractedSegment(
-                start=seg[0], end=seg[-1], frames=tuple(seg),
+                start=seg[0], end=seg[-1],
+                frames=tuple(seg) if self._keep_frames else (),
                 rep_frame=rep_frames[i],
                 text=texts[i] if i < len(texts) else None,
                 confidence=confs[i] if i < len(confs) else 0.0,
-                rep_crop=self.crops.get(rep_frames[i]))
+                rep_crop=(self.crops.get(rep_frames[i])
+                          if self._keep_crops else None))
             for i, seg in enumerate(segs)
         ]
         return ExtractionResult(
-            segments=segments, frames=frames, fps=self._fps or 0.0,
+            segments=segments,
+            frames=frames if self._keep_frames else [],
+            fps=self._fps or 0.0,
             timing=dict(self.timing),
             meta={"backend": self._backend,
                   "ocr_backend": self._ocr_backend_used,
@@ -519,6 +546,10 @@ class FieldExtractor:
         if self._frame_start > 0:
             vr.seek_accurate(self._frame_start)
         frames = list(range(self._frame_start, end, self._sample_stride))
+        if not frames:
+            raise ValueError(
+                f"帧区间为空: frame_start={self._frame_start}, "
+                f"frame_end={end}, total={total}")
         DECODE_BATCH = config.DECODE_BATCH_SIZE
         crops = {}
         grays = {}
@@ -587,6 +618,8 @@ class FieldExtractor:
         return (frames, crops, grays, sharp)
 
     def _segment(self, frames, grays):
+        if not frames:
+            raise ValueError("分段帧列表为空")
         t0 = time.perf_counter()
         ths = []
         step = max(1, len(frames) // config.SEG_CALIB_FRAMES)
@@ -624,7 +657,7 @@ class FieldExtractor:
             返回 (frames, segs, seg_vals, rep_frames)；self.crops = {rep_frame:
             crop}（仅代表帧，供 review 预览，比存全帧省内存）。
             """
-        from queue import Queue
+        from queue import Full, Queue
         import threading
         from ocr_native import OcrEngine
         from video_utils import _preprocess_standard
@@ -655,6 +688,10 @@ class FieldExtractor:
         if self._frame_start > 0:
             vr.seek_accurate(self._frame_start)
         frames = list(range(self._frame_start, end, self._sample_stride))
+        if not frames:
+            raise ValueError(
+                f"帧区间为空: frame_start={self._frame_start}, "
+                f"frame_end={end}, total={total}")
         self._prof_end('producer', 'open_and_fps', _t_open)
         calib_n = min(config.SEG_CALIB_FRAMES, len(frames))
         calib: list = []
@@ -691,6 +728,21 @@ class FieldExtractor:
         ocr_err: list = []
         ocr_wall = [0.0]
 
+        def _put_ocr(item) -> None:
+            """向 OCR 队列投递；OCR 线程已死时及时退出，避免有界队列死锁。
+
+            正常情况下与 q.put 行为一致（队列不满立即返回）；队列满时最多
+            等待 timeout，期间若发现 OCR 线程已失败则立即抛错终止生产。
+            """
+            while True:
+                if ocr_err:
+                    raise ocr_err[0]
+                try:
+                    q.put(item, timeout=0.2)
+                    return
+                except Full:
+                    continue
+
         def ocr_worker() -> None:
             t0 = time.perf_counter()
             try:
@@ -713,33 +765,47 @@ class FieldExtractor:
                 infer_q: Queue = Queue(maxsize=config.OCR_INFER_QUEUE_SIZE)
                 ocr_progress_frac = [0.0]
 
+                def _put_infer(item) -> bool:
+                    """投递到推理队列；推理线程已全部失败时尽快返回 False。"""
+                    while True:
+                        if ocr_err:
+                            return False
+                        try:
+                            infer_q.put(item, timeout=0.2)
+                            return True
+                        except Full:
+                            continue
+
                 def _report_ocr_progress(idx: int, frac: float) -> None:
                     if frac - ocr_progress_frac[0] >= 0.01 or frac >= 1.0:
                         ocr_progress_frac[0] = frac
                         self._progress(f'[OCR] 段 {idx + 1}', 58.0 + frac * 28.0)
 
                 def infer_worker(eng) -> None:
-                    while True:
-                        item = infer_q.get()
-                        if item is None:
-                            return
-                        idxs, reps, procs, fracs = item
-                        _t_i = time.perf_counter()
-                        res = eng(procs)
-                        self._prof_end('ocr', 'infer', _t_i)
-                        _t_c = time.perf_counter()
-                        for idx, rep, r, frac in zip(idxs, reps, res, fracs):
-                            if hasattr(r, 'txts'):
-                                raw_text = str(r.txts[0]) if r.txts and r.txts[0] else None
-                                scores = getattr(r, 'scores', [])
-                                ocr_conf = float(scores[0]) if scores else 0.0
-                            else:
-                                raw_text, ocr_conf = (None, 0.0)
-                            # 引擎只保存识别层原始文本+置信度（不解析速度）；
-                            # 领域解析由上层应用（SegmentPipeline）完成。
-                            results[idx] = (raw_text, ocr_conf, rep)
-                            _report_ocr_progress(idx, frac)
-                        self._prof_end('ocr', 'ctc_decode', _t_c)
+                    try:
+                        while True:
+                            item = infer_q.get()
+                            if item is None:
+                                return
+                            idxs, reps, procs, fracs = item
+                            _t_i = time.perf_counter()
+                            res = eng(procs)
+                            self._prof_end('ocr', 'infer', _t_i)
+                            _t_c = time.perf_counter()
+                            for idx, rep, r, frac in zip(idxs, reps, res, fracs):
+                                if hasattr(r, 'txts'):
+                                    raw_text = str(r.txts[0]) if r.txts and r.txts[0] else None
+                                    scores = getattr(r, 'scores', [])
+                                    ocr_conf = float(scores[0]) if scores else 0.0
+                                else:
+                                    raw_text, ocr_conf = (None, 0.0)
+                                # 引擎只保存识别层原始文本+置信度（不解析速度）；
+                                # 领域解析由上层应用（SegmentPipeline）完成。
+                                results[idx] = (raw_text, ocr_conf, rep)
+                                _report_ocr_progress(idx, frac)
+                            self._prof_end('ocr', 'ctc_decode', _t_c)
+                    except Exception as e:
+                        ocr_err.append(e)
                 infer_threads = [threading.Thread(target=infer_worker, args=(eng,), daemon=True) for eng in engines]
                 for t in infer_threads:
                     t.start()
@@ -751,7 +817,8 @@ class FieldExtractor:
                     _t_p = time.perf_counter()
                     procs = [_preprocess_standard(_nv12_luma_full(c, self._color_range)[..., None] if self._yuv_output else c, force_aspect=self._force_aspect) for c in b_crops]
                     self._prof_end('ocr', 'preprocess', _t_p)
-                    infer_q.put((list(b_idx), list(b_reps), procs, list(b_fracs)))
+                    if not _put_infer((list(b_idx), list(b_reps), procs, list(b_fracs))):
+                        return
                     b_idx.clear()
                     b_reps.clear()
                     b_crops.clear()
@@ -762,6 +829,8 @@ class FieldExtractor:
                     self._prof_end('ocr', 'q_get_wait', _t_w)
                     if item is None:
                         break
+                    if ocr_err:
+                        break
                     idx, rep, crop, frac = item
                     b_idx.append(idx)
                     b_reps.append(rep)
@@ -771,7 +840,13 @@ class FieldExtractor:
                         flush()
                 flush()
                 for _ in infer_threads:
-                    infer_q.put(None)
+                    while True:
+                        try:
+                            infer_q.put(None, timeout=0.2)
+                            break
+                        except Full:
+                            if not any(t.is_alive() for t in infer_threads):
+                                break
                 for t in infer_threads:
                     t.join()
             except Exception as e:
@@ -860,9 +935,10 @@ class FieldExtractor:
                         seg = frames[s:k]
                         segs.append(seg)
                         _t_push = time.perf_counter()
-                        q.put((seg_idx, rep_frame, rep_crop, k / max(len(frames), 1)))
+                        _put_ocr((seg_idx, rep_frame, rep_crop, k / max(len(frames), 1)))
                         self._prof_end('producer', 'q_put_block', _t_push)
-                        rep_crops[rep_frame] = rep_crop
+                        if self._keep_crops:
+                            rep_crops[rep_frame] = rep_crop
                         seg_idx += 1
                         s = k
                         rep_frame = fi
@@ -884,9 +960,10 @@ class FieldExtractor:
             seg = frames[s:]
             segs.append(seg)
             _t_push = time.perf_counter()
-            q.put((seg_idx, rep_frame, rep_crop, 1.0))
+            _put_ocr((seg_idx, rep_frame, rep_crop, 1.0))
             self._prof_end('producer', 'q_put_block', _t_push)
-            rep_crops[rep_frame] = rep_crop
+            if self._keep_crops:
+                rep_crops[rep_frame] = rep_crop
             seg_idx += 1
             consumer_ok[0] = True
         finally:
@@ -896,7 +973,15 @@ class FieldExtractor:
             if consumer_ok[0]:
                 for t in dec_threads:
                     t.join()
-            q.put(None)
+            # 通知 OCR 线程结束；若 OCR 线程已因异常退出且队列已满，不能
+            # 再阻塞在 put(None) 上（否则主线程死锁）。
+            while True:
+                try:
+                    q.put(None, timeout=0.2)
+                    break
+                except Full:
+                    if not ocr_thread.is_alive():
+                        break
             ocr_thread.join()
             self.timing['ocr_tail'] = time.perf_counter() - _t_consume_end
         if dec_err:

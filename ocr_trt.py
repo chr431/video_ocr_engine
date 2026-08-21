@@ -18,10 +18,24 @@ log = logging.getLogger(__name__)
 
 
 def _models_dir() -> Path:
-    """模型资产目录（源码: 项目 assets/ocr_models；frozen: _internal/ocr_models）。"""
+    """模型资产目录（源码 / wheel 安装 / frozen 多路径兼容）。
+
+    与 ocr_native._models_dir 保持相同查找顺序：源码树 → site-packages
+    候选 → sys.prefix data-files 安装位置。
+    """
     if getattr(sys, "frozen", False):
         return Path(getattr(sys, "_MEIPASS", "")) / "ocr_models"
-    return Path(__file__).resolve().parent / "assets" / "ocr_models"
+    here = Path(__file__).resolve().parent
+    candidates = [
+        here / "assets" / "ocr_models",
+        here.parent / "assets" / "ocr_models",
+        Path(sys.prefix) / "assets" / "ocr_models",
+    ]
+    marker = "PP-OCRv6_rec_small.onnx"
+    for p in candidates:
+        if (p / marker).is_file():
+            return p
+    return candidates[0]
 
 
 class TrtEngine:

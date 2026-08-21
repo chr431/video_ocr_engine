@@ -29,6 +29,16 @@ def test_ocr_model_assets_exist():
     assert (models / "ppocrv6_dict.txt").is_file()
 
 
+def test_models_dir_finds_marker_in_source_tree():
+    """源码模式下 _models_dir 必须解析到含模型文件的目录（wheel 安装回归保护）。"""
+    from ocr_native import _models_dir as onnx_models
+    from ocr_trt import _models_dir as trt_models
+    for fn in (onnx_models, trt_models):
+        p = fn()
+        assert (p / "PP-OCRv6_rec_small.onnx").is_file(), p
+        assert (p / "ppocrv6_dict.txt").is_file(), p
+
+
 def test_dict_format_matches_models_dir():
     """字符表：读表逻辑 = 文件行数 + 末尾空格 + 开头 blank（与 ocr_native 一致）。"""
     from ocr_native import OcrEngine, _models_dir

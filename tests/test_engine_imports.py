@@ -58,6 +58,13 @@ def test_engine_import_does_not_require_decord():
     assert "decord" not in sys.modules
 
 
+def test_no_stale_methods_body_in_package():
+    """_methods_body.py 是过期生成参考，不应随包发布。"""
+    import video_ocr_engine
+    stale = Path(video_ocr_engine.__file__).resolve().parent / "_methods_body.py"
+    assert not stale.exists()
+
+
 @pytest.mark.parametrize("name", ENGINE_MODULES)
 def test_no_app_attr_leak(name):
     """引擎模块层面不导出应用层符号（轻量冒烟）。"""

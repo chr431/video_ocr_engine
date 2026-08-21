@@ -27,3 +27,21 @@ jobs:
           PYTHONIOENCODING: utf-8  # 中文 skip reason 在 GBK 控制台崩溃
       - name: Verify version single source (engine_config <-> package)
         run: python -c "import video_ocr_engine as e, engine_config as c; assert e.__version__ == c.__version__"
+
+  wheel-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build wheel
+        run: python -m pip wheel --no-deps . -w dist
+      - name: Install into clean venv
+        run: |
+          python -m venv /tmp/voe-venv
+          /tmp/voe-venv/bin/python -m pip install numpy
+          /tmp/voe-venv/bin/python -m pip install --no-deps dist/video_ocr_engine-*.whl
+      - name: Verify model assets resolve after wheel install
+        run: |
+          /tmp/voe-venv/bin/python -c "import video_ocr_engine; from ocr_native import _models_dir; from pathlib import Path; p=_models_dir(); assert (p/'PP-OCRv6_rec_small.onnx').is_file(), p; print('model dir:', p)"

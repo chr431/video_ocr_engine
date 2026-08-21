@@ -29,10 +29,29 @@ log = logging.getLogger(__name__)
 
 
 def _models_dir() -> Path:
-    """模型资产目录（源码: 项目 assets/ocr_models；frozen: _internal/ocr_models）。"""
+    """模型资产目录（源码 / wheel 安装 / frozen 多路径兼容）。
+
+    查找顺序：
+      1. frozen: PyInstaller _MEIPASS/ocr_models
+      2. 源码树: <repo>/assets/ocr_models（也兼容未来包内 assets）
+      3. site-packages/assets/ocr_models（若改为 package-data 布局）
+      4. sys.prefix/assets/ocr_models（当前 pyproject data-files 安装位置）
+    返回第一个包含模型文件的目录；都找不到时返回源码树候选，
+    让后续打开文件时给出自然的 FileNotFoundError。
+    """
     if getattr(sys, "frozen", False):
         return Path(getattr(sys, "_MEIPASS", "")) / "ocr_models"
-    return Path(__file__).resolve().parent / "assets" / "ocr_models"
+    here = Path(__file__).resolve().parent
+    candidates = [
+        here / "assets" / "ocr_models",          # 源码 / 包内资源
+        here.parent / "assets" / "ocr_models",   # 模块在 video_ocr_engine/ 包内时
+        Path(sys.prefix) / "assets" / "ocr_models",  # data-files 安装位置
+    ]
+    marker = "PP-OCRv6_rec_small.onnx"
+    for p in candidates:
+        if (p / marker).is_file():
+            return p
+    return candidates[0]
 
 
 def cpu_physical_cores() -> int:

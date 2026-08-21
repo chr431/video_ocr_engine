@@ -55,6 +55,8 @@ ex = FieldExtractor(
     decode_backend="auto",            # auto/cpu/nvdec
     ocr_backend="cpu",                # auto/cpu/tensorrt
     yuv_output=True,                  # 代表帧保留 YUV（转 RGB 预览用）
+    keep_crops=True,                  # 是否在结果中保留每段代表帧图像
+    keep_frames=True,                 # 是否在结果中保留每段帧号序列
 )
 result = ex.extract()
 
@@ -81,6 +83,9 @@ for seg in result.segments:
 需 decord fork ≥v0.7.12 的 `GetBatch` 等差步长快速路径（顺序流式跳帧）；旧版退化
 为逐索引 seek（仍正确但 AV1/HEVC 上更慢）。`stride=1`（默认）与 RaceVideoToLog
 完全兼容（零改动）。
+
+> 长视频/大 ROI 场景若不需要预览图，可设 `keep_crops=False`、`keep_frames=False`
+> 显著降低内存占用（默认 `True` 保持兼容）。
 
 > 面向字幕提取的完整 CLI 应用已拆到独立仓库
 > [chr431/video_subtitle_extractor](https://github.com/chr431/video_subtitle_extractor)：
