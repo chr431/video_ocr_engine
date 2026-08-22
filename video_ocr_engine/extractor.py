@@ -691,6 +691,306 @@ class FieldExtractor:
         self.timing['segment'] = time.perf_counter() - t0
         return segs
 
+    def _start_ocr_session(self, _ocr_engines: list | None = None) -> dict:
+        """启动一个可跨多个切片持续复用的 OCR 会话。
+
+        返回 dict：q（段任务队列）、results（全局段索引 → text/conf/rep）、
+        err、wall、put（投递段任务）、finish（哨兵并 join OCR worker）。
+        单流水线仍用该会话；双流水线多条切片共用同一会话，避免每片重建
+        OCR worker / infer 线程造成屏障。
+        """
+        from queue import Full, Queue
+        import threading
+        from ocr_native import OcrEngine
+        from video_utils import _preprocess_standard
+
+        q: Queue = Queue(maxsize=max(1, self._buffer_size))
+        results: dict = {}
+        ocr_err: list = []
+        ocr_wall = [0.0]
+
+        def _put(item) -> None:
+            while True:
+                if ocr_err:
+                    raise ocr_err[0]
+                try:
+                    q.put(item, timeout=0.2)
+                    return
+                except Full:
+                    continue
+
+        def ocr_worker() -> None:
+            t0 = time.perf_counter()
+            try:
+                if _ocr_engines is not None:
+                    engines = list(_ocr_engines)
+                    self._ocr_backend_used = (
+                        'tensorrt+onnxruntime'
+                        if len(engines) == 2 and engines[0].backend_name != engines[1].backend_name
+                        else engines[0].backend_name)
+                else:
+                    _hybrid_ocr = _os.environ.get(config.HYBRID_OCR_ENV, '').strip().lower() in ('1', 'true', 'yes', 'on')
+                    _t_eng = time.perf_counter()
+                    _engine_progress = lambda msg: self._progress(msg, 2.5)
+                    if _hybrid_ocr:
+                        engines = [OcrEngine(self._ocr_model, 'tensorrt', fill_width=self._fill_width, num_threads=self._ocr_num_threads(), progress_cb=_engine_progress), OcrEngine(self._ocr_model, 'onnxruntime', fill_width=self._fill_width, num_threads=self._ocr_num_threads(), progress_cb=_engine_progress)]
+                    else:
+                        ot = self._ocr_num_threads()
+                        dual_onnx = self._ocr_engine_type() == 'onnxruntime' and ot >= 8 and (_os.environ.get('RVTOL_DUAL_ONNX', '1') != '0')
+                        if dual_onnx:
+                            half = max(2, ot // 2)
+                            engines = [OcrEngine(self._ocr_model, 'onnxruntime', fill_width=self._fill_width, num_threads=half, progress_cb=_engine_progress) for _ in range(2)]
+                        else:
+                            engines = [OcrEngine(self._ocr_model, self._ocr_engine_type(), fill_width=self._fill_width, num_threads=ot, progress_cb=_engine_progress)]
+                    self._ocr_backend_used = 'tensorrt+onnxruntime' if len(engines) == 2 and engines[0].backend_name != engines[1].backend_name else engines[0].backend_name
+                    self._prof_end('ocr', 'engine_init', _t_eng)
+                B = _ocr_batch_size()
+                infer_q: Queue = Queue(maxsize=config.OCR_INFER_QUEUE_SIZE)
+                ocr_progress_frac = [0.0]
+
+                def _put_infer(item) -> bool:
+                    while True:
+                        if ocr_err:
+                            return False
+                        try:
+                            infer_q.put(item, timeout=0.2)
+                            return True
+                        except Full:
+                            continue
+
+                def _report_ocr_progress(idx: int, frac: float) -> None:
+                    if frac - ocr_progress_frac[0] >= 0.01 or frac >= 1.0:
+                        ocr_progress_frac[0] = frac
+                        self._progress(f'[OCR] 段 {idx + 1}', 58.0 + frac * 28.0)
+
+                def infer_worker(eng) -> None:
+                    try:
+                        while True:
+                            item = infer_q.get()
+                            if item is None:
+                                return
+                            idxs, reps, procs, fracs = item
+                            _t_i = time.perf_counter()
+                            res = eng(procs)
+                            self._prof_end('ocr', 'infer', _t_i)
+                            _t_c = time.perf_counter()
+                            for idx, rep, r, frac in zip(idxs, reps, res, fracs):
+                                if hasattr(r, 'txts'):
+                                    raw_text = str(r.txts[0]) if r.txts and r.txts[0] else None
+                                    scores = getattr(r, 'scores', [])
+                                    ocr_conf = float(scores[0]) if scores else 0.0
+                                else:
+                                    raw_text, ocr_conf = (None, 0.0)
+                                results[idx] = (raw_text, ocr_conf, rep)
+                                _report_ocr_progress(idx, frac)
+                            self._prof_end('ocr', 'ctc_decode', _t_c)
+                    except Exception as e:
+                        ocr_err.append(e)
+
+                infer_threads = [
+                    threading.Thread(target=infer_worker, args=(eng,), daemon=True)
+                    for eng in engines]
+                for t in infer_threads:
+                    t.start()
+                b_idx, b_reps, b_crops, b_fracs = ([], [], [], [])
+
+                def flush() -> None:
+                    if not b_idx:
+                        return
+                    _t_p = time.perf_counter()
+                    procs = [_preprocess_standard(
+                        _nv12_luma_full(c, self._color_range)[..., None]
+                        if self._yuv_output else c,
+                        force_aspect=self._force_aspect) for c in b_crops]
+                    self._prof_end('ocr', 'preprocess', _t_p)
+                    if not _put_infer((list(b_idx), list(b_reps), procs, list(b_fracs))):
+                        return
+                    b_idx.clear()
+                    b_reps.clear()
+                    b_crops.clear()
+                    b_fracs.clear()
+
+                while True:
+                    _t_w = time.perf_counter()
+                    item = q.get()
+                    self._prof_end('ocr', 'q_get_wait', _t_w)
+                    if item is None:
+                        break
+                    if ocr_err:
+                        break
+                    idx, rep, crop, frac = item
+                    b_idx.append(idx)
+                    b_reps.append(rep)
+                    b_crops.append(crop)
+                    b_fracs.append(frac)
+                    if len(b_idx) >= B:
+                        flush()
+                flush()
+                for _ in infer_threads:
+                    while True:
+                        try:
+                            infer_q.put(None, timeout=0.2)
+                            break
+                        except Full:
+                            if not any(t.is_alive() for t in infer_threads):
+                                break
+                for t in infer_threads:
+                    t.join()
+            except Exception as e:
+                ocr_err.append(e)
+            finally:
+                ocr_wall[0] = time.perf_counter() - t0
+
+        ocr_thread = threading.Thread(target=ocr_worker, daemon=True)
+        ocr_thread.start()
+
+        def _finish() -> None:
+            while True:
+                try:
+                    q.put(None, timeout=0.2)
+                    break
+                except Full:
+                    if not ocr_thread.is_alive():
+                        break
+            ocr_thread.join()
+
+        return {
+            "q": q,
+            "results": results,
+            "err": ocr_err,
+            "wall": ocr_wall,
+            "thread": ocr_thread,
+            "put": _put,
+            "finish": _finish,
+            "seg_idx": 0,
+        }
+
+    def _run_parallel_chunk(self, worker, vr, session, chunk_idx: int,
+                            start: int, end_f: int, n_chunks: int):
+        """双流水线 worker 处理单个切片的解码/分段，送入共享 OCR 会话。
+
+        不等待 OCR 完成、不新建 OCR 线程——只把段任务塞进 session["q"]，
+        这样下一个切片可以立即开始解码，真正跨片重叠。
+        返回 (segs, keys, reps, rep_crops, decode_elapsed)。
+        """
+        x1, y1, x2, y2 = worker._roi
+        total = len(vr)
+        end = min(worker._frame_end or total, total)
+        if worker._frame_start > 0:
+            vr.seek_accurate(worker._frame_start)
+        frames = list(range(worker._frame_start, end, worker._sample_stride))
+        if not frames:
+            raise ValueError(
+                f"帧区间为空: frame_start={worker._frame_start}, "
+                f"frame_end={end}, total={total}")
+        calib_n = min(config.SEG_CALIB_FRAMES, len(frames))
+        calib: list = []
+        if worker._sample_stride > 1:
+            _calib_crops = vr.get_batch(
+                frames[:calib_n], roi=(x1, y1, x2 + 1, y2 + 1)).asnumpy()
+            for k in range(calib_n):
+                c = _calib_crops[k]
+                if not worker._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
+                    c = c[y1:y2 + 1, x1:x2 + 1]
+                g = worker._crop_luma(c)
+                calib.append((frames[k], c, g, float(g.std())))
+        else:
+            for k in range(calib_n):
+                c = vr.next_roi(x1, y1, x2 + 1, y2 + 1).asnumpy()
+                if not worker._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
+                    c = c[y1:y2 + 1, x1:x2 + 1]
+                g = worker._crop_luma(c)
+                calib.append((frames[k], c, g, float(g.std())))
+        ths = [_otsu(g) for _fi, _c, g, _s in calib]
+        th = int(np.median(ths)) if ths else config.OTSU_FALLBACK_THRESH
+        worker._bin_thresh = th
+        DECODE_BATCH = config.DECODE_BATCH_SIZE
+
+        def frame_stream():
+            for fi, c, g, s in calib:
+                yield (fi, c, g, s, g > th)
+            for bstart in range(calib_n, len(frames), DECODE_BATCH):
+                bend = min(bstart + DECODE_BATCH, len(frames))
+                crops = vr.get_batch(
+                    frames[bstart:bend],
+                    roi=(x1, y1, x2 + 1, y2 + 1)).asnumpy()
+                g = worker._batch_luma(crops)
+                sharp = g.std(axis=(1, 2))
+                bs = g > th
+                for k, gi in enumerate(range(bstart, bend)):
+                    yield (frames[gi], crops[k], g[k], float(sharp[k]), bs[k])
+
+        segs: list = []
+        keys: list = []
+        reps: list = []
+        rep_crops: dict = {}
+        seg_idx = int(session.get("seg_idx", 0))
+        s = 0
+        rep_frame = frames[0]
+        rep_crop = None
+        rep_sharp = -1.0
+        rep_gray = None
+        last_rep_gray = None
+        prev_b = None
+        t0 = time.perf_counter()
+
+        def emit(seg, rep_frame, rep_crop, frac) -> None:
+            nonlocal seg_idx
+            segs.append(seg)
+            keys.append(seg_idx)
+            reps.append(rep_frame)
+            session["put"]((seg_idx, rep_frame, rep_crop, frac))
+            if worker._keep_crops:
+                rep_crops[rep_frame] = rep_crop
+            seg_idx += 1
+
+        for k, (fi, c, g, sharp, b) in enumerate(frame_stream()):
+            if prev_b is not None:
+                d = prev_b != b
+                changed = _cluster_win3(d) >= worker._C
+                if changed:
+                    seg = frames[s:k]
+                    similar = (
+                        worker._merge_similar and segs
+                        and worker._segments_similar(last_rep_gray, rep_gray))
+                    if similar:
+                        segs[-1].extend(seg)
+                    else:
+                        emit(seg, rep_frame, rep_crop,
+                             k / max(len(frames), 1))
+                    s = k
+                    rep_frame = fi
+                    rep_crop = c
+                    rep_sharp = sharp
+                    rep_gray = g
+                elif sharp > rep_sharp:
+                    rep_sharp = sharp
+                    rep_frame = fi
+                    rep_crop = c
+                    rep_gray = g
+            else:
+                rep_frame = fi
+                rep_crop = c
+                rep_sharp = sharp
+                rep_gray = g
+            prev_b = b
+            if k % 100 == 0:
+                worker._cancel()
+            if k % 500 == 0:
+                worker._progress(
+                    f'[{worker._backend}] 并行解码+分段: '
+                    f'{k}/{len(frames)}',
+                    3 + k / max(len(frames), 1) * 55)
+        seg = frames[s:]
+        similar = (
+            worker._merge_similar and segs
+            and worker._segments_similar(last_rep_gray, rep_gray))
+        if similar:
+            segs[-1].extend(seg)
+        else:
+            emit(seg, rep_frame, rep_crop, 1.0)
+        session["seg_idx"] = seg_idx
+        return segs, keys, reps, rep_crops, time.perf_counter() - t0
 
     def _run_pipelined(self, _ocr_engines: list | None = None,
                        _force_single: bool = False,
@@ -780,145 +1080,14 @@ class FieldExtractor:
         th = int(np.median(ths)) if ths else config.OTSU_FALLBACK_THRESH
         self._bin_thresh = th
         self._prof_end('producer', 'calib_total', _t_cal)
-        q: Queue = Queue(maxsize=max(1, self._buffer_size))
-        results: dict = {}
-        ocr_err: list = []
-        ocr_wall = [0.0]
+        ocr_session = self._start_ocr_session(_ocr_engines)
+        q = ocr_session["q"]
+        results = ocr_session["results"]
+        ocr_err = ocr_session["err"]
+        ocr_wall = ocr_session["wall"]
+        ocr_thread = ocr_session["thread"]
+        _put_ocr = ocr_session["put"]
 
-        def _put_ocr(item) -> None:
-            """向 OCR 队列投递；OCR 线程已死时及时退出，避免有界队列死锁。
-
-            正常情况下与 q.put 行为一致（队列不满立即返回）；队列满时最多
-            等待 timeout，期间若发现 OCR 线程已失败则立即抛错终止生产。
-            """
-            while True:
-                if ocr_err:
-                    raise ocr_err[0]
-                try:
-                    q.put(item, timeout=0.2)
-                    return
-                except Full:
-                    continue
-
-        def ocr_worker() -> None:
-            t0 = time.perf_counter()
-            try:
-                if _ocr_engines is not None:
-                    engines = list(_ocr_engines)
-                    self._ocr_backend_used = (
-                        'tensorrt+onnxruntime'
-                        if len(engines) == 2 and engines[0].backend_name != engines[1].backend_name
-                        else engines[0].backend_name)
-                else:
-                    _hybrid_ocr = _os.environ.get(config.HYBRID_OCR_ENV, '').strip().lower() in ('1', 'true', 'yes', 'on')
-                    _t_eng = time.perf_counter()
-                    _engine_progress = lambda msg: self._progress(msg, 2.5)
-                    if _hybrid_ocr:
-                        engines = [OcrEngine(self._ocr_model, 'tensorrt', fill_width=self._fill_width, num_threads=self._ocr_num_threads(), progress_cb=_engine_progress), OcrEngine(self._ocr_model, 'onnxruntime', fill_width=self._fill_width, num_threads=self._ocr_num_threads(), progress_cb=_engine_progress)]
-                    else:
-                        ot = self._ocr_num_threads()
-                        dual_onnx = self._ocr_engine_type() == 'onnxruntime' and ot >= 8 and (_os.environ.get('RVTOL_DUAL_ONNX', '1') != '0')
-                        if dual_onnx:
-                            half = max(2, ot // 2)
-                            engines = [OcrEngine(self._ocr_model, 'onnxruntime', fill_width=self._fill_width, num_threads=half, progress_cb=_engine_progress) for _ in range(2)]
-                        else:
-                            engines = [OcrEngine(self._ocr_model, self._ocr_engine_type(), fill_width=self._fill_width, num_threads=ot, progress_cb=_engine_progress)]
-                    self._ocr_backend_used = 'tensorrt+onnxruntime' if len(engines) == 2 and engines[0].backend_name != engines[1].backend_name else engines[0].backend_name
-                    self._prof_end('ocr', 'engine_init', _t_eng)
-                B = _ocr_batch_size()
-                infer_q: Queue = Queue(maxsize=config.OCR_INFER_QUEUE_SIZE)
-                ocr_progress_frac = [0.0]
-
-                def _put_infer(item) -> bool:
-                    """投递到推理队列；推理线程已全部失败时尽快返回 False。"""
-                    while True:
-                        if ocr_err:
-                            return False
-                        try:
-                            infer_q.put(item, timeout=0.2)
-                            return True
-                        except Full:
-                            continue
-
-                def _report_ocr_progress(idx: int, frac: float) -> None:
-                    if frac - ocr_progress_frac[0] >= 0.01 or frac >= 1.0:
-                        ocr_progress_frac[0] = frac
-                        self._progress(f'[OCR] 段 {idx + 1}', 58.0 + frac * 28.0)
-
-                def infer_worker(eng) -> None:
-                    try:
-                        while True:
-                            item = infer_q.get()
-                            if item is None:
-                                return
-                            idxs, reps, procs, fracs = item
-                            _t_i = time.perf_counter()
-                            res = eng(procs)
-                            self._prof_end('ocr', 'infer', _t_i)
-                            _t_c = time.perf_counter()
-                            for idx, rep, r, frac in zip(idxs, reps, res, fracs):
-                                if hasattr(r, 'txts'):
-                                    raw_text = str(r.txts[0]) if r.txts and r.txts[0] else None
-                                    scores = getattr(r, 'scores', [])
-                                    ocr_conf = float(scores[0]) if scores else 0.0
-                                else:
-                                    raw_text, ocr_conf = (None, 0.0)
-                                # 引擎只保存识别层原始文本+置信度（不解析速度）；
-                                # 领域解析由上层应用（SegmentPipeline）完成。
-                                results[idx] = (raw_text, ocr_conf, rep)
-                                _report_ocr_progress(idx, frac)
-                            self._prof_end('ocr', 'ctc_decode', _t_c)
-                    except Exception as e:
-                        ocr_err.append(e)
-                infer_threads = [threading.Thread(target=infer_worker, args=(eng,), daemon=True) for eng in engines]
-                for t in infer_threads:
-                    t.start()
-                b_idx, b_reps, b_crops, b_fracs = ([], [], [], [])
-
-                def flush() -> None:
-                    if not b_idx:
-                        return
-                    _t_p = time.perf_counter()
-                    procs = [_preprocess_standard(_nv12_luma_full(c, self._color_range)[..., None] if self._yuv_output else c, force_aspect=self._force_aspect) for c in b_crops]
-                    self._prof_end('ocr', 'preprocess', _t_p)
-                    if not _put_infer((list(b_idx), list(b_reps), procs, list(b_fracs))):
-                        return
-                    b_idx.clear()
-                    b_reps.clear()
-                    b_crops.clear()
-                    b_fracs.clear()
-                while True:
-                    _t_w = time.perf_counter()
-                    item = q.get()
-                    self._prof_end('ocr', 'q_get_wait', _t_w)
-                    if item is None:
-                        break
-                    if ocr_err:
-                        break
-                    idx, rep, crop, frac = item
-                    b_idx.append(idx)
-                    b_reps.append(rep)
-                    b_crops.append(crop)
-                    b_fracs.append(frac)
-                    if len(b_idx) >= B:
-                        flush()
-                flush()
-                for _ in infer_threads:
-                    while True:
-                        try:
-                            infer_q.put(None, timeout=0.2)
-                            break
-                        except Full:
-                            if not any(t.is_alive() for t in infer_threads):
-                                break
-                for t in infer_threads:
-                    t.join()
-            except Exception as e:
-                ocr_err.append(e)
-            finally:
-                ocr_wall[0] = time.perf_counter() - t0
-        ocr_thread = threading.Thread(target=ocr_worker, daemon=True)
-        ocr_thread.start()
         DECODE_BATCH = config.DECODE_BATCH_SIZE
         dec_threads: list = []
         dec_err: list = []
@@ -1059,16 +1228,7 @@ class FieldExtractor:
             if consumer_ok[0]:
                 for t in dec_threads:
                     t.join()
-            # 通知 OCR 线程结束；若 OCR 线程已因异常退出且队列已满，不能
-            # 再阻塞在 put(None) 上（否则主线程死锁）。
-            while True:
-                try:
-                    q.put(None, timeout=0.2)
-                    break
-                except Full:
-                    if not ocr_thread.is_alive():
-                        break
-            ocr_thread.join()
+            ocr_session["finish"]()
             self.timing['ocr_tail'] = time.perf_counter() - _t_consume_end
         if dec_err:
             raise dec_err[0]
@@ -1270,6 +1430,10 @@ class FieldExtractor:
                     errors.append(e)
                 cancel_event.set()
                 return
+            # 一个 worker 只开一个持久 OCR 会话：所有切片共用它的队列和
+            # infer 线程。切片之间不再 join，后一片解码可与前一片 OCR 重叠。
+            session = worker._start_ocr_session([eng])
+            chunk_meta: dict = {}
             chunks_done = 0
             wall = 0.0
             try:
@@ -1277,28 +1441,59 @@ class FieldExtractor:
                     try:
                         item = item_q.get_nowait()
                     except Empty:
-                        return
+                        break
                     idx, start, end_f = item
                     worker._frame_start = int(start)
                     worker._frame_end = int(end_f)
                     worker._progress = _chunk_progress(idx, n_chunks)
                     _t_chunk = time.perf_counter()
                     try:
-                        fr, segs, texts, confs, reps = worker._run_pipelined(
-                            _ocr_engines=[eng], _external_vr=worker_vr)
+                        segs, keys, reps, crops_chunk, dec_elapsed = (
+                            self._run_parallel_chunk(
+                                worker, worker_vr, session, idx,
+                                start, end_f, n_chunks))
                     except Exception as e:  # noqa: BLE001
                         with result_lock:
                             errors.append(e)
                         cancel_event.set()
-                        return
+                        break
                     wall += time.perf_counter() - _t_chunk
                     chunks_done += 1
+                    chunk_meta[idx] = (
+                        segs, keys, reps, crops_chunk, dec_elapsed)
+            finally:
+                try:
+                    session["finish"]()
+                except Exception as e:  # noqa: BLE001
+                    with result_lock:
+                        if not errors:
+                            errors.append(e)
+                    cancel_event.set()
+                if session["err"]:
+                    with result_lock:
+                        if not errors:
+                            errors.append(session["err"][0])
+                # OCR 会话结束后按 chunk 内全局段索引组装结果
+                for idx in sorted(chunk_meta):
+                    segs, keys, reps, crops_chunk, dec_elapsed = chunk_meta[idx]
+                    texts: list = []
+                    confs: list = []
+                    reps_out: list = []
+                    for k, rep in zip(keys, reps):
+                        item = session["results"].get(k)
+                        if item is not None:
+                            texts.append(item[0])
+                            confs.append(item[1])
+                            reps_out.append(item[2])
+                        else:
+                            texts.append(None)
+                            confs.append(0.0)
+                            reps_out.append(rep)
                     with result_lock:
                         chunk_results[idx] = (
-                            fr, segs, texts, confs, reps,
-                            dict(worker.crops), dict(worker.timing),
+                            None, segs, texts, confs, reps_out,
+                            crops_chunk, {"decode": dec_elapsed},
                             worker._ocr_backend_used, worker._backend)
-            finally:
                 with result_lock:
                     worker_stats[tag] = (
                         chunks_done, wall, worker._backend,
