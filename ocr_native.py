@@ -125,6 +125,7 @@ class OcrEngine:
 
         # ── 模型 ──
         self._trt: TrtEngine | None = None
+        self._gpu_pre = None  # TRT GPU 预处理（懒加载）
         if engine_type == "tensorrt":
             try:
                 self._trt = TrtEngine(models, size, progress_cb=self._progress_cb)
@@ -320,6 +321,9 @@ class OcrEngine:
                 _floor = int(_env)
         max_wh = max(_floor / config.OCR_TARGET_H,
                      *(float(im.shape[1]) / im.shape[0] for im in img_list))
+        if self._trt is not None:
+            # GPU 预处理路径：直接生成显存模型输入，省去 host batch 构造
+            return self._call_trt_gpu(img_list, max_wh, h0)
         batch_np = np.stack([self._resize_norm(img_list[i], max_wh, h0)
                              for i in order])
         preds = self._infer(batch_np)
@@ -334,3 +338,40 @@ class OcrEngine:
             for k, idx in enumerate(order):
                 results[idx] = self._ctc_decode(preds[k])
         return results
+
+    # ═══════════════ TRT GPU 预处理专用路径 ═══════════════
+
+    def _call_trt_gpu(self, img_list: list, max_wh: float,
+                      h0: int) -> list:
+        """TRT：GPU 端 transpose+normalize+pad → device tensor → 推理。"""
+        from ocr_trt import GpuPreprocessor
+        if self._gpu_pre is None:
+            self._gpu_pre = GpuPreprocessor()
+        out_width = int(h0 * max_wh)
+        dev_ptr, shape = self._gpu_pre.process(img_list, out_width)
+        preds = self._infer_trt_device(dev_ptr, shape)
+        results: list = []
+        if preds.ndim == 3:
+            results = self._ctc_decode_batch(preds)
+        else:
+            for k in range(len(img_list)):
+                results.append(self._ctc_decode(preds[k]))
+        return results
+
+    def _infer_trt_device(self, dev_ptr: int, shape: tuple) -> np.ndarray:
+        """对已位于显存的整批输入执行 TRT，整批只同步一次。"""
+        B = int(shape[0])
+        max_batch = self._trt.max_batch
+        first_shape = (min(B, max_batch),) + tuple(shape[1:])
+        out_shape = self._trt._prepare_shape(first_shape)
+        preds = np.empty(
+            (B,) + tuple(out_shape[1:]), dtype=np.float32)
+        elem_floats = int(np.prod(shape[1:]))
+        for i in range(0, B, max_batch):
+            n = min(max_batch, B - i)
+            off = i * elem_floats * 4
+            self._trt.execute_device_async(
+                dev_ptr + off, (n,) + tuple(shape[1:]),
+                out_host=preds[i:i + n])
+        self._trt.synchronize()
+        return preds

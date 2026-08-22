@@ -38,6 +38,136 @@ def _models_dir() -> Path:
     return candidates[0]
 
 
+class GpuPreprocessor:
+    """TRT 路径的 GPU 预处理：把已 48 高的 float32 HWC 图直接变成模型输入。
+
+    只在 GPU 上完成最后一层 transpose + normalize + pad：
+    - 输入：list[float32 ndarray] (H, W_i, C)，已由 _preprocess_standard 缩到 48 高
+    - 输出：device float32 tensor (B, C, H, W_out)，可被 TrtEngine 直接执行
+    该路径避免在 host 上构造完整 padded batch，并让 DtoH 前始终是显存数据。
+    """
+    _KERNEL = r'''
+extern "C" __global__ void prep(
+    const float* __restrict__ raw,
+    const int* __restrict__ widths,
+    float* __restrict__ out,
+    int B, int H, int W_out, int C) {
+    int total = B * C * H * W_out;
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= total) return;
+    int b = i / (C * H * W_out);
+    int rem = i % (C * H * W_out);
+    int c = rem / (H * W_out);
+    int rem2 = rem % (H * W_out);
+    int y = rem2 / W_out;
+    int x = rem2 % W_out;
+    int w = widths[b];
+    if (x < w) {
+        int src = ((b * H + y) * w + x) * C + c;
+        float v = raw[src];
+        out[i] = (v / 255.0f - 0.5f) / 0.5f;
+    } else {
+        out[i] = 0.0f;
+    }
+}
+'''
+
+    def __init__(self) -> None:
+        import numpy as np  # noqa: F401
+        from cuda.core import (Buffer, Device, LaunchConfig, Program,
+                               ProgramOptions, launch)
+        self._dev = Device()
+        self._dev.set_current()
+        self._prog = Program(
+            self._KERNEL, code_type="c++",
+            options=ProgramOptions(std="c++11",
+                                   arch=f"sm_{self._dev.arch}"))
+        self._mod = self._prog.compile(
+            "cubin", name_expressions=("prep",))
+        self._kernel = self._mod.get_kernel("prep")
+        self._launch_cls = LaunchConfig
+        self._launch = launch
+        self._buffer_cls = Buffer
+        from cuda.bindings import runtime as cudart
+        _err, self._stream = cudart.cudaStreamCreate()
+        self._raw_size = 0
+        self._raw_dev = None
+        self._raw_buf = None
+        self._out_size = 0
+        self._out_dev = None
+        self._out_buf = None
+        self._width_size = 0
+        self._width_dev = None
+        self._width_buf = None
+
+    def _ensure_raw(self, nbytes: int) -> int:
+        from cuda.bindings import runtime as cudart
+        if self._raw_size < nbytes:
+            if self._raw_dev is not None:
+                cudart.cudaFree(self._raw_dev)
+            _err, self._raw_dev = cudart.cudaMalloc(nbytes)
+            self._raw_buf = self._buffer_cls.from_handle(self._raw_dev, nbytes)
+            self._raw_size = nbytes
+        return self._raw_dev
+
+    def _ensure_width(self, nbytes: int) -> int:
+        from cuda.bindings import runtime as cudart
+        if self._width_size < nbytes:
+            if self._width_dev is not None:
+                cudart.cudaFree(self._width_dev)
+            _err, self._width_dev = cudart.cudaMalloc(nbytes)
+            self._width_buf = self._buffer_cls.from_handle(self._width_dev, nbytes)
+            self._width_size = nbytes
+        return self._width_dev
+
+    def _ensure_out(self, nbytes: int) -> int:
+        from cuda.bindings import runtime as cudart
+        if self._out_size < nbytes:
+            if self._out_dev is not None:
+                cudart.cudaFree(self._out_dev)
+            _err, self._out_dev = cudart.cudaMalloc(nbytes)
+            self._out_buf = self._buffer_cls.from_handle(self._out_dev, nbytes)
+            self._out_size = nbytes
+        return self._out_dev
+
+    def process(self, images: list, out_width: int):
+        """返回 (device_ptr, output_shape)。调用方必须保持本对象存活。"""
+        import numpy as np
+        from cuda.bindings import runtime as cudart
+        B = len(images)
+        H = int(images[0].shape[0])
+        C = int(images[0].shape[2])
+        # 平铺每个图的真实像素，只有实际宽度数据上 GPU；pad 由 kernel 补 0
+        raw = np.concatenate(
+            [im.reshape(-1) for im in images]).astype(np.float32, copy=False)
+        widths = np.array([int(im.shape[1]) for im in images], dtype=np.int32)
+
+        raw_dev = self._ensure_raw(raw.nbytes)
+        width_dev = self._ensure_width(widths.nbytes)
+        out_nbytes = B * C * H * out_width * 4
+        out_dev = self._ensure_out(out_nbytes)
+
+        cudart.cudaMemcpyAsync(
+            raw_dev, raw.ctypes.data, raw.nbytes,
+            cudart.cudaMemcpyKind.cudaMemcpyHostToDevice, self._stream)
+        cudart.cudaMemcpyAsync(
+            width_dev, widths.ctypes.data, widths.nbytes,
+            cudart.cudaMemcpyKind.cudaMemcpyHostToDevice, self._stream)
+
+        shape = (B, C, H, out_width)
+        total = int(np.prod(shape))
+        block = 256
+        grid = (total + block - 1) // block
+        self._launch(
+            self._stream,
+            self._launch_cls(grid=grid, block=block),
+            self._kernel,
+            self._raw_buf, self._width_buf, self._out_buf,
+            np.int32(B), np.int32(H), np.int32(out_width), np.int32(C))
+        cudart.cudaStreamSynchronize(self._stream)
+        return int(out_dev), shape
+
+
 class TrtEngine:
     """反序列化 TRT 引擎 + 执行上下文 + 输入/输出显存缓冲复用。"""
 
@@ -241,6 +371,47 @@ class TrtEngine:
             host_out.ctypes.data, dev_out, out_nbytes,
             cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, stream)
         return host_out
+
+    def execute_device_async(self, dev_input: int, shape: tuple,
+                             out_host: "np.ndarray | None" = None) -> np.ndarray:
+        """异步执行已位于显存的输入（GPU 预处理结果），省去 HtoD。
+
+        dev_input 必须是当前 stream 上有效的 device 指针；调用方须在读取
+        out_host 前 synchronize()。
+        """
+        from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
+        stream = self._ensure_stream()
+        out_shape = self._prepare_shape(shape)
+        out_nbytes = int(np.prod(out_shape)) * 4
+        if self._dev_out is None or out_nbytes > self._out_nbytes:
+            if self._dev_out is not None:
+                cudart.cudaFree(self._dev_out)
+            _, self._dev_out = cudart.cudaMalloc(out_nbytes)
+            self._out_nbytes = out_nbytes
+        dev_out = self._dev_out
+        self.context.set_tensor_address(self.in_name, dev_input)
+        self.context.set_tensor_address(self.out_name, dev_out)
+        self.context.execute_async_v3(stream)
+        if out_host is not None:
+            if (not out_host.flags.c_contiguous or out_host.dtype != np.float32
+                    or out_host.nbytes < out_nbytes):
+                raise ValueError("out_host 必须是足够大的 float32 连续数组")
+            cudart.cudaMemcpyAsync(
+                out_host.ctypes.data, dev_out, out_nbytes,
+                cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, stream)
+            return out_host
+        host_out = np.empty(out_shape, dtype=np.float32)
+        cudart.cudaMemcpyAsync(
+            host_out.ctypes.data, dev_out, out_nbytes,
+            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, stream)
+        return host_out
+
+    def execute_device(self, dev_input: int, shape: tuple,
+                       out_host: "np.ndarray | None" = None) -> np.ndarray:
+        """同步执行显存输入。"""
+        result = self.execute_device_async(dev_input, shape, out_host)
+        self.synchronize()
+        return result
 
     def execute(self, x: np.ndarray, out_host: "np.ndarray | None" = None) -> np.ndarray:
         """同步执行一批输入（batch ≤ max_batch），复用输入/输出 buffer。"""
