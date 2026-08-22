@@ -1498,7 +1498,7 @@ class FieldExtractor:
                 with result_lock:
                     worker_stats[tag] = (
                         chunks_done, wall, worker._backend,
-                        worker._ocr_backend_used)
+                        worker._ocr_backend_used, session["wall"][0])
 
         pairs = self._dual_backend_pairs()
         threads = [
@@ -1550,12 +1550,16 @@ class FieldExtractor:
         self.timing = timing_sum
         self.timing['parallel_probe'] = time.perf_counter() - _t_probe
         # 每条流水线完成的片数/墙钟（诊断 GPU/CPU 路径是否闲置）
+        ocr_walls: list = []
         for tag in sorted(worker_stats):
-            chunks_done, wall, w_backend, w_ocr = worker_stats[tag]
+            chunks_done, wall, w_backend, w_ocr, w_ocr_wall = worker_stats[tag]
             self.timing[f'parallel_{tag}_chunks'] = chunks_done
             self.timing[f'parallel_{tag}_s'] = wall
             self.timing[f'parallel_{tag}_backend'] = w_backend
             self.timing[f'parallel_{tag}_ocr'] = w_ocr
+            ocr_walls.append(w_ocr_wall)
+        if ocr_walls:
+            self.timing['ocr'] = max(ocr_walls)
         self._progress("并行双流水线完成", 100.0)
         return (frames, all_segs, all_texts, all_confs, all_reps)
 
