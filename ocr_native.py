@@ -223,10 +223,13 @@ class OcrEngine:
             # 分配和最后的 concatenate 拷贝。
             preds = np.empty(
                 (len(batch_np),) + tuple(out_shape[1:]), dtype=np.float32)
+            # 所有子批全部异步 enqueue 到同一 CUDA stream，最后只同步一次；
+            # 消除每个子批一次 host-GPU 往返同步，让 GPU 连续执行。
             for i in range(0, len(batch_np), self._trt.max_batch):
                 n = min(self._trt.max_batch, len(batch_np) - i)
-                self._trt.execute(
+                self._trt.execute_async(
                     batch_np[i:i + n], out_host=preds[i:i + n])
+            self._trt.synchronize()
             return preds
         # ONNX 动态 batch 无上限：超大输入会让中间激活内存爆炸
         # （MaxPool bad allocation）。分片限制单批帧数，输出形状不变。

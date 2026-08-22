@@ -85,6 +85,7 @@ class TrtEngine:
         self._dev_in: int | None = None
         self._dev_out: int | None = None
         self._out_nbytes = 0
+        self._stream = None  # CUDA stream：异步 HtoD/execute/DtoH 流水线用
 
     @staticmethod
     def _engine_candidates(size: str) -> list[Path]:
@@ -177,13 +178,30 @@ class TrtEngine:
             self._out_shape = tuple(self.context.get_tensor_shape(self.out_name))
         return self._out_shape
 
-    def execute(self, x: np.ndarray, out_host: "np.ndarray | None" = None) -> np.ndarray:
-        """执行一批输入（batch ≤ max_batch），复用输入/输出 buffer。
+    def _ensure_stream(self) -> int:
+        """创建专用 CUDA stream（TRT async 必须用非默认流）。"""
+        if self._stream is None:
+            from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
+            _err, self._stream = cudart.cudaStreamCreate()
+        return self._stream
 
+    def synchronize(self) -> None:
+        """等待当前 CUDA stream 上的所有 async 操作完成。"""
+        if self._stream is None:
+            return
+        from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
+        cudart.cudaStreamSynchronize(self._stream)
+
+    def execute_async(self, x: np.ndarray,
+                      out_host: "np.ndarray | None" = None) -> np.ndarray:
+        """异步执行一批输入（batch ≤ max_batch），不等待完成。
+
+        调用方必须在读取 out_host/host_out 前调用 synchronize()。
         out_host 提供时直接把 DtoH 结果写入该 float32 连续数组，避免每次
         额外分配 host_out 并在 _infer_locked 中再 concatenate。
         """
         from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
+        stream = self._ensure_stream()
         out_shape = self._prepare_shape(x.shape)
         # 输入 device buffer：按 max profile 形状预分配并复用。
         # 直接以当前批的 numpy 内存作为 HtoD 源，去掉旧 host_in staging 拷贝：
@@ -194,8 +212,9 @@ class TrtEngine:
             size_in = int(np.prod(self.max_in_shape)) * 4
             _, self._dev_in = cudart.cudaMalloc(size_in)
         dev_in = self._dev_in
-        cudart.cudaMemcpy(dev_in, x.ctypes.data, x.nbytes,
-                          cudart.cudaMemcpyKind.cudaMemcpyHostToDevice)
+        cudart.cudaMemcpyAsync(
+            dev_in, x.ctypes.data, x.nbytes,
+            cudart.cudaMemcpyKind.cudaMemcpyHostToDevice, stream)
         # 输出 device buffer 按需增长复用（cudaMalloc 每次 ~ms，避免每片分配）
         out_nbytes = int(np.prod(out_shape)) * 4
         if self._dev_out is None or out_nbytes > self._out_nbytes:
@@ -204,16 +223,27 @@ class TrtEngine:
             _, self._dev_out = cudart.cudaMalloc(out_nbytes)
             self._out_nbytes = out_nbytes
         dev_out = self._dev_out
-        self.context.execute_v2([dev_in, dev_out])
+        # execute_async_v3 需要显式设置输入/输出 tensor 地址
+        self.context.set_tensor_address(self.in_name, dev_in)
+        self.context.set_tensor_address(self.out_name, dev_out)
+        self.context.execute_async_v3(stream)
         if out_host is not None:
             if (not out_host.flags.c_contiguous
                     or out_host.dtype != np.float32
                     or out_host.nbytes < out_nbytes):
                 raise ValueError("out_host 必须是足够大的 float32 连续数组")
-            cudart.cudaMemcpy(out_host.ctypes.data, dev_out, out_nbytes,
-                              cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
+            cudart.cudaMemcpyAsync(
+                out_host.ctypes.data, dev_out, out_nbytes,
+                cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, stream)
             return out_host
         host_out = np.empty(out_shape, dtype=np.float32)
-        cudart.cudaMemcpy(host_out.ctypes.data, dev_out, out_nbytes,
-                          cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
+        cudart.cudaMemcpyAsync(
+            host_out.ctypes.data, dev_out, out_nbytes,
+            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, stream)
         return host_out
+
+    def execute(self, x: np.ndarray, out_host: "np.ndarray | None" = None) -> np.ndarray:
+        """同步执行一批输入（batch ≤ max_batch），复用输入/输出 buffer。"""
+        result = self.execute_async(x, out_host)
+        self.synchronize()
+        return result
