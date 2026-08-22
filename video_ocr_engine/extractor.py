@@ -801,9 +801,12 @@ class FieldExtractor:
                             item = infer_q.get()
                             if item is None:
                                 return
-                            idxs, reps, procs, fracs = item
+                            idxs, reps, procs, fracs, raw_infos = item
                             _t_i = time.perf_counter()
-                            res = eng(procs)
+                            if raw_infos is not None:
+                                res = eng.call_gpu_raw(raw_infos)
+                            else:
+                                res = eng(procs)
                             self._prof_end('ocr', 'infer', _t_i)
                             _t_c = time.perf_counter()
                             for idx, rep, r, frac in zip(idxs, reps, res, fracs):
@@ -850,11 +853,13 @@ class FieldExtractor:
                             in ('1', 'true', 'yes', 'on')
                             or getattr(self, '_gpu_pipeline_mode', False)))
                     if raw_ok:
+                        # 把 raw 任务交给 infer 线程异步执行，避免 OCR worker
+                        # 被 GPU 预处理 + TRT 同步阻塞。
                         infos = [(d[1], d[2], d[3], d[0]) for d in b_devs]
-                        raw_res = engines[0].call_gpu_raw(infos)
-                        for idx, rep, r, frac in zip(
-                                b_idx, b_reps, raw_res, b_fracs):
-                            _store_result(idx, rep, r, frac)
+                        if not _put_infer((
+                                list(b_idx), list(b_reps), None,
+                                list(b_fracs), infos)):
+                            return
                         b_idx.clear(); b_reps.clear(); b_crops.clear()
                         b_devs.clear(); b_fracs.clear()
                         return
@@ -864,7 +869,7 @@ class FieldExtractor:
                         if self._yuv_output else c,
                         force_aspect=self._force_aspect) for c in b_crops]
                     self._prof_end('ocr', 'preprocess', _t_p)
-                    if not _put_infer((list(b_idx), list(b_reps), procs, list(b_fracs))):
+                    if not _put_infer((list(b_idx), list(b_reps), procs, list(b_fracs), None)):
                         return
                     b_idx.clear()
                     b_reps.clear()
@@ -1135,7 +1140,7 @@ class FieldExtractor:
         def frame_stream():
             nonlocal prev_holder, prev_ptr
             from cuda.bindings import runtime as cudart
-            DECODE_BATCH = config.DECODE_BATCH_SIZE
+            DECODE_BATCH = 64  # GPU 分段实验：更大批减少 kernel/同步次数
             _d2d = cudart.cudaMemcpyKind.cudaMemcpyDeviceToDevice
 
             def _fill_prev(prev_buf, base, B, frame_nbytes, prev_single):

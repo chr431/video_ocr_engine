@@ -209,7 +209,6 @@ extern "C" __global__ void prep_gray_raw(
             np.int32(B), np.int32(src_h), np.int32(src_w),
             np.int32(dst_h), np.int32(dst_w), np.int32(content_w),
             np.float32(gamma))
-        cudart.cudaStreamSynchronize(self._stream)
         return int(out_dev), shape
 
     def process(self, images: list, out_width: int):
@@ -246,7 +245,6 @@ extern "C" __global__ void prep_gray_raw(
             self._kernel,
             self._raw_buf, self._width_buf, self._out_buf,
             np.int32(B), np.int32(H), np.int32(out_width), np.int32(C))
-        cudart.cudaStreamSynchronize(self._stream)
         return int(out_dev), shape
 
 

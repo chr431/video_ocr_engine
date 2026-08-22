@@ -341,12 +341,18 @@ class OcrEngine:
 
     # ═══════════════ TRT GPU 预处理专用路径 ═══════════════
 
-    def _call_trt_gpu(self, img_list: list, max_wh: float,
-                      h0: int) -> list:
-        """TRT：GPU 端 transpose+normalize+pad → device tensor → 推理。"""
+    def _get_gpu_pre(self):
+        """创建 GpuPreprocessor 并与 TrtEngine 共享同一 CUDA stream。"""
         from ocr_trt import GpuPreprocessor
         if self._gpu_pre is None:
             self._gpu_pre = GpuPreprocessor()
+            self._gpu_pre._stream = self._trt._ensure_stream()
+        return self._gpu_pre
+
+    def _call_trt_gpu(self, img_list: list, max_wh: float,
+                      h0: int) -> list:
+        """TRT：GPU 端 transpose+normalize+pad → device tensor → 推理。"""
+        self._get_gpu_pre()
         out_width = int(h0 * max_wh)
         dev_ptr, shape = self._gpu_pre.process(img_list, out_width)
         preds = self._infer_trt_device(dev_ptr, shape)
@@ -363,9 +369,7 @@ class OcrEngine:
 
         infos: [(dev_ptr, src_h, src_w, owner), ...]
         """
-        from ocr_trt import GpuPreprocessor
-        if self._gpu_pre is None:
-            self._gpu_pre = GpuPreprocessor()
+        self._get_gpu_pre()
         src_h = int(infos[0][1])
         src_w = int(infos[0][2])
         if self._fill_width > 0:
