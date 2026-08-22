@@ -47,6 +47,8 @@
 
 - `TrtEngine.execute()` 已移除 `host_in` 固定 staging 数组：直接以当前批
   numpy 连续内存作为 `cudaMemcpy` 源，Host→Device 只保留一次拷贝。
+- `_infer_locked()` 对 TRT 路径预分配整批输出数组，每个子批直接 DtoH 进
+  对应切片，免去逐批 `host_out` 分配和 `np.concatenate` 拷贝。
 - 当前仍存在 1 次 HtoD（预处理后的 batch） + 1 次 DtoH（TRT 输出后处理用）。
   更进一步的 pinned memory / CUDA stream 异步拷贝 / GPU 侧预处理需要更大重构，
   尚未落地。
