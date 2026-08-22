@@ -81,8 +81,8 @@ class TrtEngine:
                 self._progress_cb("TensorRT 引擎构建完成")
             self._load(self.engine_path)
 
-        # 输入/输出 buffer 状态
-        self._buffers: tuple | None = None  # (dev_in, host_in)
+        # 输入/输出 device buffer 状态（host 侧不再保留中间 staging 数组）
+        self._dev_in: int | None = None
         self._dev_out: int | None = None
         self._out_nbytes = 0
 
@@ -179,16 +179,16 @@ class TrtEngine:
             self._last_in_shape = x.shape
             self._out_shape = tuple(self.context.get_tensor_shape(self.out_name))
         out_shape = self._out_shape
-        # 输入 buffer：max profile 形状预分配并复用
-        if self._buffers is None:
+        # 输入 device buffer：按 max profile 形状预分配并复用。
+        # 直接以当前批的 numpy 内存作为 HtoD 源，去掉旧 host_in staging 拷贝：
+        # 预处理结果本来就是 host float32 连续数组，无需再平铺进一块固定 host buffer。
+        if not x.flags.c_contiguous:
+            x = np.ascontiguousarray(x)
+        if self._dev_in is None:
             size_in = int(np.prod(self.max_in_shape)) * 4
-            _, dev_in = cudart.cudaMalloc(size_in)
-            host_in = np.zeros(self.max_in_shape, dtype=np.float32)
-            self._buffers = (dev_in, host_in)
-        dev_in, host_in = self._buffers
-        # 平铺拷贝（max-shape buffer 的前 x.size 个连续元素 = x 的连续内存）
-        host_in.reshape(-1)[:x.size] = x.reshape(-1)
-        cudart.cudaMemcpy(dev_in, host_in.ctypes.data, x.nbytes,
+            _, self._dev_in = cudart.cudaMalloc(size_in)
+        dev_in = self._dev_in
+        cudart.cudaMemcpy(dev_in, x.ctypes.data, x.nbytes,
                           cudart.cudaMemcpyKind.cudaMemcpyHostToDevice)
         # 输出 device buffer 按需增长复用（cudaMalloc 每次 ~ms，避免每片分配）
         out_nbytes = int(np.prod(out_shape)) * 4
