@@ -27,7 +27,8 @@ from hybrid_decode import (
 )
 from ocr_native import OcrEngine, auto_ocr_thread_count
 from video_utils import (_nv12_luma_full, _preprocess_standard,
-                         nv12_to_rgb)  # 识别链 YUV/preprocess/RGB 预览
+                         nv12_to_rgb, nvdec_available,
+                         tensorrt_available)  # 识别链 YUV/preprocess/RGB 预览
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +95,10 @@ class FieldExtractor:
                  progress_cb=None, cancel_check=None, gray_output: bool = False,
                  yuv_output: bool = False, keep_crops: bool = True,
                  keep_frames: bool = True, merge_similar: bool = False,
-                 merge_similar_threshold: float | None = None):
+                 merge_similar_threshold: float | None = None,
+                 dual_pipeline: bool | None = None,
+                 dual_pipeline_chunks: int = 0,
+                 dual_backends: list | None = None):
         self._video_path = Path(video_path)
         self._roi = tuple(roi)
         # fps 强制自测：open decoder 后从 get_avg_fps/get_fps 读，忽略外部
@@ -123,6 +127,15 @@ class FieldExtractor:
             float(merge_similar_threshold)
             if merge_similar_threshold is not None
             else float(config.SEG_MERGE_SIMILAR_THRESHOLD))
+        if dual_pipeline is None:
+            _env_dual = _os.environ.get(
+                config.DUAL_PIPELINE_ENV, '').strip().lower()
+            dual_pipeline = _env_dual in ('1', 'true', 'yes', 'on')
+        self._dual_pipeline = bool(dual_pipeline)
+        self._dual_pipeline_chunks = max(0, int(dual_pipeline_chunks or 0))
+        self._dual_backends = (
+            [tuple(map(str, p)) for p in dual_backends]
+            if dual_backends else None)
         self._color_range = 0            # run 时从 decoder get_color_range 读取
         self._codec = ""                 # run 时从 decoder get_codec 探测
         self._hybrid_codec = ""
@@ -679,8 +692,13 @@ class FieldExtractor:
         return segs
 
 
-    def _run_pipelined(self):
+    def _run_pipelined(self, _ocr_engines: list | None = None,
+                       _force_single: bool = False,
+                       _external_vr=None):
         """流水线：解码线程增量分段，OCR 线程批处理已闭合段的代表帧。
+        _ocr_engines：内部并行流水线复用 OCR 引擎时传入；None 走常规创建。
+        _force_single：内部回退单实例时传入，绕过 dual_pipeline 分发。
+        _external_vr：内部并行流水线复用已打开解码器时传入（不重新 open）。
 
             解码是 I/O 瓶颈（CPU 占用低），段边界（win3）在解码循环内增量计算，
             段一闭合就把代表帧（最清晰）交给 OCR 工作线程 —— 解码∥OCR 重叠摊薄
@@ -691,6 +709,8 @@ class FieldExtractor:
             返回 (frames, segs, seg_vals, rep_frames)；self.crops = {rep_frame:
             crop}（仅代表帧，供 review 预览，比存全帧省内存）。
             """
+        if self._dual_pipeline and _ocr_engines is None and not _force_single:
+            return self._run_pipelined_parallel()
         from queue import Full, Queue
         import threading
         from ocr_native import OcrEngine
@@ -703,7 +723,10 @@ class FieldExtractor:
             if vr_gpu is None:
                 hybrid = False
         else:
-            vr = self._open_vr()
+            if _external_vr is not None:
+                vr = _external_vr
+            else:
+                vr = self._open_vr()
         if self._fps is None:
             for m in ('get_avg_fps', 'get_fps'):
                 fn = getattr(vr, m, None)
@@ -780,21 +803,28 @@ class FieldExtractor:
         def ocr_worker() -> None:
             t0 = time.perf_counter()
             try:
-                _hybrid_ocr = _os.environ.get(config.HYBRID_OCR_ENV, '').strip().lower() in ('1', 'true', 'yes', 'on')
-                _t_eng = time.perf_counter()
-                _engine_progress = lambda msg: self._progress(msg, 2.5)
-                if _hybrid_ocr:
-                    engines = [OcrEngine(self._ocr_model, 'tensorrt', fill_width=self._fill_width, num_threads=self._ocr_num_threads(), progress_cb=_engine_progress), OcrEngine(self._ocr_model, 'onnxruntime', fill_width=self._fill_width, num_threads=self._ocr_num_threads(), progress_cb=_engine_progress)]
+                if _ocr_engines is not None:
+                    engines = list(_ocr_engines)
+                    self._ocr_backend_used = (
+                        'tensorrt+onnxruntime'
+                        if len(engines) == 2 and engines[0].backend_name != engines[1].backend_name
+                        else engines[0].backend_name)
                 else:
-                    ot = self._ocr_num_threads()
-                    dual_onnx = self._ocr_engine_type() == 'onnxruntime' and ot >= 8 and (_os.environ.get('RVTOL_DUAL_ONNX', '1') != '0')
-                    if dual_onnx:
-                        half = max(2, ot // 2)
-                        engines = [OcrEngine(self._ocr_model, 'onnxruntime', fill_width=self._fill_width, num_threads=half, progress_cb=_engine_progress) for _ in range(2)]
+                    _hybrid_ocr = _os.environ.get(config.HYBRID_OCR_ENV, '').strip().lower() in ('1', 'true', 'yes', 'on')
+                    _t_eng = time.perf_counter()
+                    _engine_progress = lambda msg: self._progress(msg, 2.5)
+                    if _hybrid_ocr:
+                        engines = [OcrEngine(self._ocr_model, 'tensorrt', fill_width=self._fill_width, num_threads=self._ocr_num_threads(), progress_cb=_engine_progress), OcrEngine(self._ocr_model, 'onnxruntime', fill_width=self._fill_width, num_threads=self._ocr_num_threads(), progress_cb=_engine_progress)]
                     else:
-                        engines = [OcrEngine(self._ocr_model, self._ocr_engine_type(), fill_width=self._fill_width, num_threads=ot, progress_cb=_engine_progress)]
-                self._ocr_backend_used = 'tensorrt+onnxruntime' if len(engines) == 2 and engines[0].backend_name != engines[1].backend_name else engines[0].backend_name
-                self._prof_end('ocr', 'engine_init', _t_eng)
+                        ot = self._ocr_num_threads()
+                        dual_onnx = self._ocr_engine_type() == 'onnxruntime' and ot >= 8 and (_os.environ.get('RVTOL_DUAL_ONNX', '1') != '0')
+                        if dual_onnx:
+                            half = max(2, ot // 2)
+                            engines = [OcrEngine(self._ocr_model, 'onnxruntime', fill_width=self._fill_width, num_threads=half, progress_cb=_engine_progress) for _ in range(2)]
+                        else:
+                            engines = [OcrEngine(self._ocr_model, self._ocr_engine_type(), fill_width=self._fill_width, num_threads=ot, progress_cb=_engine_progress)]
+                    self._ocr_backend_used = 'tensorrt+onnxruntime' if len(engines) == 2 and engines[0].backend_name != engines[1].backend_name else engines[0].backend_name
+                    self._prof_end('ocr', 'engine_init', _t_eng)
                 B = _ocr_batch_size()
                 infer_q: Queue = Queue(maxsize=config.OCR_INFER_QUEUE_SIZE)
                 ocr_progress_frac = [0.0]
@@ -1052,6 +1082,267 @@ class FieldExtractor:
         self._ocr_confs = [results[i][1] for i in range(seg_idx)]
         return (frames, segs, self._ocr_texts, self._ocr_confs,
                 [results[i][2] for i in range(seg_idx)])
+
+    # ═══════════════ 单实例双完整流水线并行（实验） ═══════════════
+
+    @staticmethod
+    def _opposite_decode(backend: str) -> str:
+        """互补解码后端：CPU 软解 ↔ auto（NVDEC 优先）。"""
+        return "auto" if str(backend or "").strip().lower() == "cpu" else "cpu"
+
+    @staticmethod
+    def _opposite_ocr(backend: str) -> str:
+        """互补 OCR 后端：CPU ONNX ↔ auto（TensorRT 优先）。"""
+        return "auto" if str(backend or "").strip().lower() == "cpu" else "cpu"
+
+    def _dual_pipeline_available(self) -> bool:
+        """单实例双流水线需要 NVDEC 和 TensorRT 均可用，构成 CPU/GPU 互补。"""
+        return nvdec_available(str(self._video_path)) and tensorrt_available()
+
+    def _dual_backend_pairs(self) -> list[tuple[str, str]]:
+        """返回两条流水线的 (decode, ocr) 后端组合。
+
+        默认：主后端 + 互补后端（CPU ↔ GPU/TRT）。调用方可显式传
+        dual_backends=[('cpu','auto'), ('cpu','auto')] 等自定义组合；
+        少于两条时复制第一条补足两条。
+        """
+        if self._dual_backends:
+            pairs = [tuple(p) for p in self._dual_backends]
+            if len(pairs) == 1:
+                pairs = pairs * 2
+            return pairs[:2]
+        main = (self._decode_backend or "auto", self._ocr_backend or "auto")
+        opp = (self._opposite_decode(main[0]), self._opposite_ocr(main[1]))
+        pairs = [main]
+        if opp != main:
+            pairs.append(opp)
+        return pairs
+
+    def _new_worker(self, decode_backend: str, ocr_backend: str,
+                    progress_cb=None, cancel_check=None) -> "FieldExtractor":
+        """创建一条子流水线实例（关闭 dual，避免递归）。"""
+        return FieldExtractor(
+            str(self._video_path), self._roi,
+            frame_start=self._frame_start,
+            frame_end=self._frame_end,
+            force_aspect=self._force_aspect,
+            decode_backend=decode_backend,
+            ocr_backend=ocr_backend,
+            buffer_size=self._buffer_size,
+            fill_width=self._fill_width,
+            C=self._C,
+            fps=self._fps,
+            sample_stride=self._sample_stride,
+            progress_cb=progress_cb,
+            cancel_check=cancel_check,
+            gray_output=self._gray_output,
+            yuv_output=self._yuv_output,
+            keep_crops=self._keep_crops,
+            keep_frames=self._keep_frames,
+            merge_similar=self._merge_similar,
+            merge_similar_threshold=self._merge_similar_threshold,
+            dual_pipeline=False)
+
+    def _dual_ocr_num_threads(self) -> int:
+        """双流水线的 OCR 线程预算：env 钩子优先，否则全物理核。
+
+        双流水线设计默认是“CPU+ONNX 与 GPU+TRT”互补，CPU 侧独占软解+ONNX，
+        与 GPU 侧不抢核；少核/AV1 的精细分核暂不在此实验路径展开。
+        """
+        _env = _os.environ.get('RVTOL_OCR_THREADS')
+        if _env and _env.isdigit():
+            return max(1, int(_env))
+        return auto_ocr_thread_count()
+
+    def _run_pipelined_parallel(self):
+        """单实例双完整流水线并行：同一视频切多片，两流水线动态取片。
+
+        与旧“混合解码/混合 OCR”只在一个阶段内并行的方案不同：
+        这里是两条完整“解码→分段→OCR”流水线各自带互补后端（如 GPU+TRT 与
+        CPU+ONNX），从共享队列取连续小片，谁快谁多干，避免机械对半切导致
+        快流水线闲置。最后按片序合并段文本/置信度/代表帧。
+
+        需要 NVDEC 与 TensorRT 均可用；不满足则由 _run_pipelined 分发到此处
+        前先探测，回退单流水线（_force_single=True）。
+        """
+        from queue import Empty, Queue
+        import threading
+        from ocr_native import OcrEngine
+
+        if not self._dual_pipeline_available():
+            logger.warning(
+                '单实例双流水线需要 NVDEC 和 TensorRT 均可用，回退单流水线')
+            return self._run_pipelined(_force_single=True)
+
+        # ── 1. 探测视频总长 / fps，构造全局采样帧列表 ──
+        from video_utils import open_decord_vr
+        _t_probe = time.perf_counter()
+        _vr, _label = open_decord_vr(str(self._video_path))
+        try:
+            _fps = None
+            for _m in ('get_avg_fps', 'get_fps'):
+                _fn = getattr(_vr, _m, None)
+                if _fn is None:
+                    continue
+                try:
+                    _fps = float(_fn())
+                    break
+                except Exception:
+                    _fps = None
+            if not _fps or _fps <= 0:
+                _fps = config.DEFAULT_FPS_FALLBACK
+            total = len(_vr)
+        finally:
+            del _vr
+        if self._fps is None:
+            self._fps = _fps
+        end = min(self._frame_end or total, total)
+        frames = list(range(self._frame_start, end, self._sample_stride))
+        if not frames:
+            raise ValueError(
+                f"帧区间为空: frame_start={self._frame_start}, "
+                f"frame_end={end}, total={total}")
+        if len(frames) < 2:
+            return self._run_pipelined(_force_single=True)
+
+        # ── 2. 切连续小片；每个 worker 从队列取片（动态负载均衡）──
+        n_chunks = (self._dual_pipeline_chunks
+                    if self._dual_pipeline_chunks > 0
+                    else config.DUAL_PIPELINE_CHUNKS)
+        min_chunk = config.DUAL_PIPELINE_MIN_CHUNK_FRAMES
+        n_chunks = max(2, min(n_chunks, max(2, len(frames) // min_chunk)))
+        n_chunks = min(n_chunks, len(frames))
+        chunk_specs: list[tuple[int, int]] = []
+        for i in range(n_chunks):
+            a = i * len(frames) // n_chunks
+            b = (i + 1) * len(frames) // n_chunks
+            start = frames[a]
+            if i == n_chunks - 1:
+                end_f = end if self._frame_end not in (None, 0) else total
+            else:
+                end_f = frames[b]
+            chunk_specs.append((start, end_f))
+        item_q: Queue = Queue()
+        for idx, spec in enumerate(chunk_specs):
+            item_q.put((idx, spec[0], spec[1]))
+
+        # ── 3. 两个消费者线程：每条完整流水线 + 持久 OCR 引擎 ──
+        result_lock = threading.Lock()
+        errors: list = []
+        cancel_event = threading.Event()
+        chunk_results: dict = {}
+        prog_lock = threading.Lock()
+        prog_last = [-1.0]
+
+        def _chunk_progress(idx: int, n: int):
+            def cb(msg: str, pct: float) -> None:
+                overall = ((idx + min(max(float(pct), 0.0), 100.0) / 100.0)
+                           / n * 100.0)
+                with prog_lock:
+                    if overall <= prog_last[0]:
+                        return
+                    prog_last[0] = overall
+                self._progress(f'[并行 {idx + 1}/{n}] {msg}', overall)
+            return cb
+
+        def _consumer(decode_backend: str, ocr_backend: str, tag: str) -> None:
+            worker = self._new_worker(
+                decode_backend, ocr_backend,
+                progress_cb=None, cancel_check=self._cancel)
+            try:
+                worker_vr = worker._open_vr()
+            except Exception as e:  # noqa: BLE001
+                with result_lock:
+                    errors.append(e)
+                cancel_event.set()
+                return
+            try:
+                eng = OcrEngine(
+                    self._ocr_model,
+                    worker._ocr_engine_type(),
+                    fill_width=self._fill_width,
+                    num_threads=self._dual_ocr_num_threads(),
+                    progress_cb=lambda m: self._progress(
+                        f'[{tag}] {m}', 2.5))
+            except Exception as e:  # noqa: BLE001
+                with result_lock:
+                    errors.append(e)
+                cancel_event.set()
+                return
+            while not cancel_event.is_set():
+                try:
+                    item = item_q.get_nowait()
+                except Empty:
+                    return
+                idx, start, end_f = item
+                worker._frame_start = int(start)
+                worker._frame_end = int(end_f)
+                worker._progress = _chunk_progress(idx, n_chunks)
+                try:
+                    fr, segs, texts, confs, reps = worker._run_pipelined(
+                        _ocr_engines=[eng], _external_vr=worker_vr)
+                except Exception as e:  # noqa: BLE001
+                    with result_lock:
+                        errors.append(e)
+                    cancel_event.set()
+                    return
+                with result_lock:
+                    chunk_results[idx] = (
+                        fr, segs, texts, confs, reps,
+                        dict(worker.crops), dict(worker.timing),
+                        worker._ocr_backend_used, worker._backend)
+
+        pairs = self._dual_backend_pairs()
+        threads = [
+            threading.Thread(
+                target=_consumer, args=(dec, ocr, f'pipe{i + 1}'),
+                daemon=True)
+            for i, (dec, ocr) in enumerate(pairs)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        if errors:
+            raise errors[0]
+        if len(chunk_results) != n_chunks:
+            raise RuntimeError(
+                f"双流水线切片结果不完整: {len(chunk_results)}/{n_chunks}")
+
+        # ── 4. 按片序合并（帧序全局单调）──
+        all_segs: list = []
+        all_texts: list = []
+        all_confs: list = []
+        all_reps: list = []
+        all_crops: dict = {}
+        timing_sum: dict = {}
+        backend_names: list = []
+        ocr_backend_names: list = []
+        for i in sorted(chunk_results):
+            _fr, segs, texts, confs, reps, crops_chunk, tim, ob, bk = (
+                chunk_results[i])
+            all_segs.extend(segs)
+            all_texts.extend(texts)
+            all_confs.extend(confs)
+            all_reps.extend(reps)
+            all_crops.update(crops_chunk)
+            for k, v in tim.items():
+                if isinstance(v, (int, float)):
+                    timing_sum[k] = timing_sum.get(k, 0.0) + float(v)
+            ocr_backend_names.append(ob or "")
+            backend_names.append(bk or "")
+        self._frames = frames
+        self._segs = all_segs
+        self.crops = all_crops
+        self._ocr_texts = all_texts
+        self._ocr_confs = all_confs
+        self._n_segments = len(all_segs)
+        self._backend = "dual:" + "+".join(backend_names)
+        self._ocr_backend_used = "+".join(ocr_backend_names)
+        self.timing = timing_sum
+        self.timing['parallel_probe'] = time.perf_counter() - _t_probe
+        self._progress("并行双流水线完成", 100.0)
+        return (frames, all_segs, all_texts, all_confs, all_reps)
 
     def prepare_review_rgb(self) -> None:
         """最终检查前：把全部代表帧 packed YUV420 就地转成 RGB。

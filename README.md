@@ -94,6 +94,38 @@ CPU 且片源为 h264 时，可手动选 `"cpu"` 获得更高软解吞吐（NVDE
 > 长视频/大 ROI 场景若不需要预览图，可设 `keep_crops=False`、`keep_frames=False`
 > 显著降低内存占用（默认 `True` 保持兼容）。
 
+## 单实例双完整流水线并行（实验，默认关闭）
+
+`FieldExtractor` 可以在一个实例内把同一视频切成多个连续小片，由两条完整
+“解码 → 分段 → OCR”流水线作为消费者从队列动态取片，最后按帧序合并。与旧
+“只并行解码或只并行 OCR”的方案不同，这里每条流水线都有独立的解码器与 OCR
+引擎，能同时利用 CPU 与 GPU。
+
+```python
+ex = FieldExtractor(
+    video_path="subtitle_episode.mkv",
+    roi=(10, 850, 1910, 940),
+    decode_backend="auto",       # 主流水线
+    ocr_backend="auto",
+    gray_output=True,
+    merge_similar=True,
+    dual_pipeline=True,          # 开启单实例双流水线
+    dual_pipeline_chunks=4,      # 切片数，默认 4
+    # 可选：自定义两条流水线后端；默认主+互补（CPU ↔ GPU/TRT）
+    # dual_backends=[("cpu", "auto"), ("cpu", "auto")],
+)
+result = ex.extract()
+```
+
+- 默认 `dual_pipeline=False`，保持原有单流水线行为。
+- 需要 **NVDEC 和 TensorRT 同时可用**；不满足时自动回退单流水线并发出警告。
+- `dual_backends` 可显式指定两条流水线的 `(decode_backend, ocr_backend)`；
+  只给一条时自动复制为两条（例如两条 CPU 解码 + TensorRT OCR）。
+- 在本机标清 h264 字幕场景，默认双流水线（auto+auto 与 cpu+cpu）相对单流水线
+  有约 **30%** 加速；显式两条 `("cpu","auto")` 再快约 5%。
+- 分片数不是越多越好：本机实测 2~4 片最优，8 片会因额外 seek/边界处理变慢。
+  短片段/短范围建议保持默认或改用 2 片。
+
 > 面向字幕提取的完整 CLI 应用已拆到独立仓库
 > [chr431/video_subtitle_extractor](https://github.com/chr431/video_subtitle_extractor)：
 > 提供 `--roi`/`--start-frame`/`--end-frame`/`--sample-stride` 等参数，输出
@@ -118,6 +150,7 @@ CPU 且片源为 h264 时，可手动选 `"cpu"` 获得更高软解吞吐（NVDE
 | `RVTOL_DUAL_ONNX` | `0` 关闭双 ONNX 实例（CPU 核数≥8 默认开） |
 | `RVTOL_HYBRID_DECODE` | `1` 开启 CPU+NVDEC 混合解码（队列实测无提升，维持关闭） |
 | `RVTOL_HYBRID_OCR` | `1` 开启 TRT+ONNX 混合 OCR（队列实测无提升，维持关闭） |
+| `RVTOL_DUAL_PIPELINE` | `1` 开启单实例双完整流水线并行（需 NVDEC+TRT，默认关闭） |
 | `RVTOL_SEG_GAMMA` | 分段灰度 gamma（默认 0=raw） |
 | `RVTOL_OCR_GAMMA` | OCR 预处理 gamma（默认 2.0） |
 

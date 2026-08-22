@@ -245,6 +245,44 @@ def open_decord_vr(video_path, force_cpu: bool = False):
     return _vr, _label
 
 
+def nvdec_available(video_path=None) -> bool:
+    """轻量探测 NVDEC 解码是否可用（尝试用 GPU reader 打开视频）。
+
+    video_path 为 None 时只探测 decord GPU 模块/上下文是否可用，不打开文件。
+    """
+    try:
+        from decord import VideoReader, gpu
+        if video_path is None:
+            from decord import gpu as _g
+            _g(0)
+            return True
+        vr = VideoReader(str(video_path), ctx=gpu(0))
+        del vr
+        return True
+    except Exception:
+        return False
+
+
+def tensorrt_available() -> bool:
+    """轻量探测 TensorRT 是否可用（存在 nvinfer DLL 且绑定可导入）。"""
+    try:
+        import tensorrt  # noqa: F401 — shim / binding 导入
+        import tensorrt_bindings
+        pkg = Path(tensorrt_bindings.__file__).resolve().parent
+        candidates = list(pkg.glob("nvinfer*.dll"))
+        libs = pkg.parent / "tensorrt_libs"
+        if libs.is_dir():
+            candidates.extend(libs.glob("nvinfer*.dll"))
+        for entry in _os.environ.get("PATH", "").split(_os.pathsep):
+            if entry:
+                d = Path(entry)
+                if d.is_dir():
+                    candidates.extend(d.glob("nvinfer*.dll"))
+        return bool(candidates)
+    except Exception:
+        return False
+
+
 def rss_mb() -> float:
     """当前进程 RSS（MB）。psutil 缺失返回 -1。"""
     try:

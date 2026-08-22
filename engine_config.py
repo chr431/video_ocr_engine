@@ -54,6 +54,12 @@ HYBRID_DECODE_ENV: str = "RVTOL_HYBRID_DECODE"
 # TRT+ONNX 混合 OCR 开关（默认关闭；5 视频队列实测无提升，维持关闭）：
 # OCR 同时用 TensorRT（GPU）+ onnxruntime（CPU）双引擎并发处理段批。
 HYBRID_OCR_ENV: str = "RVTOL_HYBRID_OCR"
+# 单实例双完整流水线并行（可选）：一个 FieldExtractor 把同一视频切成多个连续
+# 小片，两条完整解码+分段+OCR 流水线（互补后端组合）作为消费者从队列取片，
+# 动态负载均衡；最后按帧序合并。默认关闭。需要 NVDEC 和 TensorRT 均可用。
+DUAL_PIPELINE_ENV: str = "RVTOL_DUAL_PIPELINE"
+DUAL_PIPELINE_CHUNKS: int = 4          # 默认切片数（两条流水线动态取片）
+DUAL_PIPELINE_MIN_CHUNK_FRAMES: int = 16  # 每个切片至少包含的采样帧数（太少则减片）
 DEFAULT_OCR_BACKEND: str = "auto"      # OCR 推理后端 (auto / cpu / tensorrt)
 OCR_BACKEND_KEYS: list[str] = ["auto", "cpu", "tensorrt"]
 OCR_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU", "tensorrt": "TensorRT"}
