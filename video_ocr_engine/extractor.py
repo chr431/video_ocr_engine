@@ -1231,6 +1231,7 @@ class FieldExtractor:
         errors: list = []
         cancel_event = threading.Event()
         chunk_results: dict = {}
+        worker_stats: dict = {}
         prog_lock = threading.Lock()
         prog_last = [-1.0]
 
@@ -1269,28 +1270,37 @@ class FieldExtractor:
                     errors.append(e)
                 cancel_event.set()
                 return
-            while not cancel_event.is_set():
-                try:
-                    item = item_q.get_nowait()
-                except Empty:
-                    return
-                idx, start, end_f = item
-                worker._frame_start = int(start)
-                worker._frame_end = int(end_f)
-                worker._progress = _chunk_progress(idx, n_chunks)
-                try:
-                    fr, segs, texts, confs, reps = worker._run_pipelined(
-                        _ocr_engines=[eng], _external_vr=worker_vr)
-                except Exception as e:  # noqa: BLE001
+            chunks_done = 0
+            wall = 0.0
+            try:
+                while not cancel_event.is_set():
+                    try:
+                        item = item_q.get_nowait()
+                    except Empty:
+                        return
+                    idx, start, end_f = item
+                    worker._frame_start = int(start)
+                    worker._frame_end = int(end_f)
+                    worker._progress = _chunk_progress(idx, n_chunks)
+                    _t_chunk = time.perf_counter()
+                    try:
+                        fr, segs, texts, confs, reps = worker._run_pipelined(
+                            _ocr_engines=[eng], _external_vr=worker_vr)
+                    except Exception as e:  # noqa: BLE001
+                        with result_lock:
+                            errors.append(e)
+                        cancel_event.set()
+                        return
+                    wall += time.perf_counter() - _t_chunk
+                    chunks_done += 1
                     with result_lock:
-                        errors.append(e)
-                    cancel_event.set()
-                    return
+                        chunk_results[idx] = (
+                            fr, segs, texts, confs, reps,
+                            dict(worker.crops), dict(worker.timing),
+                            worker._ocr_backend_used, worker._backend)
+            finally:
                 with result_lock:
-                    chunk_results[idx] = (
-                        fr, segs, texts, confs, reps,
-                        dict(worker.crops), dict(worker.timing),
-                        worker._ocr_backend_used, worker._backend)
+                    worker_stats[tag] = (chunks_done, wall)
 
         pairs = self._dual_backend_pairs()
         threads = [
@@ -1308,6 +1318,12 @@ class FieldExtractor:
         if len(chunk_results) != n_chunks:
             raise RuntimeError(
                 f"双流水线切片结果不完整: {len(chunk_results)}/{n_chunks}")
+
+        # 每条流水线完成的片数/墙钟（诊断 GPU/CPU 路径是否闲置）
+        for tag in sorted(worker_stats):
+            chunks_done, wall = worker_stats[tag]
+            self.timing[f'parallel_{tag}_chunks'] = chunks_done
+            self.timing[f'parallel_{tag}_s'] = wall
 
         # ── 4. 按片序合并（帧序全局单调）──
         all_segs: list = []
