@@ -169,16 +169,22 @@ class TrtEngine:
         with open(engine_path, "wb") as f:
             f.write(serialized)
 
-    def execute(self, x: np.ndarray) -> np.ndarray:
-        """执行一批输入（batch ≤ max_batch），复用输入/输出 buffer。"""
-        from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
-        # 主路径 shape 恒定（batch 6, 320 宽）：set_input_shape 实测每批
-        # 开销 ~0.5ms（TRT context 重配置），只在 shape 变化时调用
-        if self._last_in_shape != x.shape:
-            self.context.set_input_shape(self.in_name, x.shape)
-            self._last_in_shape = x.shape
+    def _prepare_shape(self, shape: tuple) -> tuple:
+        """更新 TRT context 输入 shape（幂等），返回输出 shape。"""
+        if self._last_in_shape != shape:
+            self.context.set_input_shape(self.in_name, shape)
+            self._last_in_shape = shape
             self._out_shape = tuple(self.context.get_tensor_shape(self.out_name))
-        out_shape = self._out_shape
+        return self._out_shape
+
+    def execute(self, x: np.ndarray, out_host: "np.ndarray | None" = None) -> np.ndarray:
+        """执行一批输入（batch ≤ max_batch），复用输入/输出 buffer。
+
+        out_host 提供时直接把 DtoH 结果写入该 float32 连续数组，避免每次
+        额外分配 host_out 并在 _infer_locked 中再 concatenate。
+        """
+        from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
+        out_shape = self._prepare_shape(x.shape)
         # 输入 device buffer：按 max profile 形状预分配并复用。
         # 直接以当前批的 numpy 内存作为 HtoD 源，去掉旧 host_in staging 拷贝：
         # 预处理结果本来就是 host float32 连续数组，无需再平铺进一块固定 host buffer。
@@ -199,6 +205,14 @@ class TrtEngine:
             self._out_nbytes = out_nbytes
         dev_out = self._dev_out
         self.context.execute_v2([dev_in, dev_out])
+        if out_host is not None:
+            if (not out_host.flags.c_contiguous
+                    or out_host.dtype != np.float32
+                    or out_host.nbytes < out_nbytes):
+                raise ValueError("out_host 必须是足够大的 float32 连续数组")
+            cudart.cudaMemcpy(out_host.ctypes.data, dev_out, out_nbytes,
+                              cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
+            return out_host
         host_out = np.empty(out_shape, dtype=np.float32)
         cudart.cudaMemcpy(host_out.ctypes.data, dev_out, out_nbytes,
                           cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)

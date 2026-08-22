@@ -217,10 +217,17 @@ class OcrEngine:
 
     def _infer_locked(self, batch_np: np.ndarray) -> np.ndarray:
         if self._trt is not None:
-            outs = []
+            first_batch = batch_np[:min(len(batch_np), self._trt.max_batch)]
+            out_shape = self._trt._prepare_shape(first_batch.shape)
+            # 预分配整批输出并让每个子批直接写进对应切片，免去逐批 host_out
+            # 分配和最后的 concatenate 拷贝。
+            preds = np.empty(
+                (len(batch_np),) + tuple(out_shape[1:]), dtype=np.float32)
             for i in range(0, len(batch_np), self._trt.max_batch):
-                outs.append(self._trt.execute(batch_np[i:i + self._trt.max_batch]))
-            return np.concatenate(outs, axis=0)
+                n = min(self._trt.max_batch, len(batch_np) - i)
+                self._trt.execute(
+                    batch_np[i:i + n], out_host=preds[i:i + n])
+            return preds
         # ONNX 动态 batch 无上限：超大输入会让中间激活内存爆炸
         # （MaxPool bad allocation）。分片限制单批帧数，输出形状不变。
         # 16（原 64）为历史最优：小片更快且 ORT arena 峰值更低
