@@ -72,6 +72,34 @@ def _ndarray_device_ptr(nd):
     return int(t.data), shape
 
 
+def _otsu_from_hist(hist) -> int:
+    """从 256-bin 直方图算 Otsu 阈值（与 segmentation._otsu 等价）。"""
+    hist = np.asarray(hist, dtype=np.int64)
+    total = int(hist.sum())
+    if total <= 0:
+        return config.OTSU_FALLBACK_THRESH
+    st = float((np.arange(256) * hist).sum())
+    sb = 0.0
+    wb = 0
+    best = config.OTSU_FALLBACK_THRESH
+    vmax = -1.0
+    for t in range(256):
+        wb += int(hist[t])
+        if wb == 0:
+            continue
+        wf = total - wb
+        if wf == 0:
+            break
+        sb += t * int(hist[t])
+        mb = sb / wb
+        mf = (st - sb) / wf
+        vb = wb * wf * (mb - mf) ** 2
+        if vb > vmax:
+            vmax = vb
+            best = t
+    return best
+
+
 def _gray_mean_abs_diff(a, b) -> float:
     """两帧分段灰度 ROI 的平均绝对差；形状不一致时视为不相似。"""
     if a is None or b is None:
@@ -1110,22 +1138,18 @@ class FieldExtractor:
         calib_n = min(config.SEG_CALIB_FRAMES, len(frames))
         calib_nds = vr.get_batch(
             frames[:calib_n], roi=(x1, y1, x2 + 1, y2 + 1))
-        calib_crops = calib_nds.asnumpy()
-        calib_th = []
-        for k in range(calib_n):
-            c = calib_crops[k]
-            if not self._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
-                c = c[y1:y2 + 1, x1:x2 + 1]
-            calib_th.append(_otsu(self._crop_luma(c)))
-        th = int(np.median(calib_th)) if calib_th else config.OTSU_FALLBACK_THRESH
-        self._bin_thresh = th
         calib_base, calib_shape = _ndarray_device_ptr(calib_nds)
         calib_c = calib_shape[-1] if len(calib_shape) == 4 else 0
         if calib_c != 1:
             return self._run_pipelined(_force_single=True)
+        src_h, src_w = calib_shape[1], calib_shape[2]
+        analyzer = GpuFrameAnalyzer()
+        # GPU 直方图 Otsu：不再把前 50 帧整帧 D2H
+        _hist = analyzer.histogram(calib_base, calib_n * src_h * src_w)
+        th = _otsu_from_hist(_hist)
+        self._bin_thresh = th
 
         self._gpu_pipeline_mode = True
-        analyzer = GpuFrameAnalyzer()
         ocr_session = self._start_ocr_session(None)
         q = ocr_session["q"]
         results = ocr_session["results"]
@@ -1133,7 +1157,6 @@ class FieldExtractor:
         ocr_wall = ocr_session["wall"]
         _put_ocr = ocr_session["put"]
 
-        src_h, src_w = calib_shape[1], calib_shape[2]
         prev_holder = calib_nds
         prev_ptr = calib_base
 
@@ -1186,6 +1209,22 @@ class FieldExtractor:
                     prev_holder = nds
                     prev_ptr = cur
 
+        # 生产者线程：解码 + GPU analyze 与主线程分段/OCR 重叠
+        producer_q: Queue = Queue(maxsize=max(8, self._buffer_size))
+        producer_err: list = []
+
+        def _producer() -> None:
+            try:
+                for item in frame_stream():
+                    producer_q.put(item)
+            except Exception as e:  # noqa: BLE001
+                producer_err.append(e)
+            finally:
+                producer_q.put(None)
+
+        producer = threading.Thread(target=_producer, daemon=True)
+        producer.start()
+
         segs: list = []
         rep_crops: dict = {}
         seg_idx = 0
@@ -1194,9 +1233,16 @@ class FieldExtractor:
         rep_dev = None
         rep_sharp = -1.0
         prev_seen = False
+        k = 0
         t0 = time.perf_counter()
         try:
-            for k, (fi, dev, sharp, cluster) in enumerate(frame_stream()):
+            while True:
+                item = producer_q.get()
+                if item is None:
+                    break
+                if producer_err:
+                    raise producer_err[0]
+                fi, dev, sharp, cluster = item
                 if prev_seen:
                     changed = float(cluster) >= self._C
                     if changed:
@@ -1223,6 +1269,10 @@ class FieldExtractor:
                 if k % 500 == 0:
                     self._progress(f'[{self._backend}] GPU分段: {k}/{len(frames)}',
                                    3 + k / max(len(frames), 1) * 55)
+                k += 1
+            producer.join()
+            if producer_err:
+                raise producer_err[0]
             seg = frames[s:]
             segs.append(seg)
             _put_ocr((seg_idx, rep_frame, None, rep_dev, 1.0))
