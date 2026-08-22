@@ -958,6 +958,7 @@ class FieldExtractor:
                     else:
                         emit(seg, rep_frame, rep_crop,
                              k / max(len(frames), 1))
+                        last_rep_gray = rep_gray
                     s = k
                     rep_frame = fi
                     rep_crop = c
