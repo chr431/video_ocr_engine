@@ -257,7 +257,9 @@ class FieldExtractor:
         大部分区域未变，均值被稀释。因此额外限制 abs(diff)>10 的像素数。
         RVTOL_TEXT_SEP 开启时，先做字幕/背景分离再比较，减少背景干扰。
         """
-        _text_mode = _os.environ.get('RVTOL_TEXT_SEP', '').strip().lower()
+        _text_mode = _os.environ.get(
+            'RVTOL_TEXT_SEP_MERGE',
+            _os.environ.get('RVTOL_TEXT_SEP', '')).strip().lower()
         if _text_mode in ('1', 'contrast', '2', 'binary'):
             a = _text_sep_gray(a, 'contrast' if _text_mode in ('1', 'contrast')
                                else 'binary', th=self._bin_thresh)
