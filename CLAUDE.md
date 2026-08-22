@@ -43,6 +43,14 @@
   `merge_similar` / 下游去重吸收。
 - 当前仅支持 2 条流水线；超过 2 条的后端组合暂未开放。
 
+### TRT 拷贝路径（2026-08）
+
+- `TrtEngine.execute()` 已移除 `host_in` 固定 staging 数组：直接以当前批
+  numpy 连续内存作为 `cudaMemcpy` 源，Host→Device 只保留一次拷贝。
+- 当前仍存在 1 次 HtoD（预处理后的 batch） + 1 次 DtoH（TRT 输出后处理用）。
+  更进一步的 pinned memory / CUDA stream 异步拷贝 / GPU 侧预处理需要更大重构，
+  尚未落地。
+
 ### Race 跨编码实测（2026-08，1500 帧窗口）
 
 - h264（test3/test5）：默认双流水线 2 片有 7~17% 收益；两条 CPU+TRT 略快。
