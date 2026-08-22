@@ -845,9 +845,10 @@ class FieldExtractor:
                         len(engines) == 1
                         and getattr(engines[0], '_trt', None) is not None
                         and b_devs and all(d is not None for d in b_devs)
-                        and _os.environ.get(
+                        and (_os.environ.get(
                             'RVTOL_GPU_RAW', '').strip().lower()
-                        in ('1', 'true', 'yes', 'on'))
+                            in ('1', 'true', 'yes', 'on')
+                            or getattr(self, '_gpu_pipeline_mode', False)))
                     if raw_ok:
                         infos = [(d[1], d[2], d[3], d[0]) for d in b_devs]
                         raw_res = engines[0].call_gpu_raw(infos)
@@ -1055,6 +1056,188 @@ class FieldExtractor:
         session["seg_idx"] = seg_idx
         return segs, keys, reps, rep_crops, time.perf_counter() - t0
 
+    def _gpu_pipeline_enabled(self) -> bool:
+        """实验 GPU 全流水线开关：RVTOL_GPU_PIPELINE=1 + gray + GPU/TRT 可用。"""
+        _env = _os.environ.get('RVTOL_GPU_PIPELINE', '').strip().lower()
+        if _env not in ('1', 'true', 'yes', 'on'):
+            return False
+        if not self._gray_output or self._yuv_output:
+            return False
+        return nvdec_available(str(self._video_path)) and tensorrt_available()
+
+    def _run_pipelined_gpu(self):
+        """实验：灰度/sharp/聚类变化分都在 GPU 计算，host 只收标量。
+
+        代表帧保留 GPU device pointer，OCR 走 RVTOL_GPU_RAW 自动开启的
+        call_gpu_raw 路径。校准阈值仍取前 50 帧 D2H（量小，可接受）。
+        返回格式与 _run_pipelined 相同。
+        """
+        from queue import Queue
+        import threading
+        from ocr_trt import GpuFrameAnalyzer
+        _t_open = time.perf_counter()
+        vr = self._open_vr()
+        if not self._backend.startswith('decord/GPU'):
+            return self._run_pipelined(_force_single=True)
+        if self._fps is None:
+            for m in ('get_avg_fps', 'get_fps'):
+                fn = getattr(vr, m, None)
+                if fn is None:
+                    continue
+                try:
+                    self._fps = float(fn())
+                    break
+                except Exception:
+                    self._fps = None
+            if not self._fps or self._fps <= 0:
+                self._fps = config.DEFAULT_FPS_FALLBACK
+        x1, y1, x2, y2 = self._roi
+        total = len(vr)
+        end = min(self._frame_end or total, total)
+        if self._frame_start > 0:
+            vr.seek_accurate(self._frame_start)
+        frames = list(range(self._frame_start, end, self._sample_stride))
+        if not frames:
+            raise ValueError(
+                f"帧区间为空: frame_start={self._frame_start}, "
+                f"frame_end={end}, total={total}")
+        self._prof_end('producer', 'open_and_fps', _t_open)
+        calib_n = min(config.SEG_CALIB_FRAMES, len(frames))
+        calib_nds = vr.get_batch(
+            frames[:calib_n], roi=(x1, y1, x2 + 1, y2 + 1))
+        calib_crops = calib_nds.asnumpy()
+        calib_th = []
+        for k in range(calib_n):
+            c = calib_crops[k]
+            if not self._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
+                c = c[y1:y2 + 1, x1:x2 + 1]
+            calib_th.append(_otsu(self._crop_luma(c)))
+        th = int(np.median(calib_th)) if calib_th else config.OTSU_FALLBACK_THRESH
+        self._bin_thresh = th
+        calib_base, calib_shape = _ndarray_device_ptr(calib_nds)
+        calib_c = calib_shape[-1] if len(calib_shape) == 4 else 0
+        if calib_c != 1:
+            return self._run_pipelined(_force_single=True)
+
+        self._gpu_pipeline_mode = True
+        analyzer = GpuFrameAnalyzer()
+        ocr_session = self._start_ocr_session(None)
+        q = ocr_session["q"]
+        results = ocr_session["results"]
+        ocr_err = ocr_session["err"]
+        ocr_wall = ocr_session["wall"]
+        _put_ocr = ocr_session["put"]
+
+        src_h, src_w = calib_shape[1], calib_shape[2]
+        prev_holder = calib_nds
+        prev_ptr = calib_base
+
+        def frame_stream():
+            nonlocal prev_holder, prev_ptr
+            from cuda.bindings import runtime as cudart
+            DECODE_BATCH = config.DECODE_BATCH_SIZE
+            _d2d = cudart.cudaMemcpyKind.cudaMemcpyDeviceToDevice
+
+            def _fill_prev(prev_buf, base, B, frame_nbytes, prev_single):
+                for k in range(B):
+                    src = (prev_single if k == 0
+                           else base + (k - 1) * frame_nbytes)
+                    cudart.cudaMemcpyAsync(
+                        prev_buf + k * frame_nbytes, src, frame_nbytes,
+                        _d2d, analyzer._stream)
+
+            # 校准帧整批分析
+            B = calib_n
+            frame_nbytes = src_h * src_w
+            prev_buf = analyzer._ensure_prev(max(B, DECODE_BATCH) * frame_nbytes)
+            _fill_prev(prev_buf, calib_base, B, frame_nbytes, calib_base)
+            sums = analyzer.analyze_batch(
+                calib_base, prev_buf, B, src_h, src_w, th)
+            for k in range(B):
+                cur = calib_base + k * frame_nbytes
+                yield (frames[k], (calib_nds, cur, src_h, src_w),
+                       float(sums[k, 0]), float(sums[k, 1]))
+                prev_holder = calib_nds
+                prev_ptr = cur
+
+            for bstart in range(calib_n, len(frames), DECODE_BATCH):
+                bend = min(bstart + DECODE_BATCH, len(frames))
+                nds = vr.get_batch(
+                    frames[bstart:bend], roi=(x1, y1, x2 + 1, y2 + 1))
+                base, shape = _ndarray_device_ptr(nds)
+                if len(shape) != 4 or shape[-1] != 1:
+                    raise RuntimeError("GPU 分段仅支持 decord gray 输出")
+                H, W = shape[1], shape[2]
+                B = bend - bstart
+                fnb = H * W
+                prev_buf = analyzer._ensure_prev(max(B, DECODE_BATCH) * fnb)
+                _fill_prev(prev_buf, base, B, fnb, prev_ptr)
+                sums = analyzer.analyze_batch(
+                    base, prev_buf, B, H, W, th)
+                for k in range(B):
+                    cur = base + k * fnb
+                    yield (frames[bstart + k], (nds, cur, H, W),
+                           float(sums[k, 0]), float(sums[k, 1]))
+                    prev_holder = nds
+                    prev_ptr = cur
+
+        segs: list = []
+        rep_crops: dict = {}
+        seg_idx = 0
+        s = 0
+        rep_frame = frames[0]
+        rep_dev = None
+        rep_sharp = -1.0
+        prev_seen = False
+        t0 = time.perf_counter()
+        try:
+            for k, (fi, dev, sharp, cluster) in enumerate(frame_stream()):
+                if prev_seen:
+                    changed = float(cluster) >= self._C
+                    if changed:
+                        seg = frames[s:k]
+                        segs.append(seg)
+                        _put_ocr((seg_idx, rep_frame, None, rep_dev,
+                                  k / max(len(frames), 1)))
+                        seg_idx += 1
+                        s = k
+                        rep_frame = fi
+                        rep_dev = dev
+                        rep_sharp = sharp
+                    elif sharp > rep_sharp:
+                        rep_sharp = sharp
+                        rep_frame = fi
+                        rep_dev = dev
+                else:
+                    rep_frame = fi
+                    rep_dev = dev
+                    rep_sharp = sharp
+                    prev_seen = True
+                if k % 100 == 0:
+                    self._cancel()
+                if k % 500 == 0:
+                    self._progress(f'[{self._backend}] GPU分段: {k}/{len(frames)}',
+                                   3 + k / max(len(frames), 1) * 55)
+            seg = frames[s:]
+            segs.append(seg)
+            _put_ocr((seg_idx, rep_frame, None, rep_dev, 1.0))
+            seg_idx += 1
+        finally:
+            _t_consume_end = time.perf_counter()
+            self.timing['decode'] = _t_consume_end - t0
+            ocr_session["finish"]()
+            self.timing['ocr_tail'] = time.perf_counter() - _t_consume_end
+        if ocr_err:
+            raise ocr_err[0]
+        self.timing['ocr'] = ocr_wall[0]
+        self._n_segments = len(segs)
+        self.crops = rep_crops
+        del vr
+        self._ocr_texts = [results[i][0] for i in range(seg_idx)]
+        self._ocr_confs = [results[i][1] for i in range(seg_idx)]
+        return (frames, segs, self._ocr_texts, self._ocr_confs,
+                [results[i][2] for i in range(seg_idx)])
+
     def _run_pipelined(self, _ocr_engines: list | None = None,
                        _force_single: bool = False,
                        _external_vr=None):
@@ -1074,6 +1257,8 @@ class FieldExtractor:
             """
         if self._dual_pipeline and _ocr_engines is None and not _force_single:
             return self._run_pipelined_parallel()
+        if self._gpu_pipeline_enabled():
+            return self._run_pipelined_gpu()
         from queue import Full, Queue
         import threading
         from ocr_native import OcrEngine

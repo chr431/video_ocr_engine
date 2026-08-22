@@ -68,6 +68,14 @@
   - 本机 test5 1500/3000 帧 A/B：**开启反而慢 20~30%**（当前仍做每帧
     asnumpy 供分段，raw 只省代表帧，却增加 GPU kernel 与 D2D 竞争）。
   - 结论：要真正收益必须把灰度/sharp/分段也留在 GPU，当前实验路径保留参考。
+- GPU 灰度/sharp/聚类分段已实现实验路径（`RVTOL_GPU_PIPELINE=1`）：
+  - `GpuFrameAnalyzer` 一次 kernel 分析整批帧，只回传 (sharp, cluster) 标量；
+  - 避免整帧 ROI D2H；校准阈值仍取前 50 帧 D2H。
+  - 默认关闭。
+  - test5 1500/3000 帧 A/B：开启仍比 host 慢（2.59 vs 1.72；4.11 vs 3.24），
+    主要瓶颈是 raw OCR 路径 + GPU 分析 kernel 尚未与解码/TRT 充分重叠。
+  - 结论：当前实验路径不提供净收益；若继续，应把 GPU 分析并入 decode 批量
+    异步流水线并减少 kernel/同步次数。
 - 当前仍存在 1 次原始 ROI D2H（decord asnumpy） + 1 次 DtoH（TRT 输出）。
 
 ### Race 跨编码实测（2026-08，1500 帧窗口）

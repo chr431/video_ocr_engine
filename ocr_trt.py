@@ -250,6 +250,126 @@ extern "C" __global__ void prep_gray_raw(
         return int(out_dev), shape
 
 
+class GpuFrameAnalyzer:
+    """GPU 帧分析：sharp(std) + 相邻帧 3x3 聚类变化分，直接把标量回传 host。
+
+    当前用于实验性 GPU 分段路径：只把每帧的 (sharp, cluster_score) 小数组
+    D2H，不再把整帧 ROI 灰度拷贝回 host。
+    """
+    _KERNEL = r'''
+extern "C" __global__ void analyze_gray(
+    const unsigned char* __restrict__ raw,
+    const unsigned char* __restrict__ prev,
+    float* __restrict__ summary,
+    int B, int H, int W, float th) {
+    int b = blockIdx.x;
+    if (b >= B) return;
+    const unsigned char* cur = raw + (size_t)b * H * W;
+    const unsigned char* pre = prev + (size_t)b * H * W;
+    double sum = 0.0, sum2 = 0.0;
+    int maxc = 0;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            int v = cur[y * W + x];
+            sum += v; sum2 += (double)v * v;
+            int s = 0;
+            for (int dy = -1; dy <= 1; dy++) {
+                int yy = y + dy;
+                if (yy < 0 || yy >= H) continue;
+                for (int dx = -1; dx <= 1; dx++) {
+                    int xx = x + dx;
+                    if (xx < 0 || xx >= W) continue;
+                    int cv = cur[yy * W + xx];
+                    int pv = pre[yy * W + xx];
+                    if ((cv > th) != (pv > th)) s++;
+                }
+            }
+            if (s > maxc) maxc = s;
+        }
+    }
+    double mean = sum / (double)(H * W);
+    double var = sum2 / (double)(H * W) - mean * mean;
+    summary[b * 2] = (float)(var > 0.0 ? sqrt(var) : 0.0);
+    summary[b * 2 + 1] = (float)maxc;
+}
+'''
+
+    def __init__(self) -> None:
+        import numpy as np  # noqa: F401
+        from cuda.core import Device, Program, ProgramOptions
+        self._dev = Device()
+        self._dev.set_current()
+        self._prog = Program(
+            self._KERNEL, code_type="c++",
+            options=ProgramOptions(std="c++11",
+                                   arch=f"sm_{self._dev.arch}"))
+        self._mod = self._prog.compile("cubin", name_expressions=("analyze_gray",))
+        self._kernel = self._mod.get_kernel("analyze_gray")
+        from cuda.bindings import runtime as cudart
+        _err, self._stream = cudart.cudaStreamCreate()
+        self._summary_size = 0
+        self._summary_dev = None
+        self._prev_size = 0
+        self._prev_dev = None
+
+    def _ensure_prev(self, nbytes: int) -> int:
+        from cuda.bindings import runtime as cudart
+        if self._prev_size < nbytes:
+            if self._prev_dev is not None:
+                cudart.cudaFree(self._prev_dev)
+            _err, self._prev_dev = cudart.cudaMalloc(nbytes)
+            self._prev_size = nbytes
+        return self._prev_dev
+
+    def analyze_batch(self, raw_ptr: int, prev_ptr: int, B: int,
+                      H: int, W: int, th: float) -> "np.ndarray":
+        """一次 kernel 分析 B 帧；prev_ptr 必须是已准备好的 B 帧前帧缓冲。"""
+        import numpy as np
+        from cuda.bindings import runtime as cudart
+        from cuda.core import Buffer, LaunchConfig, launch
+        nbytes = B * 2 * 4
+        if self._summary_size < nbytes:
+            if self._summary_dev is not None:
+                cudart.cudaFree(self._summary_dev)
+            _err, self._summary_dev = cudart.cudaMalloc(nbytes)
+            self._summary_size = nbytes
+        buf = Buffer.from_handle(self._summary_dev, nbytes)
+        launch(self._stream, LaunchConfig(grid=B, block=1), self._kernel,
+               Buffer.from_handle(raw_ptr, B * H * W),
+               Buffer.from_handle(prev_ptr, B * H * W),
+               buf, np.int32(B), np.int32(H), np.int32(W), np.float32(th))
+        cudart.cudaStreamSynchronize(self._stream)
+        out = np.empty((B, 2), dtype=np.float32)
+        cudart.cudaMemcpy(
+            out.ctypes.data, self._summary_dev, nbytes,
+            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
+        return out
+
+    def analyze(self, raw_ptr: int, prev_ptr: int, B: int, H: int, W: int,
+                th: float) -> "np.ndarray":
+        """返回 (B,2) float32 host 数组：每帧 (sharp, cluster_score)。"""
+        import numpy as np
+        from cuda.bindings import runtime as cudart
+        from cuda.core import Buffer, LaunchConfig, launch
+        nbytes = B * 2 * 4
+        if self._summary_size < nbytes:
+            if self._summary_dev is not None:
+                cudart.cudaFree(self._summary_dev)
+            _err, self._summary_dev = cudart.cudaMalloc(nbytes)
+            self._summary_size = nbytes
+        buf = Buffer.from_handle(self._summary_dev, nbytes)
+        launch(self._stream, LaunchConfig(grid=B, block=1), self._kernel,
+               Buffer.from_handle(raw_ptr, B * H * W),
+               Buffer.from_handle(prev_ptr, B * H * W),
+               buf, np.int32(B), np.int32(H), np.int32(W), np.float32(th))
+        cudart.cudaStreamSynchronize(self._stream)
+        out = np.empty((B, 2), dtype=np.float32)
+        cudart.cudaMemcpy(
+            out.ctypes.data, self._summary_dev, nbytes,
+            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
+        return out
+
+
 class TrtEngine:
     """反序列化 TRT 引擎 + 执行上下文 + 输入/输出显存缓冲复用。"""
 
