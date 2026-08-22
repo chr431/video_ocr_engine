@@ -54,10 +54,15 @@
 - 微基准（test5 3000 帧 / 16 图 batch）：
   - 基线 OCR micro：21.94ms/batch（729 img/s）
   - 异步 stream 后：18.58ms/batch（861 img/s，约 +18%）
-  - E2E 仍由 NVDEC 解码瓶颈主导，test5 3000 帧约 3.46s 基本不变。
+  - GPU 预处理后：18.58ms/batch（861 img/s，micro 持平）
+  - E2E：基线 3.457s → 3.252s（-6%，decode 仍为主瓶颈）
 - pinned host staging 微测反而更慢（额外 CPU 拷贝），未采纳。
-- 当前仍存在 1 次 HtoD（预处理后的 batch） + 1 次 DtoH（TRT 输出后处理用）。
-  GPU 侧预处理 / decord GPU 帧直通显存需要更大重构，尚未落地。
+- GPU 预处理已落地为 `GpuPreprocessor`：
+  - 对已 48 高的 float32 HWC 图在 GPU 完成 transpose+normalize+pad；
+  - 直接生成显存模型输入，`TrtEngine.execute_device_async` 跳过 HtoD；
+  - 与旧 CPU `_resize_norm` 输出逐项一致（随机批对比 same=True）。
+- 当前仍存在 1 次原始 ROI D2H（decord asnumpy） + 1 次 DtoH（TRT 输出）。
+  decord GPU 帧直通显存需要 DLPack + GPU 分段/灰度，尚未落地。
 
 ### Race 跨编码实测（2026-08，1500 帧窗口）
 
