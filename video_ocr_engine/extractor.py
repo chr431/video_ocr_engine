@@ -155,8 +155,10 @@ class FieldExtractor:
                  sample_stride: int = config.DEFAULT_SAMPLE_STRIDE,
                  progress_cb=None, cancel_check=None, gray_output: bool = False,
                  yuv_output: bool = False, keep_crops: bool = True,
-                 keep_frames: bool = True, merge_similar: bool = False,
+                 keep_frames: bool = True,
+                 merge_similar: bool = config.DEFAULT_MERGE_SIMILAR,
                  merge_similar_threshold: float | None = None,
+                 merge_text_sep: str | None = None,
                  dual_pipeline: bool | None = None,
                  dual_pipeline_chunks: int = 0,
                  dual_backends: list | None = None):
@@ -188,6 +190,9 @@ class FieldExtractor:
             float(merge_similar_threshold)
             if merge_similar_threshold is not None
             else float(config.SEG_MERGE_SIMILAR_THRESHOLD))
+        self._merge_text_sep = (
+            merge_text_sep if merge_text_sep is not None
+            else config.DEFAULT_MERGE_TEXT_SEP)
         if dual_pipeline is None:
             _env_dual = _os.environ.get(
                 config.DUAL_PIPELINE_ENV, '').strip().lower()
@@ -259,7 +264,8 @@ class FieldExtractor:
         """
         _text_mode = _os.environ.get(
             'RVTOL_TEXT_SEP_MERGE',
-            _os.environ.get('RVTOL_TEXT_SEP', '')).strip().lower()
+            _os.environ.get('RVTOL_TEXT_SEP', self._merge_text_sep or '')
+        ).strip().lower()
         if _text_mode in ('1', 'contrast', '2', 'binary'):
             a = _text_sep_gray(a, 'contrast' if _text_mode in ('1', 'contrast')
                                else 'binary', th=self._bin_thresh)

@@ -78,13 +78,16 @@ def test_extract_keep_frames_false(monkeypatch):
     assert result.segments[0].rep_crop == "crop1"
 
 
-def test_merge_similar_default_off_and_custom():
+def test_merge_similar_default_on_and_custom():
     ex = _make()
-    assert ex._merge_similar is False
+    assert ex._merge_similar is True
     assert ex._merge_similar_threshold == 3.0
-    ex2 = _make(merge_similar=True, merge_similar_threshold=5.0)
-    assert ex2._merge_similar is True
+    assert ex._merge_text_sep == "binary"
+    ex2 = _make(merge_similar=False, merge_similar_threshold=5.0,
+                merge_text_sep="contrast")
+    assert ex2._merge_similar is False
     assert ex2._merge_similar_threshold == 5.0
+    assert ex2._merge_text_sep == "contrast"
 
 
 def test_gray_mean_abs_diff():

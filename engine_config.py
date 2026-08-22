@@ -108,9 +108,13 @@ SEG_GAMMA: float = 0.0             # 分段/代表帧选择的灰度 gamma 增�
                                    # >0 = 255*(g/255)^g 增强后分段（与 OCR 预处理
                                    # 对齐实验，env RVTOL_SEG_GAMMA 可覆盖）。
 SEG_C: float = 5.0              # 分段聚类阈值：max 3×3 窗口和 < C ⇒ 显示未变
-# 相似段合并（subtitle 场景可选）：连续两段代表帧灰度平均绝对差 ≤ 该阈值时，
-# 视为同一视觉内容（如噪声把同一条字幕切成多段），合并后只 OCR 一次。
-# 默认关闭（速度数字场景不能合并）；video_subtitle_extractor 可显式开启。
+# 相似段合并（生产默认开启）：连续两段代表帧在字幕/背景分离图上比较，
+# 平均绝对差 ≤ 阈值时视为同一视觉内容（如噪声把同一条字幕切成多段），
+# 合并后只 OCR 一次。Race 全量实测最终错误 0、分段 -1.6%。
+DEFAULT_MERGE_SIMILAR: bool = True
+# 相似帧合并使用的分离方案：binary（黑底白字）为引擎默认。
+# OCR 输入仍保持灰度+gamma，不直接使用 binary（实测会降低 OCR 准确率）。
+DEFAULT_MERGE_TEXT_SEP: str = "binary"
 SEG_MERGE_SIMILAR_THRESHOLD: float = 3.0
 # 相似段合并的“显著变化像素”上限（ROI 面积比例）：即使平均绝对差很小，若
 # 变化像素占比超过该比例，仍视为真实内容变化（防止宽 ROI 中单字短字幕被误合并）。
