@@ -57,8 +57,9 @@ ex = FieldExtractor(
     yuv_output=True,                  # 代表帧保留 YUV（转 RGB 预览用）
     keep_crops=True,                  # 是否在结果中保留每段代表帧图像
     keep_frames=True,                 # 是否在结果中保留每段帧号序列
-    merge_similar=False,              # 是否合并视觉相似相邻段（字幕噪声场景可开）
+    merge_similar=True,               # 是否合并视觉相似相邻段（默认开启）
     merge_similar_threshold=3.0,      # 相似判定阈值（灰度平均绝对差）
+    merge_text_sep="binary",          # 相似帧合并用的分离方案（默认 binary）
 )
 result = ex.extract()
 
