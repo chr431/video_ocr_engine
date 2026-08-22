@@ -61,8 +61,14 @@
   - 对已 48 高的 float32 HWC 图在 GPU 完成 transpose+normalize+pad；
   - 直接生成显存模型输入，`TrtEngine.execute_device_async` 跳过 HtoD；
   - 与旧 CPU `_resize_norm` 输出逐项一致（随机批对比 same=True）。
+- decord GPU 帧直通已实现为实验路径（`RVTOL_GPU_RAW=1` 开启）：
+  - 从 decord gray NDArray DLPack 解析 device ptr，代表帧 D2D 聚批后
+    `prep_gray_raw` kernel 在 GPU 完成 resize+gamma+normalize+pad；
+  - 默认关闭。
+  - 本机 test5 1500/3000 帧 A/B：**开启反而慢 20~30%**（当前仍做每帧
+    asnumpy 供分段，raw 只省代表帧，却增加 GPU kernel 与 D2D 竞争）。
+  - 结论：要真正收益必须把灰度/sharp/分段也留在 GPU，当前实验路径保留参考。
 - 当前仍存在 1 次原始 ROI D2H（decord asnumpy） + 1 次 DtoH（TRT 输出）。
-  decord GPU 帧直通显存需要 DLPack + GPU 分段/灰度，尚未落地。
 
 ### Race 跨编码实测（2026-08，1500 帧窗口）
 

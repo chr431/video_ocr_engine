@@ -844,7 +844,10 @@ class FieldExtractor:
                     raw_ok = (
                         len(engines) == 1
                         and getattr(engines[0], '_trt', None) is not None
-                        and b_devs and all(d is not None for d in b_devs))
+                        and b_devs and all(d is not None for d in b_devs)
+                        and _os.environ.get(
+                            'RVTOL_GPU_RAW', '').strip().lower()
+                        in ('1', 'true', 'yes', 'on'))
                     if raw_ok:
                         infos = [(d[1], d[2], d[3], d[0]) for d in b_devs]
                         raw_res = engines[0].call_gpu_raw(infos)
