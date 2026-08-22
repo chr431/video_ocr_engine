@@ -49,9 +49,15 @@
   numpy 连续内存作为 `cudaMemcpy` 源，Host→Device 只保留一次拷贝。
 - `_infer_locked()` 对 TRT 路径预分配整批输出数组，每个子批直接 DtoH 进
   对应切片，免去逐批 `host_out` 分配和 `np.concatenate` 拷贝。
+- 使用专用 CUDA Stream + `execute_async_v3`：所有子批一次性异步 enqueue，
+  最后只 `cudaStreamSynchronize` 一次，消除每子批一次 host-GPU 往返同步。
+- 微基准（test5 3000 帧 / 16 图 batch）：
+  - 基线 OCR micro：21.94ms/batch（729 img/s）
+  - 异步 stream 后：18.58ms/batch（861 img/s，约 +18%）
+  - E2E 仍由 NVDEC 解码瓶颈主导，test5 3000 帧约 3.46s 基本不变。
+- pinned host staging 微测反而更慢（额外 CPU 拷贝），未采纳。
 - 当前仍存在 1 次 HtoD（预处理后的 batch） + 1 次 DtoH（TRT 输出后处理用）。
-  更进一步的 pinned memory / CUDA stream 异步拷贝 / GPU 侧预处理需要更大重构，
-  尚未落地。
+  GPU 侧预处理 / decord GPU 帧直通显存需要更大重构，尚未落地。
 
 ### Race 跨编码实测（2026-08，1500 帧窗口）
 
