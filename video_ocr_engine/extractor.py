@@ -1319,12 +1319,6 @@ class FieldExtractor:
             raise RuntimeError(
                 f"双流水线切片结果不完整: {len(chunk_results)}/{n_chunks}")
 
-        # 每条流水线完成的片数/墙钟（诊断 GPU/CPU 路径是否闲置）
-        for tag in sorted(worker_stats):
-            chunks_done, wall = worker_stats[tag]
-            self.timing[f'parallel_{tag}_chunks'] = chunks_done
-            self.timing[f'parallel_{tag}_s'] = wall
-
         # ── 4. 按片序合并（帧序全局单调）──
         all_segs: list = []
         all_texts: list = []
@@ -1357,6 +1351,11 @@ class FieldExtractor:
         self._ocr_backend_used = "+".join(ocr_backend_names)
         self.timing = timing_sum
         self.timing['parallel_probe'] = time.perf_counter() - _t_probe
+        # 每条流水线完成的片数/墙钟（诊断 GPU/CPU 路径是否闲置）
+        for tag in sorted(worker_stats):
+            chunks_done, wall = worker_stats[tag]
+            self.timing[f'parallel_{tag}_chunks'] = chunks_done
+            self.timing[f'parallel_{tag}_s'] = wall
         self._progress("并行双流水线完成", 100.0)
         return (frames, all_segs, all_texts, all_confs, all_reps)
 
