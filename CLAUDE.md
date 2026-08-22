@@ -73,12 +73,12 @@
   - 避免整帧 ROI D2H；校准阈值仍取前 50 帧 D2H。
   - 默认关闭。
   - 已继续优化：GpuPreprocessor 与 TrtEngine 共享 CUDA stream、
-    raw OCR 转 infer 线程异步、GPU 分段批加大到 64。
-  - test5 1500 帧 A/B：开启仍比 host 慢（2.49 vs 1.71），raw 单独开启也慢
+    raw OCR 转 infer 线程异步、GPU 分段批加大到 64、
+    GPU 直方图 Otsu 校准、生产者线程让 analyze 与分段/OCR 重叠。
+  - test5 1500 帧 A/B：开启仍比 host 慢（2.50 vs 1.74），raw 单独开启也慢
     （2.34~2.39 vs 1.71）。micro 上 raw 与 host 接近，E2E 慢主要来自
-    GPU 路径与 decode/TRT 尚未形成真正的异步重叠。
-  - 结论：当前实验路径仍不提供净收益；若继续，需要把 analyze+raw OCR
-    放入完整异步 decode pipeline，而不是串行批次。
+    GPU 路径与 decode/TRT 之间仍缺少真正统一的异步流水线。
+  - 结论：当前实验路径已完整实现但无净收益；不建议启用。
 - 当前仍存在 1 次原始 ROI D2H（decord asnumpy） + 1 次 DtoH（TRT 输出）。
 
 ### Race 跨编码实测（2026-08，1500 帧窗口）
