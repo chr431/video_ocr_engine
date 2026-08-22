@@ -40,6 +40,38 @@ def _ocr_batch_size() -> int:
     return config.OCR_BATCH_SIZE
 
 
+def _ndarray_device_ptr(nd):
+    """从 decord GPU NDArray DLPack 解析 device 数据基址。
+
+    返回 (base_ptr:int, shape:tuple[int,...])。调用方必须保持 nd 存活。
+    """
+    import ctypes
+    cap = nd.to_dlpack()
+    _get = ctypes.pythonapi.PyCapsule_GetPointer
+    _get.restype = ctypes.c_void_p
+    _get.argtypes = [ctypes.py_object, ctypes.c_char_p]
+    ptr = _get(cap, b"dltensor")
+
+    class _DLDevice(ctypes.Structure):
+        _fields_ = [("device_type", ctypes.c_int32),
+                    ("device_id", ctypes.c_int32)]
+
+    class _DLDataType(ctypes.Structure):
+        _fields_ = [("code", ctypes.c_uint8), ("bits", ctypes.c_uint8),
+                    ("lanes", ctypes.c_uint16)]
+
+    class _DLTensor(ctypes.Structure):
+        _fields_ = [("data", ctypes.c_void_p), ("device", _DLDevice),
+                    ("ndim", ctypes.c_int32), ("dtype", _DLDataType),
+                    ("shape", ctypes.POINTER(ctypes.c_int64)),
+                    ("strides", ctypes.POINTER(ctypes.c_int64)),
+                    ("byte_offset", ctypes.c_uint64)]
+
+    t = ctypes.cast(ptr, ctypes.POINTER(_DLTensor)).contents
+    shape = tuple(int(t.shape[i]) for i in range(t.ndim))
+    return int(t.data), shape
+
+
 def _gray_mean_abs_diff(a, b) -> float:
     """两帧分段灰度 ROI 的平均绝对差；形状不一致时视为不相似。"""
     if a is None or b is None:
@@ -792,10 +824,35 @@ class FieldExtractor:
                     for eng in engines]
                 for t in infer_threads:
                     t.start()
-                b_idx, b_reps, b_crops, b_fracs = ([], [], [], [])
+                b_idx, b_reps, b_crops, b_devs, b_fracs = ([], [], [], [], [])
+
+                def _store_result(idx, rep, r, frac) -> None:
+                    if hasattr(r, 'txts'):
+                        raw_text = (str(r.txts[0])
+                                    if r.txts and r.txts[0] else None)
+                        scores = getattr(r, 'scores', [])
+                        ocr_conf = float(scores[0]) if scores else 0.0
+                    else:
+                        raw_text, ocr_conf = (None, 0.0)
+                    results[idx] = (raw_text, ocr_conf, rep)
+                    _report_ocr_progress(idx, frac)
 
                 def flush() -> None:
                     if not b_idx:
+                        return
+                    # GPU 直通：只有单 TRT 引擎且代表帧全部带 GPU 指针时走
+                    raw_ok = (
+                        len(engines) == 1
+                        and getattr(engines[0], '_trt', None) is not None
+                        and b_devs and all(d is not None for d in b_devs))
+                    if raw_ok:
+                        infos = [(d[1], d[2], d[3], d[0]) for d in b_devs]
+                        raw_res = engines[0].call_gpu_raw(infos)
+                        for idx, rep, r, frac in zip(
+                                b_idx, b_reps, raw_res, b_fracs):
+                            _store_result(idx, rep, r, frac)
+                        b_idx.clear(); b_reps.clear(); b_crops.clear()
+                        b_devs.clear(); b_fracs.clear()
                         return
                     _t_p = time.perf_counter()
                     procs = [_preprocess_standard(
@@ -808,6 +865,7 @@ class FieldExtractor:
                     b_idx.clear()
                     b_reps.clear()
                     b_crops.clear()
+                    b_devs.clear()
                     b_fracs.clear()
 
                 while True:
@@ -818,10 +876,11 @@ class FieldExtractor:
                         break
                     if ocr_err:
                         break
-                    idx, rep, crop, frac = item
+                    idx, rep, crop, dev, frac = item
                     b_idx.append(idx)
                     b_reps.append(rep)
                     b_crops.append(crop)
+                    b_devs.append(dev)
                     b_fracs.append(frac)
                     if len(b_idx) >= B:
                         flush()
@@ -939,7 +998,7 @@ class FieldExtractor:
             segs.append(seg)
             keys.append(seg_idx)
             reps.append(rep_frame)
-            session["put"]((seg_idx, rep_frame, rep_crop, frac))
+            session["put"]((seg_idx, rep_frame, rep_crop, None, frac))
             if worker._keep_crops:
                 rep_crops[rep_frame] = rep_crop
             seg_idx += 1
@@ -1058,26 +1117,40 @@ class FieldExtractor:
             # 分频采样：校准帧也按 stride 抽取（真实帧号 = frames[k]）——用
             # get_batch 的等差步长快速路径（decord fork ≥0.7.12）顺序流式取，
             # 校准帧与后续流水线帧号一致，避免 next_roi（逐帧）与采样不匹配。
-            _calib_crops = vr.get_batch(frames[:calib_n],
-                                        roi=(x1, y1, x2 + 1, y2 + 1)).asnumpy()
+            _calib_nds = vr.get_batch(frames[:calib_n],
+                                      roi=(x1, y1, x2 + 1, y2 + 1))
+            _calib_crops = _calib_nds.asnumpy()
+            _calib_base, _calib_shape = _ndarray_device_ptr(_calib_nds)
+            _calib_c = _calib_shape[-1] if _calib_shape else 1
             for k in range(calib_n):
                 c = _calib_crops[k]
                 if not self._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
                     c = c[y1:y2 + 1, x1:x2 + 1]
                 g = self._crop_luma(c)
-                calib.append((frames[k], c, g, float(g.std())))
+                dev_info = None
+                if _calib_c == 1 and len(_calib_shape) == 4:
+                    src_h, src_w = _calib_shape[1], _calib_shape[2]
+                    dev_info = (_calib_nds,
+                                _calib_base + k * src_h * src_w,
+                                src_h, src_w)
+                calib.append((frames[k], c, g, float(g.std()), dev_info))
         else:
             for k in range(calib_n):
                 _t_p = time.perf_counter()
-                c = vr.next_roi(x1, y1, x2 + 1, y2 + 1).asnumpy()
+                _nd = vr.next_roi(x1, y1, x2 + 1, y2 + 1)
+                c = _nd.asnumpy()
                 self._prof_end('producer', 'calib_decode', _t_p)
                 if not self._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
                     c = c[y1:y2 + 1, x1:x2 + 1]
                 _t_p = time.perf_counter()
                 g = self._crop_luma(c)
                 self._prof_end('producer', 'calib_gray', _t_p)
-                calib.append((frames[k], c, g, float(g.std())))
-        ths = [_otsu(g) for _fi, _c, g, _s in calib]
+                dev_info = None
+                if _nd.shape[-1] == 1 and len(_nd.shape) == 3:
+                    _base, _shape = _ndarray_device_ptr(_nd)
+                    dev_info = (_nd, _base, _shape[0], _shape[1])
+                calib.append((frames[k], c, g, float(g.std()), dev_info))
+        ths = [_otsu(g) for _fi, _c, g, _s, _dev in calib]
         th = int(np.median(ths)) if ths else config.OTSU_FALLBACK_THRESH
         self._bin_thresh = th
         self._prof_end('producer', 'calib_total', _t_cal)
@@ -1118,24 +1191,30 @@ class FieldExtractor:
             def frame_stream():
                 """先产出校准帧（CPU reader），再按序消费 CPU 段队列
                     与 GPU 段队列 —— 帧序与单解码器完全一致。"""
-                for fi, c, g, s in calib:
-                    yield (fi, c, g, s, g > th)
-                yield from _drain_queue(cpu_q)
+                for fi, c, g, s, dev in calib:
+                    yield (fi, c, g, s, g > th, dev)
+                for item in _drain_queue(cpu_q):
+                    yield (*item, None)
                 if gpu_q is not None:
-                    yield from _drain_queue(gpu_q)
+                    for item in _drain_queue(gpu_q):
+                        yield (*item, None)
         else:
 
             def frame_stream():
                 """先产出校准帧，再批量流式解码剩余帧。
 
-                    yield (fi, crop, gray, sharp, bin) —— bin 为预计算的二值化。
+                    yield (fi, crop, gray, sharp, bin, dev_info) —— bin 为
+                    预计算的二值化；dev_info 仅在 gray 输出时保留 GPU 指针。
                     """
-                for fi, c, g, s in calib:
-                    yield (fi, c, g, s, g > th)
+                for fi, c, g, s, dev in calib:
+                    yield (fi, c, g, s, g > th, dev)
                 for bstart in range(calib_n, len(frames), DECODE_BATCH):
                     bend = min(bstart + DECODE_BATCH, len(frames))
                     _t_d = time.perf_counter()
-                    crops = vr.get_batch(frames[bstart:bend], roi=(x1, y1, x2 + 1, y2 + 1)).asnumpy()
+                    nds = vr.get_batch(
+                        frames[bstart:bend],
+                        roi=(x1, y1, x2 + 1, y2 + 1))
+                    crops = nds.asnumpy()
                     self._prof_end('producer', 'decode_batch', _t_d)
                     _t_g = time.perf_counter()
                     g = self._batch_luma(crops)
@@ -1146,14 +1225,27 @@ class FieldExtractor:
                     _t_b = time.perf_counter()
                     bs = g > th
                     self._prof_end('producer', 'bin_batch', _t_b)
+                    dev_info = None
+                    if nds.shape[-1] == 1 and len(nds.shape) == 4:
+                        _base, _shape = _ndarray_device_ptr(nds)
+                        src_h, src_w = _shape[1], _shape[2]
+                    else:
+                        _base = 0
+                        src_h = src_w = 0
                     for k, gi in enumerate(range(bstart, bend)):
-                        yield (frames[gi], crops[k], g[k], float(sharp[k]), bs[k])
+                        d = None
+                        if _base:
+                            d = (nds, _base + k * src_h * src_w,
+                                 src_h, src_w)
+                        yield (frames[gi], crops[k], g[k],
+                               float(sharp[k]), bs[k], d)
         segs: list = []
         rep_crops: dict = {}
         seg_idx = 0
         s = 0
         rep_frame = frames[0]
         rep_crop = None
+        rep_dev = None
         rep_sharp = -1.0
         rep_gray = None
         last_rep_gray = None
@@ -1161,7 +1253,7 @@ class FieldExtractor:
         t0 = time.perf_counter()
         consumer_ok = [False]
         try:
-            for k, (fi, c, g, sharp, b) in enumerate(frame_stream()):
+            for k, (fi, c, g, sharp, b, dev_info) in enumerate(frame_stream()):
                 if prev_b is not None:
                     d = prev_b != b
                     _t_seg = time.perf_counter()
@@ -1180,7 +1272,7 @@ class FieldExtractor:
                             segs.append(seg)
                             _t_push = time.perf_counter()
                             _put_ocr((seg_idx, rep_frame, rep_crop,
-                                      k / max(len(frames), 1)))
+                                      rep_dev, k / max(len(frames), 1)))
                             self._prof_end('producer', 'q_put_block', _t_push)
                             if self._keep_crops:
                                 rep_crops[rep_frame] = rep_crop
@@ -1189,16 +1281,19 @@ class FieldExtractor:
                         s = k
                         rep_frame = fi
                         rep_crop = c
+                        rep_dev = dev_info
                         rep_sharp = sharp
                         rep_gray = g
                     elif sharp > rep_sharp:
                         rep_sharp = sharp
                         rep_frame = fi
                         rep_crop = c
+                        rep_dev = dev_info
                         rep_gray = g
                 else:
                     rep_frame = fi
                     rep_crop = c
+                    rep_dev = dev_info
                     rep_sharp = sharp
                     rep_gray = g
                 prev_b = b
@@ -1215,7 +1310,7 @@ class FieldExtractor:
             else:
                 segs.append(seg)
                 _t_push = time.perf_counter()
-                _put_ocr((seg_idx, rep_frame, rep_crop, 1.0))
+                _put_ocr((seg_idx, rep_frame, rep_crop, rep_dev, 1.0))
                 self._prof_end('producer', 'q_put_block', _t_push)
                 if self._keep_crops:
                     rep_crops[rep_frame] = rep_crop

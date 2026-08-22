@@ -70,6 +70,39 @@ extern "C" __global__ void prep(
         out[i] = 0.0f;
     }
 }
+
+extern "C" __global__ void prep_gray_raw(
+    const unsigned char* __restrict__ raw,
+    float* __restrict__ out,
+    int B, int src_h, int src_w,
+    int dst_h, int dst_w, int content_w, float gamma) {
+    int total = B * 3 * dst_h * dst_w;
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= total) return;
+    int b = i / (3 * dst_h * dst_w);
+    int rem = i % (3 * dst_h * dst_w);
+    int c = rem / (dst_h * dst_w);
+    int rem2 = rem % (dst_h * dst_w);
+    int y = rem2 / dst_w;
+    int x = rem2 % dst_w;
+    if (x >= content_w) { out[i] = 0.0f; return; }
+    double sx = (x + 0.5) * ((double)src_w / (double)content_w) - 0.5;
+    double sy = (y + 0.5) * ((double)src_h / (double)dst_h) - 0.5;
+    sx = fmax(0.0, fmin(sx, (double)(src_w - 1)));
+    sy = fmax(0.0, fmin(sy, (double)(src_h - 1)));
+    int x0 = (int)sx, y0 = (int)sy;
+    int x1 = min(x0 + 1, src_w - 1), y1 = min(y0 + 1, src_h - 1);
+    double wx = sx - x0, wy = sy - y0;
+    const unsigned char* base = raw + ((size_t)b * src_h * src_w);
+    double v00 = base[y0 * src_w + x0];
+    double v10 = base[y0 * src_w + x1];
+    double v01 = base[y1 * src_w + x0];
+    double v11 = base[y1 * src_w + x1];
+    double g = (1 - wx) * (1 - wy) * v00 + wx * (1 - wy) * v10 +
+               (1 - wx) * wy * v01 + wx * wy * v11;
+    double g2 = 255.0 * pow(g / 255.0, (double)gamma);
+    out[i] = (g2 / 255.0f - 0.5f) / 0.5f;
+}
 '''
 
     def __init__(self) -> None:
@@ -83,8 +116,9 @@ extern "C" __global__ void prep(
             options=ProgramOptions(std="c++11",
                                    arch=f"sm_{self._dev.arch}"))
         self._mod = self._prog.compile(
-            "cubin", name_expressions=("prep",))
+            "cubin", name_expressions=("prep", "prep_gray_raw"))
         self._kernel = self._mod.get_kernel("prep")
+        self._kernel_raw = self._mod.get_kernel("prep_gray_raw")
         self._launch_cls = LaunchConfig
         self._launch = launch
         self._buffer_cls = Buffer
@@ -129,6 +163,54 @@ extern "C" __global__ void prep(
             self._out_buf = self._buffer_cls.from_handle(self._out_dev, nbytes)
             self._out_size = nbytes
         return self._out_dev
+
+    def process_gray_raw(self, infos: list, out_width: int):
+        """处理 decord GPU 灰度帧：D2D 聚批 → GPU resize+gamma+normalize+pad。
+
+        infos: [(dev_ptr, src_h, src_w, owner), ...]，frame 已位于显存。
+        返回 (device_ptr, output_shape)。调用方必须保持 owner/本对象存活。
+        """
+        import numpy as np
+        from cuda.bindings import runtime as cudart
+        B = len(infos)
+        src_h = int(infos[0][1])
+        src_w = int(infos[0][2])
+        dst_h = int(config.OCR_TARGET_H)
+        content_w = max(1, int(src_w * dst_h / src_h))
+        dst_w = int(out_width)
+        if content_w > dst_w:
+            dst_w = content_w
+        raw_nbytes = B * src_h * src_w
+        raw_dev = self._ensure_raw(raw_nbytes)
+        for i, (src_dev, _sh, _sw, _owner) in enumerate(infos):
+            cudart.cudaMemcpyAsync(
+                raw_dev + i * src_h * src_w,
+                int(src_dev), src_h * src_w,
+                cudart.cudaMemcpyKind.cudaMemcpyDeviceToDevice,
+                self._stream)
+        out_nbytes = B * 3 * dst_h * dst_w * 4
+        out_dev = self._ensure_out(out_nbytes)
+        gamma = float(config.OCR_GAMMA)
+        _env_g = os.environ.get("RVTOL_OCR_GAMMA")
+        if _env_g:
+            try:
+                gamma = float(_env_g)
+            except ValueError:
+                pass
+        shape = (B, 3, dst_h, dst_w)
+        total = int(np.prod(shape))
+        block = 256
+        grid = (total + block - 1) // block
+        self._launch(
+            self._stream,
+            self._launch_cls(grid=grid, block=block),
+            self._kernel_raw,
+            self._raw_buf, self._out_buf,
+            np.int32(B), np.int32(src_h), np.int32(src_w),
+            np.int32(dst_h), np.int32(dst_w), np.int32(content_w),
+            np.float32(gamma))
+        cudart.cudaStreamSynchronize(self._stream)
+        return int(out_dev), shape
 
     def process(self, images: list, out_width: int):
         """返回 (device_ptr, output_shape)。调用方必须保持本对象存活。"""

@@ -358,6 +358,37 @@ class OcrEngine:
                 results.append(self._ctc_decode(preds[k]))
         return results
 
+    def call_gpu_raw(self, infos: list) -> list:
+        """TRT：直接消费 decord GPU NDArray（灰度 raw），跳过 D2H 代表帧拷贝。
+
+        infos: [(dev_ptr, src_h, src_w, owner), ...]
+        """
+        from ocr_trt import GpuPreprocessor
+        if self._gpu_pre is None:
+            self._gpu_pre = GpuPreprocessor()
+        src_h = int(infos[0][1])
+        src_w = int(infos[0][2])
+        if self._fill_width > 0:
+            _floor = self._fill_width
+        else:
+            _floor = config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(
+                self._variant, config.OCR_PAD_WIDTH_MIN)
+            _env = os.environ.get("RVTOL_PAD_SMALL")
+            if _env and _env.isdigit():
+                _floor = int(_env)
+        max_wh = max(_floor / config.OCR_TARGET_H,
+                     float(src_w) / float(src_h))
+        out_width = int(config.OCR_TARGET_H * max_wh)
+        dev_ptr, shape = self._gpu_pre.process_gray_raw(infos, out_width)
+        preds = self._infer_trt_device(dev_ptr, shape)
+        results: list = []
+        if preds.ndim == 3:
+            results = self._ctc_decode_batch(preds)
+        else:
+            for k in range(len(preds)):
+                results.append(self._ctc_decode(preds[k]))
+        return results
+
     def _infer_trt_device(self, dev_ptr: int, shape: tuple) -> np.ndarray:
         """对已位于显存的整批输入执行 TRT，整批只同步一次。"""
         B = int(shape[0])
