@@ -210,6 +210,49 @@ def _preprocess_standard(crop: "np.ndarray", force_aspect: float = 0.0,
     return resized
 
 
+def _box_blur(img: "np.ndarray", k: int) -> "np.ndarray":
+    """纯 numpy 盒式模糊（用 sliding_window_view，无需 cv2/scipy）。"""
+    if k <= 1:
+        return img.astype(np.float32).copy()
+    pad = k // 2
+    p = np.pad(img, pad, mode="edge")
+    win = np.lib.stride_tricks.sliding_window_view(p, (k, k))
+    return win.mean(axis=(2, 3)).astype(np.float32)
+
+
+def _text_sep_gray(gray: "np.ndarray", mode: str = "contrast",
+                   th: "int | None" = None) -> "np.ndarray":
+    """从背景中分离字幕文字的灰度图（实验）。
+
+    mode:
+      - "contrast"：局部背景估计 + 绝对差分，突出文字笔画/边缘；
+      - "binary"：用阈值把文字变白、背景变黑。
+    """
+    g = gray.astype(np.float32)
+    if mode == "binary":
+        if th is None:
+            th = int(np.mean(g))
+        return np.where(g > th, 255.0, 0.0).astype(np.float32)
+    k = max(9, min(31, int(round(gray.shape[0] * 0.6 / 2) * 2 + 1)))
+    bg = _box_blur(g, k)
+    sep = np.abs(g - bg)
+    p95 = float(np.percentile(sep, 95))
+    if p95 > 1.0:
+        sep = np.clip(sep / p95 * 255.0, 0.0, 255.0)
+    return sep.astype(np.float32)
+
+
+def _preprocess_text_sep(proc: "np.ndarray", mode: str = "contrast",
+                         th: "int | None" = None) -> "np.ndarray":
+    """对已 48 高的 float32 OCR 输入做字幕/背景分离，返回 3 通道 float32。"""
+    if proc.shape[-1] == 1:
+        gray = proc[..., 0]
+    else:
+        gray = proc @ _GRAY_W
+    sep = _text_sep_gray(gray, mode=mode, th=th)
+    return np.stack([sep] * 3, axis=-1).astype(np.float32)
+
+
 def open_decord_vr(video_path, force_cpu: bool = False):
     """Open video with decord — GPU (NVDEC) preferred, CPU fallback.
 

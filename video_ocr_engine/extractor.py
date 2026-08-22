@@ -27,6 +27,7 @@ from hybrid_decode import (
 )
 from ocr_native import OcrEngine, auto_ocr_thread_count
 from video_utils import (_nv12_luma_full, _preprocess_standard,
+                         _preprocess_text_sep, _text_sep_gray,
                          nv12_to_rgb, nvdec_available,
                          tensorrt_available)  # 识别链 YUV/preprocess/RGB 预览
 
@@ -254,7 +255,14 @@ class FieldExtractor:
 
         只用平均绝对差会把宽 ROI 中的单字短字幕（如“在”“不”）误判为噪声：
         大部分区域未变，均值被稀释。因此额外限制 abs(diff)>10 的像素数。
+        RVTOL_TEXT_SEP 开启时，先做字幕/背景分离再比较，减少背景干扰。
         """
+        _text_mode = _os.environ.get('RVTOL_TEXT_SEP', '').strip().lower()
+        if _text_mode in ('1', 'contrast', '2', 'binary'):
+            a = _text_sep_gray(a, 'contrast' if _text_mode in ('1', 'contrast')
+                               else 'binary', th=self._bin_thresh)
+            b = _text_sep_gray(b, 'contrast' if _text_mode in ('1', 'contrast')
+                               else 'binary', th=self._bin_thresh)
         if a is None or b is None or a.shape != b.shape:
             return False
         diff = np.abs(a.astype(np.float32) - b.astype(np.float32))
@@ -896,6 +904,16 @@ class FieldExtractor:
                         _nv12_luma_full(c, self._color_range)[..., None]
                         if self._yuv_output else c,
                         force_aspect=self._force_aspect) for c in b_crops]
+                    _text_mode = _os.environ.get(
+                        'RVTOL_TEXT_SEP', '').strip().lower()
+                    if _text_mode in ('1', 'contrast'):
+                        procs = [_preprocess_text_sep(
+                            p, 'contrast', th=self._bin_thresh)
+                            for p in procs]
+                    elif _text_mode in ('2', 'binary'):
+                        procs = [_preprocess_text_sep(
+                            p, 'binary', th=self._bin_thresh)
+                            for p in procs]
                     self._prof_end('ocr', 'preprocess', _t_p)
                     if not _put_infer((list(b_idx), list(b_reps), procs, list(b_fracs), None)):
                         return
