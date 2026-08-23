@@ -54,6 +54,60 @@ def _models_dir() -> Path:
     return candidates[0]
 
 
+def build_argmax_model(src: Path, dst: Path) -> bool:
+    """在 ONNX 图末尾追加 ArgMax+ReduceMax，输出 (B,S) 索引+概率。
+
+    rec 模型原始输出为 (B,S,C≈18710) float32——宽 ROI 下每批 ~117MB 的
+    DRAM 写出 + 宿主 argmax 再回读一遍。图级归约后 DtoH…（纯 CPU 推理则
+    是 ORT arena 写出+宿主回读）降为 B*S*12 字节（~2300×），与 GPU 侧
+    GpuOutputReducer 对称，显著降低 ONNX 路径的内存吞吐占用。
+    需要 onnx 包（仅构建时）；成功写 dst 返回 True。
+    """
+    try:
+        import onnx
+        from onnx import helper, TensorProto
+    except ImportError:
+        return False
+    model = onnx.load(str(src))
+    graph = model.graph
+    src_out = graph.output[0].name
+    # 目标 opset：ReduceMax 的 axes 在 opset<18 为属性、>=18 为可选输入
+    opset = max((o.version for o in model.opset_import
+                 if o.domain in ("", "ai.onnx")), default=13)
+    init = None
+    axes_attr = {}
+    axes_input = []
+    if opset >= 18:
+        import numpy as np
+        init = helper.make_tensor("ctc_axes", TensorProto.INT64,
+                                  [1], [2])
+        graph.initializer.append(init)
+        axes_input = ["ctc_axes"]
+    else:
+        axes_attr = {"axes": [2]}
+    nodes = [
+        helper.make_node("ArgMax", [src_out], ["ctc_idx_raw"],
+                         axis=2, keepdims=0),
+        helper.make_node("ReduceMax", [src_out] + axes_input, ["ctc_prob"],
+                         keepdims=0, **axes_attr),
+    ]
+    cast = helper.make_node("Cast", ["ctc_idx_raw"], ["ctc_idx"],
+                            to=TensorProto.INT32)
+    nodes.insert(1, cast)
+    graph.node.extend(nodes)
+    while len(graph.output):
+        graph.output.pop()
+    graph.output.extend([
+        helper.make_tensor_value_info("ctc_idx",
+                               TensorProto.INT32, ["batch", "seq"]),
+        helper.make_tensor_value_info("ctc_prob",
+                               TensorProto.FLOAT, ["batch", "seq"]),
+    ])
+    onnx.checker.check_model(model)
+    onnx.save(model, str(dst))
+    return True
+
+
 def cpu_physical_cores() -> int:
     """物理核数（psutil 缺失时用逻辑核/2 估算，最小 2）。"""
     try:
@@ -178,9 +232,31 @@ class OcrEngine:
         if _env_spin_ms:
             so.add_session_config_entry(
                 "session.intra_op.spin_duration", _env_spin_ms)
+        # 图级输出归约：ArgMax+ReduceMax 追加到模型尾部，推理直接输出
+        # (B,S) 索引+概率——消除 (B,S,C≈18710) 输出张量的 arena 写出与宿主
+        # argmax 回读（宽 ROI 每批 ~117MB×2 的 DRAM 流量）。构建需要 onnx
+        # 包（仅首次），结果缓存为 <model>_am.onnx；失败/缺失回退原模型。
+        # 默认关闭：实测单引擎慢 ~10%（ORT 归约核不如 numpy 成块 SIMD），
+        # 仅在显式 TRT⊕ONNX 混配时值得开启（削减聚合访存、小幅保护对端
+        # TRT 提交路径：共存退化 +75%→+67%）。
+        self._onnx_ctc_mode = (
+            os.environ.get("RVTOL_ONNX_CTC", "").strip().lower()
+            in ("1", "true", "yes", "on"))
+        model_path = models / f"PP-OCRv6_rec_{size}.onnx"
+        if self._onnx_ctc_mode:
+            am_path = models / f"PP-OCRv6_rec_{size}_am.onnx"
+            if not am_path.exists():
+                try:
+                    build_argmax_model(model_path, am_path)
+                except Exception as e:  # noqa: BLE001 — 回退原模型
+                    log.warning("ONNX argmax 图构建失败，回退原始模型: %s", e)
+            if am_path.exists():
+                model_path = am_path
         self._session = ort.InferenceSession(
-            str(models / f"PP-OCRv6_rec_{size}.onnx"),
-            sess_options=so, providers=["CPUExecutionProvider"])
+            str(model_path), sess_options=so,
+            providers=["CPUExecutionProvider"])
+        self._onnx_ctc_active = (
+            self._onnx_ctc_mode and len(self._session.get_outputs()) == 2)
 
     # ═══════════════ 预处理（复刻 rapidocr resize_norm_img）═══════════════
 
@@ -221,6 +297,30 @@ class OcrEngine:
         # 主 OCR 线程必须串行（GPU 单上下文本就不能并行，串行不损失吞吐）。
         with self._lock:
             return self._infer_locked(batch_np)
+
+    def _run_onnx_idxprob(self, batch_np: np.ndarray):
+        """图级归约模型的推理：(B,S) int32 索引 + (B,S) float32 概率。
+
+        按 OCR_ONNX_CHUNK 分片限制单批帧数（与旧 preds 路径同语义，
+        控制 ORT arena 峰值）。
+        """
+        onnx_max = config.OCR_ONNX_CHUNK
+
+        def _one(x):
+            with self._lock:
+                out = self._session.run(None, {"x": x})
+            return (np.asarray(out[0], dtype=np.int32),
+                    np.asarray(out[1], dtype=np.float32))
+
+        if len(batch_np) <= onnx_max:
+            return _one(batch_np)
+        idxs, probs = [], []
+        for i in range(0, len(batch_np), onnx_max):
+            a, b = _one(batch_np[i:i + onnx_max])
+            idxs.append(a)
+            probs.append(b)
+        return (np.concatenate(idxs, axis=0),
+                np.concatenate(probs, axis=0))
 
     def _infer_locked(self, batch_np: np.ndarray) -> np.ndarray:
         if self._trt is not None:
@@ -330,6 +430,15 @@ class OcrEngine:
         if self._trt is not None:
             # GPU 预处理路径：直接生成显存模型输入，省去 host batch 构造
             return self._call_trt_gpu(img_list, max_wh, h0)
+        if getattr(self, "_onnx_ctc_active", False):
+            batch_np = np.stack([self._resize_norm(img_list[i], max_wh, h0)
+                                 for i in order])
+            idx, prob = self._run_onnx_idxprob(batch_np)
+            batch_results = self._ctc_from_idxprob(idx, prob)
+            results: list = [None] * len(img_list)
+            for k, src in enumerate(order):
+                results[src] = batch_results[k]
+            return results
         batch_np = np.stack([self._resize_norm(img_list[i], max_wh, h0)
                              for i in order])
         preds = self._infer(batch_np)

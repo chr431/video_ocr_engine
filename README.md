@@ -168,6 +168,7 @@ result = ex.extract()
 |------|------|
 | `RVTOL_GPU_PIPELINE` | GPU 全驻留管线：`0` 关闭回退宿主路径（gray+NVDEC+TRT 时默认启用） |
 | `RVTOL_GPU_CTC` | `0` 关闭 TRT 输出的 GPU argmax 归约（默认开启，仅影响 GPU 管线） |
+| `RVTOL_ONNX_CTC` | `1` ONNX 图级输出归约（ArgMax+ReduceMax，需 onnx 包；仅 TRT⊕ONNX 混配时建议开启，单引擎会慢 ~10%） |
 | `RVTOL_OCR_THREADS` | OCR 推理线程数覆盖（默认全物理核） |
 | `RVTOL_OCR_BATCH` | OCR 批大小覆盖（默认 16） |
 | `RVTOL_DUAL_ONNX` | `0` 关闭双 ONNX 实例（CPU 核数≥8 默认开） |
