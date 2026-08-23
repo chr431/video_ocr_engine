@@ -1205,9 +1205,12 @@ class FieldExtractor:
             return self._run_pipelined(_force_single=True)
         src_h, src_w = calib_shape[1], calib_shape[2]
         analyzer = GpuFrameAnalyzer()
-        # GPU 直方图 Otsu：不再把前 50 帧整帧 D2H
-        _hist = analyzer.histogram(calib_base, calib_n * src_h * src_w)
-        th = _otsu_from_hist(_hist)
+        # 逐帧直方图校准：与单流水线"前 50 帧 Otsu 取中位数"语义逐位一致
+        # （含退化双值帧的阈值行为），D2H 仅 B×1KB 标量表，校准帧不落 RAM。
+        _hist_mat = analyzer.histograms_perframe(calib_base, calib_n,
+                                                 src_h, src_w)
+        ths = [_otsu(_hist_mat[k]) for k in range(calib_n)]
+        th = int(np.median(ths)) if ths else config.OTSU_FALLBACK_THRESH
         self._bin_thresh = th
 
         self._gpu_pipeline_mode = True

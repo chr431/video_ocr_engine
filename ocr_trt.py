@@ -262,6 +262,92 @@ extern "C" __global__ void prep_gray_raw(
         return int(out_dev), shape
 
 
+class GpuOutputReducer:
+    """TRT 输出的 GPU 侧 vocab 维归约：(B,S,C) float32 → (B,S) 索引+概率。
+
+    DtoH 数据量从 B*S*C*4 字节降到 B*S*8 字节（宽 ROI 下数千倍），使 TRT
+    推理输出不落 RAM——显存全驻留路径的最后一环。并列取首个，与
+    numpy.argmax 语义一致。
+    """
+
+    _KERNEL = r'''
+extern "C" __global__ void argmax_last(
+    const float* __restrict__ preds,
+    int* __restrict__ idx_out,
+    float* __restrict__ prob_out,
+    long long total_rows, int C) {
+    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= total_rows) return;
+    const float* row = preds + (size_t)i * C;
+    float best = row[0];
+    int bi = 0;
+    for (int c = 1; c < C; ++c) {
+        float v = row[c];
+        if (v > best) { best = v; bi = c; }
+    }
+    idx_out[i] = bi;
+    prob_out[i] = best;
+}
+'''
+
+    def __init__(self, stream: int | None = None) -> None:
+        import numpy as np  # noqa: F401
+        from cuda.core import (Buffer, Device, LaunchConfig, Program,
+                               ProgramOptions, launch)
+        self._dev = Device()
+        self._dev.set_current()
+        self._prog = Program(
+            self._KERNEL, code_type="c++",
+            options=ProgramOptions(std="c++11",
+                                   arch=f"sm_{self._dev.arch}"))
+        self._mod = self._prog.compile("cubin", name_expressions=("argmax_last",))
+        self._kernel = self._mod.get_kernel("argmax_last")
+        self._launch_cls = LaunchConfig
+        self._launch = launch
+        self._buffer_cls = Buffer
+        from cuda.bindings import runtime as cudart
+        self._stream = stream
+        if self._stream is None:
+            _err, self._stream = cudart.cudaStreamCreate()
+        self._idx_dev = None
+        self._idx_size = 0
+        self._prob_dev = None
+
+    def reduce(self, preds_dev: int, out_shape: tuple):
+        """对显存中的 (B,S,C) 输出做归约，回传 (idx int32[B*S], prob f32[B*S])。"""
+        import numpy as np
+        from cuda.bindings import runtime as cudart
+        rows = int(np.prod(out_shape[:-1], dtype=np.int64))
+        cdim = int(out_shape[-1])
+        nbytes_idx = rows * 4
+        if self._idx_size < nbytes_idx:
+            if self._idx_dev is not None:
+                cudart.cudaFree(self._idx_dev)
+            _err, self._idx_dev = cudart.cudaMalloc(nbytes_idx)
+            self._idx_size = nbytes_idx
+            self._prob_dev = None
+        if self._prob_dev is None:
+            _err, self._prob_dev = cudart.cudaMalloc(nbytes_idx)
+        idx_buf = self._buffer_cls.from_handle(self._idx_dev, nbytes_idx)
+        prob_buf = self._buffer_cls.from_handle(self._prob_dev, nbytes_idx)
+        block = 256
+        grid = (rows + block - 1) // block
+        self._launch(self._stream,
+                     self._launch_cls(grid=grid, block=block),
+                     self._kernel,
+                     self._buffer_cls.from_handle(int(preds_dev),
+                                                  rows * cdim * 4),
+                     idx_buf, prob_buf,
+                     np.int64(rows), np.int32(cdim))
+        idx = np.empty(rows, dtype=np.int32)
+        prob = np.empty(rows, dtype=np.float32)
+        cudart.cudaMemcpy(idx.ctypes.data, self._idx_dev, nbytes_idx,
+                          cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
+        cudart.cudaMemcpy(prob.ctypes.data, self._prob_dev, nbytes_idx,
+                          cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
+        return idx, prob
+
+
 class GpuFrameAnalyzer:
     """GPU 帧分析：sharp(std) + 相邻帧 3x3 聚类变化分，直接把标量回传 host。
 
@@ -313,6 +399,23 @@ extern "C" __global__ void hist_gray(
     if (i >= n) return;
     atomicAdd(&hist[raw[i]], 1);
 }
+
+extern "C" __global__ void hist_gray_perframe(
+    const unsigned char* __restrict__ raw,
+    int* __restrict__ hists,   // (B, 256)
+    int HxW) {
+    // block = 一帧；线程内串行累加私有计数后一次性 atomicAdd，减少竞争
+    __shared__ int priv[256];
+    int b = blockIdx.x;
+    if (threadIdx.x < 256) priv[threadIdx.x] = 0;
+    __syncthreads();
+    const unsigned char* cur = raw + (size_t)b * HxW;
+    for (int i = threadIdx.x; i < HxW; i += blockDim.x)
+        atomicAdd(&priv[cur[i]], 1);
+    __syncthreads();
+    if (threadIdx.x < 256 && priv[threadIdx.x] > 0)
+        atomicAdd(&hists[b * 256 + threadIdx.x], priv[threadIdx.x]);
+}
 '''
 
     def __init__(self) -> None:
@@ -325,9 +428,12 @@ extern "C" __global__ void hist_gray(
             options=ProgramOptions(std="c++11",
                                    arch=f"sm_{self._dev.arch}"))
         self._mod = self._prog.compile(
-            "cubin", name_expressions=("analyze_gray", "hist_gray"))
+            "cubin",
+            name_expressions=("analyze_gray", "hist_gray",
+                              "hist_gray_perframe"))
         self._kernel = self._mod.get_kernel("analyze_gray")
         self._kernel_hist = self._mod.get_kernel("hist_gray")
+        self._kernel_hist_pf = self._mod.get_kernel("hist_gray_perframe")
         from cuda.bindings import runtime as cudart
         _err, self._stream = cudart.cudaStreamCreate()
         self._summary_size = 0
@@ -335,6 +441,8 @@ extern "C" __global__ void hist_gray(
         self._prev_size = 0
         self._prev_dev = None
         self._hist_dev = None
+        self._histpf_size = 0
+        self._histpf_dev = None
 
     def _ensure_prev(self, nbytes: int) -> int:
         from cuda.bindings import runtime as cudart
@@ -365,6 +473,32 @@ extern "C" __global__ void hist_gray(
             hist.ctypes.data, self._hist_dev, 256 * 4,
             cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
         return hist
+
+    def histograms_perframe(self, raw_ptr: int, B: int,
+                            H: int, W: int) -> "np.ndarray":
+        """逐帧直方图：(B,256) int32 回传 host（B×1KB），供宿主复刻
+        '逐帧 Otsu 取中位数' 校准语义——与单流水线阈值行为完全一致，
+        且校准帧不落 RAM（仅 50KB 标量表）。"""
+        import numpy as np
+        from cuda.bindings import runtime as cudart
+        from cuda.core import Buffer, LaunchConfig, launch
+        nbytes = B * 256 * 4
+        if self._histpf_size < nbytes:
+            if self._histpf_dev is not None:
+                cudart.cudaFree(self._histpf_dev)
+            _err, self._histpf_dev = cudart.cudaMalloc(nbytes)
+            self._histpf_size = nbytes
+        cudart.cudaMemsetAsync(self._histpf_dev, 0, nbytes, self._stream)
+        buf = Buffer.from_handle(self._histpf_dev, nbytes)
+        launch(self._stream, LaunchConfig(grid=B, block=256),
+               self._kernel_hist_pf,
+               Buffer.from_handle(raw_ptr, B * H * W), buf, np.int32(H * W))
+        cudart.cudaStreamSynchronize(self._stream)
+        hists = np.empty((B, 256), dtype=np.int32)
+        cudart.cudaMemcpy(
+            hists.ctypes.data, self._histpf_dev, nbytes,
+            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
+        return hists
 
     def analyze_batch(self, raw_ptr: int, prev_ptr: int, B: int,
                       H: int, W: int, th: float) -> "np.ndarray":
@@ -677,6 +811,50 @@ class TrtEngine:
         result = self.execute_device_async(dev_input, shape, out_host)
         self.synchronize()
         return result
+
+    def execute_device_argmax(self, dev_input: int, shape: tuple):
+        """显存全驻留：执行 TRT 并在 GPU 完成 vocab 维 argmax/max。
+
+        输入超过 profile max_batch 时按子批循环（与 _infer_trt_device 一致）。
+        返回 (idx int32[B,S], prob f32[B,S])——输出不落 RAM，DtoH 仅
+        B*S*8 字节。需要 RVTOL_GPU_CTC=1 的调用方（call_gpu_raw）使用。
+        """
+        from cuda.bindings import runtime as cudart
+        stream = self._ensure_stream()
+        first_shape = (min(int(shape[0]), self.max_batch),) + tuple(shape[1:])
+        out_shape = self._prepare_shape(first_shape)
+        cdim = int(out_shape[-1])
+        elem_floats = int(np.prod(shape[1:], dtype=np.int64))
+        B = int(shape[0])
+        reducer = getattr(self, "_reducer", None)
+        if reducer is None:
+            reducer = GpuOutputReducer(stream=stream)
+            self._reducer = reducer
+        idx_parts = []
+        prob_parts = []
+        for i in range(0, B, self.max_batch):
+            nb = min(self.max_batch, B - i)
+            sub_shape = (nb,) + tuple(shape[1:])
+            out_nbytes = int(np.prod((nb,) + tuple(out_shape[1:]))) * 4
+            if self._dev_out is None or out_nbytes > self._out_nbytes:
+                if self._dev_out is not None:
+                    cudart.cudaFree(self._dev_out)
+                _, self._dev_out = cudart.cudaMalloc(out_nbytes)
+                self._out_nbytes = out_nbytes
+            self.context.set_tensor_address(
+                self.in_name, dev_input + i * elem_floats * 4)
+            self.context.set_tensor_address(self.out_name, self._dev_out)
+            self.context.execute_async_v3(stream)
+            idx, prob = reducer.reduce(self._dev_out,
+                                       (nb,) + tuple(out_shape[1:]))
+            idx_parts.append(idx)
+            prob_parts.append(prob)
+        idx_all = np.concatenate(idx_parts) if len(idx_parts) > 1 \
+            else idx_parts[0]
+        prob_all = np.concatenate(prob_parts) if len(prob_parts) > 1 \
+            else prob_parts[0]
+        seq = idx_all.size // max(B, 1)
+        return idx_all.reshape(B, seq), prob_all.reshape(B, seq)
 
     def execute(self, x: np.ndarray, out_host: "np.ndarray | None" = None) -> np.ndarray:
         """同步执行一批输入（batch ≤ max_batch），复用输入/输出 buffer。"""

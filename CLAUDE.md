@@ -111,12 +111,40 @@
   - 避免整帧 ROI D2H；校准阈值仍取前 50 帧 D2H。
   - 默认关闭。
   - 已继续优化：GpuPreprocessor 与 TrtEngine 共享 CUDA stream、
-    raw OCR 转 infer 线程异步、GPU 分段批加大到 64、
+    raw 推理异步、GPU 分段批加大到 64、
     GPU 直方图 Otsu 校准、生产者线程让 analyze 与分段/OCR 重叠。
   - test5 1500 帧 A/B：开启仍比 host 慢（2.50 vs 1.74），raw 单独开启也慢
     （2.34~2.39 vs 1.71）。micro 上 raw 与 host 接近，E2E 慢主要来自
     GPU 路径与 decode/TRT 之间仍缺少真正统一的异步流水线。
   - 结论：当前实验路径已完整实现但无净收益；不建议启用。
+
+### 显存全驻立路径补全与争抢韧性验证（2026-08 三轮，RVTOL_GPU_CTC）
+
+在"内存子系统争抢"结论（见双流水线小节）之后，把 GPU+TRT 路径最后两个
+RAM 大触点补掉，形成显存全驻留闭环：
+
+- **逐帧直方图校准**（`GpuFrameAnalyzer.histograms_perframe`）：每帧 256-bin
+  直方图在 GPU 统计，D2H 仅 B×1KB 标量表，宿主复刻"前 50 帧 Otsu 取中位
+  数"语义——校准阈值行为与单流水线逐位一致（此前全局池化直方图阈值不同，
+  段数差 4×）；
+- **TRT 输出 GPU argmax 归约**（`GpuOutputReducer` + `TrtEngine.
+  execute_device_argmax`，env `RVTOL_GPU_CTC=1`）：(B,S,C) float32 在 GPU
+  上沿 vocab 维归约成 (B,S) 索引+概率，DtoH 从 ~16MB/批降到 ~12KB
+  （~1300×）；并列取首个与 numpy.argmax 一致，宿主 `_ctc_from_idxprob`
+  与原批解码语义一致。注意按 profile max_batch 分子批循环。
+
+争抢韧性实测（新三国01 窗口 6000 采样帧，对端 8 进程内存流拷贝 ~100GB/s）：
+
+| 路径 | 干净 | 争抢下 | 退化 |
+|---|---:|---:|---:|
+| 宿主路径 | 9.49s | 16.12s | ×1.70 |
+| 显存全驻留 | 11.51s | 15.65s | **×1.36** |
+
+唯一文本集 host vs gpu = 211/211 完全一致。
+
+已知限制（保持默认关闭的原因）：GPU 管线尚无 merge_similar（段数偏多，
+OCR 次数 ~3×），clean 绝对速度仍略慢于宿主路径；适合作为"对端大内存流量"
+场景的专用路径而非通用默认。
 - 当前仍存在 1 次原始 ROI D2H（decord asnumpy） + 1 次 DtoH（TRT 输出）。
 
 ### 字幕/背景分离预处理（实验，RVTOL_TEXT_SEP）

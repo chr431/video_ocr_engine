@@ -126,6 +126,11 @@ class OcrEngine:
         # ── 模型 ──
         self._trt: TrtEngine | None = None
         self._gpu_pre = None  # TRT GPU 预处理（懒加载）
+        # 显存全驻留 CTC：TRT 输出在 GPU 完成 vocab 维 argmax/max，
+        # 输出不落 RAM（RVTOL_GPU_CTC=1 开启，配合 GPU 分段管线）。
+        self._gpu_ctc_mode = (engine_type == "tensorrt" and
+                              os.environ.get("RVTOL_GPU_CTC", "")
+                              .strip().lower() in ("1", "true", "yes", "on"))
         if engine_type == "tensorrt":
             try:
                 self._trt = TrtEngine(models, size, progress_cb=self._progress_cb)
@@ -368,6 +373,8 @@ class OcrEngine:
         """TRT：直接消费 decord GPU NDArray（灰度 raw），跳过 D2H 代表帧拷贝。
 
         infos: [(dev_ptr, src_h, src_w, owner), ...]
+        RVTOL_GPU_CTC=1 时进一步在 GPU 上完成 vocab 维 argmax/max，输出
+        不落 RAM（DtoH 仅 B*seq*8 字节），宿主 CTC 直接吃小数组。
         """
         self._get_gpu_pre()
         src_h = int(infos[0][1])
@@ -384,14 +391,39 @@ class OcrEngine:
                      float(src_w) / float(src_h))
         out_width = int(config.OCR_TARGET_H * max_wh)
         dev_ptr, shape = self._gpu_pre.process_gray_raw(infos, out_width)
+        if getattr(self, "_gpu_ctc_mode", False):
+            idx2d, prob2d = self._trt.execute_device_argmax(dev_ptr, shape)
+            return self._ctc_from_idxprob(idx2d, prob2d)
         preds = self._infer_trt_device(dev_ptr, shape)
-        results: list = []
+        results = []
         if preds.ndim == 3:
             results = self._ctc_decode_batch(preds)
         else:
             for k in range(len(preds)):
                 results.append(self._ctc_decode(preds[k]))
         return results
+
+    def _ctc_from_idxprob(self, idx: "np.ndarray",
+                          prob: "np.ndarray") -> list:
+        """从 GPU 归约后的 (B,S) 索引/概率做 CTC 解码（与
+        _ctc_decode_batch 语义一致：相邻去重 → 去 blank → 字符映射，
+        置信度 = 保留位置概率均值 round5）。"""
+        import numpy as np
+        out: list = []
+        for b in range(len(idx)):
+            ib = idx[b]
+            pb = prob[b]
+            keep = np.ones(len(ib), dtype=bool)
+            keep[1:] = ib[1:] != ib[:-1]
+            keep &= ib != 0  # blank
+            if keep.any():
+                text = "".join(self._chars[int(i)] for i in ib[keep])
+                confs = [round(float(p), 5) for p in pb[keep]]
+                conf = round(float(np.mean(confs)), 5)
+            else:
+                text, conf = "", 0.0
+            out.append(RecOut(text, conf))
+        return out
 
     def _infer_trt_device(self, dev_ptr: int, shape: tuple) -> np.ndarray:
         """对已位于显存的整批输入执行 TRT，整批只同步一次。"""
