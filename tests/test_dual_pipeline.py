@@ -36,12 +36,15 @@ def test_dual_pipeline_explicit_override(monkeypatch):
 
 
 def test_dual_backend_pairs_default_opposite():
+    # 互补 OCR 保持 TRT（TRT⊕ONNX 共存推理互相膨胀，实测净负），
+    # 仅解码侧互补：auto ∥ cpu。
     ex = _make(decode_backend="auto", ocr_backend="auto")
-    assert ex._dual_backend_pairs() == [("auto", "auto"), ("cpu", "cpu")]
+    assert ex._dual_backend_pairs() == [("auto", "auto"), ("cpu", "auto")]
     ex2 = _make(decode_backend="cpu", ocr_backend="cpu")
     assert ex2._dual_backend_pairs() == [("cpu", "cpu"), ("auto", "auto")]
     ex3 = _make(decode_backend="nvdec", ocr_backend="tensorrt")
-    assert ex3._dual_backend_pairs() == [("nvdec", "tensorrt"), ("cpu", "cpu")]
+    assert ex3._dual_backend_pairs() == [("nvdec", "tensorrt"),
+                                         ("cpu", "tensorrt")]
 
 
 def test_dual_backends_custom_and_duplicate_single():
@@ -83,3 +86,52 @@ def test_extract_does_not_dispatch_when_disabled(monkeypatch):
     monkeypatch.setattr(FieldExtractor, "_run_pipelined", fake_run)
     result = ex.extract()
     assert result.segments[0].text == "x"
+
+
+# ═══════════════ 慢路径让位（adaptive yield） ═══════════════
+
+def test_dual_should_yield_basic():
+    f = FieldExtractor._dual_should_yield
+    # 显著落后且队列有剩余 → 让位
+    assert f(100.0, 200.0, 0.6, 1) is True
+    # 差距不足（≥ ratio）→ 不让位
+    assert f(150.0, 200.0, 0.6, 1) is False
+    # 快路径领先 → 不让位
+    assert f(300.0, 200.0, 0.6, 1) is False
+    # 让位后无剩余片 → 不让位（必须有人做完）
+    assert f(10.0, 1000.0, 0.6, 0) is False
+
+
+def test_dual_should_yield_disabled_or_invalid():
+    f = FieldExtractor._dual_should_yield
+    # ratio=0 禁用；负值视为禁用
+    assert f(1.0, 100.0, 0.0, 5) is False
+    assert f(1.0, 100.0, -0.5, 5) is False
+    # 无效吞吐（尚未完成任何片）
+    assert f(0.0, 100.0, 0.6, 5) is False
+    assert f(100.0, 0.0, 0.6, 5) is False
+
+
+# ═══════════════ 双流水线 OCR 线程分核预算 ═══════════════
+
+def test_dual_ocr_threads_trt_fixed_cpu_split():
+    import engine_config as config
+    from ocr_native import auto_ocr_thread_count
+    ex = _make(dual_pipeline=True)
+    trt_budget = config.DUAL_PIPELINE_TRT_CPU_THREADS
+    # TRT 侧：固定小预算（推理在 GPU，多线程无收益）
+    assert ex._dual_ocr_num_threads("tensorrt", 1) == trt_budget
+    assert ex._dual_ocr_num_threads("auto", 1) == trt_budget
+    # ONNX 侧：(物理核 - TRT 预算) // CPU 侧消费者数，下限 2
+    cores = auto_ocr_thread_count()
+    assert ex._dual_ocr_num_threads("onnxruntime", 1) == \
+        max(2, (cores - trt_budget) // 1)
+    assert ex._dual_ocr_num_threads("onnxruntime", 2) == \
+        max(2, (cores - trt_budget) // 2)
+
+
+def test_dual_ocr_threads_env_override(monkeypatch):
+    monkeypatch.setenv("RVTOL_OCR_THREADS", "7")
+    ex = _make(dual_pipeline=True)
+    assert ex._dual_ocr_num_threads("tensorrt", 1) == 7
+    assert ex._dual_ocr_num_threads("onnxruntime", 1) == 7

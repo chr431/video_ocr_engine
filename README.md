@@ -111,8 +111,8 @@ ex = FieldExtractor(
     gray_output=True,
     merge_similar=True,
     dual_pipeline=True,          # 开启单实例双流水线
-    dual_pipeline_chunks=4,      # 切片数，默认 4
-    # 可选：自定义两条流水线后端；默认主+互补（CPU ↔ GPU/TRT）
+    dual_pipeline_chunks=2,      # 竞争片数，默认 2
+    # 可选：自定义两条流水线后端；默认主 + 互补解码（GPU/TRT ∥ CPU/TRT）
     # dual_backends=[("cpu", "auto"), ("cpu", "auto")],
 )
 result = ex.extract()
@@ -120,12 +120,20 @@ result = ex.extract()
 
 - 默认 `dual_pipeline=False`，保持原有单流水线行为。
 - 需要 **NVDEC 和 TensorRT 同时可用**；不满足时自动回退单流水线并发出警告。
+- 默认互补对 = `(auto, auto) ∥ (cpu, auto)`：两条流水线都用 TensorRT 推理，
+  仅解码侧互补（NVDEC 有固定吞吐上限，CPU 软解是真实增量）。TRT 与 ONNX
+  共存推理会互相膨胀（实测总吞吐反而钉死），因此默认不再混用两种推理后端。
+- 采样帧数 < `DUAL_PIPELINE_MIN_FRAMES`（默认 3000）时自动回退单流水线：
+  双流水线的固定开销（探测/校准、第二套引擎初始化、跨片边界）在短窗口无法摊销。
+- AV1 编码下 CPU 软解已知净负，默认组合自动回退单流水线
+  （`RVTOL_DUAL_NO_CODEC_FALLBACK=1` 可关闭）。
+- 运行中按“试点片 + 确认片”实测两条流水线的处理速率，明显偏慢的一侧会让位，
+  剩余片由快路径完成，避免尾部等待。
 - `dual_backends` 可显式指定两条流水线的 `(decode_backend, ocr_backend)`；
-  只给一条时自动复制为两条（例如两条 CPU 解码 + TensorRT OCR）。
-- 在本机标清 h264 字幕场景，默认双流水线（auto+auto 与 cpu+cpu）相对单流水线
-  有约 **30%** 加速；显式两条 `("cpu","auto")` 再快约 5%。
-- 分片数不是越多越好：本机实测 2~4 片最优，8 片会因额外 seek/边界处理变慢。
-  短片段/短范围建议保持默认或改用 2 片。
+  只给一条时自动复制为两条。
+- 本机实测（16 核 + RTX 4060 Laptop）：标清 h264 字幕批量 **-27%**、
+  Race 速度数字全片 **-27% ~ -42%**；输出与单流水线逐段一致
+  （跨片边界的相似段会被缝合合并）。
 
 > 面向字幕提取的完整 CLI 应用已拆到独立仓库
 > [chr431/video_subtitle_extractor](https://github.com/chr431/video_subtitle_extractor)：

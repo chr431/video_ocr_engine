@@ -12,7 +12,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # ═══════════════════ 数据目录 ═══════════════════
 
@@ -58,8 +58,33 @@ HYBRID_OCR_ENV: str = "RVTOL_HYBRID_OCR"
 # 小片，两条完整解码+分段+OCR 流水线（互补后端组合）作为消费者从队列取片，
 # 动态负载均衡；最后按帧序合并。默认关闭。需要 NVDEC 和 TensorRT 均可用。
 DUAL_PIPELINE_ENV: str = "RVTOL_DUAL_PIPELINE"
-DUAL_PIPELINE_CHUNKS: int = 4          # 默认切片数（两条流水线动态取片）
+DUAL_PIPELINE_CHUNKS: int = 2          # 默认竞争切片数（试点片之外，两条
+                                       # 流水线动态取片）。实测均衡场景
+                                       # （h264 字幕/速度数字）2 片最优；
+                                       # 失衡场景由分级让位止损，片数增大
+                                       # 只增加调度开销不再有均衡收益
 DUAL_PIPELINE_MIN_CHUNK_FRAMES: int = 16  # 每个切片至少包含的采样帧数（太少则减片）
+# 双流水线最低采样帧数：低于该值时固定开销（探测解码器打开+全局校准、
+# 第二套 OCR 引擎初始化、跨片边界）无法摊销，实测 1500 帧窗口反而变慢
+# （+7~18%），直接回退单流水线。
+DUAL_PIPELINE_MIN_FRAMES: int = 3000
+# 头部小片单位：试点/确认片各约 1/PILOT_DIV 视频长度（共 4 个，两条流水线
+# 各领 1 个试点 + 各取 1 个确认后即可做让位判定）；失衡时慢路径最多浪费
+# 约 2×1/DIV 的头部帧。太小会被首次解码 warm-up 污染吞吐估计。
+DUAL_PIPELINE_PILOT_DIV: int = 24
+# 已知互补 CPU 流水线净负的编码（默认互补组合时直接回退单流水线）：
+# AV1 CPU 软解吞吐仅 NVDEC 的 1/5 且与 GPU 路径争抢，双流水线实测 +42~125%。
+# 显式 dual_backends 不受此回退影响。env RVTOL_DUAL_NO_CODEC_FALLBACK=1 关闭。
+DUAL_PIPELINE_CODEC_FALLBACK: tuple = ("av1",)
+# 慢路径让位阈值：某条流水线稳态吞吐（排除 warm-up 试点样本）< 另一条 ×
+# 该值且队列仍有剩余片时，停止取片（剩余片由快路径完成，避免尾部等待）。
+# 0.8 = 只要稳态明显偏慢（>20%）就让位：实测字幕场景 GPU/CPU 稳态比 ~0.7，
+# 阈值过低会让慢路径全程拖尾。0 = 禁用。
+# env RVTOL_DUAL_SLOW_RATIO 可覆盖（实验钩子）。
+DUAL_PIPELINE_SLOW_RATIO: float = 0.8
+# 双流水线中 TRT（GPU）侧消费者的 OCR 线程预算：TRT 推理在 GPU 上执行、
+# 预处理是 worker 单线程 numpy，多线程无收益；让出物理核给 CPU 软解+ONNX 侧。
+DUAL_PIPELINE_TRT_CPU_THREADS: int = 2
 DEFAULT_OCR_BACKEND: str = "auto"      # OCR 推理后端 (auto / cpu / tensorrt)
 OCR_BACKEND_KEYS: list[str] = ["auto", "cpu", "tensorrt"]
 OCR_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU", "tensorrt": "TensorRT"}
