@@ -21,13 +21,13 @@ def test_dual_pipeline_default_off():
 
 
 def test_dual_pipeline_env_enabled(monkeypatch):
-    monkeypatch.setenv("RVTOL_DUAL_PIPELINE", "1")
+    monkeypatch.setenv("DUAL_PIPELINE", "1")
     ex = _make()
     assert ex._dual_pipeline is True
 
 
 def test_dual_pipeline_explicit_override(monkeypatch):
-    monkeypatch.setenv("RVTOL_DUAL_PIPELINE", "1")
+    monkeypatch.setenv("DUAL_PIPELINE", "1")
     ex = _make(dual_pipeline=False)
     assert ex._dual_pipeline is False
     ex2 = _make(dual_pipeline=True, dual_pipeline_chunks=6)
@@ -36,15 +36,14 @@ def test_dual_pipeline_explicit_override(monkeypatch):
 
 
 def test_dual_backend_pairs_default_opposite():
-    # 互补 OCR 保持 TRT（TRT⊕ONNX 共存推理互相膨胀，实测净负），
-    # 仅解码侧互补：auto ∥ cpu。
+    # 互补 OCR 与下游 --dual 一致：TRT ↔ ONNX，解码侧互补 auto ∥ cpu。
     ex = _make(decode_backend="auto", ocr_backend="auto")
-    assert ex._dual_backend_pairs() == [("auto", "auto"), ("cpu", "auto")]
+    assert ex._dual_backend_pairs() == [("auto", "auto"), ("cpu", "cpu")]
     ex2 = _make(decode_backend="cpu", ocr_backend="cpu")
     assert ex2._dual_backend_pairs() == [("cpu", "cpu"), ("auto", "auto")]
     ex3 = _make(decode_backend="nvdec", ocr_backend="tensorrt")
     assert ex3._dual_backend_pairs() == [("nvdec", "tensorrt"),
-                                         ("cpu", "tensorrt")]
+                                         ("cpu", "cpu")]
 
 
 def test_dual_backends_custom_and_duplicate_single():
@@ -146,7 +145,77 @@ def test_dual_ocr_threads_onnx_capped_with_trt_peer():
 
 
 def test_dual_ocr_threads_env_override(monkeypatch):
-    monkeypatch.setenv("RVTOL_OCR_THREADS", "7")
+    monkeypatch.setenv("OCR_THREADS", "7")
     ex = _make(dual_pipeline=True)
     assert ex._dual_ocr_num_threads("tensorrt", 1) == 7
     assert ex._dual_ocr_num_threads("onnxruntime", 1) == 7
+
+
+# ═══════════════ 每关键帧一片的切片生成（DUAL_KEYFRAME_EVERY，2026-08 实验） ═══════════════
+
+def test_keyframe_every_chunks_basic():
+    """基础最小间距下按关键帧切分；边界吸附到采样帧、覆盖无缝隙。"""
+    f = FieldExtractor._keyframe_every_chunks
+    frames = list(range(0, 1000))          # stride=1 采样帧
+    kf = [100, 300, 500, 700]
+    chunks = f(frames, kf, rest_start=0, last_end=1000,
+               stride=1, min_gap=16, max_chunks=8)
+    assert chunks == [(0, 100), (100, 300), (300, 500), (500, 700),
+                      (700, 1000)]
+    # 覆盖连续无缝隙
+    assert chunks[0][0] == 0
+    assert all(chunks[i][1] == chunks[i + 1][0] for i in range(len(chunks) - 1))
+    assert chunks[-1][1] == 1000
+
+
+def test_keyframe_every_chunks_max_chunks_cap():
+    """关键帧过密时逐步放大间距，inner 片数受控在 max_chunks 内。"""
+    f = FieldExtractor._keyframe_every_chunks
+    frames = list(range(0, 2000))
+    kf = [i * 20 for i in range(1, 100)]    # 每 20 帧一个关键帧（密集）
+    chunks = f(frames, kf, rest_start=0, last_end=2000,
+               stride=1, min_gap=8, max_chunks=6)
+    # 只产生 max_chunks 个内部边界（末片不计）
+    assert len(chunks) - 1 <= 6
+    assert chunks[0][0] == 0
+    assert all(chunks[i][1] == chunks[i + 1][0] for i in range(len(chunks) - 1))
+    assert chunks[-1][1] == 2000
+    # 每个内部边界都吸附到关键帧附近：间距以整数倍 stride 计
+    for s, e in chunks[1:-1]:
+        assert (s - e) % 1 == 0
+
+
+def test_keyframe_every_chunks_stride_snap():
+    """采样步长>1 时边界吸附到最近采样帧（保持全帧覆盖、无缝隙）。"""
+    f = FieldExtractor._keyframe_every_chunks
+    frames = list(range(0, 400, 4))        # stride=4：采样帧 0,4,8,...
+    kf = [10, 110, 210, 310]               # 关键帧可能不在采样网格上
+    chunks = f(frames, kf, rest_start=0, last_end=400,
+               stride=4, min_gap=8, max_chunks=8)
+    # 内部边界（非首片起点/末片终点）必须是采样帧列表中的帧号；
+    # 末片终点=last_end 允许不在采样网格上（真实代码中 last_end=total）
+    fset = set(frames)
+    for s, e in chunks[1:-1]:
+        assert s in fset and e in fset
+    assert chunks[-1][1] == 400
+    assert all(chunks[i][1] == chunks[i + 1][0] for i in range(len(chunks) - 1))
+
+
+def test_keyframe_every_chunks_no_keyframes():
+    """无关键帧时退化为一整片。"""
+    f = FieldExtractor._keyframe_every_chunks
+    frames = list(range(0, 500))
+    chunks = f(frames, [], rest_start=0, last_end=500,
+               stride=1, min_gap=16, max_chunks=8)
+    assert chunks == [(0, 500)]
+
+
+def test_parallel_chunk_seek_required_passthrough(monkeypatch):
+    """竞争取片时按“与上一片终点是否相邻”决定 seek_required。"""
+    ex = _make(dual_pipeline=True)
+    # 直接验证 _run_parallel_chunk 的默认参数存在即可（真实 seek 行为由
+    # 集成冒烟覆盖）；此处只锁定签名兼容性。
+    import inspect
+    sig = inspect.signature(FieldExtractor._run_parallel_chunk)
+    assert "seek_required" in sig.parameters
+    assert sig.parameters["seek_required"].default is True

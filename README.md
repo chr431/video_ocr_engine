@@ -112,23 +112,24 @@ ex = FieldExtractor(
     merge_similar=True,
     dual_pipeline=True,          # 开启单实例双流水线
     dual_pipeline_chunks=2,      # 竞争片数，默认 2
-    # 可选：自定义两条流水线后端；默认主 + 互补解码（GPU/TRT ∥ CPU/TRT）
-    # dual_backends=[("cpu", "auto"), ("cpu", "auto")],
+    # 可选：自定义两条流水线后端；默认主 + 互补（GPU/TRT ∥ CPU/ONNX）
+    # dual_backends=[("auto", "auto"), ("cpu", "cpu")],
 )
 result = ex.extract()
 ```
 
 - 默认 `dual_pipeline=False`，保持原有单流水线行为。
 - 需要 **NVDEC 和 TensorRT 同时可用**；不满足时自动回退单流水线并发出警告。
-- 默认互补对 = `(auto, auto) ∥ (cpu, auto)`：两条流水线都用 TensorRT 推理，
-  仅解码侧互补（NVDEC 有固定吞吐上限，CPU 软解是真实增量）。TRT 与 ONNX
-  共存推理会互相膨胀（实测总吞吐反而钉死），因此默认不再混用两种推理后端。
+- 默认互补对 = `(auto, auto) ∥ (cpu, cpu)`：一条 GPU+NVDEC+TensorRT，
+  一条 CPU+ONNX，与下游 `video_subtitle_extractor --dual` 的互补策略一致，
+  分别利用 GPU 与 CPU 硬件。
+- 混配（TRT ⊕ ONNX）默认让位阈值取 `DUAL_PIPELINE_MIXED_SLOW_RATIO=0.5`：
+  两条流水线分属不同硬件，阈值过高会误让、过低/0 又无法在 AV1 极端失衡时
+  止损；可用 `DUAL_SLOW_RATIO` 覆盖。
 - 采样帧数 < `DUAL_PIPELINE_MIN_FRAMES`（默认 3000）时自动回退单流水线：
   双流水线的固定开销（探测/校准、第二套引擎初始化、跨片边界）在短窗口无法摊销。
 - AV1 编码下 CPU 软解已知净负，默认组合自动回退单流水线
-  （`RVTOL_DUAL_NO_CODEC_FALLBACK=1` 可关闭）。
-- 运行中按“试点片 + 确认片”实测两条流水线的处理速率，明显偏慢的一侧会让位，
-  剩余片由快路径完成，避免尾部等待。
+  （`DUAL_NO_CODEC_FALLBACK=1` 可关闭）。
 - `dual_backends` 可显式指定两条流水线的 `(decode_backend, ocr_backend)`；
   只给一条时自动复制为两条。
 - 本机实测（16 核 + RTX 4060 Laptop）：标清 h264 字幕批量 **-27%**、
@@ -160,23 +161,33 @@ result = ex.extract()
 - 干净环境小幅更快（窗口实测 -13%），对端大内存流量时显著更稳
   （对端 ~100GB/s 流拷贝下 -24%，退化 ×1.43 vs 宿主 ×1.64）
 - 整集 stride=8 场景两路径同受 NVDEC 跳帧解码供给率限制，速度持平
-- env `RVTOL_GPU_PIPELINE=0` 显式关闭；YUV 输出场景仍走宿主管线
+- env `GPU_PIPELINE=0` 显式关闭；YUV 输出场景仍走宿主管线
 
 ## 环境变量钩子（实验）
 
 | 变量 | 作用 |
 |------|------|
-| `RVTOL_GPU_PIPELINE` | GPU 全驻留管线：`0` 关闭回退宿主路径（gray+NVDEC+TRT 时默认启用） |
-| `RVTOL_GPU_CTC` | `0` 关闭 TRT 输出的 GPU argmax 归约（默认开启，仅影响 GPU 管线） |
-| `RVTOL_ONNX_CTC` | `1` ONNX 图级输出归约（ArgMax+ReduceMax，需 onnx 包；仅 TRT⊕ONNX 混配时建议开启，单引擎会慢 ~10%） |
-| `RVTOL_OCR_THREADS` | OCR 推理线程数覆盖（默认全物理核） |
-| `RVTOL_OCR_BATCH` | OCR 批大小覆盖（默认 16） |
-| `RVTOL_DUAL_ONNX` | `0` 关闭双 ONNX 实例（CPU 核数≥8 默认开） |
-| `RVTOL_HYBRID_DECODE` | `1` 开启 CPU+NVDEC 混合解码（队列实测无提升，维持关闭） |
-| `RVTOL_HYBRID_OCR` | `1` 开启 TRT+ONNX 混合 OCR（队列实测无提升，维持关闭） |
-| `RVTOL_DUAL_PIPELINE` | `1` 开启单实例双完整流水线并行（需 NVDEC+TRT，默认关闭） |
-| `RVTOL_SEG_GAMMA` | 分段灰度 gamma（默认 0=raw） |
-| `RVTOL_OCR_GAMMA` | OCR 预处理 gamma（默认 2.0） |
+| `GPU_PIPELINE` | GPU 全驻留管线：`0` 关闭回退宿主路径（gray+NVDEC+TRT 时默认启用） |
+| `GPU_CTC` | `0` 关闭 TRT 输出的 GPU argmax 归约（默认开启，仅影响 GPU 管线） |
+| `OCR_THREADS` | OCR 推理线程数覆盖（默认全物理核） |
+| `OCR_BATCH` | OCR 批大小覆盖（默认 16） |
+| `OCR_PAD_SMALL` | OCR 输入 pad 宽度下限覆盖 |
+| `OCR_GAMMA` | OCR 预处理 gamma（默认 2.0） |
+| `DUAL_ONNX` | `0` 关闭双 ONNX 实例（CPU 核数≥8 默认开） |
+| `DUAL_PIPELINE` | `1` 开启单实例双完整流水线并行（需 NVDEC+TRT，默认关闭） |
+| `DUAL_KEYFRAME_SLICING` | `0` 关闭双流水线大竞争片的关键帧边界吸附（默认开启） |
+| `DUAL_KEYFRAME_EVERY` | `1` 把大竞争区按关键帧边界切片交给共享队列竞争（实验；默认关）。配合 `DUAL_PIPELINE_INFLIGHT`/`DUAL_KEYFRAME_EVERY_MIN_GAP`/`DUAL_KEYFRAME_EVERY_MAX_CHUNKS` 调节粒度与配平 |
+| `DUAL_KEYFRAME_EVERY_MIN_GAP` | 关键帧切片最小间距（采样帧数，默认 16）：间距小于该值的关键帧不切分 |
+| `DUAL_KEYFRAME_EVERY_MAX_CHUNKS` | 关键帧切片竞争片数上限（默认 8）：关键帧过密时逐步放大间距合并，防止片数上百导致 seek 总耗时线性暴涨 |
+| `DUAL_PIPELINE_INFLIGHT` | 竞争取片 in-flight 上限（片数，默认 1）：本流水线“已取但 OCR 尚未排空”的片数达到上限即暂停取片等自己 OCR 追上来——防止“解码快、OCR 慢”的路径在自由竞争中抢占过多切片却因 OCR 瓶颈拖慢整体 |
+| `DUAL_PROPORTIONAL` | `1` 按试点测速比例分配剩余大区间（实验） |
+| `DUAL_PRIORITY` | `1` 在线优先取片：双方同时等待时速度更快者优先拿下一片（实验） |
+| `DUAL_SLOW_RATIO` | 双流水线让位阈值覆盖（混配默认 0.5，可显式覆盖） |
+| `DUAL_NO_CODEC_FALLBACK` | `1` 关闭 AV1 编码时的双流水线自动回退 |
+| `TEXT_SEP_MERGE` | 相似段合并使用的分离模式（contrast/binary/off） |
+| `ENGINE_PROFILE` | `1` 开启引擎细粒度性能剖面 |
+| `TRT_SUBPROBE` | `1` 开启 TRT 子相位探针 |
+| `DEBUG_BOUNDS` | `1` 打印分段边界调试信息 |
 
 ## 文档
 

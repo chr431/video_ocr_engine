@@ -1,7 +1,7 @@
 """管线引擎配置（engine_config）— 解码/OCR/分段/纠错域常量。
 
 独立引擎仓库的配置单一事实源，供 engine 内 ocr_native / ocr_trt /
-segmentation / video_utils / hybrid_decode 与引擎外的上层应用直接引用。
+segmentation / video_utils 与引擎外的上层应用直接引用。
 RaceVideoToLog 的 config.py 通过 `from engine_config import *` 聚合再导出
 （GUI 与 `import config` 兼容），GUI 专属常量（颜色/窗口/图表）留在应用侧。
 
@@ -47,17 +47,39 @@ DEFAULT_DECODE_BACKEND: str = "auto"   # 解码后端 (auto / cpu / nvdec)
 DECODE_BACKEND_KEYS: list[str] = ["auto", "cpu", "nvdec"]
 DECODE_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU",
                                          "nvdec": "NVDEC"}
-# CPU+NVDEC 混合解码开关（默认关闭；5 视频队列实测无提升，维持关闭）：
-# 环境变量置 1/true/yes/on 后，GPU 模式（auto / nvdec）内部改走
-# CPU+NVDEC 双解码器并行（CPU 前段 + GPU 后段，见 _open_hybrid_vrs）。
-HYBRID_DECODE_ENV: str = "RVTOL_HYBRID_DECODE"
-# TRT+ONNX 混合 OCR 开关（默认关闭；5 视频队列实测无提升，维持关闭）：
-# OCR 同时用 TensorRT（GPU）+ onnxruntime（CPU）双引擎并发处理段批。
-HYBRID_OCR_ENV: str = "RVTOL_HYBRID_OCR"
 # 单实例双完整流水线并行（可选）：一个 FieldExtractor 把同一视频切成多个连续
 # 小片，两条完整解码+分段+OCR 流水线（互补后端组合）作为消费者从队列取片，
 # 动态负载均衡；最后按帧序合并。默认关闭。需要 NVDEC 和 TensorRT 均可用。
-DUAL_PIPELINE_ENV: str = "RVTOL_DUAL_PIPELINE"
+DUAL_PIPELINE_ENV: str = "DUAL_PIPELINE"
+
+# 在线优先取片（实验）：DUAL_PRIORITY=1 开启。共用取片时若两条流水线同时
+# 等待，速度更快的一方优先拿下一片；不依赖前期静态测速，用真实完成吞吐
+# 动态决定优先级。
+DUAL_PIPELINE_PRIORITY_ENV: str = "DUAL_PRIORITY"
+# 关键帧分片（默认开启）：把大竞争片的内部边界吸附到最近关键帧，
+# DUAL_KEYFRAME_SLICING=0 可关闭。
+DUAL_PIPELINE_KEYFRAME_ENV: str = "DUAL_KEYFRAME_SLICING"
+# 每个关键帧切一大片（实验）：DUAL_KEYFRAME_EVERY=1 时，试点之外的大竞争区不再
+# 等分，而是按剩余区域内每个关键帧边界切出一片，交给共享队列自由竞争。
+# 关键帧开得越密，片越多，快慢路径越容易自动配平。
+DUAL_PIPELINE_KEYFRAME_EVERY_ENV: str = "DUAL_KEYFRAME_EVERY"
+# 按试点测速比例分配实验（DUAL_PROPORTIONAL=1）：把大竞争区按试点稳态吞吐
+# 比例切成两个连续区间，各自只给一条流水线（不参与共享队列竞争）。
+DUAL_PIPELINE_PROPORTIONAL_ENV: str = "DUAL_PROPORTIONAL"
+# 每关键帧一片实验的切片粒度控制：基础最小片间距（采样帧数）之上，若关键帧
+# 过密（如 mkv 重编码场景每 30-140 源帧一个关键帧）导致片数超过上限，则逐步
+# 放大间距合并（边界仍落在关键帧附近，seek 便宜，片数受控在 MAX_CHUNKS 内）。
+# 片数太多会让 seek+每片固定开销线性爆炸，太少又回到粗颗粒失衡。
+DUAL_KEYFRAME_EVERY_MIN_GAP_ENV: str = "DUAL_KEYFRAME_EVERY_MIN_GAP"
+DUAL_KEYFRAME_EVERY_MIN_GAP: int = 16
+DUAL_KEYFRAME_EVERY_MAX_CHUNKS_ENV: str = "DUAL_KEYFRAME_EVERY_MAX_CHUNKS"
+DUAL_KEYFRAME_EVERY_MAX_CHUNKS: int = 8
+# 竞争取片 in-flight 上限（片数）：某条流水线“已取但 OCR 尚未排空”的片数
+# 达到该值时暂停取片，等自己的 OCR 追上来——防止“解码快、OCR 慢”的路径
+# 在共享队列竞争中跑得太前（抢占过多切片却因 OCR 瓶颈拖慢整体）。片数口径
+# 与内容无关，天然免疫“分段稀疏时段做不了多少 OCR 工作”的测量偏差。
+DUAL_PIPELINE_INFLIGHT_ENV: str = "DUAL_PIPELINE_INFLIGHT"
+DUAL_PIPELINE_INFLIGHT: int = 1
 DUAL_PIPELINE_CHUNKS: int = 2          # 默认竞争切片数（试点片之外，两条
                                        # 流水线动态取片）。实测均衡场景
                                        # （h264 字幕/速度数字）2 片最优；
@@ -74,23 +96,27 @@ DUAL_PIPELINE_MIN_FRAMES: int = 3000
 DUAL_PIPELINE_PILOT_DIV: int = 24
 # 已知互补 CPU 流水线净负的编码（默认互补组合时直接回退单流水线）：
 # AV1 CPU 软解吞吐仅 NVDEC 的 1/5 且与 GPU 路径争抢，双流水线实测 +42~125%。
-# 显式 dual_backends 不受此回退影响。env RVTOL_DUAL_NO_CODEC_FALLBACK=1 关闭。
+# 显式 dual_backends 不受此回退影响。env DUAL_NO_CODEC_FALLBACK=1 关闭。
 DUAL_PIPELINE_CODEC_FALLBACK: tuple = ("av1",)
 # 慢路径让位阈值：某条流水线稳态吞吐（排除 warm-up 试点样本）< 另一条 ×
 # 该值且队列仍有剩余片时，停止取片（剩余片由快路径完成，避免尾部等待）。
 # 0.8 = 只要稳态明显偏慢（>20%）就让位：实测字幕场景 GPU/CPU 稳态比 ~0.7，
 # 阈值过低会让慢路径全程拖尾。0 = 禁用。
-# env RVTOL_DUAL_SLOW_RATIO 可覆盖（实验钩子）。
+# env DUAL_SLOW_RATIO 可覆盖（实验钩子）。
 DUAL_PIPELINE_SLOW_RATIO: float = 0.8
+# 混配（TRT ⊕ ONNX）默认让位阈值：两条路径分属 GPU/CPU，阈值过高会误让位
+# （0.8 曾把可并行对端交给慢路径），阈值过低/0 又会在大幅失衡时无法止损。
+# 实测 0.5 兼得：h264 对比路径不触发、AV1 极端差触发快路径接管。
+# env DUAL_SLOW_RATIO 仍可显式覆盖。
+DUAL_PIPELINE_MIXED_SLOW_RATIO: float = 0.5
 # 双流水线中 TRT（GPU）侧消费者的 OCR 线程预算：TRT 推理在 GPU 上执行、
 # 预处理是 worker 单线程 numpy，多线程无收益；让出物理核给 CPU 软解+ONNX 侧。
 DUAL_PIPELINE_TRT_CPU_THREADS: int = 2
-# 混配保护：当两条流水线的 OCR 后端不同（TRT ⊕ ONNX 显式组合）时，ONNX 侧
-# 线程预算上限。实测（引擎级判别实验，2026-08）：ONNX 多线程宽矩阵乘的聚合
-# 访存流量占满 DRAM/Infinity Fabric，TRT 宿主提交路径（ioctl/pageable 拷贝
-# staging）随之变慢（单线程重 SIMD 计算零影响、8 进程纯内存拷贝灾难级 →
-# 与核占用/指令组合无关）；限线程即限聚合访存流量。默认互补对两条都是
-# TRT，不受此值影响。
+# 混配保护：当两条流水线的 OCR 后端不同（TRT ⊕ ONNX）时，ONNX 侧线程预算
+# 上限。早期引擎级判别实验认为限线程即限聚合访存流量；五轮修正后确认混配
+# 端到端瓶颈主要是解码 seek 与让位，保此上限作为防御性保护仍可保留（本机
+# 修正后默认混配与显式双 TRT 基本持平）。用户可用 DUAL_SLOW_RATIO /
+# OCR_THREADS 覆盖。
 DUAL_PIPELINE_ONNX_PEER_THREADS: int = 6
 DEFAULT_OCR_BACKEND: str = "auto"      # OCR 推理后端 (auto / cpu / tensorrt)
 OCR_BACKEND_KEYS: list[str] = ["auto", "cpu", "tensorrt"]
@@ -118,27 +144,6 @@ OCR_GAMMA: float = 2.0                 # OCR 预处理灰度 gamma 增强指数�
                                        # 回归多。1.0=纯灰度不增强，0=保留 RGB）
 
 # ═══════════════════ 段管线参数 ═══════════════════
-HYBRID_CPU_SPLIT: float = 0.10    # 实验性混合解码（HYBRID_DECODE_ENV=1 时生效）
-                                  # 的 CPU 段帧数比例（保守分法）。
-                                  # 只有 CPU/GPU 吞吐相近（h264：CPU 软解
-                                  # ~1260fps ≈ NVDEC 2Gp/s 上限 ~960fps）时
-                                  # 对半分（55/45）才有 decode 砍半优势；
-                                  # HEVC/AV1 的 CPU 软解只有 NVDEC 的 1/3~1/5，
-                                  # 大份额 CPU 段反成瓶颈（test6 AV1 混合
-                                  # 43.6s vs GPU 14.4s）。10% 保守分法下
-                                  # wall = max(CPU 10% 耗时, GPU 90% 耗时)，
-                                  # h264/HEVC ≤ 纯 GPU（实测 test HEVC 2.7 vs
-                                  # 2.9s / test3 h264 3.1 vs 3.4s / test5 h264
-                                  # 7.1 vs 7.6s decode）；AV1 特判：CPU 软解
-                                  # AV1 极耗核且并发竞争拖慢 GPU 段（混合 19.1s
-                                  # vs 纯 GPU 14.4s）→ _hybrid_split 返回 0，
-                                  # 等效纯 GPU。env RVTOL_HYBRID_SPLIT 可覆盖
-                                  # （实验）。
-SEG_GAMMA: float = 0.0             # 分段/代表帧选择的灰度 gamma 增强指数。
-                                   # 0 = raw 灰度（锁定基线，v2.14 现状：分段与
-                                   # OCR 正式预处理 gray+gamma2.0 不一致但已接受）。
-                                   # >0 = 255*(g/255)^g 增强后分段（与 OCR 预处理
-                                   # 对齐实验，env RVTOL_SEG_GAMMA 可覆盖）。
 SEG_C: float = 5.0              # 分段聚类阈值：max 3×3 窗口和 < C ⇒ 显示未变
 # 相似段合并（生产默认开启）：连续两段代表帧在字幕/背景分离图上比较，
 # 平均绝对差 ≤ 阈值时视为同一视觉内容（如噪声把同一条字幕切成多段），
@@ -230,8 +235,7 @@ GRAY_RGB_WEIGHTS: tuple[float, float, float] = (0.299, 0.587, 0.114)
 # 段管线批大小：OCR 批（段数）与解码批（帧数）
 OCR_BATCH_SIZE: int = 16
 DECODE_BATCH_SIZE: int = 16
-# 流水线队列：混合解码各后端队列上限；OCR 预处理→推理队列上限
-HYBRID_QUEUE_SIZE: int = 8
+# 流水线队列：OCR 预处理→推理队列上限
 OCR_INFER_QUEUE_SIZE: int = 4
 # 分段 Otsu 阈值校准帧数（前 N 帧；seek 校准代价高，前段与全片抽样一致）
 SEG_CALIB_FRAMES: int = 50

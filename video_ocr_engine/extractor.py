@@ -19,15 +19,12 @@ import numpy as np
 
 import engine_config as config  # 识别链只用引擎域常量
 from segmentation import (
-    _apply_gamma, _cluster_win3, _gray, _gray_batch, _gray_seg,
-    _gray_seg_batch, _gray_seg_yuv, _gray_seg_yuv_batch, _otsu, _seg_gamma,
-)
-from hybrid_decode import (
-    HYBRID_BACKEND_ALIASES, _decode_range_worker, _drain_queue, _hybrid_ranges,
+    _cluster_win3, _gray, _gray_batch, _gray_seg,
+    _gray_seg_batch, _gray_seg_yuv, _gray_seg_yuv_batch, _otsu,
 )
 from ocr_native import OcrEngine, auto_ocr_thread_count
 from video_utils import (_nv12_luma_full, _preprocess_standard,
-                         _preprocess_text_sep, _text_sep_gray,
+                         _text_sep_gray,
                          nv12_to_rgb, nvdec_available,
                          tensorrt_available)  # 识别链 YUV/preprocess/RGB 预览
 
@@ -35,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 def _ocr_batch_size() -> int:
-    _env = _os.environ.get("RVTOL_OCR_BATCH")
+    _env = _os.environ.get("OCR_BATCH")
     if _env and _env.isdigit():
         return max(1, int(_env))
     return config.OCR_BATCH_SIZE
@@ -204,7 +201,6 @@ class FieldExtractor:
             if dual_backends else None)
         self._color_range = 0            # run 时从 decoder get_color_range 读取
         self._codec = ""                 # run 时从 decoder get_codec 探测
-        self._hybrid_codec = ""
         self._backend = ""
         self._bin_thresh = 0
         self._progress = progress_cb or (lambda m, p: None)
@@ -224,7 +220,7 @@ class FieldExtractor:
         self._n_segments = 0
         self._n_corr = 0
         self._profile_enabled = _os.environ.get(
-            "RVTOL_PROFILE", "").strip().lower() in ("1", "true", "yes", "on")
+            "ENGINE_PROFILE", "").strip().lower() in ("1", "true", "yes", "on")
         self.profile: dict = {}
         self._prof_lock = None
         if self._profile_enabled:
@@ -259,8 +255,7 @@ class FieldExtractor:
         """merge_similar 使用的分离模式（env 钩子优先级与 _segments_similar
         一致）：'contrast' | 'binary' | ''（原始灰度比较）。"""
         _m = _os.environ.get(
-            'RVTOL_TEXT_SEP_MERGE',
-            _os.environ.get('RVTOL_TEXT_SEP', self._merge_text_sep or '')
+            'TEXT_SEP_MERGE', self._merge_text_sep or ''
         ).strip().lower()
         if _m in ('1', 'contrast'):
             return 'contrast'
@@ -417,8 +412,6 @@ class FieldExtractor:
 
             auto: 尝试 GPU (NVDEC) 失败回退 CPU。cpu: 强制 CPU。
             nvdec: 强制 GPU（失败回退 CPU 并警告）。替代旧 DECORD_FORCE_CPU env。
-            混合（显式 cpu+nvdec 或 HYBRID_DECODE_ENV 开启）：走
-            _open_hybrid_vrs（双解码器并行），不经过本方法。
 
             ROI-first（decord ≥0.7.5）：构造时传入固定 ROI（半开区间）——
             解码器只输出该矩形（CPU filter 先 crop 再转换 / GPU 转换 kernel
@@ -464,47 +457,6 @@ class FieldExtractor:
                 self._codec = ''
         self._remember_color_range(vr)
         return vr
-
-    def _hybrid_env_enabled(self) -> bool:
-        """实验开关 config.HYBRID_DECODE_ENV（RVTOL_HYBRID_DECODE）。
-
-            1/true/yes/on（大小写不敏感）为开启，默认关闭。开启后 GPU 模式
-            （auto / nvdec）内部改走 CPU+NVDEC 双解码器并行；不暴露给 GUI/CLI。
-            """
-        _v = _os.environ.get(config.HYBRID_DECODE_ENV, '').strip().lower()
-        return _v in ('1', 'true', 'yes', 'on')
-
-    def _is_hybrid(self) -> bool:
-        """是否启用 CPU+NVDEC 混合并行解码。
-
-            显式传 decode_backend='cpu+nvdec'/'hybrid'（旧版程序化用法）恒为
-            混合；否则需 HYBRID_DECODE_ENV 开启 且 后端为 GPU 系（auto /
-            nvdec）——即"混合是 GPU 模式的实验变体"，cpu 不受影响。
-            """
-        _b = (self._decode_backend or 'auto').lower()
-        if _b in HYBRID_BACKEND_ALIASES:
-            return True
-        return self._hybrid_env_enabled() and _b in ('auto', 'nvdec')
-
-    def _hybrid_split(self) -> float:
-        """混合解码的 CPU 段帧数比例（env RVTOL_HYBRID_SPLIT 优先）。
-
-            保守分法（默认 config.HYBRID_CPU_SPLIT）：只把 CPU 软解当"增量"。
-            AV1 特判：CPU 软解 AV1 极耗核且与 GPU 段并发竞争反而拖慢 GPU 吞吐
-            → 返回 0（CPU 段空，等效纯 GPU；_open_hybrid_vrs 已按纯 GPU 分支走，
-            此返回为其他路径的防御性兜底）。
-            """
-        if getattr(self, '_hybrid_codec', '') == 'av1':
-            return 0.0
-        _env = _os.environ.get('RVTOL_HYBRID_SPLIT')
-        if _env:
-            try:
-                v = float(_env)
-                if 0.0 < v < 1.0:
-                    return v
-            except ValueError:
-                pass
-        return float(config.HYBRID_CPU_SPLIT)
 
     def _decord_format(self) -> str:
         """当前管线请求的 decord output_format。"""
@@ -582,56 +534,12 @@ class FieldExtractor:
             return c.ndim == 2 and c.shape[0] == roi_h + (roi_h + 1) // 2 and (c.shape[1] == roi_w)
         return c.shape[0] == roi_h and c.shape[1] == roi_w
 
-    def _open_hybrid_vrs(self):
-        """CPU+NVDEC 混合解码：打开一对 ROI-first 解码器（CPU 前段 + GPU 后段）。
-
-            与 _open_vr 相同 ROI 语义（闭合框 → 半开 +1）。两个 reader 使用
-            同一输出格式：gray（≥0.7.9 直出 Y）或 yuv420（≥0.7.10，Y 平面
-            跨后端一致）。GPU 不可用 → 回退单 CPU reader（vr_gpu=None，
-            调用方按纯 CPU 走）。
-            AV1 特判：CPU 软解 AV1 极耗核（~330fps）且与 GPU 段并发竞争拖慢
-            GPU 吞吐 → 不再打开 CPU reader，直接返回 (vr_gpu, vr_gpu)；调用方
-            见 vr_gpu is vr → 置 hybrid=False 走纯 GPU 分支（无队列/线程开销，
-            与纯 GPU 完全一致）。_hybrid_split 同步返回 0（防御性，其他路径兜底）。
-            返回 (vr_cpu, vr_gpu)。
-            """
-        from decord import cpu as _cpu
-        try:
-            import decord.video_reader as _vr_mod
-            _has_roi_api = hasattr(_vr_mod, '_CAPI_VideoReaderSetRoi')
-        except ImportError:
-            _has_roi_api = False
-        roi = (self._roi[0], self._roi[1], self._roi[2] + 1, self._roi[3] + 1)
-        roi_kw = {'roi': roi} if _has_roi_api else {}
-        try:
-            from decord import gpu as _g
-            vr_gpu = self._open_decord_reader(_g(0), roi_kw)
-            self._remember_color_range(vr_gpu)
-            self._backend = 'decord/CPU+NVDEC'
-        except Exception:
-            logger.warning('NVDEC 解码不可用，CPU+NVDEC 回退纯 CPU')
-            self._backend = 'decord/CPU'
-            vr = self._open_decord_reader(_cpu(0), roi_kw, num_threads=self._decode_num_threads())
-            self._remember_color_range(vr)
-            return (vr, None)
-        try:
-            self._hybrid_codec = str(vr_gpu.get_codec() or '').lower()
-        except Exception:
-            self._hybrid_codec = ''
-        if self._hybrid_codec == 'av1':
-            logger.warning('AV1 视频：CPU 软解与 GPU 并发竞争反而拖慢解码，CPU+NVDEC 按纯 GPU 解码（不打开 CPU reader）')
-            self._backend = 'decord/GPU'
-            return (vr_gpu, vr_gpu)
-        vr = self._open_decord_reader(_cpu(0), roi_kw, num_threads=self._decode_num_threads())
-        self._remember_color_range(vr)
-        return (vr, vr_gpu)
-
     def _ocr_engine_type(self) -> str:
         """OCR 推理后端：auto/tensorrt → tensorrt（OcrEngine 失败回退 onnx），cpu → onnxruntime。"""
         return 'onnxruntime' if (self._ocr_backend or 'auto').lower() == 'cpu' else 'tensorrt'
 
     def _ocr_num_threads(self) -> int:
-        """OCR 推理线程预算：RVTOL_OCR_THREADS env 钩子优先，否则全物理核；
+        """OCR 推理线程预算：OCR_THREADS env 钩子优先，否则全物理核；
             CPU 软解且物理核 ≤ 8 时与解码显式分核（cores//2，防过订阅）。
 
             解码（NVDEC 全卸载 / CPU 下 FFmpeg 帧线程 2 + filter auto 只占
@@ -641,7 +549,7 @@ class FieldExtractor:
             差 → 保持全核。显式参数传入引擎，不污染全局 env。
             """
         from ocr_native import auto_ocr_thread_count
-        _env = _os.environ.get('RVTOL_OCR_THREADS')
+        _env = _os.environ.get('OCR_THREADS')
         if _env:
             return max(1, int(_env))
         cores = auto_ocr_thread_count()
@@ -652,16 +560,7 @@ class FieldExtractor:
         return cores
 
     def _decode_all(self):
-        hybrid = self._is_hybrid()
-        vr_gpu = None
-        if hybrid:
-            vr, vr_gpu = self._open_hybrid_vrs()
-            if vr_gpu is None:
-                hybrid = False
-            elif vr_gpu is vr:
-                hybrid = False
-        else:
-            vr = self._open_vr()
+        vr = self._open_vr()
         if self._fps is None:
             for m in ('get_avg_fps', 'get_fps'):
                 fn = getattr(vr, m, None)
@@ -689,66 +588,25 @@ class FieldExtractor:
         grays = {}
         sharp = {}
         t0 = time.perf_counter()
-        if hybrid:
-            import threading
-            from queue import Queue
-            cpu_fis, gpu_fis = _hybrid_ranges(frames, 0, self._hybrid_split())
-            q_cpu: Queue = Queue(maxsize=config.HYBRID_QUEUE_SIZE)
-            q_gpu = Queue(maxsize=config.HYBRID_QUEUE_SIZE) if gpu_fis else None
-            err: list = []
-            threads: list = []
-            roi_half = (x1, y1, x2 + 1, y2 + 1)
-            if cpu_fis:
-                t = threading.Thread(target=_decode_range_worker, args=(vr, cpu_fis, q_cpu, roi_half, None, err, DECODE_BATCH, self._yuv_output, self._color_range), daemon=True)
-                t.start()
-                threads.append(t)
+        for k, fi in enumerate(frames):
+            if self._sample_stride > 1:
+                # 分频采样（串行参考路径）：单帧 get_batch（等差数列长度为
+                # 1 走通用 seek 路径），保证 crops[fi] 对应真实采样帧号。
+                c = vr.get_batch([fi], roi=(x1, y1, x2 + 1, y2 + 1)).asnumpy()[0]
             else:
-                q_cpu.put(None)
-            if q_gpu is not None:
-                try:
-                    vr_gpu.seek_accurate(gpu_fis[0])
-                except Exception as e:
-                    err.append(e)
-                    q_gpu.put(None)
-                else:
-                    t = threading.Thread(target=_decode_range_worker, args=(vr_gpu, gpu_fis, q_gpu, roi_half, None, err, DECODE_BATCH, self._yuv_output, self._color_range), daemon=True)
-                    t.start()
-                    threads.append(t)
-            for q in (q_cpu, q_gpu):
-                if q is None:
-                    continue
-                for fi, c, g, s, _b in _drain_queue(q):
-                    if not self._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
-                        c = c[y1:y2 + 1, x1:x2 + 1]
-                        g = self._crop_luma(c)
-                        s = float(g.std())
-                    crops[fi] = c
-                    grays[fi] = g
-                    sharp[fi] = s
-            for t in threads:
-                t.join()
-            if err:
-                raise err[0]
-        else:
-            for k, fi in enumerate(frames):
-                if self._sample_stride > 1:
-                    # 分频采样（串行参考路径）：单帧 get_batch（等差数列长度为
-                    # 1 走通用 seek 路径），保证 crops[fi] 对应真实采样帧号。
-                    c = vr.get_batch([fi], roi=(x1, y1, x2 + 1, y2 + 1)).asnumpy()[0]
-                else:
-                    c = vr.next_roi(x1, y1, x2 + 1, y2 + 1).asnumpy()
-                if not self._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
-                    c = c[y1:y2 + 1, x1:x2 + 1]
-                crops[fi] = c
-                g = self._crop_luma(c)
-                grays[fi] = g
-                sharp[fi] = float(g.std())
-                if k % 500 == 0:
-                    self._progress(f'[{self._backend}] 解码: {k}/{len(frames)}', 3 + k / max(len(frames), 1) * 70)
-                if k % 100 == 0:
-                    self._cancel()
+                c = vr.next_roi(x1, y1, x2 + 1, y2 + 1).asnumpy()
+            if not self._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
+                c = c[y1:y2 + 1, x1:x2 + 1]
+            crops[fi] = c
+            g = self._crop_luma(c)
+            grays[fi] = g
+            sharp[fi] = float(g.std())
+            if k % 500 == 0:
+                self._progress(f'[{self._backend}] 解码: {k}/{len(frames)}', 3 + k / max(len(frames), 1) * 70)
+            if k % 100 == 0:
+                self._cancel()
         self.timing['decode'] = time.perf_counter() - t0
-        del vr, vr_gpu
+        del vr
         return (frames, crops, grays, sharp)
 
     def _segment(self, frames, grays):
@@ -816,20 +674,16 @@ class FieldExtractor:
                         if len(engines) == 2 and engines[0].backend_name != engines[1].backend_name
                         else engines[0].backend_name)
                 else:
-                    _hybrid_ocr = _os.environ.get(config.HYBRID_OCR_ENV, '').strip().lower() in ('1', 'true', 'yes', 'on')
                     _t_eng = time.perf_counter()
                     _engine_progress = lambda msg: self._progress(msg, 2.5)
-                    if _hybrid_ocr:
-                        engines = [OcrEngine(self._ocr_model, 'tensorrt', fill_width=self._fill_width, num_threads=self._ocr_num_threads(), progress_cb=_engine_progress), OcrEngine(self._ocr_model, 'onnxruntime', fill_width=self._fill_width, num_threads=self._ocr_num_threads(), progress_cb=_engine_progress)]
+                    ot = self._ocr_num_threads()
+                    dual_onnx = self._ocr_engine_type() == 'onnxruntime' and ot >= 8 and (_os.environ.get('DUAL_ONNX', '1') != '0')
+                    if dual_onnx:
+                        half = max(2, ot // 2)
+                        engines = [OcrEngine(self._ocr_model, 'onnxruntime', fill_width=self._fill_width, num_threads=half, progress_cb=_engine_progress) for _ in range(2)]
                     else:
-                        ot = self._ocr_num_threads()
-                        dual_onnx = self._ocr_engine_type() == 'onnxruntime' and ot >= 8 and (_os.environ.get('RVTOL_DUAL_ONNX', '1') != '0')
-                        if dual_onnx:
-                            half = max(2, ot // 2)
-                            engines = [OcrEngine(self._ocr_model, 'onnxruntime', fill_width=self._fill_width, num_threads=half, progress_cb=_engine_progress) for _ in range(2)]
-                        else:
-                            engines = [OcrEngine(self._ocr_model, self._ocr_engine_type(), fill_width=self._fill_width, num_threads=ot, progress_cb=_engine_progress)]
-                    self._ocr_backend_used = 'tensorrt+onnxruntime' if len(engines) == 2 and engines[0].backend_name != engines[1].backend_name else engines[0].backend_name
+                        engines = [OcrEngine(self._ocr_model, self._ocr_engine_type(), fill_width=self._fill_width, num_threads=ot, progress_cb=_engine_progress)]
+                    self._ocr_backend_used = engines[0].backend_name
                     self._prof_end('ocr', 'engine_init', _t_eng)
                 B = _ocr_batch_size()
                 infer_q: Queue = Queue(maxsize=config.OCR_INFER_QUEUE_SIZE)
@@ -903,10 +757,7 @@ class FieldExtractor:
                         len(engines) == 1
                         and getattr(engines[0], '_trt', None) is not None
                         and b_devs and all(d is not None for d in b_devs)
-                        and (_os.environ.get(
-                            'RVTOL_GPU_RAW', '').strip().lower()
-                            in ('1', 'true', 'yes', 'on')
-                            or getattr(self, '_gpu_pipeline_mode', False)))
+                        and getattr(self, '_gpu_pipeline_mode', False))
                     if raw_ok:
                         # 把 raw 任务交给 infer 线程异步执行，避免 OCR worker
                         # 被 GPU 预处理 + TRT 同步阻塞。
@@ -923,16 +774,6 @@ class FieldExtractor:
                         _nv12_luma_full(c, self._color_range)[..., None]
                         if self._yuv_output else c,
                         force_aspect=self._force_aspect) for c in b_crops]
-                    _text_mode = _os.environ.get(
-                        'RVTOL_TEXT_SEP', '').strip().lower()
-                    if _text_mode in ('1', 'contrast'):
-                        procs = [_preprocess_text_sep(
-                            p, 'contrast', th=self._bin_thresh)
-                            for p in procs]
-                    elif _text_mode in ('2', 'binary'):
-                        procs = [_preprocess_text_sep(
-                            p, 'binary', th=self._bin_thresh)
-                            for p in procs]
                     self._prof_end('ocr', 'preprocess', _t_p)
                     if not _put_infer((list(b_idx), list(b_reps), procs, list(b_fracs), None)):
                         return
@@ -1000,7 +841,8 @@ class FieldExtractor:
 
     def _run_parallel_chunk(self, worker, vr, session, chunk_idx: int,
                             start: int, end_f: int, n_chunks: int,
-                            th: int | None = None):
+                            th: int | None = None,
+                            seek_required: bool = True):
         """双流水线 worker 处理单个切片的解码/分段，送入共享 OCR 会话。
 
         不等待 OCR 完成、不新建 OCR 线程——只把段任务塞进 session["q"]，
@@ -1025,8 +867,8 @@ class FieldExtractor:
         if th is None:
             # 兼容路径：无全局阈值时按旧逻辑片内校准（前 50 帧 Otsu）。
             # 仅此路径使用顺序 next_roi（stride==1 时依赖解码器当前位置）
-            # ——需要先精确定位；全局 th 路径全程 get_batch 随机访问，
-            # 无需任何显式 seek（实测单次 seek_accurate 150~290ms）。
+            # ——需要先精确定位；全局 th 路径也需要 seek_accurate 到片首，
+            # 否则 get_batch 从当前/文件头随机跳到目标帧，CPU 解码吞吐约慢一倍。
             vr.seek_accurate(start)
             calib_n = min(config.SEG_CALIB_FRAMES, len(frames))
             if worker._sample_stride > 1:
@@ -1048,6 +890,22 @@ class FieldExtractor:
             ths = [_otsu(g) for _fi, _c, g, _s in calib]
             th = int(np.median(ths)) if ths else config.OTSU_FALLBACK_THRESH
         worker._bin_thresh = th
+        # 生产者净耗时（seek+解码+灰度/sharp/二分/分段 分相累加）：之前 seek
+        # 未计入吞吐信号，导致试点测速远高于真实整片速度（AV1 实测真实比 2.2:1
+        # 试点却算出 6.4:1）。把 seek 计入后，测速才能反映每片实际成本。
+        prod_acc = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        # 全局阈值路径仍需精确定位到本片起点：只依赖 get_batch 随机访问会
+        # 让 decord 每次从当前/文件头跳到目标帧（实测 CPU 解码吞吐约慢一倍），
+        # 而先 seek_accurate 一次后 get_batch 可走连续等差步长快速路径。
+        # 单次精确 seek 成本 ~150-300ms，远小于随机访问带来的额外解码开销。
+        # 例外：本片起点与上一片终点相邻（同一流水线沿帧序连续扫掠）时解码
+        # 器已停在正确位置附近，seek_accurate 实测 ~1ms（vs 乱序跳跃 40-70ms），
+        # 直接跳过——分片越密（每关键帧一片）节省越明显。
+        if th is not None and seek_required:
+            _t_seek = time.perf_counter()
+            vr.seek_accurate(start)
+            prod_acc[0] += time.perf_counter() - _t_seek
+            worker._prof_end('producer', 'seek_accurate', _t_seek)
         DECODE_BATCH = config.DECODE_BATCH_SIZE
 
         def frame_stream():
@@ -1059,19 +917,19 @@ class FieldExtractor:
                 crops = vr.get_batch(
                     frames[bstart:bend],
                     roi=(x1, y1, x2 + 1, y2 + 1)).asnumpy()
-                prod_acc[0] += time.perf_counter() - _t_d
+                prod_acc[1] += time.perf_counter() - _t_d
                 worker._prof_end('producer', 'decode_batch', _t_d)
                 _t_g = time.perf_counter()
                 g = worker._batch_luma(crops)
-                prod_acc[1] += time.perf_counter() - _t_g
+                prod_acc[2] += time.perf_counter() - _t_g
                 worker._prof_end('producer', 'gray_batch', _t_g)
                 _t_s = time.perf_counter()
                 sharp = g.std(axis=(1, 2))
-                prod_acc[2] += time.perf_counter() - _t_s
+                prod_acc[3] += time.perf_counter() - _t_s
                 worker._prof_end('producer', 'sharp_batch', _t_s)
                 _t_b = time.perf_counter()
                 bs = g > th
-                prod_acc[3] += time.perf_counter() - _t_b
+                prod_acc[4] += time.perf_counter() - _t_b
                 worker._prof_end('producer', 'bin_batch', _t_b)
                 for k, gi in enumerate(range(bstart, bend)):
                     yield (frames[gi], crops[k], g[k], float(sharp[k]), bs[k])
@@ -1089,10 +947,6 @@ class FieldExtractor:
         last_rep_gray = None
         prev_b = None
         t0 = time.perf_counter()
-        # 生产者净耗时（解码+灰度/sharp/二值/分段的 host 开销之和）：
-        # 片墙钟含 OCR 背压等待（q.put 阻塞），不能用作流水线吞吐信号；
-        # 净耗时免疫 OCR 拥塞，供让位判定比较真实处理速率。
-        prod_acc = [0.0, 0.0, 0.0, 0.0, 0.0]
 
         def emit(seg, r_frame, r_crop, r_gray, frac) -> None:
             nonlocal seg_idx
@@ -1113,7 +967,7 @@ class FieldExtractor:
                 d = prev_b != b
                 _t_seg = time.perf_counter()
                 changed = _cluster_win3(d) >= worker._C
-                prod_acc[4] += time.perf_counter() - _t_seg
+                prod_acc[5] += time.perf_counter() - _t_seg
                 worker._prof_end('producer', 'segmentation', _t_seg)
                 if changed:
                     seg = frames[s:k]
@@ -1171,10 +1025,10 @@ class FieldExtractor:
         - merge_similar 的分离模式不是 contrast（GPU 路径支持 raw/binary）
         - 未开启 dual_pipeline（双流水线优先级更高，保持现状）
 
-        env RVTOL_GPU_PIPELINE：'0' 显式关闭；'1' 强制尝试（条件不满足时
+        env GPU_PIPELINE：'0' 显式关闭；'1' 强制尝试（条件不满足时
         内部自动回退宿主管线）。不设置 = 按上述默认规则。
         """
-        env = _os.environ.get('RVTOL_GPU_PIPELINE', '').strip().lower()
+        env = _os.environ.get('GPU_PIPELINE', '').strip().lower()
         if env in ('0', 'false', 'no', 'off'):
             return False
         if self._dual_pipeline:
@@ -1192,8 +1046,8 @@ class FieldExtractor:
     def _run_pipelined_gpu(self):
         """实验：灰度/sharp/聚类变化分都在 GPU 计算，host 只收标量。
 
-        代表帧保留 GPU device pointer，OCR 走 RVTOL_GPU_RAW 自动开启的
-        call_gpu_raw 路径。校准阈值仍取前 50 帧 D2H（量小，可接受）。
+        代表帧保留 GPU device pointer，OCR 走 call_gpu_raw 路径。
+        校准阈值仍取前 50 帧 D2H（量小，可接受）。
         返回格式与 _run_pipelined 相同。
         """
         from queue import Queue
@@ -1356,7 +1210,7 @@ class FieldExtractor:
                     changed = float(cluster) >= self._C
                     if changed:
                         seg = frames[s:k]
-                        if _os.environ.get('RVTOL_DEBUG_BOUNDS'):
+                        if _os.environ.get('DEBUG_BOUNDS'):
                             print(f'[GB]{fi}:{float(cluster):.0f}',
                                   flush=True)
                         similar = (
@@ -1439,8 +1293,7 @@ class FieldExtractor:
             解码是 I/O 瓶颈（CPU 占用低），段边界（win3）在解码循环内增量计算，
             段一闭合就把代表帧（最清晰）交给 OCR 工作线程 —— 解码∥OCR 重叠摊薄
             总墙钟。代表帧选择与串行 _segment/_ocr_segments 完全一致（每段 max
-            灰度 std），OCR 批 _ocr_batch_size()。cpu+nvdec 时两个解码线程
-            （CPU 前段 + GPU 后段）并行填有界队列，消费者按序合并，帧序与单解码器一致。
+            灰度 std），OCR 批 _ocr_batch_size()。
 
             返回 (frames, segs, seg_vals, rep_frames)；self.crops = {rep_frame:
             crop}（仅代表帧，供 review 预览，比存全帧省内存）。
@@ -1449,22 +1302,11 @@ class FieldExtractor:
             return self._run_pipelined_parallel()
         if self._gpu_pipeline_enabled():
             return self._run_pipelined_gpu()
-        from queue import Full, Queue
-        import threading
-        from ocr_native import OcrEngine
-        from video_utils import _preprocess_standard
         _t_open = time.perf_counter()
-        hybrid = self._is_hybrid()
-        vr_gpu = None
-        if hybrid:
-            vr, vr_gpu = self._open_hybrid_vrs()
-            if vr_gpu is None:
-                hybrid = False
+        if _external_vr is not None:
+            vr = _external_vr
         else:
-            if _external_vr is not None:
-                vr = _external_vr
-            else:
-                vr = self._open_vr()
+            vr = self._open_vr()
         if self._fps is None:
             for m in ('get_avg_fps', 'get_fps'):
                 fn = getattr(vr, m, None)
@@ -1537,86 +1379,49 @@ class FieldExtractor:
         results = ocr_session["results"]
         ocr_err = ocr_session["err"]
         ocr_wall = ocr_session["wall"]
-        ocr_thread = ocr_session["thread"]
         _put_ocr = ocr_session["put"]
 
         DECODE_BATCH = config.DECODE_BATCH_SIZE
-        dec_threads: list = []
-        dec_err: list = []
-        if hybrid:
-            from queue import Queue as _Queue
-            cpu_fis, gpu_fis = _hybrid_ranges(frames, calib_n, self._hybrid_split())
-            cpu_q: _Queue = _Queue(maxsize=config.HYBRID_QUEUE_SIZE)
-            gpu_q = _Queue(maxsize=config.HYBRID_QUEUE_SIZE) if gpu_fis else None
-            roi_half = (x1, y1, x2 + 1, y2 + 1)
-            if cpu_fis:
-                t = threading.Thread(target=_decode_range_worker, args=(vr, cpu_fis, cpu_q, roi_half, th, dec_err, DECODE_BATCH, self._yuv_output, self._color_range), daemon=True)
-                t.start()
-                dec_threads.append(t)
-            else:
-                cpu_q.put(None)
-            if gpu_q is not None:
-                try:
-                    vr_gpu.seek_accurate(gpu_fis[0])
-                except Exception as e:
-                    dec_err.append(e)
-                    gpu_q.put(None)
+
+        def frame_stream():
+            """先产出校准帧，再批量流式解码剩余帧。
+
+                yield (fi, crop, gray, sharp, bin, dev_info) —— bin 为
+                预计算的二值化；dev_info 仅在 gray 输出时保留 GPU 指针。
+                """
+            for fi, c, g, s, dev in calib:
+                yield (fi, c, g, s, g > th, dev)
+            for bstart in range(calib_n, len(frames), DECODE_BATCH):
+                bend = min(bstart + DECODE_BATCH, len(frames))
+                _t_d = time.perf_counter()
+                nds = vr.get_batch(
+                    frames[bstart:bend],
+                    roi=(x1, y1, x2 + 1, y2 + 1))
+                crops = nds.asnumpy()
+                self._prof_end('producer', 'decode_batch', _t_d)
+                _t_g = time.perf_counter()
+                g = self._batch_luma(crops)
+                self._prof_end('producer', 'gray_batch', _t_g)
+                _t_s = time.perf_counter()
+                sharp = g.std(axis=(1, 2))
+                self._prof_end('producer', 'sharp_batch', _t_s)
+                _t_b = time.perf_counter()
+                bs = g > th
+                self._prof_end('producer', 'bin_batch', _t_b)
+                dev_info = None
+                if nds.shape[-1] == 1 and len(nds.shape) == 4:
+                    _base, _shape = _ndarray_device_ptr(nds)
+                    src_h, src_w = _shape[1], _shape[2]
                 else:
-                    t = threading.Thread(target=_decode_range_worker, args=(vr_gpu, gpu_fis, gpu_q, roi_half, th, dec_err, DECODE_BATCH, self._yuv_output, self._color_range), daemon=True)
-                    t.start()
-                    dec_threads.append(t)
-
-            def frame_stream():
-                """先产出校准帧（CPU reader），再按序消费 CPU 段队列
-                    与 GPU 段队列 —— 帧序与单解码器完全一致。"""
-                for fi, c, g, s, dev in calib:
-                    yield (fi, c, g, s, g > th, dev)
-                for item in _drain_queue(cpu_q):
-                    yield (*item, None)
-                if gpu_q is not None:
-                    for item in _drain_queue(gpu_q):
-                        yield (*item, None)
-        else:
-
-            def frame_stream():
-                """先产出校准帧，再批量流式解码剩余帧。
-
-                    yield (fi, crop, gray, sharp, bin, dev_info) —— bin 为
-                    预计算的二值化；dev_info 仅在 gray 输出时保留 GPU 指针。
-                    """
-                for fi, c, g, s, dev in calib:
-                    yield (fi, c, g, s, g > th, dev)
-                for bstart in range(calib_n, len(frames), DECODE_BATCH):
-                    bend = min(bstart + DECODE_BATCH, len(frames))
-                    _t_d = time.perf_counter()
-                    nds = vr.get_batch(
-                        frames[bstart:bend],
-                        roi=(x1, y1, x2 + 1, y2 + 1))
-                    crops = nds.asnumpy()
-                    self._prof_end('producer', 'decode_batch', _t_d)
-                    _t_g = time.perf_counter()
-                    g = self._batch_luma(crops)
-                    self._prof_end('producer', 'gray_batch', _t_g)
-                    _t_s = time.perf_counter()
-                    sharp = g.std(axis=(1, 2))
-                    self._prof_end('producer', 'sharp_batch', _t_s)
-                    _t_b = time.perf_counter()
-                    bs = g > th
-                    self._prof_end('producer', 'bin_batch', _t_b)
-                    dev_info = None
-                    if nds.shape[-1] == 1 and len(nds.shape) == 4:
-                        _base, _shape = _ndarray_device_ptr(nds)
-                        src_h, src_w = _shape[1], _shape[2]
-                    else:
-                        _base = 0
-                        src_h = src_w = 0
-                    for k, gi in enumerate(range(bstart, bend)):
-                        d = None
-                        if _base:
-                            d = (nds, _base + k * src_h * src_w,
-                                 src_h, src_w)
-                        yield (frames[gi], crops[k], g[k],
-                               float(sharp[k]), bs[k], d)
+                    _base = 0
+                    src_h = src_w = 0
+                for k, gi in enumerate(range(bstart, bend)):
+                    d = None
+                    if _base:
+                        d = (nds, _base + k * src_h * src_w,
+                             src_h, src_w)
+                    yield (frames[gi], crops[k], g[k],
+                           float(sharp[k]), bs[k], d)
         segs: list = []
         rep_crops: dict = {}
         seg_idx = 0
@@ -1629,7 +1434,6 @@ class FieldExtractor:
         last_rep_gray = None
         prev_b = None
         t0 = time.perf_counter()
-        consumer_ok = [False]
         try:
             for k, (fi, c, g, sharp, b, dev_info) in enumerate(frame_stream()):
                 if prev_b is not None:
@@ -1639,7 +1443,7 @@ class FieldExtractor:
                     self._prof_end('producer', 'segmentation', _t_seg)
                     if changed:
                         seg = frames[s:k]
-                        if _os.environ.get('RVTOL_DEBUG_BOUNDS'):
+                        if _os.environ.get('DEBUG_BOUNDS'):
                             print(f'[HB]{fi}:{_cluster_win3(d):.0f}',
                                   flush=True)
                         similar = (
@@ -1697,24 +1501,18 @@ class FieldExtractor:
                     rep_crops[rep_frame] = rep_crop
                 seg_idx += 1
                 last_rep_gray = rep_gray
-            consumer_ok[0] = True
         finally:
             _t_consume_end = time.perf_counter()
             self.timing['decode'] = _t_consume_end - t0
             self._prof_end('producer', 'consumer_total', t0)
-            if consumer_ok[0]:
-                for t in dec_threads:
-                    t.join()
             ocr_session["finish"]()
             self.timing['ocr_tail'] = time.perf_counter() - _t_consume_end
-        if dec_err:
-            raise dec_err[0]
         if ocr_err:
             raise ocr_err[0]
         self.timing['ocr'] = ocr_wall[0]
         self._n_segments = len(segs)
         self.crops = rep_crops
-        del vr, vr_gpu
+        del vr
         self._ocr_texts = [results[i][0] for i in range(seg_idx)]
         self._ocr_confs = [results[i][1] for i in range(seg_idx)]
         return (frames, segs, self._ocr_texts, self._ocr_confs,
@@ -1729,16 +1527,17 @@ class FieldExtractor:
 
     @staticmethod
     def _opposite_ocr(backend: str) -> str:
-        """互补 OCR 后端：保持 TRT（auto），仅解码侧互补。
+        """互补 OCR 后端：TRT ↔ ONNX，两条流水线分别用 GPU/CPU 硬件。
 
-        实测（新三国01 剖面，2026-08）：TRT 与 ONNX 共存推理会互相膨胀
-        （各自 ~2.9/16.5 ms/段 → 双方都 ~8.4 ms/段，总吞吐钉死），而
-        TRT+TRT 共存无膨胀（合计≈单跑）；解码侧 NVDEC 有固定功能上限，
-        FFmpeg 软解才是真实增量。故默认互补对 = (auto,auto) ∥ (cpu,auto)；
-        主后端本就是 CPU OCR 时互补侧换回 TRT。
+        与下游 video_subtitle_extractor --dual 的互补策略一致：主后端为
+        GPU/TRT 时副线程用 CPU+ONNX，主后端为 CPU 时副线程换回 TRT。
+        早期“混配必互相拖慢”的结论被后续定位修正：真正的瓶颈是全局阈值
+        路径缺少 seek_accurate 到片首导致 CPU 解码随机访问减半，以及混配下
+        让位把并行对端交给慢路径；修正后显式混配已能接近双 TRT 并显著
+        优于单 TRT（见 docs/PERFORMANCE.md 4.5 节）。
         """
-        return "auto" if str(backend or "").strip().lower() == "cpu" \
-            else str(backend or "auto")
+        _b = str(backend or "").strip().lower()
+        return "auto" if _b in ("cpu", "onnxruntime") else "cpu"
 
     def _dual_pipeline_available(self) -> bool:
         """单实例双流水线需要 NVDEC 和 TensorRT 均可用，构成 CPU/GPU 互补。"""
@@ -1762,6 +1561,89 @@ class FieldExtractor:
         if opp != main:
             pairs.append(opp)
         return pairs
+
+    @staticmethod
+    def _nearest_keyframe_sample(target: int, key_frames: list[int],
+                                 frames: list[int]) -> int:
+        """返回离 target 最近的关键帧，再吸附到最近的采样帧号（保持采样网格）。"""
+        import bisect
+        if not key_frames or not frames:
+            return target
+        idx = bisect.bisect_left(key_frames, target)
+        cand = [idx - 1, idx]
+        cand = [i for i in cand if 0 <= i < len(key_frames)]
+        if not cand:
+            return target
+        key = min((key_frames[i] for i in cand),
+                  key=lambda k: (abs(k - target), k))
+        sidx = bisect.bisect_left(frames, key)
+        sc = [sidx - 1, sidx]
+        sc = [i for i in sc if 0 <= i < len(frames)]
+        if not sc:
+            return target
+        return min((frames[i] for i in sc),
+                   key=lambda f: (abs(f - key), f))
+
+    @classmethod
+    def _snap_keyframe_chunks(cls, chunk_specs: list[tuple[int, int]],
+                              frames: list[int], key_frames: list[int],
+                              snap_from_idx: int) -> list[tuple[int, int]]:
+        """把 snap_from_idx 起的大竞争片内部边界吸附到最近关键帧。
+
+        只吸附内部边界，不移动第一大片起点和最后一大片终点，保证全帧覆盖；
+        如果吸附后会越界/重叠，则保留原边界。
+        """
+        if snap_from_idx >= len(chunk_specs) - 1 or len(key_frames) <= 1:
+            return chunk_specs
+        last_end = chunk_specs[-1][1]
+        starts = [chunk_specs[snap_from_idx][0]]
+        for i in range(snap_from_idx + 1, len(chunk_specs)):
+            orig = chunk_specs[i][0]
+            cand = cls._nearest_keyframe_sample(orig, key_frames, frames)
+            prev = starts[-1]
+            if cand <= prev or cand >= last_end:
+                cand = orig
+            starts.append(cand)
+        ends = starts[1:] + [last_end]
+        new = list(chunk_specs)
+        for k, (s, e) in enumerate(zip(starts, ends)):
+            new[snap_from_idx + k] = (s, e)
+        return new
+
+    @classmethod
+    def _keyframe_every_chunks(cls, frames: list[int],
+                               key_frames: list[int], rest_start: int,
+                               last_end: int, stride: int, min_gap: int,
+                               max_chunks: int) -> list[tuple[int, int]]:
+        """每关键帧一片（实验）的竞争区切片生成。
+
+        按基础最小片间距切；若关键帧过密（mkv 重编码 ~每 30-140 源帧一个
+        关键帧）导致片数超过上限，逐步放大间距合并，片数受控在 max_chunks
+        以内。边界吸附到最近采样帧（保持全帧覆盖、无缝隙/无重叠；吸附帧离
+        关键帧 ≤ stride/2，seek_accurate 仍便宜）。返回覆盖 [rest_start,
+        last_end) 的连续切片列表（首片起点=rest_start，末片终点=last_end）。
+        """
+        _key_list = [k for k in key_frames if rest_start < k < last_end]
+        if not _key_list:
+            return [(rest_start, last_end)]
+        _mg = max(1, int(min_gap))
+        _mx = max(1, int(max_chunks))
+        _s = max(1, int(stride))
+        _big: list[tuple[int, int]] = [(rest_start, last_end)]
+        for _iter in range(80):
+            _cand: list[tuple[int, int]] = []
+            _prev2 = rest_start
+            for _k in _key_list:
+                _b = cls._nearest_keyframe_sample(_k, key_frames, frames)
+                if (_b - _prev2) // _s >= _mg and _b < last_end:
+                    _cand.append((_prev2, _b))
+                    _prev2 = _b
+            _cand.append((_prev2, last_end))
+            _big = _cand
+            if len(_cand) - 1 <= _mx:
+                break
+            _mg = max(_mg + 1, int(_mg * 1.5))
+        return _big
 
     def _new_worker(self, decode_backend: str, ocr_backend: str,
                     progress_cb=None, cancel_check=None) -> "FieldExtractor":
@@ -1793,7 +1675,7 @@ class FieldExtractor:
                               has_trt_peer: bool = False) -> int:
         """双流水线的 OCR 线程预算（按消费者后端分核，消除满核×2 过订阅）。
 
-        env RVTOL_OCR_THREADS 优先（实验钩子，显式即全量生效）。否则：
+        env OCR_THREADS 优先（实验钩子，显式即全量生效）。否则：
         - TRT（auto/tensorrt）侧：DUAL_PIPELINE_TRT_CPU_THREADS（默认 2）——
           推理在 GPU、预处理是 worker 单线程 numpy，多线程无收益；
         - ONNX（cpu）侧：(物理核 - TRT 预算) // CPU 侧消费者数，下限 2——
@@ -1802,7 +1684,7 @@ class FieldExtractor:
           封顶 DUAL_PIPELINE_ONNX_PEER_THREADS——ONNX 满核计算会饥饿 TRT
           宿主提交线程（实测 TRT 2.57→4.47ms/段，限 6 线程恢复到 3.39）。
         """
-        _env = _os.environ.get('RVTOL_OCR_THREADS')
+        _env = _os.environ.get('OCR_THREADS')
         if _env and _env.isdigit():
             return max(1, int(_env))
         kind = (ocr_backend or 'auto').strip().lower()
@@ -1904,15 +1786,15 @@ class FieldExtractor:
         pairs = self._dual_backend_pairs()
         # 编码回退（校准前，零额外开销）：默认互补组合下，已知 CPU 软解
         # 净负的编码直接回退单流水线；显式 dual_backends 视为用户知情选择，
-        # 不回退。env RVTOL_DUAL_NO_CODEC_FALLBACK=1 关闭。
+        # 不回退。env DUAL_NO_CODEC_FALLBACK=1 关闭。
         _codec_fb = tuple(getattr(config, 'DUAL_PIPELINE_CODEC_FALLBACK', ()))
         if (_codec_fb and self._dual_backends is None and self._codec
                 and self._codec.lower() in _codec_fb
-                and _os.environ.get('RVTOL_DUAL_NO_CODEC_FALLBACK', '')
+                and _os.environ.get('DUAL_NO_CODEC_FALLBACK', '')
                 .strip().lower() not in ('1', 'true', 'yes', 'on')):
             logger.info(
                 '编码 %s 下互补 CPU 流水线已知净负，双流水线回退单流水线'
-                '（RVTOL_DUAL_NO_CODEC_FALLBACK=1 可关闭）', self._codec)
+                '（DUAL_NO_CODEC_FALLBACK=1 可关闭）', self._codec)
             return self._run_pipelined(_force_single=True, _external_vr=_vr)
 
         # 全局 Otsu 校准只做一次（前 SEG_CALIB_FRAMES 个采样帧，与单流水线
@@ -1975,6 +1857,41 @@ class FieldExtractor:
                 b = (i + 1) * len(frames) // n_chunks
                 chunk_specs.append((frames[a], last_end
                                     if i == n_chunks - 1 else frames[b]))
+        # 关键帧分片实验：只吸附大竞争片的内部边界，保留试点/确认片与首尾覆盖。
+        _kf_env = _os.environ.get(
+            config.DUAL_PIPELINE_KEYFRAME_ENV, '1').strip().lower()
+        if _kf_env not in ('0', 'false', 'no', 'off'):
+            try:
+                _key_frames = [int(v) for v in _vr.get_key_indices()]
+            except Exception:
+                _key_frames = []
+            if _key_frames:
+                _snap_from = 4 if has_pilots else 0
+                chunk_specs = self._snap_keyframe_chunks(
+                    chunk_specs, frames, _key_frames, _snap_from)
+# 每个关键帧切大片（实验）：DUAL_KEYFRAME_EVERY=1 时，试点之外的大
+        # 竞争区不再等分，而是按剩余区域内的每个关键帧边界切出一片，交给共享
+        # 队列自由竞争。片越密，快慢路径越容易自动配平，前提是每片落到关键帧
+        # 上、seek 开销足够低。
+        _kfe_env = _os.environ.get(
+            config.DUAL_PIPELINE_KEYFRAME_EVERY_ENV, '').strip().lower()
+        if _kfe_env in ('1', 'true', 'yes', 'on') and has_pilots and \
+                len(frames) > 4 * unit_n:
+            _min_gap_env = _os.environ.get(
+                config.DUAL_KEYFRAME_EVERY_MIN_GAP_ENV, '').strip()
+            _min_gap = (max(1, int(_min_gap_env))
+                        if _min_gap_env and _min_gap_env.isdigit()
+                        else config.DUAL_KEYFRAME_EVERY_MIN_GAP)
+            _max_chunks_env = _os.environ.get(
+                config.DUAL_KEYFRAME_EVERY_MAX_CHUNKS_ENV, '').strip()
+            _max_chunks = (max(1, int(_max_chunks_env))
+                           if _max_chunks_env and _max_chunks_env.isdigit()
+                           else config.DUAL_KEYFRAME_EVERY_MAX_CHUNKS)
+            _big = self._keyframe_every_chunks(
+                frames, _key_frames, frames[4 * unit_n],
+                chunk_specs[-1][1], self._sample_stride,
+                _min_gap, _max_chunks)
+            chunk_specs = chunk_specs[:4] + _big
         n_specs = len(chunk_specs)
         # 探测解码器移交给后端方向相同的第一条流水线复用（省一次 GPU
         # reader 打开）。全局校准已把移交方解码器推进到帧头附近（帧 50），
@@ -2007,11 +1924,34 @@ class FieldExtractor:
             reserved_idx = {ci: (n_specs - n_reserve + ci,)
                             for ci in range(n_reserve)}
             compete_range = range(n_specs - n_reserve)
+        n_compete = len(list(compete_range))
         item_q: Queue = Queue()
         for idx in compete_range:
             spec = chunk_specs[idx]
             item_q.put((idx, spec[0], spec[1]))
         remaining = [len(compete_range)]  # 竞争队列剩余片数（让位判定用）
+
+        # 按试点测速比例分配实验：仅在有头部小组、且大竞争片恰好 2 片时启用，
+        # 两个路径各拿一个按速度比例切出的连续大区间。
+        _prop_env = _os.environ.get(
+            config.DUAL_PIPELINE_PROPORTIONAL_ENV, '').strip().lower()
+        proportional = (
+            _prop_env in ('1', 'true', 'yes', 'on')
+            and has_pilots and len(pairs) == 2
+            and len(list(compete_range)) == 2)
+        owned_queues = ([Queue() for _ in range(len(pairs))]
+                        if proportional else None)
+        allocation_ready = threading.Event()
+        allocation_lock = threading.Lock()
+        allocation_done = [False]
+        _prio_env = _os.environ.get(
+            config.DUAL_PIPELINE_PRIORITY_ENV, '').strip().lower()
+        priority_mode = (
+            _prio_env in ('1', 'true', 'yes', 'on')
+            and not proportional)
+        pick_cond = threading.Condition()
+        waiting_flags = [False, False]
+        cur_speed: dict = {}
 
         # ── 3. 两个消费者线程：每条完整流水线 + 持久 OCR 引擎 ──
         result_lock = threading.Lock()
@@ -2021,15 +1961,27 @@ class FieldExtractor:
         worker_stats: dict = {}
         ready_t: dict = {}
         throughput: dict = {}   # tag -> (chunks_done, steady_fps)
+        e2e_speed: dict = {}    # tag -> 端到端吞吐（帧/片起点到该片 OCR 排空的墙钟）
         prog_lock = threading.Lock()
         prog_last = [-1.0]
         slow_ratio = float(config.DUAL_PIPELINE_SLOW_RATIO)
-        _env_ratio = _os.environ.get('RVTOL_DUAL_SLOW_RATIO')
+        _env_ratio = _os.environ.get('DUAL_SLOW_RATIO')
         if _env_ratio:
             try:
                 slow_ratio = max(0.0, float(_env_ratio))
             except ValueError:
                 pass
+        # 混配（TRT ⊕ ONNX）时默认让位阈值用独立常量：两条路径分属 GPU/CPU，
+        # 阈值 0.5 在 h264 对比路径不触发、在 AV1 极端失衡时让快路径接管；
+        # 早期“直接禁用让位”在 AV1 关闭回退下无法止损，而 0.8 在 h264 会误让。
+        if _env_ratio is None:
+            _ocr_kinds = {
+                'onnxruntime'
+                if (ob or '').strip().lower() in ('cpu', 'onnxruntime')
+                else 'tensorrt'
+                for _dec, ob in pairs}
+            if len(_ocr_kinds) > 1:
+                slow_ratio = float(config.DUAL_PIPELINE_MIXED_SLOW_RATIO)
 
         def _chunk_progress(idx: int, n: int):
             def cb(msg: str, pct: float) -> None:
@@ -2095,8 +2047,25 @@ class FieldExtractor:
             yielded = [False]
             timeline: list = []   # (idx, t_start, t_end, n_frames) 剖面用
             _prev_end = [None]    # 上一片结束时刻（拉片空隙统计）
+            # 竞争取片闸门用：pending = 本流水线已取但 OCR 尚未排空的片
+            # （存每片 push 完成后的全局段计数）；prev_end_abs = 上一片终点
+            # 绝对帧号——下一片起点与之相邻时判定“连续扫掠”，免 seek_accurate
+            # （实测连续 ~1ms vs 乱序跳跃 40-70ms）。
+            pending: list = []
+            prev_end_abs = [None]
+            inf_cap = config.DUAL_PIPELINE_INFLIGHT
+            _env_inf = _os.environ.get(
+                config.DUAL_PIPELINE_INFLIGHT_ENV, '').strip()
+            if _env_inf and _env_inf.isdigit():
+                inf_cap = max(1, int(_env_inf))
+            # 端到端吞吐跟踪：e2e_last = (片起点时刻, 片帧数)。竞争闸门保证
+            # 最近一片已排空（含半批容忍）后，(now - 片起点) 即该片真正端到端
+            # 墙钟（含 OCR 排空尾），用它做竞争/让位决策——免疫“解码快、OCR
+            # 慢”路径（如 CPU+ONNX 宽 ROI 字幕）生产者速率虚高导致的误判。
+            e2e_last = [None]
 
-            def _do_chunk(idx: int, start: int, end_f: int) -> None:
+            def _do_chunk(idx: int, start: int, end_f: int,
+                          seek_required: bool = True) -> None:
                 nonlocal chunks_done, wall
                 worker._frame_start = int(start)
                 worker._frame_end = int(end_f)
@@ -2108,7 +2077,8 @@ class FieldExtractor:
                     (segs, keys, reps, crops_chunk, dec_elapsed,
                      g_first, g_last, prod_elapsed) = self._run_parallel_chunk(
                         worker, worker_vr, session, idx,
-                        start, end_f, n_specs, th)
+                        start, end_f, n_specs, th,
+                        seek_required=seek_required)
                 except Exception as e:  # noqa: BLE001
                     with result_lock:
                         errors.append(e)
@@ -2117,6 +2087,8 @@ class FieldExtractor:
                 chunk_time = time.perf_counter() - _t_chunk
                 wall += chunk_time
                 chunks_done += 1
+                pending.append(int(session["seg_idx"]))
+                prev_end_abs[0] = int(end_f)
                 _prev_end[0] = time.perf_counter()
                 timeline.append((idx, round(_t_chunk, 3),
                                  round(_prev_end[0], 3),
@@ -2133,6 +2105,20 @@ class FieldExtractor:
                 base_t = prod_elapsed if prod_elapsed > 0 else chunk_time
                 fps = n_fr / base_t if base_t > 0 else 0.0
                 fps_samples.append(fps)
+                e2e_last[0] = (_t_chunk, n_fr)
+
+            def _e2e_fps() -> float:
+                """最近一片的端到端速率：帧数 / (此刻 - 片起点)。
+
+                配合竞争闸门（片在取下一片前排空，含半批容忍），
+                此刻-片起点 已包含该片 OCR 排空尾，即真实端到端墙钟。
+                未处理过任何片时返回 0（让位判定视为尚未有依据）。
+                """
+                if e2e_last[0] is None:
+                    return 0.0
+                _t0, _fr = e2e_last[0]
+                _dt = time.perf_counter() - _t0
+                return _fr / _dt if _dt > 0 else 0.0
 
             def _steady_fps() -> float:
                 """稳态吞吐：排除首个片（解码器/引擎 warm-up）后的近段均值。
@@ -2156,6 +2142,39 @@ class FieldExtractor:
                             best = v[1]
                 return best
 
+            def _other_best_e2e() -> float:
+                """对方流水线的端到端速率最大值（e2e_speed，最近一次在竞争
+                闸门排空后记录的口径）。"""
+                best = 0.0
+                with result_lock:
+                    for t2, v in e2e_speed.items():
+                        if t2 != tag and v > best:
+                            best = v
+                return best
+
+            def _priority_get():
+                """在线优先取片：双方同时等待时，速度更快的一方先拿。"""
+                other = 1 - ci
+                other_tag = f'pipe{other + 1}'
+                with pick_cond:
+                    waiting_flags[ci] = True
+                    try:
+                        while True:
+                            if cancel_event.is_set():
+                                return None
+                            my = cur_speed.get(tag, 0.0)
+                            other_speed = cur_speed.get(other_tag, 0.0)
+                            if (waiting_flags[other] and other_speed > my
+                                    and not item_q.empty()):
+                                pick_cond.wait(timeout=0.05)
+                                continue
+                            try:
+                                return item_q.get_nowait()
+                            except Empty:
+                                return None
+                    finally:
+                        waiting_flags[ci] = False
+
             try:
                 # 预留头部片组：init 完成即按序处理（试点→确认）。每片完成
                 # 都立即上报吞吐，让对方的分级让位判定尽早拿到依据。
@@ -2163,46 +2182,153 @@ class FieldExtractor:
                     if cancel_event.is_set():
                         break
                     try:
-                        _do_chunk(ridx, *chunk_specs[ridx])
+                        _spec = chunk_specs[ridx]
+                        _seek = (prev_end_abs[0] is None
+                                 or _spec[0] != prev_end_abs[0])
+                        _do_chunk(ridx, _spec[0], _spec[1],
+                                  seek_required=_seek)
                     except Exception:  # noqa: BLE001 — 已入 errors
                         break
                     else:
+                        _fps_now = _steady_fps()
                         with result_lock:
-                            throughput[tag] = (chunks_done, _steady_fps())
-                while not cancel_event.is_set():
-                    # 让位判定（分级）：吞吐比极端悬殊时单个试点片即可判定
-                    # （阈值 0.35，容忍首次解码 warm-up 噪声）；一般悬殊需
-                    # 两次取样确认——试点片含 warm-up，单次比值噪声大
-                    # （实测 test3 GPU 试点被 warm-up 拖低而误判让位）。
-                    min_samples = 2 if has_pilots else 1
-                    if slow_ratio > 0 and chunks_done >= 1:
+                            throughput[tag] = (chunks_done, _fps_now)
+                        cur_speed[tag] = _fps_now
+                if proportional:
+                    # 等两条流水线都完成试点/确认片后，按稳态吞吐比例分配剩余区间。
+                    with result_lock:
+                        if all(t in throughput for t in ("pipe1", "pipe2")):
+                            allocation_ready.set()
+                    while (not allocation_ready.is_set()
+                           and not cancel_event.is_set()):
+                        allocation_ready.wait(0.05)
+                    if cancel_event.is_set():
+                        pass
+                    else:
+                        if ci == 0:
+                            with allocation_lock:
+                                if not allocation_done[0]:
+                                    big_idx = list(compete_range)
+                                    total_rem = len(frames) - 4 * unit_n
+                                    with result_lock:
+                                        v1 = throughput.get(
+                                            "pipe1", (0, 0.0))[1]
+                                        v2 = throughput.get(
+                                            "pipe2", (0, 0.0))[1]
+                                    if v1 <= 0 and v2 <= 0:
+                                        v1 = v2 = 1.0
+                                    n1 = total_rem
+                                    if v2 > 0:
+                                        n1 = int(
+                                            total_rem * v1 / (v1 + v2))
+                                        n1 = max(
+                                            1, min(total_rem - 1, n1))
+                                    elif v1 <= 0:
+                                        n1 = 0
+                                    split_idx = 4 * unit_n + n1
+                                    end_abs = chunk_specs[-1][1]
+                                    start_abs = frames[4 * unit_n]
+                                    split_abs = (end_abs if split_idx >= len(frames)
+                                                 else frames[split_idx])
+                                    owned_queues[0].put(
+                                        (big_idx[0], start_abs, split_abs))
+                                    owned_queues[1].put(
+                                        (big_idx[1], split_abs, end_abs))
+                                    allocation_done[0] = True
+                        while True:
+                            try:
+                                item = owned_queues[ci].get_nowait()
+                            except Empty:
+                                break
+                            idx, start, end_f = item
+                            try:
+                                _do_chunk(idx, start, end_f)
+                            except Exception:  # noqa: BLE001 — 已入 errors
+                                break
+                            with result_lock:
+                                throughput[tag] = (chunks_done, _steady_fps())
+                else:
+                    while not cancel_event.is_set():
+                        # 让位判定（分级）：吞吐比极端悬殊时单个试点片即可判定
+                        # （阈值 0.35，容忍首次解码 warm-up 噪声）；一般悬殊需
+                        # 两次取样确认——试点片含 warm-up，单次比值噪声大
+                        # （实测 test3 GPU 试点被 warm-up 拖低而误判让位）。
+                        min_samples = 2 if has_pilots else 1
+                        # 竞争片密（关键帧切片等细粒度，n_compete>=6）时单片/双片
+                        # 测速噪声大（试点头片含解码 warm-up），让位需更多取样才
+                        # 确认，防把实际更快的 GPU 路径误判为慢路径而误让位。
+                        if n_compete >= 6:
+                            min_samples = 4
+                        if slow_ratio > 0 and chunks_done >= 1:
+                            with result_lock:
+                                rem = remaining[0]
+                            # 让位判定用端到端速率（含 OCR 排空）：生产者净速率
+                            # 会把“解码快、OCR 慢”路径（CPU+ONNX 宽 ROI）误判为快，
+                            # 让位方向反了（慢路径抢片、快路径误让）。端到端口径
+                            # 来自竞争闸门排空后记录的 e2e_speed，双方都至少取过
+                            # 一片竞争片后才可能触发，天然规避试点头片 warm-up 噪声。
+                            my_fps = e2e_speed.get(tag, 0.0)
+                            other_fps = _other_best_e2e()
+                            confirmed = self._dual_should_yield(
+                                my_fps, other_fps,
+                                slow_ratio if chunks_done >= min_samples else 0.0,
+                                rem)
+                            extreme = (
+                                rem >= 1 and my_fps > 0.0
+                                and other_fps > 0.0
+                                and my_fps < 0.35 * other_fps)
+                            if confirmed or extreme:
+                                yielded[0] = True
+                                break
+                        # 竞争取片闸门（in-flight 片数上限）：本流水线“已取但 OCR
+                        # 尚未排空”的片数达到上限时暂停取片，等自己的 OCR 追上来，
+                        # 让对方取——防“解码快、OCR 慢”路径在自由竞争中跑得太前
+                        # （抢占过多切片却因 OCR 瓶颈拖慢整体墙钟）。片数口径与
+                        # 内容无关，免疫“分段稀疏时段做不了多少 OCR 工作”的偏差。
+                        # 排空判定带半批容忍（≤B-1 段）：OCR worker 会把不足一
+                        # 批（16）的尾部段先攒在 b_idx，等下一片补齐才 flush——
+                        # 若 producer 在此精确等待 len(results) ≥ pu 而队列空，
+                        # 双方互等死锁（producer 等排空、OCR worker 等下一片补齐
+                        # 批次）。容忍最后一半批未 flush 后，producer 先取下一片，
+                        # 下一片头部段补齐批次即可恢复前进。
+                        if inf_cap > 0:
+                            _grace = _ocr_batch_size() - 1
+                            while (not cancel_event.is_set()
+                                   and not item_q.empty()):
+                                _rlen = len(session["results"])
+                                _inflight = sum(
+                                    1 for pu in pending if pu > _rlen + _grace)
+                                if _inflight < inf_cap:
+                                    break
+                                time.sleep(0.02)
+                        # 竞争闸门已保证最近一片排空（含半批容忍）→ 此刻
+                        # (now - 片起点) 为该片真正端到端耗时，记录为端到端
+                        # 速率（竞争/让位的准确口径；双方都取过至少一片后才有值）。
                         with result_lock:
-                            rem = remaining[0]
-                        my_fps = _steady_fps()
-                        other_fps = _other_best()
-                        confirmed = self._dual_should_yield(
-                            my_fps, other_fps,
-                            slow_ratio if chunks_done >= min_samples else 0.0,
-                            rem)
-                        extreme = (
-                            rem >= 1 and my_fps > 0.0 and other_fps > 0.0
-                            and my_fps < 0.35 * other_fps)
-                        if confirmed or extreme:
-                            yielded[0] = True
+                            e2e_speed[tag] = _e2e_fps()
+                        if priority_mode:
+                            item = _priority_get()
+                            if item is None:
+                                break
+                        else:
+                            try:
+                                item = item_q.get_nowait()
+                            except Empty:
+                                break
+                        with result_lock:
+                            remaining[0] -= 1
+                        idx, start, end_f = item
+                        _seek = (prev_end_abs[0] is None
+                                 or start != prev_end_abs[0])
+                        try:
+                            _do_chunk(idx, start, end_f,
+                                      seek_required=_seek)
+                        except Exception:  # noqa: BLE001 — 已入 errors
                             break
-                    try:
-                        item = item_q.get_nowait()
-                    except Empty:
-                        break
-                    with result_lock:
-                        remaining[0] -= 1
-                    idx, start, end_f = item
-                    try:
-                        _do_chunk(idx, start, end_f)
-                    except Exception:  # noqa: BLE001 — 已入 errors
-                        break
-                    with result_lock:
-                        throughput[tag] = (chunks_done, _steady_fps())
+                        _fps_now = _steady_fps()
+                        with result_lock:
+                            throughput[tag] = (chunks_done, _fps_now)
+                        cur_speed[tag] = _fps_now
             finally:
                 _t_drain0 = time.perf_counter()
                 try:

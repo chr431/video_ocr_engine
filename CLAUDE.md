@@ -17,9 +17,13 @@
 
 - 一个 `FieldExtractor` 实例内，把同一视频的采样帧序列切片；两条完整
   “解码→分段→OCR”流水线作为消费者动态取片，最后按帧序合并。
-- **默认互补对 = `(auto,auto) ∥ (cpu,auto)`**（二轮起）：两条流水线都用
-  TensorRT 推理，仅解码侧互补。探针实测 TRT⊕ONNX 共存推理互相膨胀
-  （2.9/16.5 ms/段 → 双方 ~8.4，总吞吐钉死），TRT+TRT 无膨胀。
+- **默认互补对 = `(auto,auto) ∥ (cpu,cpu)`**（修正后）：与下游
+  `video_subtitle_extractor --dual` 一致，一条 GPU+NVDEC+TRT、一条
+  CPU+ONNX，两条流水线分别利用 GPU 与 CPU 硬件。
+  早期“混配无赢面”的结论被后续实际测试修正：当时双流水线的 CPU 路径缺少
+  `seek_accurate` 到片首，解码随机访问让 CPU 侧吞吐约慢一倍；且混配下让位
+  会把并行对端交给慢路径。修正后显式混配/默认混配实测与双 TRT 基本持平，
+  相对单 TRT 约 -33%。
 - 切片结构 = 头部小片组（试点×2 + 确认×2，各约 1/24 视频长）+ 大竞争片
   （默认 2 片）。头部组预留（每条流水线一组）兼作让位判定取样。
 - 让位：按**生产者净耗时**（decode/gray/sharp/bin/segment 分相和，免疫 OCR
@@ -31,14 +35,14 @@
 - 跨片边界 merge_similar 缝合：相邻片尾/首段代表帧相似则并入前段
   （OCR 结果沿用前段），段数与单流水线一致。
 - 回退：NVDEC/TRT 缺失、采样帧数 <`DUAL_PIPELINE_MIN_FRAMES`(3000)、
-  AV1 编码（CPU 软解已知净负，`RVTOL_DUAL_NO_CODEC_FALLBACK=1` 可关）。
-- 默认关闭（`dual_pipeline=False`），环境变量 `RVTOL_DUAL_PIPELINE=1` 可开启。
+  AV1 编码（CPU 软解已知净负，`DUAL_NO_CODEC_FALLBACK=1` 可关）。
+- 默认关闭（`dual_pipeline=False`），环境变量 `DUAL_PIPELINE=1` 可开启。
 
 ### 探针定位的损耗来源（2026-08 二轮，勿再猜测）
 
 1. **混配退化的真因 = 内存子系统争抢（三轮探针定位，勿再用"核饱和/
    调度饥饿/GIL/对称收敛"表述）**。判别链：CPU 占用仅 ~46%（未饱和）；
-   跨进程仍退化（非 GIL）；`RVTOL_ORT_SPIN=0` 无效（非自旋）；双侧绑核
+   跨进程仍退化（非 GIL）；ORT 自旋参数无效（非自旋）；双侧绑核
    隔离+进程优先级组合无效（非调度/迁移）；GPU 时钟恒定 2490MHz、温度
    正常（非降频）；**单线程重 SIMD 计算（L2 驻留、零 DRAM 流量）完全不伤
    TRT；而 8 进程纯内存流拷贝（~100GB/s）让 TRT 10.26ms/段、enqueue 子相
@@ -52,12 +56,18 @@
    显式混配时 `DUAL_PIPELINE_ONNX_PEER_THREADS=6` 自动限流（本质是限
    聚合访存流量）。trt∥trt 的互退（各 +40%，合计仍线性扩展）则是 GPU
    双上下文时间片切换，与内存无关。
-   补充（四轮-b）：尝试削减 ONNX 侧可裁剪的输出流量——图级追加
-   ArgMax+ReduceMax（`RVTOL_ONNX_CTC=1`，需 onnx 包一次性构建缓存，
+   补充（四轮-b，已删除）：曾尝试削减 ONNX 侧可裁剪的输出流量——图级追加
+   ArgMax+ReduceMax（需 onnx 包一次性构建缓存，
    数值与旧路径 100% 一致）。结果：共存时 TRT 退化仅 +75%→+67%、ONNX
    自身 -6%，单引擎反而 +10%（ORT 归约核不如 numpy 成块 SIMD）——证明
    混配干扰的主体是 ONNX 计算内部的激活/权重访存，而非可裁剪的 I/O
    张量；默认关闭。进一步缓解只剩模型量化路线（未立项）。
+
+   > 注意：以上是引擎级剥离探针的历史结论，曾据此把默认互补对改成双 TRT。
+   > 后续端到端双流水线实测推翻了“混配无赢面”的生产结论——真正把混配
+   > 拖垮的是全局阈值路径缺少 `seek_accurate` 到片首（CPU 解码随机访问
+   > 约慢一倍）以及混配下让位误把并行对端交给慢路径；修正后默认互补对
+   > 已改回下游 `--dual` 的 CPU+ONNX ∥ GPU+TRT（见下文“五轮修正”）。
 2. NVDEC 固定功能上限：两个 NVDEC 会话合计吞吐比单个低 ~15%，
    FFmpeg 软解才是解码增量（h264 标清 CPU 解码 ~1240fps vs 单 NVDEC ~810fps）。
 3. 初版 -25~-35% 里相当部分来自每片阈值漂移导致的意外激进合并
@@ -78,11 +88,122 @@
 输出一致性：字幕批量 CSV 与单流水线仅差 1 行（缝合吸收的重复行）；
 唯一文本集一致；Race 段数 ±1。短窗口回退单流水线无回归。
 
+### 五轮修正：混配双线程真正并行（2026-08，本机实测）
+
+背景：引擎内双流水线显式混配（GPU+TRT ∥ CPU+ONNX）时，CPU 路径比下游
+`--dual` 的独立实例慢很多。用“同一个视频切两半、两个独立 FieldExtractor
+实例并发”作对照，发现独立实例 4.26s 即可完成，而引擎内双流水线要 6.6s+。
+
+定位到两个可修复点：
+
+1. **全局阈值路径漏了 `seek_accurate(start)`**：`_run_parallel_chunk` 在
+   `th is not None` 时直接 `get_batch`，但 CPU 解码器还停在文件头/上次位置，
+   decord 等价于每次随机跳到片首，CPU 解码吞吐约慢一倍（单一半 CPU 流水线
+   2.52s → 引擎内同片 5.07s）。补一次精确 seek 后无试点混配从 6.57s 降到
+   4.71s。
+2. **混配下让位方向错误**：让位逻辑把本可并行的 TRT 对端也停掉，全部交给
+   ONNX 路径，从 ~4.8s 退化到 ~6.8s。混配两条流水线分属 GPU/CPU 硬件，
+   默认让位阈值取 `DUAL_PIPELINE_MIXED_SLOW_RATIO=0.5`（`DUAL_SLOW_RATIO` 仍可显式覆盖）；默认互补对同步改回
+   下游 `--dual` 的 `(auto,auto) ∥ (cpu,cpu)`。
+
+修正后本机实测（新三国01，3000 采样帧，stride=8，host 双流水线）：
+
+| 方案 | 墙钟 | 相对单 TRT |
+|---|---:|---:|
+| 单 GPU+TRT | 7.28s | 1.00× |
+| 双流水线（修正后，默认混配） | 4.84s | **0.66×（-34%）** |
+| 双流水线（修正后，显式双 TRT） | 4.85s | 0.67× |
+| 两个独立实例同视频两半（对照） | 4.26s | 0.59× |
+
+结论：混配不再靠“让位止损”，而是真正同时利用 CPU+ONNX 与 GPU+TRT；
+引擎内双流水线与下游双实例的差距从 ~2.4s 缩小到 ~0.6s。
+
+### 每关键帧切一片的探针定位与死路（2026-08，勿再投入）
+
+`DUAL_KEYFRAME_EVERY=1` 把大竞争区按每个关键帧边界切一片交给共享队列
+自由竞争。用 ENGINE_PROFILE 分片时间线 + producer 分相探针定位：
+
+- **片间死区 gap ≈ 0**：队列/唤醒/跨片缝合机制没有额外开销，分片本身
+  不是瓶颈来源；
+- **唯一随片数增长的开销是 `seek_accurate`**（h264 GPU ~50ms/次、CPU
+  ~15-20ms/次，AV1 GPU ~20ms/次）。每关键帧一片使片序在两条流水线间
+  交错，“升序连续扫掠免 seek”的假设失效，seek 总耗时随片数线性增长；
+- **自由竞争会向“生产者快、OCR 慢”的路径倾斜**：h264 下 CPU 软解吞吐
+  高于 NVDEC，小片竞争让 CPU+ONNX 抢到更多片，但 ONNX infer 是真正的
+  墙钟瓶颈，整体反而变慢（test5 3.11s vs 基线 2.44s）。现有让位阈值按
+  生产者净耗时判定，对这种“解码快、OCR 慢”的路径不触发（2 片中与 GPU
+  基本均分，正好是墙钟最优）；
+- AV1 下 CPU 生产者过慢，0.5 让位把剩余片交给 GPU，每关键帧一片与普通
+  2/4 片基线基本持平（AV1 关键帧 seek 便宜、片多不亏也不赚）。
+
+结论：默认保持“2 大竞争片 + 关键帧吸附 + 混配 0.5 让位”；
+`DUAL_KEYFRAME_EVERY` 保留为实验开关但不默认启用。详细数值见
+docs/PERFORMANCE.md“每关键帧切一片实验”。
+
+### 六轮修正：关键帧切片复活——连续扫掠免 seek + 竞争闸门 + 端到端让位（2026-08，本机实测）
+
+上小节曾把“每关键帧一片自由竞争”判为死路。本轮把两个障碍分别修复后，
+该方案在失衡情境（字幕宽 ROI）取代 2 片成为双流水线最优，均衡情境
+（Race h264 速度数字）与 2 片基本持平、仍明显优于单流水线。
+
+**障碍 1 — seek 总耗时随片数线性增长**：
+
+- 实测：h264 GPU 精确 seek ~40-70ms/次、CPU ~30-40ms/次；而“连续扫掠”
+  （下一片起点 == 上一片终点，解码器已停在相邻位置）仅 ~1ms；
+- 修复：`_run_parallel_chunk` 增加 `seek_required` 参数——仅在下一片与
+  上一片不连续时才 `seek_accurate`。分片时间线里连续片的 seek 归零。
+
+**障碍 2 — “解码快、OCR 慢”路径在自由竞争中抢片**：
+
+- CPU+ONNX（尤其宽 ROI 字幕）解码比 NVDEC 快，但 ONNX 是真正的墙钟瓶颈；
+  按生产者净耗时判定时它被误判为快路径、抢走多数小片，整体反而变慢
+  （字幕 kfe 曾 20s vs 单 9.4s）；按生产者净速率让位还会反向误伤（
+  max_chunks=16 时 GPU 被误让、CPU 独跑 12 片 16s）；
+- 两层修复：
+  a. **竞争取片闸门**（`DUAL_PIPELINE_INFLIGHT`，实测 1 最优）：in-flight
+     片数（已取但 OCR 未排空）达上限即暂停取片等自己 OCR 追上来，让对方取；
+     片数口径与内容无关，免疫“分段稀疏时段做不了多少 OCR 工作”的偏差；
+  b. **端到端速率让位**：让位判定改用“片起点 → 该片 OCR 排空”的墙钟
+     （e2e_speed，竞争闸门排空后记录）替代生产者净速率；双方都至少取过
+     一片竞争片后才可能触发，天然规避试点头片 warm-up 噪声。
+
+**实现附带修复**：
+
+- OCR worker 尾批死锁：OCR worker 把不足 16 的尾批段先攒在 b_idx、等下一
+  片补齐才 flush；竞争闸门若精确等 `len(results) ≥ pu` 而队列已空 → producer
+  等排空、OCR worker 等下一片补齐批次，互等死锁（INFLIGHT=1 实测必现）。
+  排空判定带半批容忍（≤OCR_BATCH-1 段），producer 先取下一片、头部段补齐
+  批次即可恢复前进；
+- 关键帧切片粒度：`DUAL_KEYFRAME_EVERY_MIN_GAP`（默认 16 采样帧）+
+  `DUAL_KEYFRAME_EVERY_MAX_CHUNKS`（默认 8）——mkv 重编码关键帧过密（每
+  30-140 源帧一个）时逐步放大间距合并，片数受控且边界仍落关键帧（seek 便宜）。
+
+**本机实测**（A/B 单跑串行取最优，7945HX + RTX 4060 Laptop）：
+
+| 场景 | 单流水线 | 双流水线最优 | Δ |
+|---|---:|---:|---:|
+| 新三国01 窗口（6000 采样帧） | 8.75s | kfe+INFLIGHT=1 8.52s | -3% |
+| 新三国01 窗口 双 2 片（默认） | 8.75s | 13.36s | +53%（失衡下 2 片必回退） |
+| test5 窗口（3000 帧） | 3.37s | 双 2 片 2.54s | -25% |
+| test5 窗口 kfe | 3.37s | 2.87s | -15% |
+| test3 窗口（3000 帧） | 3.22s | kfe 2.76s | -14% |
+| test5 全片（7223 帧） | 7.66s | 双 2 片 5.71s | -25% |
+| test3 全片（3190 帧） | 3.39s | 双 2 片 3.00s | -12% |
+| test6 AV1（默认回退） | 单流水线 | 回退单（不回归） | 0 |
+| 字幕整集 stride=8（新三国01 全片） | 21.38s | 双 2 片 11.68s | **-45%** |
+
+结论：每关键帧一片不再靠“自由竞争”，而是靠“竞争闸门限速（按 OCR 排空）
++ 端到端让位方向正确（按含 OCR 的墙钟）+ 连续扫掠免 seek（相邻片零成本）”。
+作为实验增强保留（`DUAL_KEYFRAME_EVERY=1`），默认仍是 2 片 + 关键帧吸附 +
+混配 0.5 让位；字幕类失衡场景建议显式 `DUAL_KEYFRAME_EVERY=1` +
+`DUAL_PIPELINE_INFLIGHT=1`（或把 chunks 提到 8）。详细数值见
+docs/PERFORMANCE.md“关键帧切片复活”。
+
 ### 实现注意
 
 - 每条 worker 使用“持久 OCR 会话”（`_start_ocr_session`）：一个 OCR worker +
   infer 队列跨所有切片复用，切片之间不做 join；后一片解码可与前一片 OCR 重叠。
-- `RVTOL_PROFILE=1` 时各流水线 profile 按 `producer:pipeN / ocr:pipeN`
+- `ENGINE_PROFILE=1` 时各流水线 profile 按 `producer:pipeN / ocr:pipeN`
   聚合进 `self.profile`，分片时间线在 `timing['parallel_pipeN_timeline']`
   （(idx, t0, t1, frames, gap)），用于诊断串行化/空隙。
 - 当前仅支持 2 条流水线；显式 `dual_backends` 不受编码回退影响。
@@ -105,14 +226,14 @@
   - 对已 48 高的 float32 HWC 图在 GPU 完成 transpose+normalize+pad；
   - 直接生成显存模型输入，`TrtEngine.execute_device_async` 跳过 HtoD；
   - 与旧 CPU `_resize_norm` 输出逐项一致（随机批对比 same=True）。
-- decord GPU 帧直通已实现为实验路径（`RVTOL_GPU_RAW=1` 开启）：
+- decord GPU 帧直通是 GPU 主管线内部 raw 路径（不再提供独立实验开关）：
   - 从 decord gray NDArray DLPack 解析 device ptr，代表帧 D2D 聚批后
     `prep_gray_raw` kernel 在 GPU 完成 resize+gamma+normalize+pad；
-  - 默认关闭。
-  - 本机 test5 1500/3000 帧 A/B：**开启反而慢 20~30%**（当前仍做每帧
-    asnumpy 供分段，raw 只省代表帧，却增加 GPU kernel 与 D2D 竞争）。
-  - 结论：要真正收益必须把灰度/sharp/分段也留在 GPU，当前实验路径保留参考。
-- GPU 灰度/sharp/聚类分段已实现实验路径（`RVTOL_GPU_PIPELINE=1`）：
+  - 独立开启曾实测反而慢 20~30%（当前仍做每帧 asnumpy 供分段，raw 只省
+    代表帧，却增加 GPU kernel 与 D2D 竞争）；在显存全驻留主管线中该路径
+    仍作为内部实现保留。
+  - 结论：要真正收益必须把灰度/sharp/分段也留在 GPU。
+- GPU 灰度/sharp/聚类分段已实现实验路径（`GPU_PIPELINE=1`）：
   - `GpuFrameAnalyzer` 一次 kernel 分析整批帧，只回传 (sharp, cluster) 标量；
   - 避免整帧 ROI D2H；校准阈值仍取前 50 帧 D2H。
   - 默认关闭。
@@ -124,7 +245,7 @@
     GPU 路径与 decode/TRT 之间仍缺少真正统一的异步流水线。
   - 结论：当前实验路径已完整实现但无净收益；不建议启用。
 
-### 显存全驻立路径补全与争抢韧性验证（2026-08 三轮，RVTOL_GPU_CTC）
+### 显存全驻立路径补全与争抢韧性验证（2026-08 三轮，GPU_CTC）
 
 在"内存子系统争抢"结论（见双流水线小节）之后，把 GPU+TRT 路径最后两个
 RAM 大触点补掉，形成显存全驻留闭环：
@@ -134,7 +255,7 @@ RAM 大触点补掉，形成显存全驻留闭环：
   数"语义——校准阈值行为与单流水线逐位一致（此前全局池化直方图阈值不同，
   段数差 4×）；
 - **TRT 输出 GPU argmax 归约**（`GpuOutputReducer` + `TrtEngine.
-  execute_device_argmax`，env `RVTOL_GPU_CTC=1`）：(B,S,C) float32 在 GPU
+  execute_device_argmax`，env `GPU_CTC=1`）：(B,S,C) float32 在 GPU
   上沿 vocab 维归约成 (B,S) 索引+概率，DtoH 从 ~16MB/批降到 ~12KB
   （~1300×）；并列取首个与 numpy.argmax 一致，宿主 `_ctc_from_idxprob`
   与原批解码语义一致。注意按 profile max_batch 分子批循环。
@@ -161,7 +282,7 @@ RAM 大触点补掉，形成显存全驻留闭环：
   用于段内比较，微小差异无影响）。
 - **默认启用门控**（`_gpu_pipeline_enabled` 重写）：gray_output=True 且
   decode∈{auto,nvdec} 且 ocr≠cpu 且 NVDEC/TRT 可用且 merge 分离模式非
-  contrast 且未开 dual_pipeline 时自动启用；`RVTOL_GPU_PIPELINE=0` 显式
+  contrast 且未开 dual_pipeline 时自动启用；`GPU_PIPELINE=0` 显式
   关闭，'1' 强制尝试。yuv_output（RaceVideoToLog）暂走宿主管线。
 - 单测：门控矩阵 + 合并模式解析（tests/test_gpu_pipeline.py，9 例）。
 
@@ -187,19 +308,11 @@ sharp 用 int64 精确累加 + summary float64 直传，保证近平局选帧与
 "严格大于保先者"语义对齐。
 - 当前仍存在 1 次原始 ROI D2H（decord asnumpy） + 1 次 DtoH（TRT 输出）。
 
-### 字幕/背景分离预处理（实验，RVTOL_TEXT_SEP）
+### 相似段合并的分离模式（生产默认 binary）
 
-- 实验替代当前“灰度 + gamma 2.0”的 OCR 输入：
-  - contrast：局部盒式背景估计 + 绝对差分，突出文字笔画/边缘；
-  - binary：用分段 Otsu 阈值二值化，白字黑底。
-- `RVTOL_TEXT_SEP=contrast|binary` 开启 OCR 预处理；同时会让
-  `_segments_similar` 先做分离再比较，尝试让相似帧合并只关注文字变化。
-- 短窗口新三国01（1500 采样帧）实测：
-  - off：215 段 / 116 文本
-  - contrast：216 段 / 116 文本，耗时 +9%
-  - binary：214 段 / 115 文本，耗时 -6%
-- 结论：当前简单版没有明显准确率/合并收益，保留为实验入口，默认关闭。
-  后续需要更细的文字分割（连通域、颜色/亮度先验、形态学过滤）再评估。
+- `merge_similar` 的代表帧比较在分离图上进行，默认 binary（黑底白字）。
+- `TEXT_SEP_MERGE=contrast|binary|off` 可覆盖；contrast 作为实验入口无净收益。
+- OCR 输入保持 gray+gamma 2.0；原先“用分离图直接作 OCR 输入”的实验已删除。
 
 ### Race 跨编码实测（2026-08 一轮，1500 帧窗口，旧 CPU+ONNX 互补对）
 
