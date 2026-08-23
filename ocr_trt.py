@@ -17,10 +17,10 @@ import numpy as np
 import engine_config as config
 log = logging.getLogger(__name__)
 
-# 子相位探针（RVTOL_TRT_SUBPROBE=1 开启）：累计 HtoD 提交 / kernel enqueue /
+# 子相位探针（TRT_SUBPROBE=1 开启）：累计 HtoD 提交 / kernel enqueue /
 # DtoH 提交 / stream 同步等待的耗时与批数，用于定位共存负载下 TRT 批延迟
 # 的膨胀点（提交调用变慢 = 宿主被饥饿；同步等待变长 = GPU 侧/排队问题）。
-SUBPROBE_ON = os.environ.get("RVTOL_TRT_SUBPROBE", "").strip().lower() in (
+SUBPROBE_ON = os.environ.get("TRT_SUBPROBE", "").strip().lower() in (
     "1", "true", "yes", "on")
 SUBPROBE: dict = {"htod": 0.0, "enqueue": 0.0, "dtoh": 0.0, "sync": 0.0,
                   "n": 0}
@@ -205,7 +205,7 @@ extern "C" __global__ void prep_gray_raw(
         out_nbytes = B * 3 * dst_h * dst_w * 4
         out_dev = self._ensure_out(out_nbytes)
         gamma = float(config.OCR_GAMMA)
-        _env_g = os.environ.get("RVTOL_OCR_GAMMA")
+        _env_g = os.environ.get("OCR_GAMMA")
         if _env_g:
             try:
                 gamma = float(_env_g)
@@ -698,12 +698,6 @@ class TrtEngine:
         """
         name = (f"multi_PP-OCRv6_rec_{size}_{config.TRT_ENGINE_SM}"
                 f"_fp32_tf32unset.engine")
-        # 实验钩子：RVTOL_TRT_BATCH_PROFILE=N 用 batch=N 的 TRT profile 引擎
-        # （独立缓存文件名 _pbN，不污染默认 batch 引擎）
-        _pb = os.environ.get("RVTOL_TRT_BATCH_PROFILE")
-        if _pb and _pb.isdigit():
-            name = (f"multi_PP-OCRv6_rec_{size}_{config.TRT_ENGINE_SM}"
-                    f"_fp32_tf32unset_pb{_pb}.engine")
         cands = [_models_dir() / "models" / name]
         cands.append(config.app_data_dir() / "ocr_engines" / name)
         legacy = (Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
@@ -754,8 +748,7 @@ class TrtEngine:
             trt.MemoryPoolType.WORKSPACE,  # type: ignore[attr-defined]
             config.TRT_WORKSPACE_BYTES)
         profile = builder.create_optimization_profile()
-        _pb = os.environ.get("RVTOL_TRT_BATCH_PROFILE")
-        opt_b = int(_pb) if (_pb and _pb.isdigit()) else config.TRT_PROFILE_BATCH
+        opt_b = config.TRT_PROFILE_BATCH
         h = config.OCR_TARGET_H
         profile.set_shape(
             network.get_input(0).name,
@@ -906,7 +899,7 @@ class TrtEngine:
 
         输入超过 profile max_batch 时按子批循环（与 _infer_trt_device 一致）。
         返回 (idx int32[B,S], prob f32[B,S])——输出不落 RAM，DtoH 仅
-        B*S*8 字节。需要 RVTOL_GPU_CTC=1 的调用方（call_gpu_raw）使用。
+        B*S*8 字节。需要 GPU_CTC=1 的调用方（call_gpu_raw）使用。
         """
         from cuda.bindings import runtime as cudart
         stream = self._ensure_stream()

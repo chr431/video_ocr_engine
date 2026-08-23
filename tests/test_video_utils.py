@@ -57,7 +57,7 @@ def test_np_resize_identity_and_shape():
 
 
 def test_preprocess_standard_target_height_and_gamma(monkeypatch):
-    monkeypatch.delenv("RVTOL_OCR_GAMMA", raising=False)
+    monkeypatch.delenv("OCR_GAMMA", raising=False)
     crop = np.random.default_rng(1).integers(0, 256, (60, 200, 3), dtype=np.uint8)
     out = _preprocess_standard(crop)
     assert out.shape[0] == 48  # OCR_TARGET_H

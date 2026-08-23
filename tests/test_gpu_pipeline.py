@@ -24,7 +24,7 @@ def test_gpu_pipeline_default_on_for_gray_nvdec_trt(gpu_ok):
 
 
 def test_gpu_pipeline_opt_out_env(gpu_ok, monkeypatch):
-    monkeypatch.setenv("RVTOL_GPU_PIPELINE", "0")
+    monkeypatch.setenv("GPU_PIPELINE", "0")
     ex = _make(gray_output=True)
     assert ex._gpu_pipeline_enabled() is False
 
@@ -57,7 +57,7 @@ def test_gpu_pipeline_dual_takes_precedence(gpu_ok):
 
 
 def test_gpu_pipeline_contrast_merge_falls_back(gpu_ok, monkeypatch):
-    monkeypatch.setenv("RVTOL_TEXT_SEP", "contrast")
+    monkeypatch.setenv("TEXT_SEP_MERGE", "contrast")
     ex = _make(gray_output=True)
     assert ex._gpu_pipeline_enabled() is False
 
@@ -66,18 +66,16 @@ def test_merge_effective_mode_resolution(monkeypatch):
     ex = _make()
     # 引擎默认 binary
     assert ex._merge_effective_mode() == "binary"
-    # TEXT_SEP 覆盖引擎默认
-    monkeypatch.setenv("RVTOL_TEXT_SEP", "contrast")
+    # TEXT_SEP_MERGE 覆盖引擎默认
+    monkeypatch.setenv("TEXT_SEP_MERGE", "contrast")
     assert ex._merge_effective_mode() == "contrast"
-    monkeypatch.setenv("RVTOL_TEXT_SEP", "1")
+    monkeypatch.setenv("TEXT_SEP_MERGE", "1")
     assert ex._merge_effective_mode() == "contrast"
-    monkeypatch.setenv("RVTOL_TEXT_SEP", "2")
+    monkeypatch.setenv("TEXT_SEP_MERGE", "2")
     assert ex._merge_effective_mode() == "binary"
-    # TEXT_SEP_MERGE 最高优先级
-    monkeypatch.setenv("RVTOL_TEXT_SEP_MERGE", "off")
+    monkeypatch.setenv("TEXT_SEP_MERGE", "off")
     assert ex._merge_effective_mode() == ""
-    monkeypatch.delenv("RVTOL_TEXT_SEP_MERGE")
-    monkeypatch.delenv("RVTOL_TEXT_SEP")
+    monkeypatch.delenv("TEXT_SEP_MERGE")
     # 显式构造参数 merge_text_sep
     ex2 = _make(merge_text_sep="")
     assert ex2._merge_effective_mode() == ""

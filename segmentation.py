@@ -1,8 +1,6 @@
 """分段用灰度 / Otsu / 聚类判别（生产与串行参考路径共用）。"""
 from __future__ import annotations
 
-import os as _os
-
 import numpy as np
 
 import engine_config as config
@@ -21,47 +19,24 @@ def _gray_batch(crops: np.ndarray) -> np.ndarray:
     return (crops.astype(np.float32) @ _GRAY_W).astype(np.uint8)
 
 
-def _seg_gamma() -> float:
-    """分段/代表帧选择的灰度 gamma（实验钩子）。
-
-    RVTOL_SEG_GAMMA env > config.SEG_GAMMA。默认 0 = 现状 raw 灰度
-    （锁定基线）；>0 时对灰度做 255*(g/255)^gamma 增强后再分段与选代表帧
-    —— 与 OCR 正式预处理（gray + gamma 2.0）对齐的对照实验用。
-    """
-    _env = _os.environ.get("RVTOL_SEG_GAMMA")
-    if _env:
-        try:
-            return float(_env)
-        except ValueError:
-            pass
-    return float(config.SEG_GAMMA)
-
-
-def _apply_gamma(g: np.ndarray, gamma: float) -> np.ndarray:
-    if gamma <= 0:
-        return g
-    return (255.0 * np.power(g.astype(np.float32) / 255.0, gamma)
-            ).astype(np.uint8)
-
-
 def _gray_seg(crop: np.ndarray) -> np.ndarray:
-    """分段用灰度：raw（默认）或 gamma 增强（RVTOL_SEG_GAMMA / SEG_GAMMA）。"""
-    return _apply_gamma(_gray(crop), _seg_gamma())
+    """分段/代表帧选择用灰度（raw，已锁定基线）。"""
+    return _gray(crop)
 
 
 def _gray_seg_batch(crops: np.ndarray) -> np.ndarray:
-    """批量分段灰度（_gray_seg 的批量版，含 gamma 钩子）。"""
-    return _apply_gamma(_gray_batch(crops), _seg_gamma())
+    """批量分段灰度。"""
+    return _gray_batch(crops)
 
 
 def _gray_seg_yuv(crop: np.ndarray, color_range: int = 0) -> np.ndarray:
-    """decord yuv420 crop → 分段灰度：取 Y 平面 + range 展开 + gamma。"""
-    return _apply_gamma(_nv12_luma_full(crop, color_range), _seg_gamma())
+    """decord yuv420 crop → 分段灰度：取 Y 平面 + range 展开。"""
+    return _nv12_luma_full(crop, color_range)
 
 
 def _gray_seg_yuv_batch(crops: np.ndarray, color_range: int = 0) -> np.ndarray:
     """decord yuv420 批量 crops → 批量分段灰度。"""
-    return _apply_gamma(_nv12_batch_luma_full(crops, color_range), _seg_gamma())
+    return _nv12_batch_luma_full(crops, color_range)
 
 
 def _otsu(g: np.ndarray) -> int:

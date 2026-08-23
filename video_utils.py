@@ -176,7 +176,7 @@ def _preprocess_standard(crop: "np.ndarray", force_aspect: float = 0.0,
     resize。输出 float32（与 cv2 路径数值差 <= 1e-5）。
 
     gamma：灰度对比度增强指数（255*(gray/255)^g）。None = 用 env
-    RVTOL_OCR_GAMMA，都没有则 config.OCR_GAMMA（正式默认 2.0）。
+    OCR_GAMMA，都没有则 config.OCR_GAMMA（正式默认 2.0）。
     白字黄底等背景色块场景放大高段分离，平滑无裁剪不侵蚀笔画。
     gamma <= 0 跳过灰度变换（保留 RGB，回退旧行为）；
     灰度权重与 segment 灰度共用 config.GRAY_RGB_WEIGHTS。
@@ -196,7 +196,7 @@ def _preprocess_standard(crop: "np.ndarray", force_aspect: float = 0.0,
     else:
         resized = _np_resize(crop, new_w, target_h)
     if gamma is None:
-        _env = _os.environ.get("RVTOL_OCR_GAMMA")
+        _env = _os.environ.get("OCR_GAMMA")
         gamma = float(_env) if _env else float(config.OCR_GAMMA)
     if gamma > 0:
         # 灰度 + gamma（正式预处理）：RGB 逐通道 gamma 视觉差异小、回归多
@@ -240,17 +240,6 @@ def _text_sep_gray(gray: "np.ndarray", mode: str = "contrast",
     if p95 > 1.0:
         sep = np.clip(sep / p95 * 255.0, 0.0, 255.0)
     return sep.astype(np.float32)
-
-
-def _preprocess_text_sep(proc: "np.ndarray", mode: str = "contrast",
-                         th: "int | None" = None) -> "np.ndarray":
-    """对已 48 高的 float32 OCR 输入做字幕/背景分离，返回 3 通道 float32。"""
-    if proc.shape[-1] == 1:
-        gray = proc[..., 0]
-    else:
-        gray = proc @ _GRAY_W
-    sep = _text_sep_gray(gray, mode=mode, th=th)
-    return np.stack([sep] * 3, axis=-1).astype(np.float32)
 
 
 def open_decord_vr(video_path, force_cpu: bool = False):

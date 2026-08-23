@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from segmentation import (
-    _apply_gamma, _cluster_win3, _gray_batch, _gray_seg_yuv,
+    _cluster_win3, _gray_batch, _gray_seg_yuv,
     _gray_seg_yuv_batch, _otsu,
 )
 from video_utils import _nv12_luma_full
@@ -24,9 +23,8 @@ def test_gray_batch_single_and_rgb():
     assert np.array_equal(_gray_batch(one), one[..., 0])
 
 
-def test_gray_seg_yuv_matches_nv12_luma_full(monkeypatch):
-    """decord yuv420 → 取 Y + range 展开（SEG_GAMMA=0 时即 _nv12_luma_full）。"""
-    monkeypatch.setenv("RVTOL_SEG_GAMMA", "0")  # 锁定分段 gamma，防环境干扰
+def test_gray_seg_yuv_matches_nv12_luma_full():
+    """decord yuv420 → 取 Y + range 展开，与 _nv12_luma_full 一致。"""
     h, w = 16, 20
     y = np.arange(h * w, dtype=np.uint8).reshape(h, w)
     crop = np.vstack([y, np.full((h // 2, w), 128, dtype=np.uint8)])
@@ -73,10 +71,3 @@ def test_cluster_win3_isolated_noise_below_5():
 
 def test_cluster_win3_empty():
     assert _cluster_win3(np.zeros((5, 5), dtype=bool)) == 0.0
-
-
-@pytest.mark.parametrize("gamma", [0.0, 1.0, 2.0])
-def test_apply_gamma_range(gamma):
-    g = np.arange(256, dtype=np.uint8)
-    out = _apply_gamma(g, gamma).astype(np.float64)
-    assert out.min() >= 0.0 and out.max() <= 255.0

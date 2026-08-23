@@ -54,60 +54,6 @@ def _models_dir() -> Path:
     return candidates[0]
 
 
-def build_argmax_model(src: Path, dst: Path) -> bool:
-    """在 ONNX 图末尾追加 ArgMax+ReduceMax，输出 (B,S) 索引+概率。
-
-    rec 模型原始输出为 (B,S,C≈18710) float32——宽 ROI 下每批 ~117MB 的
-    DRAM 写出 + 宿主 argmax 再回读一遍。图级归约后 DtoH…（纯 CPU 推理则
-    是 ORT arena 写出+宿主回读）降为 B*S*12 字节（~2300×），与 GPU 侧
-    GpuOutputReducer 对称，显著降低 ONNX 路径的内存吞吐占用。
-    需要 onnx 包（仅构建时）；成功写 dst 返回 True。
-    """
-    try:
-        import onnx
-        from onnx import helper, TensorProto
-    except ImportError:
-        return False
-    model = onnx.load(str(src))
-    graph = model.graph
-    src_out = graph.output[0].name
-    # 目标 opset：ReduceMax 的 axes 在 opset<18 为属性、>=18 为可选输入
-    opset = max((o.version for o in model.opset_import
-                 if o.domain in ("", "ai.onnx")), default=13)
-    init = None
-    axes_attr = {}
-    axes_input = []
-    if opset >= 18:
-        import numpy as np
-        init = helper.make_tensor("ctc_axes", TensorProto.INT64,
-                                  [1], [2])
-        graph.initializer.append(init)
-        axes_input = ["ctc_axes"]
-    else:
-        axes_attr = {"axes": [2]}
-    nodes = [
-        helper.make_node("ArgMax", [src_out], ["ctc_idx_raw"],
-                         axis=2, keepdims=0),
-        helper.make_node("ReduceMax", [src_out] + axes_input, ["ctc_prob"],
-                         keepdims=0, **axes_attr),
-    ]
-    cast = helper.make_node("Cast", ["ctc_idx_raw"], ["ctc_idx"],
-                            to=TensorProto.INT32)
-    nodes.insert(1, cast)
-    graph.node.extend(nodes)
-    while len(graph.output):
-        graph.output.pop()
-    graph.output.extend([
-        helper.make_tensor_value_info("ctc_idx",
-                               TensorProto.INT32, ["batch", "seq"]),
-        helper.make_tensor_value_info("ctc_prob",
-                               TensorProto.FLOAT, ["batch", "seq"]),
-    ])
-    onnx.checker.check_model(model)
-    onnx.save(model, str(dst))
-    return True
-
-
 def cpu_physical_cores() -> int:
     """物理核数（psutil 缺失时用逻辑核/2 估算，最小 2）。"""
     try:
@@ -150,7 +96,7 @@ class OcrEngine:
         progress_cb: 构建引擎等耗时阶段的进度消息回调 (str)。
         fill_width: OCR 输入 pad 宽度下限（px）。0 = 用 config 默认。速度窄图
             对宽 pad 更准，用户可调（GUI 160-320）。
-        num_threads: ONNX 推理线程数。None = RVTOL_OCR_THREADS env →
+        num_threads: ONNX 推理线程数。None = OCR_THREADS env →
             默认物理核/2（仅直接构造 OcrEngine 时）；生产管线会显式传入
             auto_ocr_thread_count()（全物理核），因此 CPU/GPU 解码后端统一。
     """
@@ -182,9 +128,9 @@ class OcrEngine:
         self._gpu_pre = None  # TRT GPU 预处理（懒加载）
         # 显存全驻留 CTC：TRT 输出在 GPU 完成 vocab 维 argmax/max，输出
         # 不落 RAM。仅在 call_gpu_raw（GPU 分段管线）路径生效，因此默认
-        # 开启是安全的；RVTOL_GPU_CTC=0 显式关闭。
+        # 开启是安全的；GPU_CTC=0 显式关闭。
         self._gpu_ctc_mode = (engine_type == "tensorrt" and
-                              os.environ.get("RVTOL_GPU_CTC", "")
+                              os.environ.get("GPU_CTC", "")
                               .strip().lower() != "0")
         if engine_type == "tensorrt":
             try:
@@ -215,48 +161,15 @@ class OcrEngine:
         if self._num_threads:
             n = max(1, int(self._num_threads))
         else:
-            _env_t = os.environ.get("RVTOL_OCR_THREADS")
+            _env_t = os.environ.get("OCR_THREADS")
             if _env_t:
                 n = max(1, int(_env_t))
         so.intra_op_num_threads = n
         so.inter_op_num_threads = 2
-        # ORT 线程池自旋控制（1.28 支持；与解码线程共存时影响 CPU 调度）：
-        # - RVTOL_ORT_SPIN=0 → 关闭 intra/inter 忙等自旋（推理间隙让出 CPU）
-        # - RVTOL_ORT_SPIN_MS=N → 自旋时长上限（ms，0=默认无限）
-        # 默认不设置（保持 ORT 默认），实验后定稿
-        _env_spin = os.environ.get("RVTOL_ORT_SPIN")
-        if _env_spin == "0":
-            so.add_session_config_entry("session.intra_op.allow_spinning", "0")
-            so.add_session_config_entry("session.inter_op.allow_spinning", "0")
-        _env_spin_ms = os.environ.get("RVTOL_ORT_SPIN_MS")
-        if _env_spin_ms:
-            so.add_session_config_entry(
-                "session.intra_op.spin_duration", _env_spin_ms)
-        # 图级输出归约：ArgMax+ReduceMax 追加到模型尾部，推理直接输出
-        # (B,S) 索引+概率——消除 (B,S,C≈18710) 输出张量的 arena 写出与宿主
-        # argmax 回读（宽 ROI 每批 ~117MB×2 的 DRAM 流量）。构建需要 onnx
-        # 包（仅首次），结果缓存为 <model>_am.onnx；失败/缺失回退原模型。
-        # 默认关闭：实测单引擎慢 ~10%（ORT 归约核不如 numpy 成块 SIMD），
-        # 仅在显式 TRT⊕ONNX 混配时值得开启（削减聚合访存、小幅保护对端
-        # TRT 提交路径：共存退化 +75%→+67%）。
-        self._onnx_ctc_mode = (
-            os.environ.get("RVTOL_ONNX_CTC", "").strip().lower()
-            in ("1", "true", "yes", "on"))
         model_path = models / f"PP-OCRv6_rec_{size}.onnx"
-        if self._onnx_ctc_mode:
-            am_path = models / f"PP-OCRv6_rec_{size}_am.onnx"
-            if not am_path.exists():
-                try:
-                    build_argmax_model(model_path, am_path)
-                except Exception as e:  # noqa: BLE001 — 回退原模型
-                    log.warning("ONNX argmax 图构建失败，回退原始模型: %s", e)
-            if am_path.exists():
-                model_path = am_path
         self._session = ort.InferenceSession(
             str(model_path), sess_options=so,
             providers=["CPUExecutionProvider"])
-        self._onnx_ctc_active = (
-            self._onnx_ctc_mode and len(self._session.get_outputs()) == 2)
 
     # ═══════════════ 预处理（复刻 rapidocr resize_norm_img）═══════════════
 
@@ -297,30 +210,6 @@ class OcrEngine:
         # 主 OCR 线程必须串行（GPU 单上下文本就不能并行，串行不损失吞吐）。
         with self._lock:
             return self._infer_locked(batch_np)
-
-    def _run_onnx_idxprob(self, batch_np: np.ndarray):
-        """图级归约模型的推理：(B,S) int32 索引 + (B,S) float32 概率。
-
-        按 OCR_ONNX_CHUNK 分片限制单批帧数（与旧 preds 路径同语义，
-        控制 ORT arena 峰值）。
-        """
-        onnx_max = config.OCR_ONNX_CHUNK
-
-        def _one(x):
-            with self._lock:
-                out = self._session.run(None, {"x": x})
-            return (np.asarray(out[0], dtype=np.int32),
-                    np.asarray(out[1], dtype=np.float32))
-
-        if len(batch_np) <= onnx_max:
-            return _one(batch_np)
-        idxs, probs = [], []
-        for i in range(0, len(batch_np), onnx_max):
-            a, b = _one(batch_np[i:i + onnx_max])
-            idxs.append(a)
-            probs.append(b)
-        return (np.concatenate(idxs, axis=0),
-                np.concatenate(probs, axis=0))
 
     def _infer_locked(self, batch_np: np.ndarray) -> np.ndarray:
         if self._trt is not None:
@@ -415,14 +304,14 @@ class OcrEngine:
         # pad 宽度 = max(批内最大宽高比, 本模型下限/OCR_TARGET_H)。速度数字
         # 是窄图（48 高后 78-160 宽），不设下限会让 GPU 白算过多宽度；
         # v6_small 对输入宽度敏感（窄图误读升高），必须有下限。
-        # 优先级：用户 fill_width > env RVTOL_PAD_SMALL >
+        # 优先级：用户 fill_width > env OCR_PAD_SMALL >
         # config.OCR_PAD_WIDTH_MIN_BY_MODEL。
         if self._fill_width > 0:
             _floor = self._fill_width
         else:
             _floor = config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(
                 self._variant, config.OCR_PAD_WIDTH_MIN)
-            _env = os.environ.get("RVTOL_PAD_SMALL")
+            _env = os.environ.get("OCR_PAD_SMALL")
             if _env and _env.isdigit():
                 _floor = int(_env)
         max_wh = max(_floor / config.OCR_TARGET_H,
@@ -430,15 +319,6 @@ class OcrEngine:
         if self._trt is not None:
             # GPU 预处理路径：直接生成显存模型输入，省去 host batch 构造
             return self._call_trt_gpu(img_list, max_wh, h0)
-        if getattr(self, "_onnx_ctc_active", False):
-            batch_np = np.stack([self._resize_norm(img_list[i], max_wh, h0)
-                                 for i in order])
-            idx, prob = self._run_onnx_idxprob(batch_np)
-            batch_results = self._ctc_from_idxprob(idx, prob)
-            results: list = [None] * len(img_list)
-            for k, src in enumerate(order):
-                results[src] = batch_results[k]
-            return results
         batch_np = np.stack([self._resize_norm(img_list[i], max_wh, h0)
                              for i in order])
         preds = self._infer(batch_np)
@@ -483,7 +363,7 @@ class OcrEngine:
         """TRT：直接消费 decord GPU NDArray（灰度 raw），跳过 D2H 代表帧拷贝。
 
         infos: [(dev_ptr, src_h, src_w, owner), ...]
-        RVTOL_GPU_CTC=1 时进一步在 GPU 上完成 vocab 维 argmax/max，输出
+        GPU_CTC=1 时进一步在 GPU 上完成 vocab 维 argmax/max，输出
         不落 RAM（DtoH 仅 B*seq*8 字节），宿主 CTC 直接吃小数组。
         """
         self._get_gpu_pre()
@@ -494,7 +374,7 @@ class OcrEngine:
         else:
             _floor = config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(
                 self._variant, config.OCR_PAD_WIDTH_MIN)
-            _env = os.environ.get("RVTOL_PAD_SMALL")
+            _env = os.environ.get("OCR_PAD_SMALL")
             if _env and _env.isdigit():
                 _floor = int(_env)
         max_wh = max(_floor / config.OCR_TARGET_H,
