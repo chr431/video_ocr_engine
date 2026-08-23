@@ -9,12 +9,26 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
 
 import engine_config as config
 log = logging.getLogger(__name__)
+
+# 子相位探针（RVTOL_TRT_SUBPROBE=1 开启）：累计 HtoD 提交 / kernel enqueue /
+# DtoH 提交 / stream 同步等待的耗时与批数，用于定位共存负载下 TRT 批延迟
+# 的膨胀点（提交调用变慢 = 宿主被饥饿；同步等待变长 = GPU 侧/排队问题）。
+SUBPROBE_ON = os.environ.get("RVTOL_TRT_SUBPROBE", "").strip().lower() in (
+    "1", "true", "yes", "on")
+SUBPROBE: dict = {"htod": 0.0, "enqueue": 0.0, "dtoh": 0.0, "sync": 0.0,
+                  "n": 0}
+
+
+def _sp_tick(key: str, t0: float) -> None:
+    if SUBPROBE_ON:
+        SUBPROBE[key] += time.perf_counter() - t0
 
 
 def _models_dir() -> Path:
@@ -553,7 +567,9 @@ class TrtEngine:
         if self._stream is None:
             return
         from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
+        _t_sp = time.perf_counter() if SUBPROBE_ON else 0.0
         cudart.cudaStreamSynchronize(self._stream)
+        _sp_tick('sync', _t_sp)
 
     def execute_async(self, x: np.ndarray,
                       out_host: "np.ndarray | None" = None) -> np.ndarray:
@@ -575,9 +591,11 @@ class TrtEngine:
             size_in = int(np.prod(self.max_in_shape)) * 4
             _, self._dev_in = cudart.cudaMalloc(size_in)
         dev_in = self._dev_in
+        _t_sp = time.perf_counter() if SUBPROBE_ON else 0.0
         cudart.cudaMemcpyAsync(
             dev_in, x.ctypes.data, x.nbytes,
             cudart.cudaMemcpyKind.cudaMemcpyHostToDevice, stream)
+        _sp_tick('htod', _t_sp)
         # 输出 device buffer 按需增长复用（cudaMalloc 每次 ~ms，避免每片分配）
         out_nbytes = int(np.prod(out_shape)) * 4
         if self._dev_out is None or out_nbytes > self._out_nbytes:
@@ -587,22 +605,30 @@ class TrtEngine:
             self._out_nbytes = out_nbytes
         dev_out = self._dev_out
         # execute_async_v3 需要显式设置输入/输出 tensor 地址
+        _t_sp = time.perf_counter() if SUBPROBE_ON else 0.0
         self.context.set_tensor_address(self.in_name, dev_in)
         self.context.set_tensor_address(self.out_name, dev_out)
         self.context.execute_async_v3(stream)
+        _sp_tick('enqueue', _t_sp)
         if out_host is not None:
             if (not out_host.flags.c_contiguous
                     or out_host.dtype != np.float32
                     or out_host.nbytes < out_nbytes):
                 raise ValueError("out_host 必须是足够大的 float32 连续数组")
+            _t_sp = time.perf_counter() if SUBPROBE_ON else 0.0
             cudart.cudaMemcpyAsync(
                 out_host.ctypes.data, dev_out, out_nbytes,
                 cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, stream)
+            if SUBPROBE_ON:
+                SUBPROBE['n'] += 1
             return out_host
         host_out = np.empty(out_shape, dtype=np.float32)
+        _t_sp = time.perf_counter() if SUBPROBE_ON else 0.0
         cudart.cudaMemcpyAsync(
             host_out.ctypes.data, dev_out, out_nbytes,
             cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, stream)
+        if SUBPROBE_ON:
+            SUBPROBE['n'] += 1
         return host_out
 
     def execute_device_async(self, dev_input: int, shape: tuple,
@@ -622,16 +648,22 @@ class TrtEngine:
             _, self._dev_out = cudart.cudaMalloc(out_nbytes)
             self._out_nbytes = out_nbytes
         dev_out = self._dev_out
+        _t_sp = time.perf_counter() if SUBPROBE_ON else 0.0
         self.context.set_tensor_address(self.in_name, dev_input)
         self.context.set_tensor_address(self.out_name, dev_out)
         self.context.execute_async_v3(stream)
+        _sp_tick('enqueue', _t_sp)
         if out_host is not None:
             if (not out_host.flags.c_contiguous or out_host.dtype != np.float32
                     or out_host.nbytes < out_nbytes):
                 raise ValueError("out_host 必须是足够大的 float32 连续数组")
+            _t_sp = time.perf_counter() if SUBPROBE_ON else 0.0
             cudart.cudaMemcpyAsync(
                 out_host.ctypes.data, dev_out, out_nbytes,
                 cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, stream)
+            _sp_tick('dtoh', _t_sp)
+            if SUBPROBE_ON:
+                SUBPROBE['n'] += 1
             return out_host
         host_out = np.empty(out_shape, dtype=np.float32)
         cudart.cudaMemcpyAsync(
