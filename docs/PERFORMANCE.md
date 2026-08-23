@@ -53,6 +53,12 @@
 
 ### 下游场景：video_subtitle_extractor（标清宽 ROI + 跳帧，2026-08）
 
+> **2026-08 四轮更新：gray+NVDEC+TRT 场景的默认主路径已切换为显存全驻留
+> GPU 管线**（`RVTOL_GPU_PIPELINE=0` 可回退宿主）。正确性与宿主逐位一致、
+> 窗口 clean 约 -10%、内存争抢下墙钟更稳定；整集 stride8 双方同受 NVDEC
+> 跳帧解码供给率限制（速度持平）。详见引擎仓 CLAUDE.md"GPU 管线转正"小节。
+> 以下为宿主管线的历史基线数据，仍适用于 YUV 输出 / OCR=cpu 场景。
+
 测试：`D:\Videos\batch_test\新三国01.mkv`，696×424，h264，
 `stride=8`，`ROI=144,398,551,423`（约 407×25 宽 ROI）。
 

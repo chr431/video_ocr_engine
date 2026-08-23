@@ -1237,9 +1237,11 @@ class FieldExtractor:
         analyzer = GpuFrameAnalyzer()
         # 逐帧直方图校准：与单流水线"前 50 帧 Otsu 取中位数"语义逐位一致
         # （含退化双值帧的阈值行为），D2H 仅 B×1KB 标量表，校准帧不落 RAM。
+        # 注意必须用 _otsu_from_hist（输入是直方图行）；_otsu 接收的是
+        # 灰度图像并在内部做直方图——传错曾产生"直方图的直方图"垃圾阈值。
         _hist_mat = analyzer.histograms_perframe(calib_base, calib_n,
                                                  src_h, src_w)
-        ths = [_otsu(_hist_mat[k]) for k in range(calib_n)]
+        ths = [_otsu_from_hist(_hist_mat[k]) for k in range(calib_n)]
         th = int(np.median(ths)) if ths else config.OTSU_FALLBACK_THRESH
         self._bin_thresh = th
 
@@ -1354,6 +1356,9 @@ class FieldExtractor:
                     changed = float(cluster) >= self._C
                     if changed:
                         seg = frames[s:k]
+                        if _os.environ.get('RVTOL_DEBUG_BOUNDS'):
+                            print(f'[GB]{fi}:{float(cluster):.0f}',
+                                  flush=True)
                         similar = (
                             self._merge_similar and segs
                             and self._segments_similar(last_rep_gray_h,
@@ -1634,6 +1639,9 @@ class FieldExtractor:
                     self._prof_end('producer', 'segmentation', _t_seg)
                     if changed:
                         seg = frames[s:k]
+                        if _os.environ.get('RVTOL_DEBUG_BOUNDS'):
+                            print(f'[HB]{fi}:{_cluster_win3(d):.0f}',
+                                  flush=True)
                         similar = (
                             self._merge_similar and segs
                             and self._segments_similar(last_rep_gray, rep_gray))

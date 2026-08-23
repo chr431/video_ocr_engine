@@ -360,13 +360,15 @@ class GpuFrameAnalyzer:
 extern "C" __global__ void analyze_gray(
     const unsigned char* __restrict__ raw,
     const unsigned char* __restrict__ prev,
-    float* __restrict__ summary,
+    double* __restrict__ summary,
     int B, int H, int W, float th) {
     // block = 一帧：256 线程分片扫描 + shared 归约（旧版每帧单线程串行
     // 扫 H*W*9，是 GPU 分段路径的主要瓶颈）。cluster 为整数计数，逐位一致；
-    // sharp 为浮点和，归约顺序与串行版有微小差异，仅用于段内比较。
-    __shared__ double s_sum[256];
-    __shared__ double s_sum2[256];
+    // sharp 用 int64 精确累加像素值与平方和（加法顺序无关），方差实数精确
+    // ——与宿主"严格大于保先者"的代表帧选择语义对齐；浮点归约顺序差异
+    // 曾导致近平局选帧漂移（批量时间戳 ±1s 偏移）。
+    __shared__ unsigned long long s_sum[256];
+    __shared__ unsigned long long s_sum2[256];
     __shared__ int s_max[256];
     int b = blockIdx.x;
     if (b >= B) return;
@@ -374,13 +376,13 @@ extern "C" __global__ void analyze_gray(
     const unsigned char* pre = prev + (size_t)b * H * W;
     int n = H * W;
     int t = threadIdx.x;
-    double sum = 0.0, sum2 = 0.0;
+    unsigned long long sum = 0, sum2 = 0;
     int maxc = 0;
     for (int p = t; p < n; p += 256) {
         int y = p / W;
         int x = p - y * W;
-        int v = cur[p];
-        sum += v; sum2 += (double)v * v;
+        unsigned long long v = cur[p];
+        sum += v; sum2 += v * v;
         int s = 0;
         for (int dy = -1; dy <= 1; dy++) {
             int yy = y + dy;
@@ -408,8 +410,8 @@ extern "C" __global__ void analyze_gray(
     if (t == 0) {
         double mean = s_sum[0] / (double)n;
         double var = s_sum2[0] / (double)n - mean * mean;
-        summary[b * 2] = (float)(var > 0.0 ? sqrt(var) : 0.0);
-        summary[b * 2 + 1] = (float)s_max[0];
+        summary[b * 2] = var > 0.0 ? sqrt(var) : 0.0;
+        summary[b * 2 + 1] = (double)s_max[0];
     }
 }
 
@@ -565,7 +567,7 @@ extern "C" __global__ void hist_gray_perframe(
         import numpy as np
         from cuda.bindings import runtime as cudart
         from cuda.core import Buffer, LaunchConfig, launch
-        nbytes = B * 2 * 4
+        nbytes = B * 2 * 8
         if self._summary_size < nbytes:
             if self._summary_dev is not None:
                 cudart.cudaFree(self._summary_dev)
@@ -577,7 +579,7 @@ extern "C" __global__ void hist_gray_perframe(
                Buffer.from_handle(prev_ptr, B * H * W),
                buf, np.int32(B), np.int32(H), np.int32(W), np.float32(th))
         cudart.cudaStreamSynchronize(self._stream)
-        out = np.empty((B, 2), dtype=np.float32)
+        out = np.empty((B, 2), dtype=np.float64)
         cudart.cudaMemcpy(
             out.ctypes.data, self._summary_dev, nbytes,
             cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
@@ -589,7 +591,7 @@ extern "C" __global__ void hist_gray_perframe(
         import numpy as np
         from cuda.bindings import runtime as cudart
         from cuda.core import Buffer, LaunchConfig, launch
-        nbytes = B * 2 * 4
+        nbytes = B * 2 * 8
         if self._summary_size < nbytes:
             if self._summary_dev is not None:
                 cudart.cudaFree(self._summary_dev)
@@ -601,7 +603,7 @@ extern "C" __global__ void hist_gray_perframe(
                Buffer.from_handle(prev_ptr, B * H * W),
                buf, np.int32(B), np.int32(H), np.int32(W), np.float32(th))
         cudart.cudaStreamSynchronize(self._stream)
-        out = np.empty((B, 2), dtype=np.float32)
+        out = np.empty((B, 2), dtype=np.float64)
         cudart.cudaMemcpy(
             out.ctypes.data, self._summary_dev, nbytes,
             cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
