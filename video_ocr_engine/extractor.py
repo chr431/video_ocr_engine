@@ -1712,14 +1712,18 @@ class FieldExtractor:
             dual_pipeline=False)
 
     def _dual_ocr_num_threads(self, ocr_backend: str = "",
-                              n_cpu_peers: int = 1) -> int:
+                              n_cpu_peers: int = 1,
+                              has_trt_peer: bool = False) -> int:
         """双流水线的 OCR 线程预算（按消费者后端分核，消除满核×2 过订阅）。
 
         env RVTOL_OCR_THREADS 优先（实验钩子，显式即全量生效）。否则：
         - TRT（auto/tensorrt）侧：DUAL_PIPELINE_TRT_CPU_THREADS（默认 2）——
           推理在 GPU、预处理是 worker 单线程 numpy，多线程无收益；
         - ONNX（cpu）侧：(物理核 - TRT 预算) // CPU 侧消费者数，下限 2——
-          独占剩余物理核，同时给 FFmpeg 软解/系统留出余量。
+          独占剩余物理核，同时给 FFmpeg 软解/系统留出余量；
+        - 混配保护（has_trt_peer）：另一条流水线在跑 TRT 时，ONNX 侧进一步
+          封顶 DUAL_PIPELINE_ONNX_PEER_THREADS——ONNX 满核计算会饥饿 TRT
+          宿主提交线程（实测 TRT 2.57→4.47ms/段，限 6 线程恢复到 3.39）。
         """
         _env = _os.environ.get('RVTOL_OCR_THREADS')
         if _env and _env.isdigit():
@@ -1728,8 +1732,11 @@ class FieldExtractor:
         trt_budget = max(1, int(config.DUAL_PIPELINE_TRT_CPU_THREADS))
         if kind in ('auto', 'tensorrt'):
             return trt_budget
-        cores = auto_ocr_thread_count()
-        return max(2, (cores - trt_budget) // max(1, int(n_cpu_peers)))
+        n = max(2, (auto_ocr_thread_count() - trt_budget)
+                // max(1, int(n_cpu_peers)))
+        if has_trt_peer:
+            n = min(n, max(2, int(config.DUAL_PIPELINE_ONNX_PEER_THREADS)))
+        return n
 
     @staticmethod
     def _dual_should_yield(my_fps: float, other_fps: float,
@@ -1983,13 +1990,17 @@ class FieldExtractor:
             n_cpu_peers = max(1, sum(
                 1 for _d, ob in pairs
                 if (ob or '').strip().lower() == 'cpu'))
+            has_trt_peer = any(
+                (ob or 'auto').strip().lower() in ('auto', 'tensorrt')
+                for _d, ob in pairs)
             try:
                 eng = OcrEngine(
                     self._ocr_model,
                     worker._ocr_engine_type(),
                     fill_width=self._fill_width,
                     num_threads=self._dual_ocr_num_threads(
-                        worker._ocr_engine_type(), n_cpu_peers),
+                        worker._ocr_engine_type(), n_cpu_peers,
+                        has_trt_peer),
                     progress_cb=lambda m: self._progress(
                         f'[{tag}] {m}', 2.5))
             except Exception as e:  # noqa: BLE001

@@ -85,6 +85,11 @@ DUAL_PIPELINE_SLOW_RATIO: float = 0.8
 # 双流水线中 TRT（GPU）侧消费者的 OCR 线程预算：TRT 推理在 GPU 上执行、
 # 预处理是 worker 单线程 numpy，多线程无收益；让出物理核给 CPU 软解+ONNX 侧。
 DUAL_PIPELINE_TRT_CPU_THREADS: int = 2
+# 混配保护：当两条流水线的 OCR 后端不同（TRT ⊕ ONNX 显式组合）时，ONNX 侧
+# 线程预算上限。实测（新三国01 引擎级微基准）：ONNX 真实矩阵计算占满物理核会
+# 饥饿 TRT 宿主提交线程（TRT 2.57→4.47 ms/段，跨进程仍在，非 GIL）；限到 6 线程
+# 可把 TRT 恢复到 3.39 ms/段。默认互补对两条都是 TRT，不受此值影响。
+DUAL_PIPELINE_ONNX_PEER_THREADS: int = 6
 DEFAULT_OCR_BACKEND: str = "auto"      # OCR 推理后端 (auto / cpu / tensorrt)
 OCR_BACKEND_KEYS: list[str] = ["auto", "cpu", "tensorrt"]
 OCR_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU", "tensorrt": "TensorRT"}

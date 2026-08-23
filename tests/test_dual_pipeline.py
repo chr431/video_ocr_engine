@@ -130,6 +130,21 @@ def test_dual_ocr_threads_trt_fixed_cpu_split():
         max(2, (cores - trt_budget) // 2)
 
 
+def test_dual_ocr_threads_onnx_capped_with_trt_peer():
+    """混配保护：另一条流水线跑 TRT 时 ONNX 侧封顶（防饥饿 TRT 宿主线程）。"""
+    import engine_config as config
+    from ocr_native import cpu_physical_cores
+    ex = _make(dual_pipeline=True)
+    cap = config.DUAL_PIPELINE_ONNX_PEER_THREADS
+    got = ex._dual_ocr_num_threads("onnxruntime", 1, has_trt_peer=True)
+    assert got == min(max(2, (cpu_physical_cores()
+                              - config.DUAL_PIPELINE_TRT_CPU_THREADS)), cap)
+    # 无 TRT 对端 → 不封顶
+    cores = __import__("ocr_native").auto_ocr_thread_count()
+    assert ex._dual_ocr_num_threads("onnxruntime", 1, has_trt_peer=False) \
+        == max(2, cores - config.DUAL_PIPELINE_TRT_CPU_THREADS)
+
+
 def test_dual_ocr_threads_env_override(monkeypatch):
     monkeypatch.setenv("RVTOL_OCR_THREADS", "7")
     ex = _make(dual_pipeline=True)
