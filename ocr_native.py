@@ -126,11 +126,12 @@ class OcrEngine:
         # ── 模型 ──
         self._trt: TrtEngine | None = None
         self._gpu_pre = None  # TRT GPU 预处理（懒加载）
-        # 显存全驻留 CTC：TRT 输出在 GPU 完成 vocab 维 argmax/max，
-        # 输出不落 RAM（RVTOL_GPU_CTC=1 开启，配合 GPU 分段管线）。
+        # 显存全驻留 CTC：TRT 输出在 GPU 完成 vocab 维 argmax/max，输出
+        # 不落 RAM。仅在 call_gpu_raw（GPU 分段管线）路径生效，因此默认
+        # 开启是安全的；RVTOL_GPU_CTC=0 显式关闭。
         self._gpu_ctc_mode = (engine_type == "tensorrt" and
                               os.environ.get("RVTOL_GPU_CTC", "")
-                              .strip().lower() in ("1", "true", "yes", "on"))
+                              .strip().lower() != "0")
         if engine_type == "tensorrt":
             try:
                 self._trt = TrtEngine(models, size, progress_cb=self._progress_cb)

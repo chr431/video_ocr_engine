@@ -142,9 +142,36 @@ RAM 大触点补掉，形成显存全驻留闭环：
 
 唯一文本集 host vs gpu = 211/211 完全一致。
 
-已知限制（保持默认关闭的原因）：GPU 管线尚无 merge_similar（段数偏多，
-OCR 次数 ~3×），clean 绝对速度仍略慢于宿主路径；适合作为"对端大内存流量"
-场景的专用路径而非通用默认。
+### GPU 管线转正（2026-08 四轮：merge_similar 补齐 + 默认启用）
+
+四轮改动后，显存全驻留路径在 gray 输出场景正式取代宿主管线成为默认：
+
+- **merge_similar 补齐**：代表帧灰度在 emit 时 D2H 成小数组（每段一张
+  ~10KB，整片流量可忽略），段边界判定直接复用宿主 `_segments_similar`
+  ——按构造逐位一致，且避免每边界一次内核启动+同步的开销（该方案曾使
+  数千边界吃掉 1-3s）。keep_crops 时 rep_crops 复用同一副本。
+- **analyze_gray 并行化**：旧实现每帧单线程串行扫 H*W*9，改为 block=一帧
+  256 线程分片 + shared 归约（cluster 整数计数逐位不变；sharp 浮点和仅
+  用于段内比较，微小差异无影响）。
+- **默认启用门控**（`_gpu_pipeline_enabled` 重写）：gray_output=True 且
+  decode∈{auto,nvdec} 且 ocr≠cpu 且 NVDEC/TRT 可用且 merge 分离模式非
+  contrast 且未开 dual_pipeline 时自动启用；`RVTOL_GPU_PIPELINE=0` 显式
+  关闭，'1' 强制尝试。yuv_output（RaceVideoToLog）暂走宿主管线。
+- 单测：门控矩阵 + 合并模式解析（tests/test_gpu_pipeline.py，9 例）。
+
+实测（新三国01，7945HX + RTX 4060 Laptop）：
+
+| 场景 | 宿主 | GPU 全驻留 | 备注 |
+|---|---:|---:|---|
+| 窗口 6000 采样帧（stride4）clean | 9.99s | **8.66s（-13%）** | |
+| 同上 + 对端 ~100GB/s 内存流拷贝 | 16.37s | **12.37s（-24%）** | 退化 ×1.64 vs ×1.43 |
+| 整集 stride8 全片 | 20.88s | 21.53s（±3%） | 双方都卡 NVDEC 跳帧解码供给率，OCR 已完全重叠 |
+| 批量 5 集（stride8） | 115.0s | 112.3s（-2%）| 同上 |
+
+正确性：窗口与整集的段数/非空行数/唯一文本集与宿主路径完全一致
+（1889/1328/211 与 1151/573）。结论：干净环境小幅更快、争抢环境显著更
+稳、输出逐位对齐——作为 gray+NVDEC+TRT 的默认路径成立；整集 stride8 受
+限于 NVDEC 解码供给率，两路径同瓶颈。
 - 当前仍存在 1 次原始 ROI D2H（decord asnumpy） + 1 次 DtoH（TRT 输出）。
 
 ### 字幕/背景分离预处理（实验，RVTOL_TEXT_SEP）

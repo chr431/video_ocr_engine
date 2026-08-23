@@ -150,10 +150,24 @@ result = ex.extract()
 解码∥分段∥OCR 三级流水线 + 有界队列背压（`OCR_BATCH_SIZE` / `buffer_size`），
 解码与 OCR 线程重叠摊薄墙钟。
 
+### 显存全驻留管线（gray + NVDEC + TRT 时默认启用）
+
+`gray_output=True` 且 NVDEC+TRT 可用时，识别链自动切换为**显存全驻留**
+路径：NVDEC 解码、灰度、sharp/聚类分段、Otsu 校准、OCR 预处理、TensorRT
+推理、CTC 预归约全部在 GPU 内闭环，过 RAM 的只有每帧两个标量、校准直方
+图表与归约后的索引/概率。分段/合并/输出与宿主路径逐位一致。
+
+- 干净环境小幅更快（窗口实测 -13%），对端大内存流量时显著更稳
+  （对端 ~100GB/s 流拷贝下 -24%，退化 ×1.43 vs 宿主 ×1.64）
+- 整集 stride=8 场景两路径同受 NVDEC 跳帧解码供给率限制，速度持平
+- env `RVTOL_GPU_PIPELINE=0` 显式关闭；YUV 输出场景仍走宿主管线
+
 ## 环境变量钩子（实验）
 
 | 变量 | 作用 |
 |------|------|
+| `RVTOL_GPU_PIPELINE` | GPU 全驻留管线：`0` 关闭回退宿主路径（gray+NVDEC+TRT 时默认启用） |
+| `RVTOL_GPU_CTC` | `0` 关闭 TRT 输出的 GPU argmax 归约（默认开启，仅影响 GPU 管线） |
 | `RVTOL_OCR_THREADS` | OCR 推理线程数覆盖（默认全物理核） |
 | `RVTOL_OCR_BATCH` | OCR 批大小覆盖（默认 16） |
 | `RVTOL_DUAL_ONNX` | `0` 关闭双 ONNX 实例（CPU 核数≥8 默认开） |

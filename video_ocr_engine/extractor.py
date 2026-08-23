@@ -255,22 +255,33 @@ class FieldExtractor:
                 f"frame_end 必须大于 frame_start（或为 0/None 表示到末尾）: "
                 f"start={self._frame_start}, end={self._frame_end}")
 
+    def _merge_effective_mode(self) -> str:
+        """merge_similar 使用的分离模式（env 钩子优先级与 _segments_similar
+        一致）：'contrast' | 'binary' | ''（原始灰度比较）。"""
+        _m = _os.environ.get(
+            'RVTOL_TEXT_SEP_MERGE',
+            _os.environ.get('RVTOL_TEXT_SEP', self._merge_text_sep or '')
+        ).strip().lower()
+        if _m in ('1', 'contrast'):
+            return 'contrast'
+        if _m in ('2', 'binary'):
+            return 'binary'
+        return ''
+
     def _segments_similar(self, a, b) -> bool:
         """相似段判定：平均绝对差小 且 显著变化像素占比也小。
 
         只用平均绝对差会把宽 ROI 中的单字短字幕（如“在”“不”）误判为噪声：
         大部分区域未变，均值被稀释。因此额外限制 abs(diff)>10 的像素数。
-        RVTOL_TEXT_SEP 开启时，先做字幕/背景分离再比较，减少背景干扰。
+        分离模式由 _merge_effective_mode 决定（binary 为引擎默认）。
         """
-        _text_mode = _os.environ.get(
-            'RVTOL_TEXT_SEP_MERGE',
-            _os.environ.get('RVTOL_TEXT_SEP', self._merge_text_sep or '')
-        ).strip().lower()
-        if _text_mode in ('1', 'contrast', '2', 'binary'):
-            a = _text_sep_gray(a, 'contrast' if _text_mode in ('1', 'contrast')
-                               else 'binary', th=self._bin_thresh)
-            b = _text_sep_gray(b, 'contrast' if _text_mode in ('1', 'contrast')
-                               else 'binary', th=self._bin_thresh)
+        _text_mode = self._merge_effective_mode()
+        if _text_mode == 'contrast':
+            a = _text_sep_gray(a, 'contrast', th=self._bin_thresh)
+            b = _text_sep_gray(b, 'contrast', th=self._bin_thresh)
+        elif _text_mode == 'binary':
+            a = _text_sep_gray(a, 'binary', th=self._bin_thresh)
+            b = _text_sep_gray(b, 'binary', th=self._bin_thresh)
         if a is None or b is None or a.shape != b.shape:
             return False
         diff = np.abs(a.astype(np.float32) - b.astype(np.float32))
@@ -1151,11 +1162,30 @@ class FieldExtractor:
                 first_emit_gray[0], last_rep_gray, sum(prod_acc))
 
     def _gpu_pipeline_enabled(self) -> bool:
-        """实验 GPU 全流水线开关：RVTOL_GPU_PIPELINE=1 + gray + GPU/TRT 可用。"""
-        _env = _os.environ.get('RVTOL_GPU_PIPELINE', '').strip().lower()
-        if _env not in ('1', 'true', 'yes', 'on'):
+        """GPU 全驻留管线：NVDEC+TRT 场景的默认主路径（gray 输出）。
+
+        默认启用条件（全部满足）：
+        - decode_backend ∈ {auto, nvdec} 且 NVDEC 实际可用
+        - ocr_backend ≠ cpu 且 TensorRT 可用
+        - gray_output=True 且非 yuv_output（YUV 场景暂走宿主管线）
+        - merge_similar 的分离模式不是 contrast（GPU 路径支持 raw/binary）
+        - 未开启 dual_pipeline（双流水线优先级更高，保持现状）
+
+        env RVTOL_GPU_PIPELINE：'0' 显式关闭；'1' 强制尝试（条件不满足时
+        内部自动回退宿主管线）。不设置 = 按上述默认规则。
+        """
+        env = _os.environ.get('RVTOL_GPU_PIPELINE', '').strip().lower()
+        if env in ('0', 'false', 'no', 'off'):
+            return False
+        if self._dual_pipeline:
             return False
         if not self._gray_output or self._yuv_output:
+            return False
+        if (self._decode_backend or 'auto').lower() not in ('auto', 'nvdec'):
+            return False
+        if (self._ocr_backend or 'auto').lower() == 'cpu':
+            return False
+        if self._merge_similar and self._merge_effective_mode() == 'contrast':
             return False
         return nvdec_available(str(self._video_path)) and tensorrt_available()
 
@@ -1296,9 +1326,22 @@ class FieldExtractor:
         rep_frame = frames[0]
         rep_dev = None
         rep_sharp = -1.0
+        rep_gray_h = None     # 当前代表帧的宿主副本（D2H，每段一张小 ROI）
+        last_rep_gray_h = None  # 上一"已发出"段的代表帧宿主副本
         prev_seen = False
         k = 0
         t0 = time.perf_counter()
+        # 代表帧宿主副本：merge_similar 判定直接复用宿主 _segments_similar
+        # （逐位一致），且避免每个段边界一次内核启动+同步的开销。每段仅
+        # 一张 ROI 灰度（~10KB）过 RAM，整片流量可忽略。
+
+        def _d2h_rep(dev):
+            from cuda.bindings import runtime as cudart
+            arr = np.empty((dev[2], dev[3]), dtype=np.uint8)
+            cudart.cudaMemcpy(arr.ctypes.data, int(dev[1]), dev[2] * dev[3],
+                              cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
+            return arr
+
         try:
             while True:
                 item = producer_q.get()
@@ -1311,23 +1354,38 @@ class FieldExtractor:
                     changed = float(cluster) >= self._C
                     if changed:
                         seg = frames[s:k]
-                        segs.append(seg)
-                        _put_ocr((seg_idx, rep_frame, None, rep_dev,
-                                  k / max(len(frames), 1)))
-                        seg_idx += 1
+                        similar = (
+                            self._merge_similar and segs
+                            and self._segments_similar(last_rep_gray_h,
+                                                       rep_gray_h))
+                        if similar:
+                            segs[-1].extend(seg)
+                        else:
+                            segs.append(seg)
+                            _put_ocr((seg_idx, rep_frame, None, rep_dev,
+                                      k / max(len(frames), 1)))
+                            if self._keep_crops:
+                                rep_crops[rep_frame] = rep_gray_h
+                            seg_idx += 1
+                            last_rep_gray_h = rep_gray_h
                         s = k
                         rep_frame = fi
                         rep_dev = dev
                         rep_sharp = sharp
+                        rep_gray_h = None
                     elif sharp > rep_sharp:
                         rep_sharp = sharp
                         rep_frame = fi
                         rep_dev = dev
+                        rep_gray_h = None
                 else:
                     rep_frame = fi
                     rep_dev = dev
                     rep_sharp = sharp
+                    rep_gray_h = None
                     prev_seen = True
+                if rep_gray_h is None and rep_dev is not None:
+                    rep_gray_h = _d2h_rep(rep_dev)
                 if k % 100 == 0:
                     self._cancel()
                 if k % 500 == 0:
@@ -1338,9 +1396,17 @@ class FieldExtractor:
             if producer_err:
                 raise producer_err[0]
             seg = frames[s:]
-            segs.append(seg)
-            _put_ocr((seg_idx, rep_frame, None, rep_dev, 1.0))
-            seg_idx += 1
+            similar = (
+                self._merge_similar and segs
+                and self._segments_similar(last_rep_gray_h, rep_gray_h))
+            if similar:
+                segs[-1].extend(seg)
+            else:
+                segs.append(seg)
+                _put_ocr((seg_idx, rep_frame, None, rep_dev, 1.0))
+                if self._keep_crops:
+                    rep_crops[rep_frame] = rep_gray_h
+                seg_idx += 1
         finally:
             _t_consume_end = time.perf_counter()
             self.timing['decode'] = _t_consume_end - t0
