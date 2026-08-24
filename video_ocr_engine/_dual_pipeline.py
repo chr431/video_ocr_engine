@@ -202,7 +202,7 @@ class _DualPipelineMixin:
           封顶 DUAL_PIPELINE_ONNX_PEER_THREADS——ONNX 满核计算会饥饿 TRT
           宿主提交线程（实测 TRT 2.57→4.47ms/段，限 6 线程恢复到 3.39）。
         """
-        _env = _os.environ.get('OCR_THREADS')
+        _env = _os.environ.get(config.OCR_THREADS_ENV)
         if _env and _env.isdigit():
             return max(1, int(_env))
         kind = (ocr_backend or 'auto').strip().lower()
@@ -312,8 +312,7 @@ class _DualPipelineMixin:
         _codec_fb = tuple(getattr(config, 'DUAL_PIPELINE_CODEC_FALLBACK', ()))
         if (_codec_fb and self._dual_backends is None and self._codec
                 and self._codec.lower() in _codec_fb
-                and _os.environ.get('DUAL_NO_CODEC_FALLBACK', '')
-                .strip().lower() not in ('1', 'true', 'yes', 'on')):
+                and not config.env_bool(config.DUAL_PIPELINE_NO_CODEC_FALLBACK_ENV)):
             logger.info(
                 '编码 %s 下互补 CPU 流水线已知净负，双流水线回退单流水线'
                 '（DUAL_NO_CODEC_FALLBACK=1 可关闭）', self._codec)
@@ -420,7 +419,7 @@ class _DualPipelineMixin:
         prog_lock = threading.Lock()
         prog_last = [-1.0]
         slow_ratio = float(config.DUAL_PIPELINE_SLOW_RATIO)
-        _env_ratio = _os.environ.get('DUAL_SLOW_RATIO')
+        _env_ratio = _os.environ.get(config.DUAL_PIPELINE_SLOW_RATIO_ENV)
         if _env_ratio:
             try:
                 slow_ratio = max(0.0, float(_env_ratio))

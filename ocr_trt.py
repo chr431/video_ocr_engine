@@ -25,8 +25,7 @@ log = logging.getLogger(__name__)
 # 子相位探针（TRT_SUBPROBE=1 开启）：累计 HtoD 提交 / kernel enqueue /
 # DtoH 提交 / stream 同步等待的耗时与批数，用于定位共存负载下 TRT 批延迟
 # 的膨胀点（提交调用变慢 = 宿主被饥饿；同步等待变长 = GPU 侧/排队问题）。
-SUBPROBE_ON = os.environ.get("TRT_SUBPROBE", "").strip().lower() in (
-    "1", "true", "yes", "on")
+SUBPROBE_ON = config.env_bool(config.TRT_SUBPROBE_ENV)
 SUBPROBE: dict = {"htod": 0.0, "enqueue": 0.0, "dtoh": 0.0, "sync": 0.0,
                   "n": 0}
 def _sp_tick(key: str, t0: float) -> None:

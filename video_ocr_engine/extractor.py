@@ -127,8 +127,7 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
         self._pinned: set = set()
         self._n_segments = 0
         self._n_corr = 0
-        self._profile_enabled = _os.environ.get(
-            "ENGINE_PROFILE", "").strip().lower() in ("1", "true", "yes", "on")
+        self._profile_enabled = config.env_bool(config.ENGINE_PROFILE_ENV)
         self.profile: dict = {}
         self._prof_lock = None
         if self._profile_enabled:
@@ -163,7 +162,7 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
         """merge_similar 使用的分离模式（env 钩子优先级与 _segments_similar
         一致）：'contrast' | 'binary' | ''（原始灰度比较）。"""
         _m = _os.environ.get(
-            'TEXT_SEP_MERGE', self._merge_text_sep or ''
+            config.TEXT_SEP_MERGE_ENV, self._merge_text_sep or ''
         ).strip().lower()
         if _m in ('1', 'contrast'):
             return 'contrast'
@@ -457,7 +456,7 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
             差 → 保持全核。显式参数传入引擎，不污染全局 env。
             """
         from ocr_native import auto_ocr_thread_count
-        _env = _os.environ.get('OCR_THREADS')
+        _env = _os.environ.get(config.OCR_THREADS_ENV)
         if _env:
             return max(1, int(_env))
         cores = auto_ocr_thread_count()
@@ -508,7 +507,9 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
                     _t_eng = time.perf_counter()
                     _engine_progress = lambda msg: self._progress(msg, 2.5)
                     ot = self._ocr_num_threads()
-                    dual_onnx = self._ocr_engine_type() == 'onnxruntime' and ot >= 8 and (_os.environ.get('DUAL_ONNX', '1') != '0')
+                    dual_onnx = (self._ocr_engine_type() == 'onnxruntime' and ot >= 8
+                                 and config.env_bool(config.DUAL_PIPELINE_ONNX_ENV,
+                                                     default=True))
                     if dual_onnx:
                         half = max(2, ot // 2)
                         engines = [OcrEngine(self._ocr_model, 'onnxruntime', fill_width=self._fill_width, num_threads=half, progress_cb=_engine_progress) for _ in range(2)]
@@ -1007,7 +1008,7 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
                     self._prof_end('producer', 'segmentation', _t_seg)
                     if changed:
                         seg = frames[s:k]
-                        if _os.environ.get('DEBUG_BOUNDS'):
+                        if config.env_bool(config.DEBUG_BOUNDS_ENV):
                             print(f'[HB]{fi}:{_cluster_win3(d):.0f}',
                                   flush=True)
                         similar = (

@@ -10,7 +10,7 @@ import numpy as np
 import engine_config as config
 
 def _ocr_batch_size() -> int:
-    _env = _os.environ.get("OCR_BATCH")
+    _env = _os.environ.get(config.OCR_BATCH_ENV)
     if _env and _env.isdigit():
         return max(1, int(_env))
     return config.OCR_BATCH_SIZE

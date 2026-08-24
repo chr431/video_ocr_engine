@@ -167,7 +167,7 @@ extern "C" __global__ void prep_gray_raw(
         out_nbytes = B * 3 * dst_h * dst_w * 4
         out_dev = self._ensure_out(out_nbytes)
         gamma = float(config.OCR_GAMMA)
-        _env_g = os.environ.get("OCR_GAMMA")
+        _env_g = os.environ.get(config.OCR_GAMMA_ENV)
         if _env_g:
             try:
                 gamma = float(_env_g)

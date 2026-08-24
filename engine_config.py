@@ -9,10 +9,49 @@ RaceVideoToLog 的 config.py 通过 `from engine_config import *` 聚合再导�
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 __version__ = "0.3.0"
+
+# ═══════════════════ 环境变量助手与名称常量 ═══════════════════
+# 引擎全部 env 开关/覆写在此收敛（单一事实源）。布尔开关统一走 env_bool：
+# 缺省取 default，值匹配真集/假集，未识别值回退 default——与各路径历史
+# 语义一致；数值型 env（OCR_THREADS 等）只在此定义名称，解析在调用点。
+
+_TRUTHY_VALUES = ("1", "true", "yes", "on")
+_FALSY_VALUES = ("0", "false", "no", "off")
+
+def env_bool(name: str, default: bool = False) -> bool:
+    """读取布尔开关 env：缺省 → default；值在真/假集 → 对应布尔；其余回退 default。"""
+    v = os.environ.get(name)
+    if v is None:
+        return default
+    v = v.strip().lower()
+    if v in _TRUTHY_VALUES:
+        return True
+    if v in _FALSY_VALUES:
+        return False
+    return default
+
+# 双流水线（值型/开关型各自已定义的保持原常量名，此处补其余全量）
+DUAL_PIPELINE_ONNX_ENV: str = "DUAL_ONNX"                       # 0 关闭双 ONNX 实例
+DUAL_PIPELINE_SLOW_RATIO_ENV: str = "DUAL_SLOW_RATIO"           # 让位阈值覆盖（值型）
+DUAL_PIPELINE_NO_CODEC_FALLBACK_ENV: str = "DUAL_NO_CODEC_FALLBACK"  # 1 关闭编码回退
+# 解码 / OCR / 分段
+DECORD_FORCE_CPU_ENV: str = "DECORD_FORCE_CPU"                  # 1 强制 CPU 解码（旧钩子）
+OCR_THREADS_ENV: str = "OCR_THREADS"                            # OCR 推理线程数覆盖（值型）
+OCR_BATCH_ENV: str = "OCR_BATCH"                                # OCR 批大小覆盖（值型）
+OCR_GAMMA_ENV: str = "OCR_GAMMA"                                # OCR 预处理 gamma（值型）
+OCR_PAD_SMALL_ENV: str = "OCR_PAD_SMALL"                        # OCR 输入 pad 宽下限覆盖（值型）
+TEXT_SEP_MERGE_ENV: str = "TEXT_SEP_MERGE"                      # 相似段合并分离模式
+# 实验/诊断开关
+GPU_PIPELINE_ENV: str = "GPU_PIPELINE"                          # 0 关闭 GPU 全驻留管线
+GPU_CTC_ENV: str = "GPU_CTC"                                    # 0 关闭 TRT 输出 GPU 归约
+ENGINE_PROFILE_ENV: str = "ENGINE_PROFILE"                      # 1 开启引擎级性能剖面
+TRT_SUBPROBE_ENV: str = "TRT_SUBPROBE"                          # 1 开启 TRT 子相位探针
+DEBUG_BOUNDS_ENV: str = "DEBUG_BOUNDS"                          # 1 打印分段边界调试信息
 
 # ═══════════════════ 数据目录 ═══════════════════
 

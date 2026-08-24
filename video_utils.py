@@ -196,7 +196,7 @@ def _preprocess_standard(crop: "np.ndarray", force_aspect: float = 0.0,
     else:
         resized = _np_resize(crop, new_w, target_h)
     if gamma is None:
-        _env = _os.environ.get("OCR_GAMMA")
+        _env = _os.environ.get(config.OCR_GAMMA_ENV)
         gamma = float(_env) if _env else float(config.OCR_GAMMA)
     if gamma > 0:
         # 灰度 + gamma（正式预处理）：RGB 逐通道 gamma 视觉差异小、回归多
@@ -253,7 +253,8 @@ def open_decord_vr(video_path, force_cpu: bool = False):
 
     _vr = None
     _label = "CPU"
-    _force = force_cpu or _os.environ.get("DECORD_FORCE_CPU", "").strip() == "1"
+    _force = force_cpu or _os.environ.get(
+        config.DECORD_FORCE_CPU_ENV, "").strip() == "1"
 
     if not _force:
         try:

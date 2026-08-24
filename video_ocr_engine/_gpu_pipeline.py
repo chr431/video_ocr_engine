@@ -30,8 +30,7 @@ class _GpuPipelineMixin:
         env GPU_PIPELINE：'0' 显式关闭；'1' 强制尝试（条件不满足时
         内部自动回退宿主管线）。不设置 = 按上述默认规则。
         """
-        env = _os.environ.get('GPU_PIPELINE', '').strip().lower()
-        if env in ('0', 'false', 'no', 'off'):
+        if not config.env_bool(config.GPU_PIPELINE_ENV, default=True):
             return False
         if self._dual_pipeline:
             return False
@@ -212,7 +211,7 @@ class _GpuPipelineMixin:
                     changed = float(cluster) >= self._C
                     if changed:
                         seg = frames[s:k]
-                        if _os.environ.get('DEBUG_BOUNDS'):
+                        if config.env_bool(config.DEBUG_BOUNDS_ENV):
                             print(f'[GB]{fi}:{float(cluster):.0f}',
                                   flush=True)
                         similar = (

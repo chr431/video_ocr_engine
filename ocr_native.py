@@ -130,8 +130,7 @@ class OcrEngine:
         # 不落 RAM。仅在 call_gpu_raw（GPU 分段管线）路径生效，因此默认
         # 开启是安全的；GPU_CTC=0 显式关闭。
         self._gpu_ctc_mode = (engine_type == "tensorrt" and
-                              os.environ.get("GPU_CTC", "")
-                              .strip().lower() != "0")
+                              config.env_bool(config.GPU_CTC_ENV, default=True))
         if engine_type == "tensorrt":
             try:
                 self._trt = TrtEngine(models, size, progress_cb=self._progress_cb)
@@ -161,7 +160,7 @@ class OcrEngine:
         if self._num_threads:
             n = max(1, int(self._num_threads))
         else:
-            _env_t = os.environ.get("OCR_THREADS")
+            _env_t = os.environ.get(config.OCR_THREADS_ENV)
             if _env_t:
                 n = max(1, int(_env_t))
         so.intra_op_num_threads = n
@@ -311,7 +310,7 @@ class OcrEngine:
         else:
             _floor = config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(
                 self._variant, config.OCR_PAD_WIDTH_MIN)
-            _env = os.environ.get("OCR_PAD_SMALL")
+            _env = os.environ.get(config.OCR_PAD_SMALL_ENV)
             if _env and _env.isdigit():
                 _floor = int(_env)
         max_wh = max(_floor / config.OCR_TARGET_H,
@@ -374,7 +373,7 @@ class OcrEngine:
         else:
             _floor = config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(
                 self._variant, config.OCR_PAD_WIDTH_MIN)
-            _env = os.environ.get("OCR_PAD_SMALL")
+            _env = os.environ.get(config.OCR_PAD_SMALL_ENV)
             if _env and _env.isdigit():
                 _floor = int(_env)
         max_wh = max(_floor / config.OCR_TARGET_H,
