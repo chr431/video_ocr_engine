@@ -80,6 +80,13 @@ DUAL_KEYFRAME_EVERY_MAX_CHUNKS: int = 8
 # 与内容无关，天然免疫“分段稀疏时段做不了多少 OCR 工作”的测量偏差。
 DUAL_PIPELINE_INFLIGHT_ENV: str = "DUAL_PIPELINE_INFLIGHT"
 DUAL_PIPELINE_INFLIGHT: int = 1
+# 双流水线精确 seek 控制（实验）：默认仅 CPU 软解路径做显式 seek_accurate——
+# NVDEC 硬解的 get_batch 内部随机定位实测比显式 seek+get_batch 更便宜（本机
+# h264 GPU ~46ms vs ~69ms），且硬解码随机访问不衰减；CPU 软解跳过显式 seek
+# 会让随机访问约慢一倍（字幕/宽 ROI 实测 +3.5s），故仍需显式 seek。
+# DUAL_PIPELINE_SEEK=1 强制全部显式 seek（旧保守行为）；=0 全部跳过（实验，
+# 仅 h264 小片略快、字幕/CPU 灾难，勿作默认）。
+DUAL_PIPELINE_SEEK_ENV: str = "DUAL_PIPELINE_SEEK"
 DUAL_PIPELINE_CHUNKS: int = 2          # 默认竞争切片数（试点片之外，两条
                                        # 流水线动态取片）。实测均衡场景
                                        # （h264 字幕/速度数字）2 片最优；

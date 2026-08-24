@@ -901,7 +901,18 @@ class FieldExtractor:
         # 例外：本片起点与上一片终点相邻（同一流水线沿帧序连续扫掠）时解码
         # 器已停在正确位置附近，seek_accurate 实测 ~1ms（vs 乱序跳跃 40-70ms），
         # 直接跳过——分片越密（每关键帧一片）节省越明显。
-        if th is not None and seek_required:
+        # 另：NVDEC 硬解路径跳过显式 seek——get_batch 内部随机定位实测比显式
+        # seek+get_batch 更便宜（本机 h264 GPU ~46ms vs ~69ms，且硬解随机访问
+        # 不衰减）；CPU 软解仍保留显式 seek（跳过会让随机访问约慢一倍，字幕
+        # 宽 ROI 实测 +3.5s）。DUAL_PIPELINE_SEEK=1 强制全部显式；=0 全部跳过。
+        _seek_env = _os.environ.get(
+            config.DUAL_PIPELINE_SEEK_ENV, '').strip().lower()
+        _seek_all_off = _seek_env in ('0', 'false', 'no', 'off')
+        _seek_gpu_skip = (
+            _seek_env not in ('1', 'true', 'yes', 'on')
+            and worker._backend.startswith('decord/GPU'))
+        if (th is not None and seek_required
+                and not _seek_all_off and not _seek_gpu_skip):
             _t_seek = time.perf_counter()
             vr.seek_accurate(start)
             prod_acc[0] += time.perf_counter() - _t_seek
@@ -2276,6 +2287,7 @@ class FieldExtractor:
                             extreme = (
                                 rem >= 1 and my_fps > 0.0
                                 and other_fps > 0.0
+                                and chunks_done >= min_samples
                                 and my_fps < 0.35 * other_fps)
                             if confirmed or extreme:
                                 yielded[0] = True

@@ -180,6 +180,7 @@ result = ex.extract()
 | `DUAL_KEYFRAME_EVERY_MIN_GAP` | 关键帧切片最小间距（采样帧数，默认 16）：间距小于该值的关键帧不切分 |
 | `DUAL_KEYFRAME_EVERY_MAX_CHUNKS` | 关键帧切片竞争片数上限（默认 8）：关键帧过密时逐步放大间距合并，防止片数上百导致 seek 总耗时线性暴涨 |
 | `DUAL_PIPELINE_INFLIGHT` | 竞争取片 in-flight 上限（片数，默认 1）：本流水线“已取但 OCR 尚未排空”的片数达到上限即暂停取片等自己 OCR 追上来——防止“解码快、OCR 慢”的路径在自由竞争中抢占过多切片却因 OCR 瓶颈拖慢整体 |
+| `DUAL_PIPELINE_SEEK` | 显式 seek 控制：默认仅 CPU 软解做显式 seek_accurate（NVDEC 硬解 get_batch 内部随机定位更便宜且不衰减）；`1` 强制全部显式（旧保守）；`0` 全部跳过（实验，仅 h264 小片略快、字幕/CPU 随机访问会大幅变慢） |
 | `DUAL_PROPORTIONAL` | `1` 按试点测速比例分配剩余大区间（实验） |
 | `DUAL_PRIORITY` | `1` 在线优先取片：双方同时等待时速度更快者优先拿下一片（实验） |
 | `DUAL_SLOW_RATIO` | 双流水线让位阈值覆盖（混配默认 0.5，可显式覆盖） |
