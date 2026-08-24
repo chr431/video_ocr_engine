@@ -52,24 +52,16 @@ DECODE_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU",
 # 动态负载均衡；最后按帧序合并。默认关闭。需要 NVDEC 和 TensorRT 均可用。
 DUAL_PIPELINE_ENV: str = "DUAL_PIPELINE"
 
-# 在线优先取片（实验）：DUAL_PRIORITY=1 开启。共用取片时若两条流水线同时
-# 等待，速度更快的一方优先拿下一片；不依赖前期静态测速，用真实完成吞吐
-# 动态决定优先级。
-DUAL_PIPELINE_PRIORITY_ENV: str = "DUAL_PRIORITY"
-# 关键帧分片（默认开启）：把大竞争片的内部边界吸附到最近关键帧，
-# DUAL_KEYFRAME_SLICING=0 可关闭。
-DUAL_PIPELINE_KEYFRAME_ENV: str = "DUAL_KEYFRAME_SLICING"
-# 每个关键帧切一大片（实验）：DUAL_KEYFRAME_EVERY=1 时，试点之外的大竞争区不再
-# 等分，而是按剩余区域内每个关键帧边界切出一片，交给共享队列自由竞争。
-# 关键帧开得越密，片越多，快慢路径越容易自动配平。
-DUAL_PIPELINE_KEYFRAME_EVERY_ENV: str = "DUAL_KEYFRAME_EVERY"
-# 按试点测速比例分配实验（DUAL_PROPORTIONAL=1）：把大竞争区按试点稳态吞吐
-# 比例切成两个连续区间，各自只给一条流水线（不参与共享队列竞争）。
-DUAL_PIPELINE_PROPORTIONAL_ENV: str = "DUAL_PROPORTIONAL"
-# 每关键帧一片实验的切片粒度控制：基础最小片间距（采样帧数）之上，若关键帧
-# 过密（如 mkv 重编码场景每 30-140 源帧一个关键帧）导致片数超过上限，则逐步
-# 放大间距合并（边界仍落在关键帧附近，seek 便宜，片数受控在 MAX_CHUNKS 内）。
-# 片数太多会让 seek+每片固定开销线性爆炸，太少又回到粗颗粒失衡。
+# 唯一分片方法 = 每关键帧一片（kfe）：试点之外的大竞争区不再等分（dual-2 /
+# DUAL_PROPORTIONAL 等过时方法已移除），而是按剩余区域内每个关键帧边界切出
+# 一片，交给共享队列自由竞争。边界落在关键帧上、seek 便宜（相邻片连续扫掠
+# 免精确 seek）；关键帧越密，片越多，快慢路径越容易自动配平。竞争平衡由
+# INFLIGHT 竞争闸门 + 端到端让位保证（见 DUAL_PIPELINE_INFLIGHT /
+# DUAL_PIPELINE_SLOW_RATIO）。
+# kfe 的切片粒度控制：基础最小片间距（采样帧数）之上，若关键帧过密（如 mkv
+# 重编码场景每 30-140 源帧一个关键帧）导致片数超过上限，则逐步放大间距合并
+# （边界仍落在关键帧附近，seek 便宜，片数受控在 MAX_CHUNKS 内）。片数太多
+# 会让 seek+每片固定开销线性爆炸，太少又回到粗颗粒失衡。
 DUAL_KEYFRAME_EVERY_MIN_GAP_ENV: str = "DUAL_KEYFRAME_EVERY_MIN_GAP"
 DUAL_KEYFRAME_EVERY_MIN_GAP: int = 16
 DUAL_KEYFRAME_EVERY_MAX_CHUNKS_ENV: str = "DUAL_KEYFRAME_EVERY_MAX_CHUNKS"
@@ -87,12 +79,9 @@ DUAL_PIPELINE_INFLIGHT: int = 1
 # DUAL_PIPELINE_SEEK=1 强制全部显式 seek（旧保守行为）；=0 全部跳过（实验，
 # 仅 h264 小片略快、字幕/CPU 灾难，勿作默认）。
 DUAL_PIPELINE_SEEK_ENV: str = "DUAL_PIPELINE_SEEK"
-DUAL_PIPELINE_CHUNKS: int = 2          # 默认竞争切片数（试点片之外，两条
-                                       # 流水线动态取片）。实测均衡场景
-                                       # （h264 字幕/速度数字）2 片最优；
-                                       # 失衡场景由分级让位止损，片数增大
-                                       # 只增加调度开销不再有均衡收益
-DUAL_PIPELINE_MIN_CHUNK_FRAMES: int = 16  # 每个切片至少包含的采样帧数（太少则减片）
+DUAL_PIPELINE_MIN_CHUNK_FRAMES: int = 16  # 头部试点/确认片的最小采样帧数（太小
+                                          # 则按此下限放大片尺寸；竞争片粒度由
+                                          # DUAL_KEYFRAME_EVERY_MIN_GAP 控制）
 # 双流水线最低采样帧数：低于该值时固定开销（探测解码器打开+全局校准、
 # 第二套 OCR 引擎初始化、跨片边界）无法摊销，实测 1500 帧窗口反而变慢
 # （+7~18%），直接回退单流水线。

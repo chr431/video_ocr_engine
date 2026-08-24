@@ -26,7 +26,6 @@ packages = ["video_ocr_engine"]
 py-modules = [
     "engine_config",
     "gpu_setup",
-    "hybrid_decode",
     "ocr_native",
     "ocr_trt",
     "segmentation",

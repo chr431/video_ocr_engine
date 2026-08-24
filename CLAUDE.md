@@ -325,3 +325,38 @@ sharp 用 int64 精确累加 + summary float64 直传，保证近平局选帧与
 - 动态切片会让 GPU+TRT 路径拿到更多片（如 AV1 8 片时 GPU 5 片 / CPU 3 片），
   但“快路径做完后等待慢路径”仍存在，分片数只能缓解不能根治。
 - **一轮生产结论（已被二轮取代）：保持默认关闭。**
+
+### 七轮修正：kfe 转正为唯一分片方法（2026-08）
+
+按“kfe 成为双流水线唯一分片方法”的决定，移除全部过时的 dual-2 家族：
+
+- **删除**：`DUAL_PIPELINE_CHUNKS`（默认 2 大竞争片）、构造参数
+  `dual_pipeline_chunks`、等分大竞争片分支；`DUAL_KEYFRAME_SLICING`
+  （2 片关键帧吸附，`_snap_keyframe_chunks` 一并删除——kfe 自身就把边界
+  落在关键帧上）；`DUAL_PROPORTIONAL`（试点测速比例分配，只适用于恰 2 片
+  竞争区）；`DUAL_PRIORITY`（在线优先取片）。
+- **转正**：`_keyframe_every_chunks` 成为唯一竞争区分片方法（移除
+  `DUAL_KEYFRAME_EVERY` 实验开关，始终启用）；`DUAL_KEYFRAME_EVERY_MIN_GAP`
+  / `DUAL_KEYFRAME_EVERY_MAX_CHUNKS` 保留为粒度旋钮。切片 = 头部试点×2 +
+  确认×2 预留 + 关键帧竞争区；无关键帧/短视频自然退化为单大竞争片。
+- **保留**：INFLIGHT 竞争取片闸门、端到端让位（e2e 口径）、
+  `DUAL_PIPELINE_INFLIGHT`、`DUAL_PIPELINE_SEEK`、`DUAL_SLOW_RATIO` 覆盖。
+- 实现：切片生成收敛进 `FieldExtractor._dual_chunk_specs`（纯函数，可单测）；
+  producer 稳态吞吐 / 比例分配 / 优先取片相关状态全部移除，让位判定只依赖
+  `e2e_speed`。
+- 测试：`tests/test_dual_pipeline.py` 新增 `_dual_chunk_specs` 用例（试点组 +
+  关键帧竞争区、无关键帧退化、短视频、stride 吸附、过密合并上限）。
+- 结构（2026-08 同轮，按逻辑拆分过长的单文件）：
+  - `extractor.py`（2356 行）→ `extractor.py`（引擎核心）+ `_helpers.py`
+    （独立工具函数）+ `_result_types.py`（结果 dataclass）+ `_gpu_pipeline.py`
+    （`_GpuPipelineMixin`）+ `_dual_pipeline.py`（`_DualPipelineMixin`，
+    kfe 唯一分片 + 竞争闸门 + 端到端让位）；
+  - `ocr_trt.py`（945 行）→ `ocr_trt.py`（TrtEngine + 构建缓存）+
+    `video_ocr_engine/_gpu_kernels.py`（GpuPreprocessor / GpuOutputReducer /
+    GpuFrameAnalyzer），`ocr_trt` 顶部 re-export 保持旧导入路径兼容；
+  - 公共 API 不变（`FieldExtractor` / `ExtractedSegment` / `ExtractionResult`
+    及全部方法名），79 个单测保持通过。
+- 死代码清理（同轮）：pyproject `py-modules` 移除已不存在的 `hybrid_decode`
+  引用；删除无调用方方法（`_decode_all` / `_segment` / `_dual_pipeline_available`
+  / `_start_ocr_session._store_result`）与 extractor 顶层未使用导入（csv /
+  `_gray` / `_gray_batch` / `_preprocess_standard`）；删除过时生成产物 build/。

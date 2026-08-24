@@ -4,7 +4,9 @@ from __future__ import annotations
 import pytest
 
 from video_ocr_engine import FieldExtractor
-from video_ocr_engine import extractor as _ext
+# GPU 门控方法在 _gpu_pipeline mixin 模块；模拟可用性需 patch 该模块的
+# nvdec_available / tensorrt_available（split 后不再位于 extractor 命名空间）。
+from video_ocr_engine import _gpu_pipeline as _gpu
 
 
 def _make(**kwargs):
@@ -14,8 +16,8 @@ def _make(**kwargs):
 @pytest.fixture
 def gpu_ok(monkeypatch):
     """模拟 NVDEC+TRT 均可用。"""
-    monkeypatch.setattr(_ext, "nvdec_available", lambda p: True)
-    monkeypatch.setattr(_ext, "tensorrt_available", lambda: True)
+    monkeypatch.setattr(_gpu, "nvdec_available", lambda p: True)
+    monkeypatch.setattr(_gpu, "tensorrt_available", lambda: True)
 
 
 def test_gpu_pipeline_default_on_for_gray_nvdec_trt(gpu_ok):
@@ -45,8 +47,8 @@ def test_gpu_pipeline_requires_trt_ocr(gpu_ok):
 
 
 def test_gpu_pipeline_unavailable_backends(monkeypatch):
-    monkeypatch.setattr(_ext, "nvdec_available", lambda p: False)
-    monkeypatch.setattr(_ext, "tensorrt_available", lambda: False)
+    monkeypatch.setattr(_gpu, "nvdec_available", lambda p: False)
+    monkeypatch.setattr(_gpu, "tensorrt_available", lambda: False)
     ex = _make(gray_output=True)
     assert ex._gpu_pipeline_enabled() is False
 

@@ -1,6 +1,7 @@
 """单实例双完整流水线并行的单元测试（无需视频/GPU）。
 
-只覆盖构造/参数/后端组合/分发逻辑；真实解码与 OCR 由集成冒烟负责。
+只覆盖构造/参数/后端组合/切片（kfe 唯一分片方法）/分发逻辑；
+真实解码与 OCR 由集成冒烟负责。
 """
 from __future__ import annotations
 
@@ -16,7 +17,6 @@ def _make(**kwargs):
 def test_dual_pipeline_default_off():
     ex = _make()
     assert ex._dual_pipeline is False
-    assert ex._dual_pipeline_chunks == 0
     assert ex._dual_backends is None
 
 
@@ -30,9 +30,8 @@ def test_dual_pipeline_explicit_override(monkeypatch):
     monkeypatch.setenv("DUAL_PIPELINE", "1")
     ex = _make(dual_pipeline=False)
     assert ex._dual_pipeline is False
-    ex2 = _make(dual_pipeline=True, dual_pipeline_chunks=6)
+    ex2 = _make(dual_pipeline=True)
     assert ex2._dual_pipeline is True
-    assert ex2._dual_pipeline_chunks == 6
 
 
 def test_dual_backend_pairs_default_opposite():
@@ -62,7 +61,8 @@ def test_extract_dispatches_to_parallel_when_enabled(monkeypatch):
         self.crops = {1: "crop1", 2: "crop2"}
         return ([0, 1, 2], [[0, 1], [2]], ["a", "b"], [0.9, 0.8], [1, 2])
 
-    monkeypatch.setattr(FieldExtractor, "_run_pipelined_parallel", fake_parallel)
+    monkeypatch.setattr(
+        FieldExtractor, "_run_pipelined_parallel", fake_parallel)
     result = ex.extract()
     assert result.frames == [0, 1, 2]
     assert result.segments[0].frames == (0, 1)
@@ -76,7 +76,8 @@ def test_extract_does_not_dispatch_when_disabled(monkeypatch):
     def fake_parallel(self):
         raise AssertionError("不应进入并行路径")
 
-    monkeypatch.setattr(FieldExtractor, "_run_pipelined_parallel", fake_parallel)
+    monkeypatch.setattr(
+        FieldExtractor, "_run_pipelined_parallel", fake_parallel)
 
     def fake_run(self):
         self.crops = {}
@@ -87,7 +88,103 @@ def test_extract_does_not_dispatch_when_disabled(monkeypatch):
     assert result.segments[0].text == "x"
 
 
-# ═══════════════ 慢路径让位（adaptive yield） ═══════════════
+# ═══════════════ kfe：唯一分片方法（头部试点组 + 关键帧竞争区） ═══════════════
+
+def test_dual_chunk_specs_pilots_plus_keyframe_competition():
+    """正常视频：头部 4 试点片 + 关键帧竞争区（kfe），不再等分成固定块。"""
+    f = FieldExtractor._dual_chunk_specs
+    frames = list(range(0, 1000))
+    kf = [200, 400, 600, 800]
+    spec, has_pilots = f(frames, kf, last_end=1000, stride=1,
+                         min_gap=16, max_chunks=8,
+                         unit_div=40, min_chunk=16)
+    assert has_pilots is True
+    # 头部 4 片 = 试点×2 + 确认×2（unit_div=40 → 每片 25 采样帧）
+    assert spec[:4] == [(0, 25), (25, 50), (50, 75), (75, 100)]
+    # 竞争区按关键帧边界切分（边界吸附到采样网格）
+    assert spec[4:] == [(100, 200), (200, 400), (400, 600),
+                        (600, 800), (800, 1000)]
+    # 覆盖连续无缝隙
+    assert spec[0][0] == 0
+    assert all(spec[i][1] == spec[i + 1][0]
+               for i in range(len(spec) - 1))
+    assert spec[-1][1] == 1000
+
+
+def test_dual_chunk_specs_no_keyframes_single_big_chunk():
+    """无关键帧时竞争区退化为单一大片（kfe 自然退化）。"""
+    f = FieldExtractor._dual_chunk_specs
+    frames = list(range(0, 1000))
+    spec, has_pilots = f(frames, [], last_end=1000, stride=1,
+                         min_gap=16, max_chunks=8,
+                         unit_div=40, min_chunk=16)
+    assert has_pilots is True
+    assert spec[:4] == [(0, 25), (25, 50), (50, 75), (75, 100)]
+    assert spec[4:] == [(100, 1000)]
+    assert spec[-1][1] == 1000
+
+
+def test_dual_chunk_specs_short_video_no_pilots():
+    """短视频放不下头部组：整段进 kfe 竞争区（无关键帧=单一大片）。"""
+    f = FieldExtractor._dual_chunk_specs
+    frames = list(range(0, 100))
+    spec, has_pilots = f(frames, [], last_end=100, stride=1,
+                         min_gap=16, max_chunks=8,
+                         pilots=4, unit_div=24, min_chunk=30)
+    assert has_pilots is False
+    assert spec == [(0, 100)]
+
+
+def test_dual_chunk_specs_short_video_with_keyframes():
+    """短视频放不下头部组时仍用 kfe 切竞争区。"""
+    f = FieldExtractor._dual_chunk_specs
+    frames = list(range(0, 100))
+    kf = [30, 60]
+    spec, has_pilots = f(frames, kf, last_end=100, stride=1,
+                         min_gap=8, max_chunks=8,
+                         pilots=4, unit_div=24, min_chunk=30)
+    assert has_pilots is False
+    assert spec == [(0, 30), (30, 60), (60, 100)]
+    assert all(spec[i][1] == spec[i + 1][0]
+               for i in range(len(spec) - 1))
+    assert spec[-1][1] == 100
+
+
+def test_dual_chunk_specs_stride_snap():
+    """采样步长>1 时竞争区边界吸附到最近采样帧。"""
+    f = FieldExtractor._dual_chunk_specs
+    frames = list(range(0, 400, 4))
+    kf = [110, 210, 310]
+    spec, has_pilots = f(frames, kf, last_end=400, stride=4,
+                         min_gap=8, max_chunks=8,
+                         pilots=4, unit_div=24, min_chunk=16)
+    assert has_pilots is True
+    fset = set(frames)
+    for s, e in spec[1:-1]:
+        assert s in fset and e in fset
+    assert spec[-1][1] == 400
+    assert all(spec[i][1] == spec[i + 1][0]
+               for i in range(len(spec) - 1))
+
+
+def test_dual_chunk_specs_dense_keyframes_capped():
+    """关键帧过密时逐步放大间距，竞争区内边界受 max_chunks 上限约束。"""
+    f = FieldExtractor._dual_chunk_specs
+    frames = list(range(0, 2000))
+    kf = [i * 20 for i in range(1, 100)]   # 每 20 帧一个关键帧（密集）
+    spec, has_pilots = f(frames, kf, last_end=2000, stride=1,
+                         min_gap=8, max_chunks=6,
+                         pilots=4, unit_div=24, min_chunk=16)
+    assert has_pilots is True
+    # 头部 4 试点 + 竞争区内边界（末片不计）≤ max_chunks
+    assert len(spec) - 1 - 4 <= 6
+    assert spec[0][0] == 0
+    assert all(spec[i][1] == spec[i + 1][0]
+               for i in range(len(spec) - 1))
+    assert spec[-1][1] == 2000
+
+
+# ═══════════════ 慢路径让位（adaptive yield，kfe 平衡机制，保留） ═══════════════
 
 def test_dual_should_yield_basic():
     f = FieldExtractor._dual_should_yield
@@ -151,7 +248,7 @@ def test_dual_ocr_threads_env_override(monkeypatch):
     assert ex._dual_ocr_num_threads("onnxruntime", 1) == 7
 
 
-# ═══════════════ 每关键帧一片的切片生成（DUAL_KEYFRAME_EVERY，2026-08 实验） ═══════════════
+# ═══════════════ 每关键帧一片的切片生成（kfe，唯一分片方法） ═══════════════
 
 def test_keyframe_every_chunks_basic():
     """基础最小间距下按关键帧切分；边界吸附到采样帧、覆盖无缝隙。"""
@@ -164,7 +261,8 @@ def test_keyframe_every_chunks_basic():
                       (700, 1000)]
     # 覆盖连续无缝隙
     assert chunks[0][0] == 0
-    assert all(chunks[i][1] == chunks[i + 1][0] for i in range(len(chunks) - 1))
+    assert all(chunks[i][1] == chunks[i + 1][0]
+               for i in range(len(chunks) - 1))
     assert chunks[-1][1] == 1000
 
 
@@ -178,11 +276,9 @@ def test_keyframe_every_chunks_max_chunks_cap():
     # 只产生 max_chunks 个内部边界（末片不计）
     assert len(chunks) - 1 <= 6
     assert chunks[0][0] == 0
-    assert all(chunks[i][1] == chunks[i + 1][0] for i in range(len(chunks) - 1))
+    assert all(chunks[i][1] == chunks[i + 1][0]
+               for i in range(len(chunks) - 1))
     assert chunks[-1][1] == 2000
-    # 每个内部边界都吸附到关键帧附近：间距以整数倍 stride 计
-    for s, e in chunks[1:-1]:
-        assert (s - e) % 1 == 0
 
 
 def test_keyframe_every_chunks_stride_snap():
@@ -198,7 +294,8 @@ def test_keyframe_every_chunks_stride_snap():
     for s, e in chunks[1:-1]:
         assert s in fset and e in fset
     assert chunks[-1][1] == 400
-    assert all(chunks[i][1] == chunks[i + 1][0] for i in range(len(chunks) - 1))
+    assert all(chunks[i][1] == chunks[i + 1][0]
+               for i in range(len(chunks) - 1))
 
 
 def test_keyframe_every_chunks_no_keyframes():
