@@ -507,7 +507,8 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
                     _t_eng = time.perf_counter()
                     _engine_progress = lambda msg: self._progress(msg, 2.5)
                     ot = self._ocr_num_threads()
-                    dual_onnx = (self._ocr_engine_type() == 'onnxruntime' and ot >= 8
+                    dual_onnx = (self._ocr_engine_type() == 'onnxruntime'
+                                 and ot >= config.DUAL_ONNX_MIN_THREADS
                                  and config.env_bool(config.DUAL_PIPELINE_ONNX_ENV,
                                                      default=True))
                     if dual_onnx:

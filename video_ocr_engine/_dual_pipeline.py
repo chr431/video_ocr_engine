@@ -623,7 +623,7 @@ class _DualPipelineMixin:
                             rem >= 1 and my_fps > 0.0
                             and other_fps > 0.0
                             and chunks_done >= min_samples
-                            and my_fps < 0.35 * other_fps)
+                            and my_fps < config.DUAL_PIPELINE_EXTREME_SLOW_RATIO * other_fps)
                         if confirmed or extreme:
                             yielded[0] = True
                             break

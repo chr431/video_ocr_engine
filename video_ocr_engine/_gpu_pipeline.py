@@ -114,7 +114,7 @@ class _GpuPipelineMixin:
         def frame_stream():
             nonlocal prev_holder, prev_ptr
             from cuda.bindings import runtime as cudart
-            DECODE_BATCH = 64  # GPU 分段实验：更大批减少 kernel/同步次数
+            DECODE_BATCH = config.GPU_PIPELINE_DECODE_BATCH
             _d2d = cudart.cudaMemcpyKind.cudaMemcpyDeviceToDevice
 
             def _fill_prev(prev_buf, base, B, frame_nbytes, prev_single):

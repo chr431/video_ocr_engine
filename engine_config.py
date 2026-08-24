@@ -153,6 +153,18 @@ DUAL_PIPELINE_TRT_CPU_THREADS: int = 2
 # 修正后默认混配与显式双 TRT 基本持平）。用户可用 DUAL_SLOW_RATIO /
 # OCR_THREADS 覆盖。
 DUAL_PIPELINE_ONNX_PEER_THREADS: int = 6
+# 双流水线“极端悬殊”让位档（单次取样即确认）：本流水线端到端吞吐 < 对端 ×
+# 该比率时即使只取过一片也可让位（容忍首次解码 warm-up 噪声）；常规档
+# （DUAL_PIPELINE_SLOW_RATIO / MIXED_SLOW_RATIO）需要两次取样确认。0.35 为
+# 2026-08 六轮实测定档（test3 GPU 试点被 warm-up 拖低而误让位即阈值过高所致）。
+DUAL_PIPELINE_EXTREME_SLOW_RATIO: float = 0.35
+# 双 ONNX 实例启动的 OCR 线程下限：主机路径 OCR 线程预算 ≥ 该值才创建双
+# ONNX 引擎各分半核（实测少核无收益）；小于该值保持单实例。0 永不开双。
+DUAL_ONNX_MIN_THREADS: int = 8
+# GPU 全驻留管线（_gpu_pipeline）解码批大小：64 为 GPU 分段实验最优（更大批
+# 减少 kernel/同步次数），与宿主 DECODE_BATCH_SIZE=16 刻意不同——两条路径
+# 独立调参，勿统一为一个常量。
+GPU_PIPELINE_DECODE_BATCH: int = 64
 DEFAULT_OCR_BACKEND: str = "auto"      # OCR 推理后端 (auto / cpu / tensorrt)
 OCR_BACKEND_KEYS: list[str] = ["auto", "cpu", "tensorrt"]
 OCR_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU", "tensorrt": "TensorRT"}
