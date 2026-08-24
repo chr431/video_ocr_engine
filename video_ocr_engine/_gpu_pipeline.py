@@ -12,7 +12,8 @@ import numpy as np
 import engine_config as config
 from video_utils import nvdec_available, tensorrt_available
 from ._helpers import (_ndarray_device_ptr, _otsu_from_hist,
-                       _decode_progress_pct)
+                       _decode_progress_pct, _otsu_median_threshold,
+                       _read_fps_from_vr)
 
 
 class _GpuPipelineMixin:
@@ -60,17 +61,8 @@ class _GpuPipelineMixin:
         if not self._backend.startswith('decord/GPU'):
             return self._run_pipelined(_force_single=True)
         if self._fps is None:
-            for m in ('get_avg_fps', 'get_fps'):
-                fn = getattr(vr, m, None)
-                if fn is None:
-                    continue
-                try:
-                    self._fps = float(fn())
-                    break
-                except Exception:
-                    self._fps = None
-            if not self._fps or self._fps <= 0:
-                self._fps = config.DEFAULT_FPS_FALLBACK
+            _fps = _read_fps_from_vr(vr)
+            self._fps = _fps if _fps else config.DEFAULT_FPS_FALLBACK
         x1, y1, x2, y2 = self._roi
         total = len(vr)
         end = min(self._frame_end or total, total)
@@ -98,7 +90,7 @@ class _GpuPipelineMixin:
         _hist_mat = analyzer.histograms_perframe(calib_base, calib_n,
                                                  src_h, src_w)
         ths = [_otsu_from_hist(_hist_mat[k]) for k in range(calib_n)]
-        th = int(np.median(ths)) if ths else config.OTSU_FALLBACK_THRESH
+        th = _otsu_median_threshold(ths)
         self._bin_thresh = th
 
         self._gpu_pipeline_mode = True

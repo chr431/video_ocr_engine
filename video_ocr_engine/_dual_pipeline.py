@@ -8,13 +8,12 @@ import logging
 import os as _os
 import time
 
-import numpy as np
-
 import engine_config as config
 from ocr_native import auto_ocr_thread_count
 from segmentation import _otsu
 from video_utils import nvdec_available, tensorrt_available
-from ._helpers import _ocr_batch_size
+from ._helpers import (_ocr_batch_size, _otsu_median_threshold,
+                       _read_fps_from_vr)
 
 logger = logging.getLogger("video_ocr_engine.extractor")
 
@@ -274,18 +273,7 @@ class _DualPipelineMixin:
             logger.warning(
                 '单实例双流水线需要 NVDEC 和 TensorRT 均可用，回退单流水线')
             return self._run_pipelined(_force_single=True, _external_vr=_vr)
-        _fps = None
-        for _m in ('get_avg_fps', 'get_fps'):
-            _fn = getattr(_vr, _m, None)
-            if _fn is None:
-                continue
-            try:
-                _fps = float(_fn())
-                break
-            except Exception:
-                _fps = None
-        if not _fps or _fps <= 0:
-            _fps = config.DEFAULT_FPS_FALLBACK
+        _fps = _read_fps_from_vr(_vr) or config.DEFAULT_FPS_FALLBACK
         total = len(_vr)
         if self._fps is None:
             self._fps = _fps
@@ -337,7 +325,7 @@ class _DualPipelineMixin:
                 c = c[y1p:y2p + 1, x1p:x2p + 1]
             ths.append(_otsu(self._crop_luma(c)))
         del _cal_crops
-        th = int(np.median(ths)) if ths else config.OTSU_FALLBACK_THRESH
+        th = _otsu_median_threshold(ths)
         self._bin_thresh = th
         self._prof_end('parallel', 'calib_otsu', _t_cal1)
 
