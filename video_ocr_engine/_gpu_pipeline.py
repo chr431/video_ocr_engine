@@ -11,7 +11,8 @@ import numpy as np
 
 import engine_config as config
 from video_utils import nvdec_available, tensorrt_available
-from ._helpers import _ndarray_device_ptr, _otsu_from_hist
+from ._helpers import (_ndarray_device_ptr, _otsu_from_hist,
+                       _decode_progress_pct)
 
 
 class _GpuPipelineMixin:
@@ -250,7 +251,7 @@ class _GpuPipelineMixin:
                     self._cancel()
                 if k % 500 == 0:
                     self._progress(f'[{self._backend}] GPU分段: {k}/{len(frames)}',
-                                   3 + k / max(len(frames), 1) * 55)
+                                   _decode_progress_pct(k / max(len(frames), 1)))
                 k += 1
             producer.join()
             if producer_err:

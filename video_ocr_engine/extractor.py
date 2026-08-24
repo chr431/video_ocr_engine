@@ -34,6 +34,7 @@ from ._result_types import (  # noqa: F401
 )
 from ._helpers import (  # noqa: F401
     _ocr_batch_size, _ndarray_device_ptr, _otsu_from_hist, _gray_mean_abs_diff,
+    _decode_progress_pct, _ocr_progress_pct,
 )
 from ._gpu_pipeline import _GpuPipelineMixin
 from ._dual_pipeline import _DualPipelineMixin
@@ -535,7 +536,7 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
                 def _report_ocr_progress(idx: int, frac: float) -> None:
                     if frac - ocr_progress_frac[0] >= 0.01 or frac >= 1.0:
                         ocr_progress_frac[0] = frac
-                        self._progress(f'[OCR] 段 {idx + 1}', 58.0 + frac * 28.0)
+                        self._progress(f'[OCR] 段 {idx + 1}', _ocr_progress_pct(frac))
 
                 def infer_worker(eng) -> None:
                     try:
@@ -835,7 +836,7 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
                 worker._progress(
                     f'[{worker._backend}] 并行解码+分段: '
                     f'{k}/{len(frames)}',
-                    3 + k / max(len(frames), 1) * 55)
+                    _decode_progress_pct(k / max(len(frames), 1)))
         seg = frames[s:]
         similar = (
             worker._merge_similar and segs
@@ -1051,7 +1052,8 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
                 if k % 100 == 0:
                     self._cancel()
                 if k % 500 == 0:
-                    self._progress(f'[{self._backend}] 解码+分段: {k}/{len(frames)}', 3 + k / max(len(frames), 1) * 55)
+                    self._progress(f'[{self._backend}] 解码+分段: {k}/{len(frames)}',
+                                   _decode_progress_pct(k / max(len(frames), 1)))
             seg = frames[s:]
             similar = (
                 self._merge_similar and segs
