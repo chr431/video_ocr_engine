@@ -35,11 +35,219 @@ from ._result_types import (  # noqa: F401
 from ._helpers import (  # noqa: F401
     _ocr_batch_size, _ndarray_device_ptr, _otsu_from_hist, _gray_mean_abs_diff,
     _decode_progress_pct, _ocr_progress_pct,
+    _otsu_median_threshold, _read_fps_from_vr,
 )
 from ._gpu_pipeline import _GpuPipelineMixin
 from ._dual_pipeline import _DualPipelineMixin
 
 logger = logging.getLogger(__name__)
+
+
+def _host_calibrate(ex, vr, frames, *, with_dev=False, profile=True,
+                    seek_first=None):
+    """宿主路径 Otsu 校准（单流水线与并行片共用，收敛两份逐行副本）。
+
+    ex: FieldExtractor（单流水线传 self、并行片传 worker，二者同形）——
+        只调用 _crop_is_expected / _crop_luma / （profile 时）_prof_end。
+    with_dev: True 时保留 decord GPU 单通道帧的 DLPack 指针（GPU raw OCR
+        直通用）；stride==1 时同时捕获 next_roi 的（shape 3D）帧指针。
+    profile: False 时跳过 calib_decode/calib_gray 分相记时（并行片旧实现
+        不记时，保持语义一致）。
+    seek_first: 非 None 时先 seek_accurate（并行片 th=None 兼容路径用；
+        单流水线在调用前已按 frame_start 定位，不重复 seek）。
+    stride>1 走 get_batch 等差步长快速路径（校准帧号与后续帧流一致），
+    stride==1 走 next_roi 顺序流。
+    返回 (calib, th)。calib 元素统一 (fi, crop, gray, sharp, dev_info)，
+    dev_info 仅在 with_dev 且帧为 GPU 单通道时非 None。
+    """
+    x1, y1, x2, y2 = ex._roi
+    calib_n = min(config.SEG_CALIB_FRAMES, len(frames))
+    if seek_first is not None:
+        vr.seek_accurate(seek_first)
+    calib: list = []
+    if ex._sample_stride > 1:
+        nds = vr.get_batch(frames[:calib_n], roi=(x1, y1, x2 + 1, y2 + 1))
+        crops = nds.asnumpy()
+        base, shape = (0, ())
+        dev_c = 0
+        if with_dev:
+            # 与旧单流水线一致：只要请求设备指针就捕获（不先看 shape）——
+            # channel 判定由捕获后的 shape 完成（非 GPU 单通道自然 dev_c=0）。
+            base, shape = _ndarray_device_ptr(nds)
+            dev_c = shape[-1] if len(shape) == 4 else 0
+        for k in range(calib_n):
+            c = crops[k]
+            if not ex._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
+                c = c[y1:y2 + 1, x1:x2 + 1]
+            g = ex._crop_luma(c)
+            dev_info = None
+            if dev_c == 1 and len(shape) == 4:
+                src_h, src_w = shape[1], shape[2]
+                dev_info = (nds, base + k * src_h * src_w, src_h, src_w)
+            calib.append((frames[k], c, g, float(g.std()), dev_info))
+    else:
+        for k in range(calib_n):
+            _t_p = time.perf_counter()
+            nd = vr.next_roi(x1, y1, x2 + 1, y2 + 1)
+            c = nd.asnumpy()
+            if profile:
+                ex._prof_end('producer', 'calib_decode', _t_p)
+            if not ex._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
+                c = c[y1:y2 + 1, x1:x2 + 1]
+            _t_p = time.perf_counter()
+            g = ex._crop_luma(c)
+            if profile:
+                ex._prof_end('producer', 'calib_gray', _t_p)
+            dev_info = None
+            if with_dev and len(nd.shape) == 3 and nd.shape[-1] == 1:
+                base, shape = _ndarray_device_ptr(nd)
+                dev_info = (nd, base, shape[0], shape[1])
+            calib.append((frames[k], c, g, float(g.std()), dev_info))
+    ths = [_otsu(g) for _fi, _c, g, _s, _dev in calib]
+    return calib, _otsu_median_threshold(ths)
+
+
+def _host_frame_stream(ex, frames, vr, calib, th, *, with_dev=False,
+                       phase_times=None):
+    """宿主帧流：先产出校准帧，再批量流式解码剩余帧（两条宿主路径共用）。
+
+    ex: FieldExtractor（self 或并行 worker）——只调用 _batch_luma/_prof_end。
+    calib 元素统一 (fi, crop, gray, sharp, dev_info)（可为空列表）。
+    phase_times 非 None 时把 decode/gray/sharp/bin 分相累加到 [1..4]
+    （并行片生产者净耗时统计；单流水线不统计）。
+    with_dev=True 时随帧产出 decord GPU NDArray 设备信息 (owner, ptr, h, w)
+    供 GPU raw OCR 直通（仅 gray 单通道输出路径有效）。
+    yield (frame_idx, crop, gray, sharp, bin, dev_info)。
+    """
+    DECODE_BATCH = config.DECODE_BATCH_SIZE
+    x1, y1, x2, y2 = ex._roi
+    for fi, c, g, s, *dev_rest in calib:
+        yield (fi, c, g, s, g > th, dev_rest[0] if dev_rest else None)
+    for bstart in range(len(calib), len(frames), DECODE_BATCH):
+        bend = min(bstart + DECODE_BATCH, len(frames))
+        _t_d = time.perf_counter()
+        nds = vr.get_batch(frames[bstart:bend], roi=(x1, y1, x2 + 1, y2 + 1))
+        crops = nds.asnumpy()
+        if phase_times is not None:
+            phase_times[1] += time.perf_counter() - _t_d
+        ex._prof_end('producer', 'decode_batch', _t_d)
+        _t_g = time.perf_counter()
+        g = ex._batch_luma(crops)
+        if phase_times is not None:
+            phase_times[2] += time.perf_counter() - _t_g
+        ex._prof_end('producer', 'gray_batch', _t_g)
+        _t_s = time.perf_counter()
+        sharp = g.std(axis=(1, 2))
+        if phase_times is not None:
+            phase_times[3] += time.perf_counter() - _t_s
+        ex._prof_end('producer', 'sharp_batch', _t_s)
+        _t_b = time.perf_counter()
+        bs = g > th
+        if phase_times is not None:
+            phase_times[4] += time.perf_counter() - _t_b
+        ex._prof_end('producer', 'bin_batch', _t_b)
+        dev_base = 0
+        src_h = src_w = 0
+        if with_dev and len(nds.shape) == 4 and nds.shape[-1] == 1:
+            dev_base, shape = _ndarray_device_ptr(nds)
+            src_h, src_w = shape[1], shape[2]
+        for k, gi in enumerate(range(bstart, bend)):
+            d = None
+            if dev_base:
+                d = (nds, dev_base + k * src_h * src_w, src_h, src_w)
+            yield (frames[gi], crops[k], g[k], float(sharp[k]), bs[k], d)
+
+
+def _host_segment_frames(ex, frames, stream, *, debug_tag, progress_prefix,
+                         emit, segs, rep_crops, phase_times=None):
+    """宿主分段状态机（单流水线与并行片共用，消除两份逐行副本）。
+
+    ex: FieldExtractor（self 或并行 worker，二者同形）。
+    stream: (fi, crop, gray, sharp, bin, dev_info) 迭代器（_host_frame_stream）。
+    emit(seg, rep_frame, rep_crop, rep_dev, rep_gray, frac)：段闭合时投递
+        OCR，由调用方闭包实现（两路径的入队/全局段号/keys/reps/rep_crops
+        差异收敛在闭包里；本机在调用前已把 seg 追加进 segs）。
+    segs/rep_crops 由调用方传入（emit 闭包直写 rep_crops）。
+    debug_tag 非 None 且 DEBUG_BOUNDS 开启时打印边界（[PB]=并行片 /
+    [HB]=单流水线，与 GPU 路径 [GB] 对齐；并行片此前缺此诊断，属补齐）。
+    phase_times[5] 非 None 时累加分段判定净耗时（并行片生产者净耗时口径）。
+    返回 (first_rep_gray, last_rep_gray)：首发射段代表灰度与末发射段代表
+    灰度（跨片缝合用，仅并行路径读取）。与旧实现逐位一致：末发射段的灰度
+    不因尾部段 emit 而更新（并行片缝合依赖此语义）。
+    """
+    s = 0
+    rep_frame = frames[0]
+    rep_crop = None
+    rep_dev = None
+    rep_sharp = -1.0
+    rep_gray = None
+    last_rep_gray = None
+    first_rep_gray = None
+    prev_b = None
+    for k, (fi, c, g, sharp, b, dev_info) in enumerate(stream):
+        if prev_b is not None:
+            d = prev_b != b
+            _t_seg = time.perf_counter()
+            changed = _cluster_win3(d) >= ex._C
+            if phase_times is not None:
+                phase_times[5] += time.perf_counter() - _t_seg
+            ex._prof_end('producer', 'segmentation', _t_seg)
+            if changed:
+                seg = frames[s:k]
+                if (debug_tag is not None
+                        and config.env_bool(config.DEBUG_BOUNDS_ENV)):
+                    print(f'[{debug_tag}]{fi}:{_cluster_win3(d):.0f}',
+                          flush=True)
+                similar = (
+                    ex._merge_similar and segs
+                    and ex._segments_similar(last_rep_gray, rep_gray))
+                if similar:
+                    # 同一视觉内容被噪声切成多段：并入前一段，不产生新的
+                    # OCR 任务，保留前一段代表帧/文本。
+                    segs[-1].extend(seg)
+                else:
+                    segs.append(seg)
+                    emit(seg, rep_frame, rep_crop, rep_dev, rep_gray,
+                         k / max(len(frames), 1))
+                    if first_rep_gray is None:
+                        first_rep_gray = rep_gray
+                    last_rep_gray = rep_gray
+                s = k
+                rep_frame = fi
+                rep_crop = c
+                rep_dev = dev_info
+                rep_sharp = sharp
+                rep_gray = g
+            elif sharp > rep_sharp:
+                rep_sharp = sharp
+                rep_frame = fi
+                rep_crop = c
+                rep_dev = dev_info
+                rep_gray = g
+        else:
+            rep_frame = fi
+            rep_crop = c
+            rep_dev = dev_info
+            rep_sharp = sharp
+            rep_gray = g
+        prev_b = b
+        if k % 100 == 0:
+            ex._cancel()
+        if k % 500 == 0:
+            ex._progress(f'{progress_prefix}: {k}/{len(frames)}',
+                         _decode_progress_pct(k / max(len(frames), 1)))
+    seg = frames[s:]
+    similar = (
+        ex._merge_similar and segs
+        and ex._segments_similar(last_rep_gray, rep_gray))
+    if similar:
+        segs[-1].extend(seg)
+    else:
+        segs.append(seg)
+        emit(seg, rep_frame, rep_crop, rep_dev, rep_gray, 1.0)
+        if first_rep_gray is None:
+            first_rep_gray = rep_gray
+    return first_rep_gray, last_rep_gray
 
 
 class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
@@ -673,11 +881,10 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
         th：全局分段 Otsu 阈值（主线程校准一次后传入；None=片内自行校准，
         仅保留给非并行调用方）。传 th 时跳过每片 50 帧校准解码，且各片
         二值化阈值与单流水线一致（消除跨片阈值漂移）。
-        返回 (segs, keys, reps, rep_crops, decode_elapsed,
-              first_rep_gray, last_rep_gray)；首/末代表帧灰度供跨片边界
-        merge_similar 缝合使用。
+        返回 (segs, keys, reps, rep_crops, decode_elapsed, first_rep_gray,
+              last_rep_gray, producer_elapsed)；首/末代表帧灰度与生产者净耗时
+        供跨片边界 merge_similar 缝合与让位判定使用。
         """
-        x1, y1, x2, y2 = worker._roi
         total = len(vr)
         end = min(worker._frame_end or total, total)
         frames = list(range(start, end, worker._sample_stride))
@@ -685,33 +892,14 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
             raise ValueError(
                 f"帧区间为空: frame_start={start}, "
                 f"frame_end={end}, total={total}")
-        calib_n = 0
         calib: list = []
         if th is None:
-            # 兼容路径：无全局阈值时按旧逻辑片内校准（前 50 帧 Otsu）。
-            # 仅此路径使用顺序 next_roi（stride==1 时依赖解码器当前位置）
-            # ——需要先精确定位；全局 th 路径也需要 seek_accurate 到片首，
-            # 否则 get_batch 从当前/文件头随机跳到目标帧，CPU 解码吞吐约慢一倍。
-            vr.seek_accurate(start)
-            calib_n = min(config.SEG_CALIB_FRAMES, len(frames))
-            if worker._sample_stride > 1:
-                _calib_crops = vr.get_batch(
-                    frames[:calib_n], roi=(x1, y1, x2 + 1, y2 + 1)).asnumpy()
-                for k in range(calib_n):
-                    c = _calib_crops[k]
-                    if not worker._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
-                        c = c[y1:y2 + 1, x1:x2 + 1]
-                    g = worker._crop_luma(c)
-                    calib.append((frames[k], c, g, float(g.std())))
-            else:
-                for k in range(calib_n):
-                    c = vr.next_roi(x1, y1, x2 + 1, y2 + 1).asnumpy()
-                    if not worker._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
-                        c = c[y1:y2 + 1, x1:x2 + 1]
-                    g = worker._crop_luma(c)
-                    calib.append((frames[k], c, g, float(g.std())))
-            ths = [_otsu(g) for _fi, _c, g, _s in calib]
-            th = int(np.median(ths)) if ths else config.OTSU_FALLBACK_THRESH
+            # 兼容路径：无全局阈值时片内自行校准（前 SEG_CALIB_FRAMES 帧 Otsu）。
+            # 共用宿主校准助手 _host_calibrate：stride>1 走 get_batch 等差快速路径、
+            # stride==1 走 next_roi 顺序流；先精确 seek 到片首（该路径依赖解码器
+            # 当前位置语义，与旧实现一致）。
+            calib, th = _host_calibrate(worker, vr, frames, with_dev=False,
+                                        profile=False, seek_first=start)
         worker._bin_thresh = th
         # 生产者净耗时（seek+解码+灰度/sharp/二分/分段 分相累加）：之前 seek
         # 未计入吞吐信号，导致试点测速远高于真实整片速度（AV1 实测真实比 2.2:1
@@ -740,114 +928,40 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
             vr.seek_accurate(start)
             prod_acc[0] += time.perf_counter() - _t_seek
             worker._prof_end('producer', 'seek_accurate', _t_seek)
-        DECODE_BATCH = config.DECODE_BATCH_SIZE
-
-        def frame_stream():
-            for fi, c, g, s in calib:
-                yield (fi, c, g, s, g > th)
-            for bstart in range(calib_n, len(frames), DECODE_BATCH):
-                bend = min(bstart + DECODE_BATCH, len(frames))
-                _t_d = time.perf_counter()
-                crops = vr.get_batch(
-                    frames[bstart:bend],
-                    roi=(x1, y1, x2 + 1, y2 + 1)).asnumpy()
-                prod_acc[1] += time.perf_counter() - _t_d
-                worker._prof_end('producer', 'decode_batch', _t_d)
-                _t_g = time.perf_counter()
-                g = worker._batch_luma(crops)
-                prod_acc[2] += time.perf_counter() - _t_g
-                worker._prof_end('producer', 'gray_batch', _t_g)
-                _t_s = time.perf_counter()
-                sharp = g.std(axis=(1, 2))
-                prod_acc[3] += time.perf_counter() - _t_s
-                worker._prof_end('producer', 'sharp_batch', _t_s)
-                _t_b = time.perf_counter()
-                bs = g > th
-                prod_acc[4] += time.perf_counter() - _t_b
-                worker._prof_end('producer', 'bin_batch', _t_b)
-                for k, gi in enumerate(range(bstart, bend)):
-                    yield (frames[gi], crops[k], g[k], float(sharp[k]), bs[k])
+        # 帧流（校准帧 + 批量解码→灰度→sharp→二值化）与分段状态机由共享助手
+        # _host_frame_stream / _host_segment_frames 承担（见模块顶部），本路径
+        # 仅传入 phase_times=prod_acc 做生产者净耗时统计（含 OCR 背压免疫口径）。
 
         segs: list = []
         keys: list = []
         reps: list = []
         rep_crops: dict = {}
         seg_idx = int(session.get("seg_idx", 0))
-        s = 0
-        rep_frame = frames[0]
-        rep_crop = None
-        rep_sharp = -1.0
-        rep_gray = None
-        last_rep_gray = None
-        prev_b = None
         t0 = time.perf_counter()
 
-        def emit(seg, r_frame, r_crop, r_gray, frac) -> None:
+        def emit(seg, r_frame, r_crop, r_dev, _r_gray, frac) -> None:
             nonlocal seg_idx
-            segs.append(seg)
             keys.append(seg_idx)
             reps.append(r_frame)
-            session["put"]((seg_idx, r_frame, r_crop, None, frac))
+            session["put"]((seg_idx, r_frame, r_crop, r_dev, frac))
             if worker._keep_crops:
                 rep_crops[r_frame] = r_crop
-            if first_emit_gray[0] is None:
-                first_emit_gray[0] = r_gray
             seg_idx += 1
 
-        first_emit_gray = [None]  # 首个 emit 段的代表帧灰度（跨片缝合用）
-
-        for k, (fi, c, g, sharp, b) in enumerate(frame_stream()):
-            if prev_b is not None:
-                d = prev_b != b
-                _t_seg = time.perf_counter()
-                changed = _cluster_win3(d) >= worker._C
-                prod_acc[5] += time.perf_counter() - _t_seg
-                worker._prof_end('producer', 'segmentation', _t_seg)
-                if changed:
-                    seg = frames[s:k]
-                    similar = (
-                        worker._merge_similar and segs
-                        and worker._segments_similar(last_rep_gray, rep_gray))
-                    if similar:
-                        segs[-1].extend(seg)
-                    else:
-                        emit(seg, rep_frame, rep_crop, rep_gray,
-                             k / max(len(frames), 1))
-                        last_rep_gray = rep_gray
-                    s = k
-                    rep_frame = fi
-                    rep_crop = c
-                    rep_sharp = sharp
-                    rep_gray = g
-                elif sharp > rep_sharp:
-                    rep_sharp = sharp
-                    rep_frame = fi
-                    rep_crop = c
-                    rep_gray = g
-            else:
-                rep_frame = fi
-                rep_crop = c
-                rep_sharp = sharp
-                rep_gray = g
-            prev_b = b
-            if k % 100 == 0:
-                worker._cancel()
-            if k % 500 == 0:
-                worker._progress(
-                    f'[{worker._backend}] 并行解码+分段: '
-                    f'{k}/{len(frames)}',
-                    _decode_progress_pct(k / max(len(frames), 1)))
-        seg = frames[s:]
-        similar = (
-            worker._merge_similar and segs
-            and worker._segments_similar(last_rep_gray, rep_gray))
-        if similar:
-            segs[-1].extend(seg)
-        else:
-            emit(seg, rep_frame, rep_crop, rep_gray, 1.0)
+        # 分段状态机（共享 _host_segment_frames，见模块顶部）：段闭合/相似
+        # 合并/代表帧选择/首末代表灰度/取消与进度节奏全部收敛于此；并行片
+        # 的产物净耗时统计（prod_acc[5]）经 phase_times 传入。
+        first_gray, last_gray = _host_segment_frames(
+            worker, frames,
+            _host_frame_stream(worker, frames, vr, calib, th,
+                               phase_times=prod_acc),
+            debug_tag='PB',
+            progress_prefix=f'[{worker._backend}] 并行解码+分段',
+            emit=emit, segs=segs, rep_crops=rep_crops,
+            phase_times=prod_acc)
         session["seg_idx"] = seg_idx
         return (segs, keys, reps, rep_crops, time.perf_counter() - t0,
-                first_emit_gray[0], last_rep_gray, sum(prod_acc))
+                first_gray, last_gray, sum(prod_acc))
 
     def _run_pipelined(self, _ocr_engines: list | None = None,
                        _force_single: bool = False,
@@ -862,8 +976,10 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
             总墙钟。代表帧选择与串行 _segment/_ocr_segments 完全一致（每段 max
             灰度 std），OCR 批 _ocr_batch_size()。
 
-            返回 (frames, segs, seg_vals, rep_frames)；self.crops = {rep_frame:
-            crop}（仅代表帧，供 review 预览，比存全帧省内存）。
+            返回 (frames, segs, ocr_texts, ocr_confs, rep_frames)；
+            self.crops = {rep_frame: crop}（仅代表帧，供 review 预览，
+            比存全帧省内存）。分段/代表帧选择语义由模块级共享状态机
+            _host_segment_frames 承担（本方法与并行片路径共用）。
             """
         if self._dual_pipeline and _ocr_engines is None and not _force_single:
             return self._run_pipelined_parallel()
@@ -875,18 +991,8 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
         else:
             vr = self._open_vr()
         if self._fps is None:
-            for m in ('get_avg_fps', 'get_fps'):
-                fn = getattr(vr, m, None)
-                if fn is None:
-                    continue
-                try:
-                    self._fps = float(fn())
-                    break
-                except Exception:
-                    self._fps = None
-            if not self._fps or self._fps <= 0:
-                self._fps = config.DEFAULT_FPS_FALLBACK
-        x1, y1, x2, y2 = self._roi
+            _fps = _read_fps_from_vr(vr)
+            self._fps = _fps if _fps else config.DEFAULT_FPS_FALLBACK
         total = len(vr)
         end = min(self._frame_end or total, total)
         if self._frame_start > 0:
@@ -897,48 +1003,11 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
                 f"帧区间为空: frame_start={self._frame_start}, "
                 f"frame_end={end}, total={total}")
         self._prof_end('producer', 'open_and_fps', _t_open)
-        calib_n = min(config.SEG_CALIB_FRAMES, len(frames))
-        calib: list = []
         _t_cal = time.perf_counter()
-        if self._sample_stride > 1:
-            # 分频采样：校准帧也按 stride 抽取（真实帧号 = frames[k]）——用
-            # get_batch 的等差步长快速路径（decord fork ≥0.7.12）顺序流式取，
-            # 校准帧与后续流水线帧号一致，避免 next_roi（逐帧）与采样不匹配。
-            _calib_nds = vr.get_batch(frames[:calib_n],
-                                      roi=(x1, y1, x2 + 1, y2 + 1))
-            _calib_crops = _calib_nds.asnumpy()
-            _calib_base, _calib_shape = _ndarray_device_ptr(_calib_nds)
-            _calib_c = _calib_shape[-1] if _calib_shape else 1
-            for k in range(calib_n):
-                c = _calib_crops[k]
-                if not self._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
-                    c = c[y1:y2 + 1, x1:x2 + 1]
-                g = self._crop_luma(c)
-                dev_info = None
-                if _calib_c == 1 and len(_calib_shape) == 4:
-                    src_h, src_w = _calib_shape[1], _calib_shape[2]
-                    dev_info = (_calib_nds,
-                                _calib_base + k * src_h * src_w,
-                                src_h, src_w)
-                calib.append((frames[k], c, g, float(g.std()), dev_info))
-        else:
-            for k in range(calib_n):
-                _t_p = time.perf_counter()
-                _nd = vr.next_roi(x1, y1, x2 + 1, y2 + 1)
-                c = _nd.asnumpy()
-                self._prof_end('producer', 'calib_decode', _t_p)
-                if not self._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
-                    c = c[y1:y2 + 1, x1:x2 + 1]
-                _t_p = time.perf_counter()
-                g = self._crop_luma(c)
-                self._prof_end('producer', 'calib_gray', _t_p)
-                dev_info = None
-                if _nd.shape[-1] == 1 and len(_nd.shape) == 3:
-                    _base, _shape = _ndarray_device_ptr(_nd)
-                    dev_info = (_nd, _base, _shape[0], _shape[1])
-                calib.append((frames[k], c, g, float(g.std()), dev_info))
-        ths = [_otsu(g) for _fi, _c, g, _s, _dev in calib]
-        th = int(np.median(ths)) if ths else config.OTSU_FALLBACK_THRESH
+        # 宿主校准统一走 _host_calibrate（stride>1 用 get_batch 等差快速路径、
+        # stride==1 用 next_roi 顺序流——校准帧号与后续流水线帧号一致）。
+        # with_dev=True：保留 GPU 单通道帧的 DLPack 指针供 GPU raw OCR 直通。
+        calib, th = _host_calibrate(self, vr, frames, with_dev=True)
         self._bin_thresh = th
         self._prof_end('producer', 'calib_total', _t_cal)
         ocr_session = self._start_ocr_session(_ocr_engines)
@@ -948,127 +1017,28 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
         ocr_wall = ocr_session["wall"]
         _put_ocr = ocr_session["put"]
 
-        DECODE_BATCH = config.DECODE_BATCH_SIZE
-
-        def frame_stream():
-            """先产出校准帧，再批量流式解码剩余帧。
-
-                yield (fi, crop, gray, sharp, bin, dev_info) —— bin 为
-                预计算的二值化；dev_info 仅在 gray 输出时保留 GPU 指针。
-                """
-            for fi, c, g, s, dev in calib:
-                yield (fi, c, g, s, g > th, dev)
-            for bstart in range(calib_n, len(frames), DECODE_BATCH):
-                bend = min(bstart + DECODE_BATCH, len(frames))
-                _t_d = time.perf_counter()
-                nds = vr.get_batch(
-                    frames[bstart:bend],
-                    roi=(x1, y1, x2 + 1, y2 + 1))
-                crops = nds.asnumpy()
-                self._prof_end('producer', 'decode_batch', _t_d)
-                _t_g = time.perf_counter()
-                g = self._batch_luma(crops)
-                self._prof_end('producer', 'gray_batch', _t_g)
-                _t_s = time.perf_counter()
-                sharp = g.std(axis=(1, 2))
-                self._prof_end('producer', 'sharp_batch', _t_s)
-                _t_b = time.perf_counter()
-                bs = g > th
-                self._prof_end('producer', 'bin_batch', _t_b)
-                dev_info = None
-                if nds.shape[-1] == 1 and len(nds.shape) == 4:
-                    _base, _shape = _ndarray_device_ptr(nds)
-                    src_h, src_w = _shape[1], _shape[2]
-                else:
-                    _base = 0
-                    src_h = src_w = 0
-                for k, gi in enumerate(range(bstart, bend)):
-                    d = None
-                    if _base:
-                        d = (nds, _base + k * src_h * src_w,
-                             src_h, src_w)
-                    yield (frames[gi], crops[k], g[k],
-                           float(sharp[k]), bs[k], d)
         segs: list = []
         rep_crops: dict = {}
         seg_idx = 0
-        s = 0
-        rep_frame = frames[0]
-        rep_crop = None
-        rep_dev = None
-        rep_sharp = -1.0
-        rep_gray = None
-        last_rep_gray = None
-        prev_b = None
+
+        def _emit_ocr(seg, r_frame, r_crop, r_dev, _r_gray, frac) -> None:
+            nonlocal seg_idx
+            _t_push = time.perf_counter()
+            _put_ocr((seg_idx, r_frame, r_crop, r_dev, frac))
+            self._prof_end('producer', 'q_put_block', _t_push)
+            if self._keep_crops:
+                rep_crops[r_frame] = r_crop
+            seg_idx += 1
+
         t0 = time.perf_counter()
         try:
-            for k, (fi, c, g, sharp, b, dev_info) in enumerate(frame_stream()):
-                if prev_b is not None:
-                    d = prev_b != b
-                    _t_seg = time.perf_counter()
-                    changed = _cluster_win3(d) >= self._C
-                    self._prof_end('producer', 'segmentation', _t_seg)
-                    if changed:
-                        seg = frames[s:k]
-                        if config.env_bool(config.DEBUG_BOUNDS_ENV):
-                            print(f'[HB]{fi}:{_cluster_win3(d):.0f}',
-                                  flush=True)
-                        similar = (
-                            self._merge_similar and segs
-                            and self._segments_similar(last_rep_gray, rep_gray))
-                        if similar:
-                            # 同一视觉内容被噪声切成多段：并入前一段，
-                            # 不产生新的 OCR 任务，保留前一段代表帧/文本。
-                            segs[-1].extend(seg)
-                        else:
-                            segs.append(seg)
-                            _t_push = time.perf_counter()
-                            _put_ocr((seg_idx, rep_frame, rep_crop,
-                                      rep_dev, k / max(len(frames), 1)))
-                            self._prof_end('producer', 'q_put_block', _t_push)
-                            if self._keep_crops:
-                                rep_crops[rep_frame] = rep_crop
-                            seg_idx += 1
-                            last_rep_gray = rep_gray
-                        s = k
-                        rep_frame = fi
-                        rep_crop = c
-                        rep_dev = dev_info
-                        rep_sharp = sharp
-                        rep_gray = g
-                    elif sharp > rep_sharp:
-                        rep_sharp = sharp
-                        rep_frame = fi
-                        rep_crop = c
-                        rep_dev = dev_info
-                        rep_gray = g
-                else:
-                    rep_frame = fi
-                    rep_crop = c
-                    rep_dev = dev_info
-                    rep_sharp = sharp
-                    rep_gray = g
-                prev_b = b
-                if k % 100 == 0:
-                    self._cancel()
-                if k % 500 == 0:
-                    self._progress(f'[{self._backend}] 解码+分段: {k}/{len(frames)}',
-                                   _decode_progress_pct(k / max(len(frames), 1)))
-            seg = frames[s:]
-            similar = (
-                self._merge_similar and segs
-                and self._segments_similar(last_rep_gray, rep_gray))
-            if similar:
-                segs[-1].extend(seg)
-            else:
-                segs.append(seg)
-                _t_push = time.perf_counter()
-                _put_ocr((seg_idx, rep_frame, rep_crop, rep_dev, 1.0))
-                self._prof_end('producer', 'q_put_block', _t_push)
-                if self._keep_crops:
-                    rep_crops[rep_frame] = rep_crop
-                seg_idx += 1
-                last_rep_gray = rep_gray
+            _host_segment_frames(
+                self, frames,
+                _host_frame_stream(self, frames, vr, calib, th,
+                                   with_dev=True),
+                debug_tag='HB',
+                progress_prefix=f'[{self._backend}] 解码+分段',
+                emit=_emit_ocr, segs=segs, rep_crops=rep_crops)
         finally:
             _t_consume_end = time.perf_counter()
             self.timing['decode'] = _t_consume_end - t0

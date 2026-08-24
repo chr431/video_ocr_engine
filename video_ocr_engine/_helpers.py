@@ -89,6 +89,31 @@ def _otsu_from_hist(hist) -> int:
     return best
 
 
+def _otsu_median_threshold(ths) -> int:
+    """校准阈值：Otsu 列表取中位数；空列表回退 OTSU_FALLBACK_THRESH。"""
+    if not ths:
+        return config.OTSU_FALLBACK_THRESH
+    return int(np.median(ths))
+
+
+def _read_fps_from_vr(vr):
+    """从 decord reader 读平均帧率（get_avg_fps 优先，get_fps 兜底）。
+
+    都拿不到（或均为非正）返回 None，调用方按 DEFAULT_FPS_FALLBACK 兜底。
+    """
+    for m in ('get_avg_fps', 'get_fps'):
+        fn = getattr(vr, m, None)
+        if fn is None:
+            continue
+        try:
+            v = float(fn())
+        except Exception:
+            continue
+        if v and v > 0:
+            return v
+    return None
+
+
 def _gray_mean_abs_diff(a, b) -> float:
     """两帧分段灰度 ROI 的平均绝对差；形状不一致时视为不相似。"""
     if a is None or b is None:
