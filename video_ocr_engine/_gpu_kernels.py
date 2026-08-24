@@ -413,15 +413,6 @@ extern "C" __global__ void sim_pair(
     if (t == 0) { out[0] = s_mad[0]; out[1] = (double)s_chg[0]; }
 }
 
-extern "C" __global__ void hist_gray(
-    const unsigned char* __restrict__ raw,
-    int* __restrict__ hist,
-    int n) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) return;
-    atomicAdd(&hist[raw[i]], 1);
-}
-
 extern "C" __global__ void hist_gray_perframe(
     const unsigned char* __restrict__ raw,
     int* __restrict__ hists,   // (B, 256)
@@ -451,10 +442,9 @@ extern "C" __global__ void hist_gray_perframe(
                                    arch=f"sm_{self._dev.arch}"))
         self._mod = self._prog.compile(
             "cubin",
-            name_expressions=("analyze_gray", "hist_gray",
+            name_expressions=("analyze_gray",
                               "hist_gray_perframe", "sim_pair"))
         self._kernel = self._mod.get_kernel("analyze_gray")
-        self._kernel_hist = self._mod.get_kernel("hist_gray")
         self._kernel_hist_pf = self._mod.get_kernel("hist_gray_perframe")
         self._kernel_sim = self._mod.get_kernel("sim_pair")
         from cuda.bindings import runtime as cudart
@@ -463,7 +453,6 @@ extern "C" __global__ void hist_gray_perframe(
         self._summary_dev = None
         self._prev_size = 0
         self._prev_dev = None
-        self._hist_dev = None
         self._histpf_size = 0
         self._histpf_dev = None
 
@@ -475,27 +464,6 @@ extern "C" __global__ void hist_gray_perframe(
             _err, self._prev_dev = cudart.cudaMalloc(nbytes)
             self._prev_size = nbytes
         return self._prev_dev
-
-    def histogram(self, raw_ptr: int, n: int) -> "np.ndarray":
-        """GPU 直方图：只把 256 个 bin 回传 host，避免校准帧整帧 D2H。"""
-        import numpy as np
-        from cuda.bindings import runtime as cudart
-        from cuda.core import Buffer, LaunchConfig, launch
-        if self._hist_dev is None:
-            _err, self._hist_dev = cudart.cudaMalloc(256 * 4)
-        cudart.cudaMemset(self._hist_dev, 0, 256 * 4)
-        block = 256
-        grid = (n + block - 1) // block
-        hist_buf = Buffer.from_handle(self._hist_dev, 256 * 4)
-        launch(self._stream, LaunchConfig(grid=grid, block=block),
-               self._kernel_hist,
-               Buffer.from_handle(raw_ptr, n), hist_buf, np.int32(n))
-        cudart.cudaStreamSynchronize(self._stream)
-        hist = np.empty(256, dtype=np.int32)
-        cudart.cudaMemcpy(
-            hist.ctypes.data, self._hist_dev, 256 * 4,
-            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
-        return hist
 
     def histograms_perframe(self, raw_ptr: int, B: int,
                             H: int, W: int) -> "np.ndarray":
@@ -526,30 +494,6 @@ extern "C" __global__ void hist_gray_perframe(
     def analyze_batch(self, raw_ptr: int, prev_ptr: int, B: int,
                       H: int, W: int, th: float) -> "np.ndarray":
         """一次 kernel 分析 B 帧；prev_ptr 必须是已准备好的 B 帧前帧缓冲。"""
-        import numpy as np
-        from cuda.bindings import runtime as cudart
-        from cuda.core import Buffer, LaunchConfig, launch
-        nbytes = B * 2 * 8
-        if self._summary_size < nbytes:
-            if self._summary_dev is not None:
-                cudart.cudaFree(self._summary_dev)
-            _err, self._summary_dev = cudart.cudaMalloc(nbytes)
-            self._summary_size = nbytes
-        buf = Buffer.from_handle(self._summary_dev, nbytes)
-        launch(self._stream, LaunchConfig(grid=B, block=256), self._kernel,
-               Buffer.from_handle(raw_ptr, B * H * W),
-               Buffer.from_handle(prev_ptr, B * H * W),
-               buf, np.int32(B), np.int32(H), np.int32(W), np.float32(th))
-        cudart.cudaStreamSynchronize(self._stream)
-        out = np.empty((B, 2), dtype=np.float64)
-        cudart.cudaMemcpy(
-            out.ctypes.data, self._summary_dev, nbytes,
-            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
-        return out
-
-    def analyze(self, raw_ptr: int, prev_ptr: int, B: int, H: int, W: int,
-                th: float) -> "np.ndarray":
-        """返回 (B,2) float32 host 数组：每帧 (sharp, cluster_score)。"""
         import numpy as np
         from cuda.bindings import runtime as cudart
         from cuda.core import Buffer, LaunchConfig, launch
