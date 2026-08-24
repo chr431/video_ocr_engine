@@ -482,6 +482,12 @@ class _DualPipelineMixin:
             # 一个 worker 只开一个持久 OCR 会话：所有切片共用它的队列和
             # infer 线程。切片之间不再 join，后一片解码可与前一片 OCR 重叠。
             session = worker._start_ocr_session([eng])
+            # 起跑线对齐：双方引擎就绪后再开始处理头部片/竞争取片。
+            if not _os.environ.get("DUAL_NO_INIT_BARRIER"):
+                try:
+                    init_barrier.wait(timeout=60)
+                except Exception:
+                    pass
             chunk_meta: dict = {}
             chunks_done = 0
             wall = 0.0
@@ -706,6 +712,12 @@ class _DualPipelineMixin:
                         "ocr": worker._ocr_backend_used,
                         "ocr_wall": session["wall"][0]}
 
+        # 启动竞态屏障：两条流水线的 OCR 引擎初始化耗时不同（TRT 反序列化
+        # ~0.3s vs ONNX 加载），先就绪者会在对端初始化窗口内多抢竞争片，
+        # 使慢路径整段视频份额偏高（0824 探针实测 AV1 慢路径多拿 ~270 帧
+        # ≈ +1s 关键路径）。屏障把两条流水线的起跑线对齐。DUAL_NO_INIT_
+        # BARRIER=1 可关闭（实验对照用）。
+        init_barrier = threading.Barrier(len(pairs))
         threads = [
             threading.Thread(
                 target=_consumer,
