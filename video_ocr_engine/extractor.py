@@ -1,17 +1,18 @@
 """FieldExtractor — 通用视频文本提取引擎（识别链：解码∥像素分段∥OCR 文本）。
 
 引擎只输出每段原始文本与置信度；速度解析/纠错/CSV 等领域后处理由上层
-应用完成（RaceVideoToLog 的 SegmentPipeline 继承本类并叠加后处理）。
+应用完成（引擎保持通用性，不携带任何下游领域后处理）。
 
-方法体最初由 RaceVideoToLog 的 tools/archive/_gen_engine_extractor.py 从
-segment_flow.py 抽取；独立成仓后随引擎维护，不再依赖 RaceVideoToLog。
+方法体最初由既有视频项目的历史 tools/archive 生成脚本从 segment_flow.py
+抽取；独立成仓后随引擎维护，不再依赖任何下游仓库。
 
 模块划分（2026-08 七轮修正后按逻辑拆分）：
   extractor.py      — 引擎核心：解码/校准/分段/OCR 会话/流水线分发/结果组装
   _helpers.py       — 无类依赖的独立工具函数
   _result_types.py  — ExtractedSegment / ExtractionResult
   _gpu_pipeline.py  — _GpuPipelineMixin（GPU 全驻留管线）
-  _dual_pipeline.py — _DualPipelineMixin（kfe 唯一分片的双流水线并行）
+双流水线并行已被移除（2026-08 清理）；CPU+NVDEC 双解码（decode_backend=
+"hybrid"，与 auto/cpu/nvdec 并列）由顶层 hybrid_decode.py 承担。
 """
 import logging
 import os as _os
@@ -38,23 +39,17 @@ from ._helpers import (  # noqa: F401
     _otsu_median_threshold, _read_fps_from_vr,
 )
 from ._gpu_pipeline import _GpuPipelineMixin
-from ._dual_pipeline import _DualPipelineMixin
 
 logger = logging.getLogger(__name__)
 
 
-def _host_calibrate(ex, vr, frames, *, with_dev=False, profile=True,
-                    seek_first=None):
-    """宿主路径 Otsu 校准（单流水线与并行片共用，收敛两份逐行副本）。
+def _host_calibrate(ex, vr, frames, *, with_dev=False):
+    """宿主路径 Otsu 校准（单流水线统一入口）。
 
-    ex: FieldExtractor（单流水线传 self、并行片传 worker，二者同形）——
-        只调用 _crop_is_expected / _crop_luma / （profile 时）_prof_end。
+    ex: FieldExtractor——只调用 _crop_is_expected / _crop_luma /
+        _prof_end。
     with_dev: True 时保留 decord GPU 单通道帧的 DLPack 指针（GPU raw OCR
         直通用）；stride==1 时同时捕获 next_roi 的（shape 3D）帧指针。
-    profile: False 时跳过 calib_decode/calib_gray 分相记时（并行片旧实现
-        不记时，保持语义一致）。
-    seek_first: 非 None 时先 seek_accurate（并行片 th=None 兼容路径用；
-        单流水线在调用前已按 frame_start 定位，不重复 seek）。
     stride>1 走 get_batch 等差步长快速路径（校准帧号与后续帧流一致），
     stride==1 走 next_roi 顺序流。
     返回 (calib, th)。calib 元素统一 (fi, crop, gray, sharp, dev_info)，
@@ -62,8 +57,6 @@ def _host_calibrate(ex, vr, frames, *, with_dev=False, profile=True,
     """
     x1, y1, x2, y2 = ex._roi
     calib_n = min(config.SEG_CALIB_FRAMES, len(frames))
-    if seek_first is not None:
-        vr.seek_accurate(seek_first)
     calib: list = []
     if ex._sample_stride > 1:
         nds = vr.get_batch(frames[:calib_n], roi=(x1, y1, x2 + 1, y2 + 1))
@@ -87,17 +80,11 @@ def _host_calibrate(ex, vr, frames, *, with_dev=False, profile=True,
             calib.append((frames[k], c, g, float(g.std()), dev_info))
     else:
         for k in range(calib_n):
-            _t_p = time.perf_counter()
             nd = vr.next_roi(x1, y1, x2 + 1, y2 + 1)
             c = nd.asnumpy()
-            if profile:
-                ex._prof_end('producer', 'calib_decode', _t_p)
             if not ex._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
                 c = c[y1:y2 + 1, x1:x2 + 1]
-            _t_p = time.perf_counter()
             g = ex._crop_luma(c)
-            if profile:
-                ex._prof_end('producer', 'calib_gray', _t_p)
             dev_info = None
             if with_dev and len(nd.shape) == 3 and nd.shape[-1] == 1:
                 base, shape = _ndarray_device_ptr(nd)
@@ -107,14 +94,11 @@ def _host_calibrate(ex, vr, frames, *, with_dev=False, profile=True,
     return calib, _otsu_median_threshold(ths)
 
 
-def _host_frame_stream(ex, frames, vr, calib, th, *, with_dev=False,
-                       phase_times=None):
-    """宿主帧流：先产出校准帧，再批量流式解码剩余帧（两条宿主路径共用）。
+def _host_frame_stream(ex, frames, vr, calib, th, *, with_dev=False):
+    """宿主帧流：先产出校准帧，再批量流式解码剩余帧。
 
-    ex: FieldExtractor（self 或并行 worker）——只调用 _batch_luma/_prof_end。
+    ex: FieldExtractor——只调用 _batch_luma/_prof_end。
     calib 元素统一 (fi, crop, gray, sharp, dev_info)（可为空列表）。
-    phase_times 非 None 时把 decode/gray/sharp/bin 分相累加到 [1..4]
-    （并行片生产者净耗时统计；单流水线不统计）。
     with_dev=True 时随帧产出 decord GPU NDArray 设备信息 (owner, ptr, h, w)
     供 GPU raw OCR 直通（仅 gray 单通道输出路径有效）。
     yield (frame_idx, crop, gray, sharp, bin, dev_info)。
@@ -128,23 +112,15 @@ def _host_frame_stream(ex, frames, vr, calib, th, *, with_dev=False,
         _t_d = time.perf_counter()
         nds = vr.get_batch(frames[bstart:bend], roi=(x1, y1, x2 + 1, y2 + 1))
         crops = nds.asnumpy()
-        if phase_times is not None:
-            phase_times[1] += time.perf_counter() - _t_d
         ex._prof_end('producer', 'decode_batch', _t_d)
         _t_g = time.perf_counter()
         g = ex._batch_luma(crops)
-        if phase_times is not None:
-            phase_times[2] += time.perf_counter() - _t_g
         ex._prof_end('producer', 'gray_batch', _t_g)
         _t_s = time.perf_counter()
         sharp = g.std(axis=(1, 2))
-        if phase_times is not None:
-            phase_times[3] += time.perf_counter() - _t_s
         ex._prof_end('producer', 'sharp_batch', _t_s)
         _t_b = time.perf_counter()
         bs = g > th
-        if phase_times is not None:
-            phase_times[4] += time.perf_counter() - _t_b
         ex._prof_end('producer', 'bin_batch', _t_b)
         dev_base = 0
         src_h = src_w = 0
@@ -159,21 +135,18 @@ def _host_frame_stream(ex, frames, vr, calib, th, *, with_dev=False,
 
 
 def _host_segment_frames(ex, frames, stream, *, debug_tag, progress_prefix,
-                         emit, segs, rep_crops, phase_times=None):
-    """宿主分段状态机（单流水线与并行片共用，消除两份逐行副本）。
+                         emit, segs, rep_crops):
+    """宿主分段状态机（单流水线统一入口）。
 
-    ex: FieldExtractor（self 或并行 worker，二者同形）。
+    ex: FieldExtractor。
     stream: (fi, crop, gray, sharp, bin, dev_info) 迭代器（_host_frame_stream）。
     emit(seg, rep_frame, rep_crop, rep_dev, rep_gray, frac)：段闭合时投递
-        OCR，由调用方闭包实现（两路径的入队/全局段号/keys/reps/rep_crops
-        差异收敛在闭包里；本机在调用前已把 seg 追加进 segs）。
+        OCR，由调用方闭包实现（入队/全局段号/keys/reps/rep_crops 收敛在
+        闭包里；调用方在 emit 前已把 seg 追加进 segs）。
     segs/rep_crops 由调用方传入（emit 闭包直写 rep_crops）。
-    debug_tag 非 None 且 DEBUG_BOUNDS 开启时打印边界（[PB]=并行片 /
-    [HB]=单流水线，与 GPU 路径 [GB] 对齐；并行片此前缺此诊断，属补齐）。
-    phase_times[5] 非 None 时累加分段判定净耗时（并行片生产者净耗时口径）。
-    返回 (first_rep_gray, last_rep_gray)：首发射段代表灰度与末发射段代表
-    灰度（跨片缝合用，仅并行路径读取）。与旧实现逐位一致：末发射段的灰度
-    不因尾部段 emit 而更新（并行片缝合依赖此语义）。
+    debug_tag 非 None 且 DEBUG_BOUNDS 开启时打印边界（[HB]=单流水线，与
+    GPU 路径 [GB] 对齐）。
+    返回 (first_rep_gray, last_rep_gray)：首发射段代表灰度与末发射段代表灰度。
     """
     s = 0
     rep_frame = frames[0]
@@ -189,8 +162,6 @@ def _host_segment_frames(ex, frames, stream, *, debug_tag, progress_prefix,
             d = prev_b != b
             _t_seg = time.perf_counter()
             changed = _cluster_win3(d) >= ex._C
-            if phase_times is not None:
-                phase_times[5] += time.perf_counter() - _t_seg
             ex._prof_end('producer', 'segmentation', _t_seg)
             if changed:
                 seg = frames[s:k]
@@ -250,17 +221,17 @@ def _host_segment_frames(ex, frames, stream, *, debug_tag, progress_prefix,
     return first_rep_gray, last_rep_gray
 
 
-class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
+class FieldExtractor(_GpuPipelineMixin):
     """从视频固定区域提取文本的通用引擎（识别链：解码∥分段∥OCR）。
 
     构造参数（识别链用）：video_path / roi / frame_start / frame_end /
     force_aspect / decode_backend / ocr_backend / buffer_size / fill_width /
     sample_stride / progress_cb / cancel_check / gray_output / yuv_output /
     keep_crops / keep_frames / merge_similar / merge_similar_threshold。
-    分段阈值 C 取自 engine_config.SEG_C；引擎不含速度后处理参数。
-    sample_stride：分频采样步长（默认 1 = 逐帧处理，与 RaceVideoToLog 完全
-    兼容）。>1 时只解码/分段每个第 N 帧（字幕等慢更新内容可显著降低处理压力；
-    需要 decord fork ≥0.7.12 的等差步长快速路径，否则退化为逐索引 seek）。
+    分段阈值 C 取自 engine_config.SEG_C；引擎不含领域后处理参数。
+    sample_stride：分频采样步长（默认 1 = 逐帧处理）。>1 时只解码/分段每个
+    第 N 帧（字幕等慢更新内容可显著降低处理压力；需要 decord fork ≥0.7.12
+    的等差步长快速路径，否则退化为逐索引 seek）。
     """
 
     def __init__(self, video_path: str, roi: tuple, *, frame_start=None,
@@ -274,9 +245,7 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
                  keep_frames: bool = True,
                  merge_similar: bool = config.DEFAULT_MERGE_SIMILAR,
                  merge_similar_threshold: float | None = None,
-                 merge_text_sep: str | None = None,
-                 dual_pipeline: bool | None = None,
-                 dual_backends: list | None = None):
+                 merge_text_sep: str | None = None):
         self._video_path = Path(video_path)
         self._roi = tuple(roi)
         # fps 强制自测：open decoder 后从 get_avg_fps/get_fps 读，忽略外部
@@ -308,14 +277,6 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
         self._merge_text_sep = (
             merge_text_sep if merge_text_sep is not None
             else config.DEFAULT_MERGE_TEXT_SEP)
-        if dual_pipeline is None:
-            _env_dual = _os.environ.get(
-                config.DUAL_PIPELINE_ENV, '').strip().lower()
-            dual_pipeline = _env_dual in ('1', 'true', 'yes', 'on')
-        self._dual_pipeline = bool(dual_pipeline)
-        self._dual_backends = (
-            [tuple(map(str, p)) for p in dual_backends]
-            if dual_backends else None)
         self._color_range = 0            # run 时从 decoder get_color_range 读取
         self._codec = ""                 # run 时从 decoder get_codec 探测
         self._backend = ""
@@ -331,11 +292,8 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
         self._ocr_vals: list = []
         self._ocr_texts: list = []
         self._ocr_confs: list = []
-        self._corr_vals: list = []
-        self._conf_vals: list = []
         self._pinned: set = set()
         self._n_segments = 0
-        self._n_corr = 0
         self._profile_enabled = config.env_bool(config.ENGINE_PROFILE_ENV)
         self.profile: dict = {}
         self._prof_lock = None
@@ -479,24 +437,6 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
         self._ocr_confs = v
 
     @property
-    def corrected_values(self) -> list:
-        """每段纠正后读数（DP/尖峰第二遍后；finalize 可重设）。"""
-        return self._corr_vals
-
-    @corrected_values.setter
-    def corrected_values(self, v: list) -> None:
-        self._corr_vals = v
-
-    @property
-    def confidence_values(self) -> list:
-        """每段置信度（_dense_correct 前）。"""
-        return self._conf_vals
-
-    @confidence_values.setter
-    def confidence_values(self, v: list) -> None:
-        self._conf_vals = v
-
-    @property
     def n_segments(self) -> int:
         """段总数（run 后有效；无段时 0）。"""
         return getattr(self, '_n_segments', 0)
@@ -504,15 +444,6 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
     @n_segments.setter
     def n_segments(self, v: int) -> None:
         self._n_segments = v
-
-    @property
-    def n_corrected(self) -> int:
-        """纠正段数（DP + 第二遍尖峰）。"""
-        return getattr(self, '_n_corr', 0)
-
-    @n_corrected.setter
-    def n_corrected(self, v: int) -> None:
-        self._n_corr = v
 
     def _prof_end(self, group: str, key: str, t0: float) -> None:
         """累加一段耗时到 profile（线程安全；关闭时仅一次属性判断）。"""
@@ -524,10 +455,12 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
             d[key] = d.get(key, 0.0) + elapsed
 
     def _open_vr(self):
-        """按 decode_backend 打开 decord 解码器（auto/cpu/nvdec）。
+        """按 decode_backend 打开解码器（auto/cpu/nvdec/hybrid）。
 
             auto: 尝试 GPU (NVDEC) 失败回退 CPU。cpu: 强制 CPU。
             nvdec: 强制 GPU（失败回退 CPU 并警告）。替代旧 DECORD_FORCE_CPU env。
+            hybrid: CPU+NVDEC 混合解码（HybridDecoder，kfe 分片双生产者竞争）；
+                NVDEC 不可用时回退 CPU 并警告；激活安全门见下方条件。
 
             ROI-first（decord ≥0.7.5）：构造时传入固定 ROI（半开区间）——
             解码器只输出该矩形（CPU filter 先 crop 再转换 / GPU 转换 kernel
@@ -544,14 +477,14 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
         backend = (self._decode_backend or 'auto').lower()
         vr = None
         label = 'CPU'
-        if backend in ('auto', 'nvdec'):
+        if backend in ('auto', 'nvdec', 'hybrid'):
             try:
                 from decord import gpu as _g
                 vr = self._open_decord_reader(_g(0), roi_kw)
                 label = 'GPU'
             except Exception:
                 vr = None
-                if backend == 'nvdec':
+                if backend in ('nvdec', 'hybrid'):
                     logger.warning('NVDEC 解码不可用，回退 CPU')
         if vr is None:
             vr = self._open_decord_reader(_cpu(0), roi_kw, num_threads=self._decode_num_threads())
@@ -572,15 +505,15 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
             except Exception:
                 self._codec = ''
         self._remember_color_range(vr)
-        # CPU+NVDEC 混合解码（闲置 CPU 帮解码）：仅 auto/nvdec、非 AV1、
-        # stride==1、未开 dual/GPU 管线时生效；失败回退纯 GPU 不致命。
-        if (label == 'GPU' and backend == 'auto'
+        # CPU+NVDEC 混合解码（decode_backend="hybrid" 显式选择，与 auto/cpu/nvdec
+        # 并列）：NVDEC 与 CPU 软解作为双生产者按 kfe 分片竞争（HybridDecoder）。
+        # 安全门保留：stride==1（顺序交付语义）、未开 GPU 全驻留管线、编码非
+        # AV1（CPU 软解 AV1 已知净负）；NVDEC 不可用时上面已回退 CPU 并警告。
+        # 初始化失败回退纯 GPU 不致命。
+        if (backend == 'hybrid' and label == 'GPU'
                 and self._sample_stride == 1
-                and not self._dual_pipeline
-                and not getattr(self, '_in_dual_worker', False)
                 and not self._gpu_pipeline_enabled()
-                and self._codec not in ('', 'av1')
-                and config.env_bool(config.HYBRID_DECODE_ENV)):
+                and self._codec not in ('', 'av1')):
             try:
                 from hybrid_decode import HybridDecoder
                 _mc = int(_os.environ.get(
@@ -702,7 +635,7 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
 
         返回 dict：q（段任务队列）、results（全局段索引 → text/conf/rep）、
         err、wall、put（投递段任务）、finish（哨兵并 join OCR worker）。
-        单流水线仍用该会话；双流水线多条切片共用同一会话，避免每片重建
+        引擎统一使用单一 OCR 会话；跨切片持续复用，避免每片重建
         OCR worker / infer 线程造成屏障。
         """
         from queue import Full, Queue
@@ -738,11 +671,11 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
                     _t_eng = time.perf_counter()
                     _engine_progress = lambda msg: self._progress(msg, 2.5)
                     ot = self._ocr_num_threads()
-                    dual_onnx = (self._ocr_engine_type() == 'onnxruntime'
-                                 and ot >= config.DUAL_ONNX_MIN_THREADS
-                                 and config.env_bool(config.DUAL_PIPELINE_ONNX_ENV,
-                                                     default=True))
-                    if dual_onnx:
+                    ocr_instances = (self._ocr_engine_type() == 'onnxruntime'
+                                     and ot >= config.OCR_INSTANCES_MIN_THREADS
+                                     and config.env_bool(config.OCR_INSTANCES_ENV,
+                                                         default=True))
+                    if ocr_instances:
                         half = max(2, ot // 2)
                         engines = [OcrEngine(self._ocr_model, 'onnxruntime', fill_width=self._fill_width, num_threads=half, progress_cb=_engine_progress) for _ in range(2)]
                     else:
@@ -892,106 +825,10 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
             "seg_idx": 0,
         }
 
-    def _run_parallel_chunk(self, worker, vr, session, chunk_idx: int,
-                            start: int, end_f: int, n_chunks: int,
-                            th: int | None = None,
-                            seek_required: bool = True):
-        """双流水线 worker 处理单个切片的解码/分段，送入共享 OCR 会话。
 
-        不等待 OCR 完成、不新建 OCR 线程——只把段任务塞进 session["q"]，
-        这样下一个切片可以立即开始解码，真正跨片重叠。
-        th：全局分段 Otsu 阈值（主线程校准一次后传入；None=片内自行校准，
-        仅保留给非并行调用方）。传 th 时跳过每片 50 帧校准解码，且各片
-        二值化阈值与单流水线一致（消除跨片阈值漂移）。
-        返回 (segs, keys, reps, rep_crops, decode_elapsed, first_rep_gray,
-              last_rep_gray, producer_elapsed)；首/末代表帧灰度与生产者净耗时
-        供跨片边界 merge_similar 缝合与让位判定使用。
-        """
-        total = len(vr)
-        end = min(worker._frame_end or total, total)
-        frames = list(range(start, end, worker._sample_stride))
-        if not frames:
-            raise ValueError(
-                f"帧区间为空: frame_start={start}, "
-                f"frame_end={end}, total={total}")
-        calib: list = []
-        if th is None:
-            # 兼容路径：无全局阈值时片内自行校准（前 SEG_CALIB_FRAMES 帧 Otsu）。
-            # 共用宿主校准助手 _host_calibrate：stride>1 走 get_batch 等差快速路径、
-            # stride==1 走 next_roi 顺序流；先精确 seek 到片首（该路径依赖解码器
-            # 当前位置语义，与旧实现一致）。
-            calib, th = _host_calibrate(worker, vr, frames, with_dev=False,
-                                        profile=False, seek_first=start)
-        worker._bin_thresh = th
-        # 生产者净耗时（seek+解码+灰度/sharp/二分/分段 分相累加）：之前 seek
-        # 未计入吞吐信号，导致试点测速远高于真实整片速度（AV1 实测真实比 2.2:1
-        # 试点却算出 6.4:1）。把 seek 计入后，测速才能反映每片实际成本。
-        prod_acc = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        # 全局阈值路径仍需精确定位到本片起点：只依赖 get_batch 随机访问会
-        # 让 decord 每次从当前/文件头跳到目标帧（实测 CPU 解码吞吐约慢一倍），
-        # 而先 seek_accurate 一次后 get_batch 可走连续等差步长快速路径。
-        # 单次精确 seek 成本 ~150-300ms，远小于随机访问带来的额外解码开销。
-        # 例外：本片起点与上一片终点相邻（同一流水线沿帧序连续扫掠）时解码
-        # 器已停在正确位置附近，seek_accurate 实测 ~1ms（vs 乱序跳跃 40-70ms），
-        # 直接跳过——分片越密（每关键帧一片）节省越明显。
-        # 另：NVDEC 硬解路径跳过显式 seek——get_batch 内部随机定位实测比显式
-        # seek+get_batch 更便宜（本机 h264 GPU ~46ms vs ~69ms，且硬解随机访问
-        # 不衰减）；CPU 软解仍保留显式 seek（跳过会让随机访问约慢一倍，字幕
-        # 宽 ROI 实测 +3.5s）。DUAL_PIPELINE_SEEK=1 强制全部显式；=0 全部跳过。
-        _seek_env = _os.environ.get(
-            config.DUAL_PIPELINE_SEEK_ENV, '').strip().lower()
-        _seek_all_off = _seek_env in ('0', 'false', 'no', 'off')
-        _seek_gpu_skip = (
-            _seek_env not in ('1', 'true', 'yes', 'on')
-            and worker._backend.startswith('decord/GPU'))
-        if (th is not None and seek_required
-                and not _seek_all_off and not _seek_gpu_skip):
-            _t_seek = time.perf_counter()
-            vr.seek_accurate(start)
-            prod_acc[0] += time.perf_counter() - _t_seek
-            worker._prof_end('producer', 'seek_accurate', _t_seek)
-        # 帧流（校准帧 + 批量解码→灰度→sharp→二值化）与分段状态机由共享助手
-        # _host_frame_stream / _host_segment_frames 承担（见模块顶部），本路径
-        # 仅传入 phase_times=prod_acc 做生产者净耗时统计（含 OCR 背压免疫口径）。
-
-        segs: list = []
-        keys: list = []
-        reps: list = []
-        rep_crops: dict = {}
-        seg_idx = int(session.get("seg_idx", 0))
-        t0 = time.perf_counter()
-
-        def emit(seg, r_frame, r_crop, r_dev, _r_gray, frac) -> None:
-            nonlocal seg_idx
-            keys.append(seg_idx)
-            reps.append(r_frame)
-            session["put"]((seg_idx, r_frame, r_crop, r_dev, frac))
-            if worker._keep_crops:
-                rep_crops[r_frame] = r_crop
-            seg_idx += 1
-
-        # 分段状态机（共享 _host_segment_frames，见模块顶部）：段闭合/相似
-        # 合并/代表帧选择/首末代表灰度/取消与进度节奏全部收敛于此；并行片
-        # 的产物净耗时统计（prod_acc[5]）经 phase_times 传入。
-        first_gray, last_gray = _host_segment_frames(
-            worker, frames,
-            _host_frame_stream(worker, frames, vr, calib, th,
-                               phase_times=prod_acc),
-            debug_tag='PB',
-            progress_prefix=f'[{worker._backend}] 并行解码+分段',
-            emit=emit, segs=segs, rep_crops=rep_crops,
-            phase_times=prod_acc)
-        session["seg_idx"] = seg_idx
-        return (segs, keys, reps, rep_crops, time.perf_counter() - t0,
-                first_gray, last_gray, sum(prod_acc))
-
-    def _run_pipelined(self, _ocr_engines: list | None = None,
-                       _force_single: bool = False,
-                       _external_vr=None):
+    def _run_pipelined(self, _ocr_engines: list | None = None):
         """流水线：解码线程增量分段，OCR 线程批处理已闭合段的代表帧。
-        _ocr_engines：内部并行流水线复用 OCR 引擎时传入；None 走常规创建。
-        _force_single：内部回退单实例时传入，绕过 dual_pipeline 分发。
-        _external_vr：内部并行流水线复用已打开解码器时传入（不重新 open）。
+        _ocr_engines：内部复用 OCR 引擎时传入；None 走常规创建。
 
             解码是 I/O 瓶颈（CPU 占用低），段边界（win3）在解码循环内增量计算，
             段一闭合就把代表帧（最清晰）交给 OCR 工作线程 —— 解码∥OCR 重叠摊薄
@@ -1001,17 +838,12 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
             返回 (frames, segs, ocr_texts, ocr_confs, rep_frames)；
             self.crops = {rep_frame: crop}（仅代表帧，供 review 预览，
             比存全帧省内存）。分段/代表帧选择语义由模块级共享状态机
-            _host_segment_frames 承担（本方法与并行片路径共用）。
+            _host_segment_frames 承担。
             """
-        if self._dual_pipeline and _ocr_engines is None and not _force_single:
-            return self._run_pipelined_parallel()
         if self._gpu_pipeline_enabled():
             return self._run_pipelined_gpu()
         _t_open = time.perf_counter()
-        if _external_vr is not None:
-            vr = _external_vr
-        else:
-            vr = self._open_vr()
+        vr = self._open_vr()
         if self._fps is None:
             _fps = _read_fps_from_vr(vr)
             self._fps = _fps if _fps else config.DEFAULT_FPS_FALLBACK

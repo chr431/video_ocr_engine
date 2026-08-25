@@ -1,9 +1,10 @@
-"""管线引擎配置（engine_config）— 解码/OCR/分段/纠错域常量。
+"""管线引擎配置（engine_config）— 解码/OCR/分段域常量。
 
 独立引擎仓库的配置单一事实源，供 engine 内 ocr_native / ocr_trt /
 segmentation / video_utils 与引擎外的上层应用直接引用。
-RaceVideoToLog 的 config.py 通过 `from engine_config import *` 聚合再导出
-（GUI 与 `import config` 兼容），GUI 专属常量（颜色/窗口/图表）留在应用侧。
+上层应用可通过 `from engine_config import *` 聚合再导出（GUI 与
+`import config` 兼容），应用侧专属常量（颜色/窗口/图表/领域后处理参数）
+留在应用侧。
 
 自拆仓（v0.1.0）起：本文件随 video_ocr_engine 独立仓库发布、独立版本线。
 """
@@ -18,10 +19,12 @@ __version__ = "0.3.0"
 # ═══════════════════ 环境变量助手与名称常量 ═══════════════════
 # 引擎全部 env 开关/覆写在此收敛（单一事实源）。布尔开关统一走 env_bool：
 # 缺省取 default，值匹配真集/假集，未识别值回退 default——与各路径历史
-# 语义一致；数值型 env（OCR_THREADS 等）只在此定义名称，解析在调用点。
+# 语义一致；数值型 env（OCR_THREADS / HYBRID_MAX_CHUNKS 等）只在此定义名称，
+# 解析在调用点。
 
 _TRUTHY_VALUES = ("1", "true", "yes", "on")
 _FALSY_VALUES = ("0", "false", "no", "off")
+
 
 def env_bool(name: str, default: bool = False) -> bool:
     """读取布尔开关 env：缺省 → default；值在真/假集 → 对应布尔；其余回退 default。"""
@@ -35,33 +38,32 @@ def env_bool(name: str, default: bool = False) -> bool:
         return False
     return default
 
-# 双流水线（值型/开关型各自已定义的保持原常量名，此处补其余全量）
-DUAL_PIPELINE_ONNX_ENV: str = "DUAL_ONNX"                       # 0 关闭双 ONNX 实例
-DUAL_PIPELINE_SLOW_RATIO_ENV: str = "DUAL_SLOW_RATIO"           # 让位阈值覆盖（值型）
-DUAL_PIPELINE_NO_CODEC_FALLBACK_ENV: str = "DUAL_NO_CODEC_FALLBACK"  # 1 关闭编码回退
+
 # 解码 / OCR / 分段
 DECORD_FORCE_CPU_ENV: str = "DECORD_FORCE_CPU"                  # 1 强制 CPU 解码（旧钩子）
 OCR_THREADS_ENV: str = "OCR_THREADS"                            # OCR 推理线程数覆盖（值型）
 OCR_BATCH_ENV: str = "OCR_BATCH"                                # OCR 批大小覆盖（值型）
 OCR_GAMMA_ENV: str = "OCR_GAMMA"                                # OCR 预处理 gamma（值型）
 OCR_PAD_SMALL_ENV: str = "OCR_PAD_SMALL"                        # OCR 输入 pad 宽下限覆盖（值型）
+OCR_INSTANCES_ENV: str = "OCR_INSTANCES"                        # 0 关闭并行双 ONNX 实例
 TEXT_SEP_MERGE_ENV: str = "TEXT_SEP_MERGE"                      # 相似段合并分离模式
 # 实验/诊断开关
 GPU_PIPELINE_ENV: str = "GPU_PIPELINE"                          # 0 关闭 GPU 全驻留管线
 GPU_CTC_ENV: str = "GPU_CTC"                                    # 0 关闭 TRT 输出 GPU 归约
 ENGINE_PROFILE_ENV: str = "ENGINE_PROFILE"                      # 1 开启引擎级性能剖面
-# CPU+NVDEC 混合解码（2026-08-25 复活，hybrid_decode.HybridDecoder）：
-# 仅 auto/nvdec 且非 AV1、stride==1、未开 dual/GPU 管线时生效。
-# split=CPU 段占窗口比例；cpu_threads=0 表示 cores//2。h264 CPU 软解
-# 吞吐可达 NVDEC 两倍以上——闲置 CPU 的正确用途是帮解码（Race 全负载
-# 端到端均为 NVDEC 解码受限）。
-HYBRID_DECODE_ENV: str = "RVTOL_HYBRID_DECODE"                  # 1 开启混合解码
-HYBRID_CPU_THREADS_ENV: str = "RVTOL_HYBRID_CPU_THREADS"        # CPU reader 线程数(0=核数//2)
-HYBRID_MAX_CHUNKS_ENV: str = "RVTOL_HYBRID_MAX_CHUNKS"          # 竞争分片上限
 TRT_SUBPROBE_ENV: str = "TRT_SUBPROBE"                          # 1 开启 TRT 子相位探针
 DEBUG_BOUNDS_ENV: str = "DEBUG_BOUNDS"                          # 1 打印分段边界调试信息
+# CPU+NVDEC 混合解码（hybrid_decode.HybridDecoder，decode_backend="hybrid"）：
+# 仅 GPU(NVDEC) 可用、非 AV1、stride==1、未开 GPU 全驻留管线时生效；
+# cpu_threads=0 表示 cores//2。h264 CPU 软解吞吐可达 NVDEC 两倍以上，
+# 闲置 CPU 的正确用途是帮解码（全负载场景多为 NVDEC 解码受限）。
+HYBRID_CPU_THREADS_ENV: str = "HYBRID_CPU_THREADS"              # CPU reader 线程数(0=核数//2)
+HYBRID_MAX_CHUNKS_ENV: str = "HYBRID_MAX_CHUNKS"                # 竞争分片上限
+# 并行双 ONNX 实例的启动门限（OCR 线程数 ≥ 此值才默认拆两个实例）
+OCR_INSTANCES_MIN_THREADS: int = 8
 
 # ═══════════════════ 数据目录 ═══════════════════
+
 
 def app_data_dir() -> Path:
     """程序数据目录（本文件夹内，免安装/portable 设计）。
@@ -80,129 +82,46 @@ def app_logs_dir() -> Path:
     """运行日志目录（本目录/logs，与数据目录一致）。"""
     return app_data_dir() / "logs"
 
-# ═══════════════════ 物理常量 ═══════════════════
-MPS_TO_KMH: float = 3.6          # m/s → km/h 转换因子
-
 # ═══════════════════ 用户可配置默认值 ═══════════════════
 DEFAULT_OCR_MODEL: str = "v6_small"     # 唯一 OCR 模型（v2.13 起移除 tiny / 重 OCR）
-DEFAULT_SPEED_FORMAT: str = "km/h"     # 速度单位 (km/h / m/s / mile/h)
 DEFAULT_BUFFER_SIZE: int = 128          # 解码∥OCR 流水线队列缓冲（段数）
                                         # 64→128：GPU 解码突发时缓冲背压，减少
                                         # 解码线程 q.put 阻塞等待（GPU+CPU wall
                                         # -0.3s；256 无进一步收益）
-DEFAULT_DECODE_BACKEND: str = "auto"   # 解码后端 (auto / cpu / nvdec)
-DECODE_BACKEND_KEYS: list[str] = ["auto", "cpu", "nvdec"]
+DEFAULT_DECODE_BACKEND: str = "auto"    # 解码后端 (auto / cpu / nvdec / hybrid)
+DECODE_BACKEND_KEYS: list[str] = ["auto", "cpu", "nvdec", "hybrid"]
 DECODE_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU",
-                                         "nvdec": "NVDEC"}
-# 单实例双完整流水线并行（可选）：一个 FieldExtractor 把同一视频切成多个连续
-# 小片，两条完整解码+分段+OCR 流水线（互补后端组合）作为消费者从队列取片，
-# 动态负载均衡；最后按帧序合并。默认关闭。需要 NVDEC 和 TensorRT 均可用。
-DUAL_PIPELINE_ENV: str = "DUAL_PIPELINE"
-
-# 唯一分片方法 = 每关键帧一片（kfe）：试点之外的大竞争区不再等分（dual-2 /
-# DUAL_PROPORTIONAL 等过时方法已移除），而是按剩余区域内每个关键帧边界切出
-# 一片，交给共享队列自由竞争。边界落在关键帧上、seek 便宜（相邻片连续扫掠
-# 免精确 seek）；关键帧越密，片越多，快慢路径越容易自动配平。竞争平衡由
-# INFLIGHT 竞争闸门 + 端到端让位保证（见 DUAL_PIPELINE_INFLIGHT /
-# DUAL_PIPELINE_SLOW_RATIO）。
-# kfe 的切片粒度控制：基础最小片间距（采样帧数）之上，若关键帧过密（如 mkv
-# 重编码场景每 30-140 源帧一个关键帧）导致片数超过上限，则逐步放大间距合并
-# （边界仍落在关键帧附近，seek 便宜，片数受控在 MAX_CHUNKS 内）。片数太多
-# 会让 seek+每片固定开销线性爆炸，太少又回到粗颗粒失衡。
-DUAL_KEYFRAME_EVERY_MIN_GAP_ENV: str = "DUAL_KEYFRAME_EVERY_MIN_GAP"
-DUAL_KEYFRAME_EVERY_MIN_GAP: int = 16
-DUAL_KEYFRAME_EVERY_MAX_CHUNKS_ENV: str = "DUAL_KEYFRAME_EVERY_MAX_CHUNKS"
-DUAL_KEYFRAME_EVERY_MAX_CHUNKS: int = 8
-# 竞争取片 in-flight 上限（片数）：某条流水线“已取但 OCR 尚未排空”的片数
-# 达到该值时暂停取片，等自己的 OCR 追上来——防止“解码快、OCR 慢”的路径
-# 在共享队列竞争中跑得太前（抢占过多切片却因 OCR 瓶颈拖慢整体）。片数口径
-# 与内容无关，天然免疫“分段稀疏时段做不了多少 OCR 工作”的测量偏差。
-DUAL_PIPELINE_INFLIGHT_ENV: str = "DUAL_PIPELINE_INFLIGHT"
-DUAL_PIPELINE_INFLIGHT: int = 1
-# 双流水线精确 seek 控制（实验）：默认仅 CPU 软解路径做显式 seek_accurate——
-# NVDEC 硬解的 get_batch 内部随机定位实测比显式 seek+get_batch 更便宜（本机
-# h264 GPU ~46ms vs ~69ms），且硬解码随机访问不衰减；CPU 软解跳过显式 seek
-# 会让随机访问约慢一倍（字幕/宽 ROI 实测 +3.5s），故仍需显式 seek。
-# DUAL_PIPELINE_SEEK=1 强制全部显式 seek（旧保守行为）；=0 全部跳过（实验，
-# 仅 h264 小片略快、字幕/CPU 灾难，勿作默认）。
-DUAL_PIPELINE_SEEK_ENV: str = "DUAL_PIPELINE_SEEK"
-DUAL_PIPELINE_MIN_CHUNK_FRAMES: int = 16  # 头部试点/确认片的最小采样帧数（太小
-                                          # 则按此下限放大片尺寸；竞争片粒度由
-                                          # DUAL_KEYFRAME_EVERY_MIN_GAP 控制）
-# 双流水线最低采样帧数：低于该值时固定开销（探测解码器打开+全局校准、
-# 第二套 OCR 引擎初始化、跨片边界）无法摊销，实测 1500 帧窗口反而变慢
-# （+7~18%），直接回退单流水线。
-DUAL_PIPELINE_MIN_FRAMES: int = 3000
-# 头部小片单位：试点/确认片各约 1/PILOT_DIV 视频长度（共 4 个，两条流水线
-# 各领 1 个试点 + 各取 1 个确认后即可做让位判定）；失衡时慢路径最多浪费
-# 约 2×1/DIV 的头部帧。太小会被首次解码 warm-up 污染吞吐估计。
-DUAL_PIPELINE_PILOT_DIV: int = 24
-# 已知互补 CPU 流水线净负的编码（默认互补组合时直接回退单流水线）：
-# AV1 CPU 软解吞吐仅 NVDEC 的 1/5 且与 GPU 路径争抢，双流水线实测 +42~125%。
-# 显式 dual_backends 不受此回退影响。env DUAL_NO_CODEC_FALLBACK=1 关闭。
-DUAL_PIPELINE_CODEC_FALLBACK: tuple = ("av1",)
-# 慢路径让位阈值：某条流水线稳态吞吐（排除 warm-up 试点样本）< 另一条 ×
-# 该值且队列仍有剩余片时，停止取片（剩余片由快路径完成，避免尾部等待）。
-# 0.8 = 只要稳态明显偏慢（>20%）就让位：实测字幕场景 GPU/CPU 稳态比 ~0.7，
-# 阈值过低会让慢路径全程拖尾。0 = 禁用。
-# env DUAL_SLOW_RATIO 可覆盖（实验钩子）。
-DUAL_PIPELINE_SLOW_RATIO: float = 0.8
-# 混配（TRT ⊕ ONNX）默认让位阈值：两条路径分属 GPU/CPU，阈值过高会误让位
-# （0.8 曾把可并行对端交给慢路径），阈值过低/0 又会在大幅失衡时无法止损。
-# 实测 0.5 兼得：h264 对比路径不触发、AV1 极端差触发快路径接管。
-# env DUAL_SLOW_RATIO 仍可显式覆盖。
-DUAL_PIPELINE_MIXED_SLOW_RATIO: float = 0.5
-# 双流水线中 TRT（GPU）侧消费者的 OCR 线程预算：TRT 推理在 GPU 上执行、
-# 预处理是 worker 单线程 numpy，多线程无收益；让出物理核给 CPU 软解+ONNX 侧。
-DUAL_PIPELINE_TRT_CPU_THREADS: int = 2
-# 混配保护：当两条流水线的 OCR 后端不同（TRT ⊕ ONNX）时，ONNX 侧线程预算
-# 上限。早期引擎级判别实验认为限线程即限聚合访存流量；五轮修正后确认混配
-# 端到端瓶颈主要是解码 seek 与让位，保此上限作为防御性保护仍可保留（本机
-# 修正后默认混配与显式双 TRT 基本持平）。用户可用 DUAL_SLOW_RATIO /
-# OCR_THREADS 覆盖。
-DUAL_PIPELINE_ONNX_PEER_THREADS: int = 6
-# 双流水线“极端悬殊”让位档（单次取样即确认）：本流水线端到端吞吐 < 对端 ×
-# 该比率时即使只取过一片也可让位（容忍首次解码 warm-up 噪声）；常规档
-# （DUAL_PIPELINE_SLOW_RATIO / MIXED_SLOW_RATIO）需要两次取样确认。0.35 为
-# 2026-08 六轮实测定档（test3 GPU 试点被 warm-up 拖低而误让位即阈值过高所致）。
-DUAL_PIPELINE_EXTREME_SLOW_RATIO: float = 0.35
-# 双 ONNX 实例启动的 OCR 线程下限：主机路径 OCR 线程预算 ≥ 该值才创建双
-# ONNX 引擎各分半核（实测少核无收益）；小于该值保持单实例。0 永不开双。
-DUAL_ONNX_MIN_THREADS: int = 8
+                                         "nvdec": "NVDEC",
+                                         "hybrid": "混合(CPU+NVDEC)"}
 # GPU 全驻留管线（_gpu_pipeline）解码批大小：64 为 GPU 分段实验最优（更大批
 # 减少 kernel/同步次数），与宿主 DECODE_BATCH_SIZE=16 刻意不同——两条路径
 # 独立调参，勿统一为一个常量。
 GPU_PIPELINE_DECODE_BATCH: int = 64
-DEFAULT_OCR_BACKEND: str = "auto"      # OCR 推理后端 (auto / cpu / tensorrt)
+DEFAULT_OCR_BACKEND: str = "auto"       # OCR 推理后端 (auto / cpu / tensorrt)
 OCR_BACKEND_KEYS: list[str] = ["auto", "cpu", "tensorrt"]
 OCR_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU", "tensorrt": "TensorRT"}
-DEFAULT_MAX_SPEED: float = 400.0       # 最大速度 (km/h)
-DEFAULT_MAX_ACCEL: float = 50.0        # 最大加速度 (m/s²)
-DEFAULT_FORCE_ASPECT: float = 0.0      # 强制横向宽高比（0=不启用；>0 时宽度
-                                       # 强制 = 48×此值，纠正扁宽字体）
-DEFAULT_FILL_WIDTH: int = 224          # OCR 输入 pad 宽度下限（引擎 _resize_norm
-                                       # pad 到该总宽）。扫描（test2/5/6 全量）：
-                                       # 320 raw 最优 0.53% vs 224 0.67%（test5 7→2、
-                                       # test6 17→5），但端到端 224 最优（13 vs 16）
-                                       # ——test5/6 的 raw 提升被 DP 吸收，test2 宽
-                                       # pad 引入混杂邻域 DP 拉中间值（纠错 5）。
-                                       # GUI 可调 160-320，默认 224
-DEFAULT_SAMPLE_STRIDE: int = 1         # 分频采样步长（默认 1 = 逐帧，与
-                                       # RaceVideoToLog 完全兼容）。>1 时只
-                                       # 解码/分段/OCR 每个第 N 帧（字幕等慢
-                                       # 更新内容显著降低处理压力，时间戳仍取
-                                       # 真实帧号）。需 decord fork ≥0.7.12 的
-                                       # 等差步长快速路径，否则退化为逐索引 seek
-OCR_GAMMA: float = 2.0                 # OCR 预处理灰度 gamma 增强指数（正式预处理：
-                                       # 白字黄底等背景色块场景放大高段分离；灰度
-                                       # 先于 gamma——RGB 逐通道 gamma 视觉差异小、
-                                       # 回归多。1.0=纯灰度不增强，0=保留 RGB）
+DEFAULT_FORCE_ASPECT: float = 0.0       # 强制横向宽高比（0=不启用；>0 时宽度
+                                        # 强制 = 48×此值，纠正扁宽字体）
+DEFAULT_FILL_WIDTH: int = 224           # OCR 输入 pad 宽度下限（引擎 _resize_norm
+                                        # pad 到该总宽）。扫描（test2/5/6 全量）：
+                                        # 320 raw 最优 0.53% vs 224 0.67%（test5 7→2、
+                                        # test6 17→5），但端到端 224 最优（13 vs 16）。
+                                        # GUI 可调 160-320，默认 224
+DEFAULT_SAMPLE_STRIDE: int = 1          # 分频采样步长（默认 1 = 逐帧）。>1 时只
+                                        # 解码/分段/OCR 每个第 N 帧（字幕等慢更新
+                                        # 内容显著降低处理压力，时间戳仍取真实帧号）。
+                                        # 需 decord fork ≥0.7.12 的等差步长快速路径，
+                                        # 否则退化为逐索引 seek
+OCR_GAMMA: float = 2.0                  # OCR 预处理灰度 gamma 增强指数（正式预处理：
+                                        # 白字黄底等背景色块场景放大高段分离；灰度
+                                        # 先于 gamma——RGB 逐通道 gamma 视觉差异小、
+                                        # 回归多。1.0=纯灰度不增强，0=保留 RGB）
 
 # ═══════════════════ 段管线参数 ═══════════════════
 SEG_C: float = 5.0              # 分段聚类阈值：max 3×3 窗口和 < C ⇒ 显示未变
 # 相似段合并（生产默认开启）：连续两段代表帧在字幕/背景分离图上比较，
 # 平均绝对差 ≤ 阈值时视为同一视觉内容（如噪声把同一条字幕切成多段），
-# 合并后只 OCR 一次。Race 全量实测最终错误 0、分段 -1.6%。
+# 合并后只 OCR 一次。
 DEFAULT_MERGE_SIMILAR: bool = True
 # 相似帧合并使用的分离方案：binary（黑底白字）为引擎默认。
 # OCR 输入仍保持灰度+gamma，不直接使用 binary（实测会降低 OCR 准确率）。
@@ -211,73 +130,13 @@ SEG_MERGE_SIMILAR_THRESHOLD: float = 3.0
 # 相似段合并的“显著变化像素”上限（ROI 面积比例）：即使平均绝对差很小，若
 # 变化像素占比超过该比例，仍视为真实内容变化（防止宽 ROI 中单字短字幕被误合并）。
 SEG_MERGE_MAX_CHANGED_RATIO: float = 0.01
-SEG_WIN: int = 30               # 段级检测带宽窗口（换算成帧：×中位段间距，上限 120 帧）
-SEG_MULT: float = 2.0           # 检测门限倍率：|值-中值| > 带宽×mult ⇒ suspect
-SEG_MIN_DEV: float = 6.0        # 纠正最小偏差：|插值-当前| > 此值才改
-SEG_MED_K: int = 10             # 中值滤波窗口半宽（段索引）：平滑值曲线，误读=尖峰
-SEG_DETECT_FLOOR: float = 3.0   # 带宽下限 (km/h)：防 ±1-2 噪声被 flag
-                                # （floor4×mult2=gate8 会漏 8-off 尖峰，如
-                                # test.mp4 1499 段 160 在 168 平板上）
-SEG_SINGLE_FLOOR: float = 2.0   # 单帧段专用带宽下限：单帧段误读率 4.2% vs
-                                # 多帧 0.3%（12.6×，80% 误读是单帧段）→ 平缓区
-                                # gate 4 抓 ≥5-off 单帧误读；弯曲区按实际带宽
-                                # （↓到 1.5/1.0 虽提升 ±1 召回 94.5→96.7%，但
-                                #  当前纠错把正确单帧段改错 → test 19→22/23 回归，
-                                #  需配合纠错保守化（下一步）才可放宽）
-SEG_ANCHOR_MAX_FRAMES: float = 120.0  # 纠错锚点最大帧距离：近锚点才插值（防远锚点误插值）
-
-# ═══════════════════ 段级置信度（中值偏差 + 急动度加权，供 DP 锚定） ═══════════════════
-SEG_CONF_W_MED: float = 0.7       # 中值偏差信号权重（主导锚定：紧邻误读的
-                                  # 正确段中值分高 → 被 pin，防 DP 平滑拖走）
-SEG_CONF_W_JERK: float = 0.3      # 急动度信号权重：辅助区分（刹车中值低但
-                                  # 急动度高 → conf 中，raw 观测保其不变）
-SEG_CONF_JERK_SCALE: float = 3.0  # 急动度分指数尺度 (km/h)：100*exp(-jerk/scale)
-
-# ═══════════════════ 段级稠密格点 DP 纠正（对齐旧 viterbi_dense） ═══════════════════
-# 观测 = 纯惩罚偏离 raw（旧系统 ref 来自重 OCR，重 OCR 已删 → ref 删除）。
-# 观测存在的意义：惩罚任何改动，防止把正确的改错。DP 只在转移平滑性
-# （加速度约束）强烈要求时移动值。
-SEG_DP_OBS_WEIGHT: float = 1.0      # 观测权重：非锚点填向局部锚点插值（曲线），
-                                    # 高权重让 DP 输出精确贴合曲线（锚点插值
-                                    # 本身给基线，DP 再加全局平滑处理运行）
-SEG_DP_ACCEL_WEIGHT: float = 1.0    # 转移权重：超加速度约束的二次惩罚
-SEG_DP_MAX_DV_CAP: float = 4.0      # 每段转移最大变化 (km/h)：max_dv = min(
-                                    # max_accel×dt×3.6, cap)。长段间距时
-                                    # max_accel×dt 过松（8-off 跳变免费），
-                                    # cap 保证误读跳变被惩罚、DP 拉正
-SEG_DP_ANCHOR_COST: float = 0.1     # 高置信段锚定代价（固定到 raw）
-SEG_DP_CHANGE_THRESHOLD: float = 3.0  # |DP输出 - raw| > 此值才修正：干净视频
-                                      # 1-off 拉偏不提交；放宽到 3.0 消掉 2-off
-                                      # 正确段被 DP 微调改错（gamma raw 下实测
-                                      # 误改 2→0，漏纠不变，最终 15→13）
-SEG_DP_ANCHOR_CONF: float = 20.0   # 锚定阈值：conf ≥ 此值的段固定到 raw
-                                   # （门控 conf 后正确段 p10=72 干净分离，
-                                   #  T=20 pin 100% 正确、仅 9% 误读）
-
-# ═══════════════════ 孤立尖峰豁免（A4，13→12 实测） ═══════════════════
-# conf∈[20,50) 的锚定段若 jerk（二阶差分）中等 → 解除锚定交给 DP。
-# 判别依据（5 视频 722 段实测）：真刹车 jerk≈0（713 段全在 [0,9] 且
-# 绝大多数 [0,4]）、丢位邻居污染 jerk≥80（9 段）、孤立尖峰误读 jerk 中等
-# （如 test#74 raw=107 truth=103 jerk=9 —— 锚定会保留误读）。带通 [5,40]
-# 只抓尖峰：解锚 24 段中 23 误读 + 1 正确（正确段也未被改坏），13→12
-# 零误改。参数敏感性：下界 0 灾难（刹车全解锚，78 误改）、下界 3-8 ×
-# 上界 20-60 全部稳定 12。0=禁用豁免。
-SEG_DP_DEANCHOR_JERK_MIN: float = 5.0
-SEG_DP_DEANCHOR_JERK_MAX: float = 40.0
 
 # ═══════════════════ OCR 输入 pad 宽度下限 ═══════════════════
-# 速度数字是窄图（48 高后 78-160 宽）。v6_small 在宽 pad 更准
+# 窄图（48 高后 78-160 宽）在宽 pad 下 v6_small 更准
 # （test6：224→err 0.09%，192→0.16%，48~96→0.69~1.19%；256 精度相同但更慢）。
 OCR_PAD_WIDTH_MIN: int = 224
 OCR_PAD_WIDTH_MIN_BY_MODEL: dict[str, int] = {
     "v6_small": 224,
-}
-
-# ═══════════════════ 速度单位转换 ═══════════════════
-SOURCE_TO_KMH: dict[str, float] = {
-    "m/s": MPS_TO_KMH,
-    "km/h": 1.0,
-    "mile/h": 1.609344,
 }
 
 # ═══════════════════ 运行参数（v2.15.1 起从代码中收敛） ═══════════════════
@@ -298,44 +157,6 @@ SEG_CALIB_FRAMES: int = 50
 OTSU_FALLBACK_THRESH: int = 127
 # 解码器无法给出 fps 时的兜底帧率
 DEFAULT_FPS_FALLBACK: float = 30.0
-# _local_bandwidth 的帧窗口上限（config.SEG_WIN 注释中 "上限 120 帧" 的实体）
-SEG_WIN_MAX_FRAMES: float = 120.0
-# 段级置信度的结构性门槛（历史调参结论，勿单独改动）
-SEG_CONF_MIN_NEIGHBORS: int = 3
-SEG_CONF_SHORT_NEIGHBOR: float = 30.0
-SEG_CONF_EDGE: float = 100.0
-SEG_CONF_MED_GATE: float = 50.0
-# 一致性孤岛下限（近似/带波动 run）：累计帧数少于该值，即使局部中值贴合，
-# conf 也封顶到 SHORT_RUN_CAP（不能成为 HIGH_TRUST/DP 锚点）。
-# 127,128 这类 2 帧近似孤岛 → 不信任；带小波动的 3 帧以上才允许高置信。
-SEG_CONF_MIN_CONSISTENT_FRAMES: int = 3
-# 完全相同（无内部波动）的 run 需要更多帧才允许高置信：4 帧连续 127 这种
-# 短促平坦孤岛仍不锚定；带小波动的近似 run 反而 3 帧即可信（更像真实斜坡）。
-SEG_CONF_MIN_CONSISTENT_FRAMES_EXACT: int = 5
-SEG_CONF_SHORT_RUN_CAP: float = 15.0
-# 一致性孤岛的“近似相同”容差 (km/h)：孤岛内允许的小波动范围。
-# 只靠完全相同会把 127,128 这种两个误读互相撑腰的短孤岛漏掉。
-SEG_CONF_ISLAND_TOL: float = 2.0
-# 一致性孤岛还需“脱离曲线”：短近似相同值相对 run 外邻居中值的偏差
-# > 局部带宽×该倍率 才封顶（防止误伤坡道上的正常短段）
-SEG_CONF_ISLAND_DEV_MULT: float = 3.0
-# A4 孤立尖峰豁免的 conf 上界（下界=SEG_DP_ANCHOR_CONF）
-SEG_DP_DEANCHOR_CONF_MAX: float = 50.0
-
-# ═══════════════════ 第二遍尖峰检测（孤立 2-off 单帧误读，v2.16 实验） ═══════════════════
-# 生产第一遍（detect+conf+DP）去污染后，对未改动的 len=1 段做"孤立尖峰"
-# 判别：±k 段窗口两侧中值一致偏离 ≥ thresh 且 raw 值在邻域内不重复。
-# 修正目标 = 离 raw 更远的一侧中值；|raw-target| ≥ min_fix 才提交。
-# 实测（5 视频夹具全量）：final 11→5（test 3→0 / test2 8→5），harm=0，
-# 零误改；剩余 5 个为真信息论极限（truth 瞬时跳变/1-off 锚点误差传播）。
-SEG_SPIKE_K: int = 2            # 侧窗口中值半宽（段索引）
-SEG_SPIKE_THRESH: float = 2.0   # 至少一侧偏离阈值 (km/h)
-SEG_SPIKE_MIN_FIX: float = 2.0  # 提交改动最小偏差 (km/h)
-SEG_SPIKE_MIN_NBR: int = 2      # 每侧最少邻居数
-# 第二遍尖峰检测的最低帧率：低于该帧率跳过（30fps 模拟实测：低帧率下
-# 相邻段真实速度变化 1-2 km/h（赛车急加速 30-60 km/h/s），正确段的孤立
-# 凸起与 2-off 误读不可区分 → 误改 9/修对 2 净负；57fps 下修 6 零误改）。
-SEG_SPIKE_MIN_FPS: float = 40.0
 # OCR 引擎内部：ONNX 单批上限与 CTC 归约分块（内存峰值控制）
 OCR_ONNX_CHUNK: int = 16
 OCR_CTC_CHUNK: int = 64
@@ -345,7 +166,7 @@ TRT_PROFILE_MIN_W: int = 32
 TRT_PROFILE_OPT_W: int = 320
 TRT_PROFILE_MAX_W: int = 2048
 TRT_WORKSPACE_BYTES: int = 1 << 30
-# TRT 引擎缓存文件名的 SM 后缀（引擎与 GPU 架构绑定）
+# TRT 引擎缓存文件的 SM 后缀（引擎与 GPU 架构绑定）
 TRT_ENGINE_SM: str = "sm89"
 # ═══════════════════ 少核 CPU 解码线程分核预算（v2.15.2 实验） ═══════════════════
 # CPU 软解 + 物理核 ≤ CPU_CORES_SPLIT_THRESHOLD 时，OCR 线程与 decord

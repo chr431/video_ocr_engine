@@ -53,11 +53,6 @@ def test_gpu_pipeline_unavailable_backends(monkeypatch):
     assert ex._gpu_pipeline_enabled() is False
 
 
-def test_gpu_pipeline_dual_takes_precedence(gpu_ok):
-    ex = _make(gray_output=True, dual_pipeline=True)
-    assert ex._gpu_pipeline_enabled() is False
-
-
 def test_gpu_pipeline_contrast_merge_falls_back(gpu_ok, monkeypatch):
     monkeypatch.setenv("TEXT_SEP_MERGE", "contrast")
     ex = _make(gray_output=True)

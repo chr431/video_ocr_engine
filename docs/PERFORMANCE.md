@@ -119,7 +119,7 @@
   - 16 核：分核反而差，保持 OCR 全核、FFmpeg 默认 2 帧线程落 SMT。
 - **AV1 CPU 软解**：dav1d 帧并行上限约 6.6 核；AV1+CPU 解码任何核数用
   `dcd=ocrT=cores//2` 最稳（16 核 45.7s vs 12/4 的 58.5s）。
-- **双 ONNX 实例 OCR**（`DUAL_ONNX=0` 关闭）：
+- **双 ONNX 实例 OCR**（`OCR_INSTANCES=0` 关闭）：
   单实例 intra-op 线程池扩展亚线性（16 线程仅 4.2×）；两个独立实例各 `ocrT//2`
   线程并发取批，纯吞吐 313→355 段/s（+15-18%），RSS +~200MB。显式 OCR=cpu 且
   核数≥8 时默认启用。
@@ -132,10 +132,10 @@
 ## 4. 已删除的混合解码 / 混合 OCR（历史结论）
 
 > **状态更新（2026-08-25）**：本条为 v1 历史结论。CPU+NVDEC 混合解码已
-> 以 **v2（kfe 分片 + 双解码生产者竞争，机器自适应）** 形式复活并随 Race
-> 同步回引擎仓——默认关闭（`RVTOL_HYBRID_DECODE=1` 启用；仅 auto/GPU、
-> 非 AV1、stride==1、未开双流水线/GPU 管线时生效，初始化失败回退纯 GPU），
-> 见 CLAUDE.md「混合解码 v2 复活」。TRT+ONNX 混合 OCR 仍保持删除。
+> 以 **v2（kfe 分片 + 双解码生产者竞争，机器自适应）** 形式复活并随同步
+> 并入引擎仓——默认关闭（入口为显式 `decode_backend="hybrid"`；仅 NVDEC
+> 可用、非 AV1、stride==1、未开 GPU 全驻留管线时生效，初始化失败回退纯
+> GPU），见 CLAUDE.md「混合解码 v2 复活」。TRT+ONNX 混合 OCR 仍保持删除。
 
 > **2026-08 队列实测结论**：在 `D:\Videos\batch_test` 5 个视频、stride=8、
 > 默认 auto+auto+gray+merge 条件下：

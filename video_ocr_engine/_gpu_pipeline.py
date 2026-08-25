@@ -27,14 +27,12 @@ class _GpuPipelineMixin:
         - ocr_backend ≠ cpu 且 TensorRT 可用
         - gray_output=True 且非 yuv_output（YUV 场景暂走宿主管线）
         - merge_similar 的分离模式不是 contrast（GPU 路径支持 raw/binary）
-        - 未开启 dual_pipeline（双流水线优先级更高，保持现状）
+        （单流水线与 GPU 管线并行路径互斥；双流水线已移除）
 
         env GPU_PIPELINE：'0' 显式关闭；'1' 强制尝试（条件不满足时
         内部自动回退宿主管线）。不设置 = 按上述默认规则。
         """
         if not config.env_bool(config.GPU_PIPELINE_ENV, default=True):
-            return False
-        if self._dual_pipeline:
             return False
         if not self._gray_output or self._yuv_output:
             return False
@@ -59,7 +57,7 @@ class _GpuPipelineMixin:
         _t_open = time.perf_counter()
         vr = self._open_vr()
         if not self._backend.startswith('decord/GPU'):
-            return self._run_pipelined(_force_single=True)
+            return self._run_pipelined()
         if self._fps is None:
             _fps = _read_fps_from_vr(vr)
             self._fps = _fps if _fps else config.DEFAULT_FPS_FALLBACK
@@ -80,7 +78,7 @@ class _GpuPipelineMixin:
         calib_base, calib_shape = _ndarray_device_ptr(calib_nds)
         calib_c = calib_shape[-1] if len(calib_shape) == 4 else 0
         if calib_c != 1:
-            return self._run_pipelined(_force_single=True)
+            return self._run_pipelined()
         src_h, src_w = calib_shape[1], calib_shape[2]
         analyzer = GpuFrameAnalyzer()
         # 逐帧直方图校准：与单流水线"前 50 帧 Otsu 取中位数"语义逐位一致

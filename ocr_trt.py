@@ -103,20 +103,15 @@ class TrtEngine:
 
     @staticmethod
     def _engine_candidates(size: str) -> list[Path]:
-        """engine 查找顺序：模型目录（本机构建）→ 本目录缓存 → 旧 LOCALAPPDATA。
+        """engine 查找顺序：模型目录（本机构建）→ 本目录缓存。
 
         - [0] 模型目录（打包只读，通常不存在）
         - [1] 本目录缓存（可写，构建目标 —— 免安装设计，不写 %LOCALAPPDATA%）
-        - [2] 旧版本（≤v2.13）LOCALAPPDATA 缓存（只读兼容：已发布版本用户
-          首次运行新版本可复用，避免重建；不写入）
         """
         name = (f"multi_PP-OCRv6_rec_{size}_{config.TRT_ENGINE_SM}"
                 f"_fp32_tf32unset.engine")
         cands = [_models_dir() / "models" / name]
         cands.append(config.app_data_dir() / "ocr_engines" / name)
-        legacy = (Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
-                  / "RaceVideoToLog" / "ocr_engines" / name)
-        cands.append(legacy)
         return cands
 
     def _load(self, engine_path: Path) -> None:

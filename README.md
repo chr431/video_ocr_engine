@@ -52,7 +52,7 @@ ex = FieldExtractor(
     roi=(10, 850, 1910, 940),        # 字幕条区域 (x1, y1, x2, y2)
     frame_start=0,                    # 可选
     frame_end=None,                   # 可选
-    decode_backend="auto",            # auto/cpu/nvdec
+    decode_backend="auto",            # auto/cpu/nvdec/hybrid
     ocr_backend="cpu",                # auto/cpu/tensorrt
     yuv_output=True,                  # 代表帧保留 YUV（转 RGB 预览用）
     keep_crops=True,                  # 是否在结果中保留每段代表帧图像
@@ -72,7 +72,10 @@ for seg in result.segments:
 `decode_backend="auto"` 的默认逻辑：**优先 NVDEC，不可用时回退 CPU**。在强多核
 CPU 且片源为 h264 时，可手动选 `"cpu"` 获得更高软解吞吐（NVDEC h264 解码器约
 2Gp/s 上限，FFmpeg CPU 解码器最多可利用约 13 核）；弱 CPU / HEVC / AV1 场景仍
-建议保持 `auto` 或 `nvdec`。
+建议保持 `auto` 或 `nvdec`。若 NVDEC 解码是瓶颈且 CPU 有空闲，可显式选
+`"hybrid"`：同一实例内 NVDEC 与 CPU 软解作为双生产者按关键帧分片竞争，谁快
+谁多拿（要求 NVDEC 可用、`sample_stride==1`、编码非 AV1；不可用时自动回退纯
+NVDEC/CPU）。
 
 `result` 为 `ExtractionResult`：
 
@@ -94,52 +97,6 @@ CPU 且片源为 h264 时，可手动选 `"cpu"` 获得更高软解吞吐（NVDE
 
 > 长视频/大 ROI 场景若不需要预览图，可设 `keep_crops=False`、`keep_frames=False`
 > 显著降低内存占用（默认 `True` 保持兼容）。
-
-## 单实例双完整流水线并行（默认关闭）
-
-`FieldExtractor` 可以在一个实例内把同一视频切成多个连续小片，由两条完整
-“解码 → 分段 → OCR”流水线作为消费者从队列动态取片，最后按帧序合并。与旧
-“只并行解码或只并行 OCR”的方案不同，这里每条流水线都有独立的解码器与 OCR
-引擎，能同时利用 CPU 与 GPU。
-
-```python
-ex = FieldExtractor(
-    video_path="subtitle_episode.mkv",
-    roi=(10, 850, 1910, 940),
-    decode_backend="auto",       # 主流水线
-    ocr_backend="auto",
-    gray_output=True,
-    merge_similar=True,
-    dual_pipeline=True,          # 开启单实例双流水线
-    # 可选：自定义两条流水线后端；默认主 + 互补（GPU/TRT ∥ CPU/ONNX）
-    # dual_backends=[("auto", "auto"), ("cpu", "cpu")],
-)
-result = ex.extract()
-```
-
-- 默认 `dual_pipeline=False`，保持原有单流水线行为。
-- 需要 **NVDEC 和 TensorRT 同时可用**；不满足时自动回退单流水线并发出警告。
-- 默认互补对 = `(auto, auto) ∥ (cpu, cpu)`：一条 GPU+NVDEC+TensorRT，
-  一条 CPU+ONNX，与下游 `video_subtitle_extractor --dual` 的互补策略一致，
-  分别利用 GPU 与 CPU 硬件。
-- 分片方法固定为 **kfe（每关键帧一片）**：头部试点×2 + 确认×2 小片预留
-  （消解启动竞态并给让位判定取样），试点之外的大竞争区按剩余区域内的每个
-  关键帧边界切一片交给共享队列竞争——关键帧过密时按
-  `DUAL_KEYFRAME_EVERY_MIN_GAP` / `DUAL_KEYFRAME_EVERY_MAX_CHUNKS` 放大
-  间距合并、片数受控，无关键帧时退化为单大竞争片。旧的“等分 N 片（dual-2）/
-  按试点比例分配 / 在线优先取片”分片方法已移除。
-- 混配（TRT ⊕ ONNX）默认让位阈值取 `DUAL_PIPELINE_MIXED_SLOW_RATIO=0.5`：
-  两条流水线分属不同硬件，阈值过高会误让、过低/0 又无法在 AV1 极端失衡时
-  止损；可用 `DUAL_SLOW_RATIO` 覆盖。
-- 采样帧数 < `DUAL_PIPELINE_MIN_FRAMES`（默认 3000）时自动回退单流水线：
-  双流水线的固定开销（探测/校准、第二套引擎初始化、跨片边界）在短窗口无法摊销。
-- AV1 编码下 CPU 软解已知净负，默认组合自动回退单流水线
-  （`DUAL_NO_CODEC_FALLBACK=1` 可关闭）。
-- `dual_backends` 可显式指定两条流水线的 `(decode_backend, ocr_backend)`；
-  只给一条时自动复制为两条。
-- 本机实测（16 核 + RTX 4060 Laptop）：标清 h264 字幕批量 **-27%**、
-  Race 速度数字全片 **-27% ~ -42%**；输出与单流水线逐段一致
-  （跨片边界的相似段会被缝合合并）。
 
 > 面向字幕提取的完整 CLI 应用已拆到独立仓库
 > [chr431/video_subtitle_extractor](https://github.com/chr431/video_subtitle_extractor)：
@@ -178,14 +135,9 @@ result = ex.extract()
 | `OCR_BATCH` | OCR 批大小覆盖（默认 16） |
 | `OCR_PAD_SMALL` | OCR 输入 pad 宽度下限覆盖 |
 | `OCR_GAMMA` | OCR 预处理 gamma（默认 2.0） |
-| `DUAL_ONNX` | `0` 关闭双 ONNX 实例（CPU 核数≥8 默认开） |
-| `DUAL_PIPELINE` | `1` 开启单实例双完整流水线并行（需 NVDEC+TRT，默认关闭） |
-| `DUAL_KEYFRAME_EVERY_MIN_GAP` | kfe 最小片间距（采样帧数，默认 16）：间距小于该值的关键帧不切分 |
-| `DUAL_KEYFRAME_EVERY_MAX_CHUNKS` | kfe 竞争片数上限（默认 8）：关键帧过密时逐步放大间距合并，防止片数上百导致 seek 总耗时线性暴涨 |
-| `DUAL_PIPELINE_INFLIGHT` | 竞争取片 in-flight 上限（片数，默认 1）：本流水线“已取但 OCR 尚未排空”的片数达到上限即暂停取片等自己 OCR 追上来——防止“解码快、OCR 慢”的路径在自由竞争中抢占过多切片却因 OCR 瓶颈拖慢整体 |
-| `DUAL_PIPELINE_SEEK` | 显式 seek 控制：默认仅 CPU 软解做显式 seek_accurate（NVDEC 硬解 get_batch 内部随机定位更便宜且不衰减）；`1` 强制全部显式（旧保守）；`0` 全部跳过（实验，仅 h264 小片略快、字幕/CPU 随机访问会大幅变慢） |
-| `DUAL_SLOW_RATIO` | 双流水线让位阈值覆盖（混配默认 0.5，可显式覆盖） |
-| `DUAL_NO_CODEC_FALLBACK` | `1` 关闭 AV1 编码时的双流水线自动回退 |
+| `OCR_INSTANCES` | `0` 关闭并行双 ONNX 实例（CPU 核数≥8 默认开） |
+| `HYBRID_MAX_CHUNKS` | 混合解码竞争分片数量上限（默认 16）：关键帧过密时自动放大间距合并，防片数过多导致 seek 总耗时线性增长 |
+| `HYBRID_CPU_THREADS` | 混合解码中 CPU 软解线程数（默认 0=核数//2） |
 | `TEXT_SEP_MERGE` | 相似段合并使用的分离模式（contrast/binary/off） |
 | `ENGINE_PROFILE` | `1` 开启引擎细粒度性能剖面 |
 | `TRT_SUBPROBE` | `1` 开启 TRT 子相位探针 |

@@ -282,8 +282,8 @@ RAM 大触点补掉，形成显存全驻留闭环：
   用于段内比较，微小差异无影响）。
 - **默认启用门控**（`_gpu_pipeline_enabled` 重写）：gray_output=True 且
   decode∈{auto,nvdec} 且 ocr≠cpu 且 NVDEC/TRT 可用且 merge 分离模式非
-  contrast 且未开 dual_pipeline 时自动启用；`GPU_PIPELINE=0` 显式
-  关闭，'1' 强制尝试。yuv_output（RaceVideoToLog）暂走宿主管线。
+  contrast 时自动启用（双流水线已移除，无并行互斥条件）；`GPU_PIPELINE=0`
+  显式关闭，'1' 强制尝试。yuv_output 场景暂走宿主管线。
 - 单测：门控矩阵 + 合并模式解析（tests/test_gpu_pipeline.py，9 例）。
 
 实测（新三国01，7945HX + RTX 4060 Laptop，多次运行）：
@@ -376,13 +376,12 @@ v1 曾因无净收益被删除（见 docs/PERFORMANCE.md §4）。2026-08-25 以
 - **对外接口**：仍是 VideoReader 同形替身（`len` / `get_batch` /
   `next_roi` / `seek_accurate` / `get_*`），正确性依赖 decord fork v0.7.8+
   双后端 YUV420 逐位一致。
-- **激活条件**（`extractor.py` open 路径，全部满足才生效）：decode 标号为
-  GPU 且 backend==auto、`_sample_stride==1`、未开双流水线、不在 dual worker
-  内（`_in_dual_worker` 守卫，双流水线 worker 内禁止再嵌套）、未开 GPU
-  全驻留管线、编码非 AV1（CPU 软解 AV1 已知净负）；环境变量
-  `RVTOL_HYBRID_DECODE=1`（`engine_config.HYBRID_DECODE_ENV`）开启，
-  `RVTOL_HYBRID_CPU_THREADS`（0=核数//2）、`RVTOL_HYBRID_MAX_CHUNKS`（默认 16）
-  可调。初始化失败 try/except 回退纯 GPU 不致命。
+- **激活条件**（`extractor.py` open 路径，全部满足才生效）：显式
+  `decode_backend="hybrid"` 且 NVDEC 实际可用（否则回退 CPU 并警告）、
+  `_sample_stride==1`、未开 GPU 全驻留管线、编码非 AV1（CPU 软解 AV1
+  已知净负）；无环境变量入口（仅显式参数选择）；`HYBRID_CPU_THREADS`
+  （0=核数//2）、`HYBRID_MAX_CHUNKS`（默认 16）可调。
+  初始化失败 try/except 回退纯 GPU 不致命。
 - **流程钩子**：采样帧序列就绪后 producer 调 `vr.hybrid_begin(frames)`
   才生成关键帧分片并启动双生产者竞争（先校准后建片，避免预取与校准竞态）。
 - **动机**：h264 CPU 软解吞吐可达 NVDEC 两倍以上——闲置 CPU 的正确用途是

@@ -1,9 +1,11 @@
-"""CPU+NVDEC 混合解码读取器 v2：kfe 分片 + 双解码生产者竞争。
+"""CPU+NVDEC 双解码读取器 v2：kfe 分片 + 双解码生产者竞争。
 
-思路来源（2026-08-25 用户提案）：固定 split 无法跨机器自适应——CPU 慢时
-NVDEC 被饿、CPU 快时反之。改为 dual_pipeline kfe 的同款思路：
+入口：`FieldExtractor(decode_backend="hybrid")`（与 auto/cpu/nvdec 并列的
+解码后端选择；无环境变量入口，仅显式参数选择）。
+设计（2026-08-25 起，双流水线移除后本模块独立承担 kfe 分片）：
 
-  - 采样帧序列按关键帧边界切成分片（复用 _keyframe_every_chunks）；
+  - 采样帧序列按关键帧边界切成分片（kfe：每关键帧一片，见本模块
+    `_keyframe_every_chunks`——原属双流水线 mixin 的纯函数随其移除迁入）；
   - CPU 与 NVDEC 两个解码器线程作为生产者，从共享分片队列动态取片，
     谁快谁多拿（机器自适应，无饿死）；
   - 解出的 ROI 帧按全局帧序交付给唯一消费者（宿主校准/分段/OCR 零改动，
@@ -34,6 +36,62 @@ class _Batch:
     @property
     def shape(self):
         return self._arr.shape
+
+
+def _nearest_keyframe_sample(target: int, key_frames: list[int],
+                             frames: list[int]) -> int:
+    """返回离 target 最近的关键帧，再吸附到最近的采样帧号（保持采样网格）。"""
+    import bisect
+    if not key_frames or not frames:
+        return target
+    idx = bisect.bisect_left(key_frames, target)
+    cand = [idx - 1, idx]
+    cand = [i for i in cand if 0 <= i < len(key_frames)]
+    if not cand:
+        return target
+    key = min((key_frames[i] for i in cand),
+              key=lambda k: (abs(k - target), k))
+    sidx = bisect.bisect_left(frames, key)
+    sc = [sidx - 1, sidx]
+    sc = [i for i in sc if 0 <= i < len(frames)]
+    if not sc:
+        return target
+    return min((frames[i] for i in sc),
+               key=lambda f: (abs(f - key), f))
+
+
+def _keyframe_every_chunks(frames: list[int], key_frames: list[int],
+                           rest_start: int, last_end: int, stride: int,
+                           min_gap: int, max_chunks: int) -> list[tuple[int, int]]:
+    """每关键帧一片（kfe）——双解码（CPU∥NVDEC）唯一分片方法：竞争区切片生成。
+
+    按基础最小片间距切；若关键帧过密（mkv 重编码 ~每 30-140 源帧一个
+    关键帧）导致片数超过上限，逐步放大间距合并，片数受控在 max_chunks
+    以内。边界吸附到最近采样帧（保持全帧覆盖、无缝隙/无重叠；吸附帧离
+    关键帧 ≤ stride/2，seek_accurate 仍便宜）。返回覆盖 [rest_start,
+    last_end) 的连续切片列表（首片起点=rest_start，末片终点=last_end）。
+    """
+    _key_list = [k for k in key_frames if rest_start < k < last_end]
+    if not _key_list:
+        return [(rest_start, last_end)]
+    _mg = max(1, int(min_gap))
+    _mx = max(1, int(max_chunks))
+    _s = max(1, int(stride))
+    _big: list[tuple[int, int]] = [(rest_start, last_end)]
+    for _iter in range(80):
+        _cand: list[tuple[int, int]] = []
+        _prev2 = rest_start
+        for _k in _key_list:
+            _b = _nearest_keyframe_sample(_k, key_frames, frames)
+            if (_b - _prev2) // _s >= _mg and _b < last_end:
+                _cand.append((_prev2, _b))
+                _prev2 = _b
+        _cand.append((_prev2, last_end))
+        _big = _cand
+        if len(_cand) - 1 <= _mx:
+            break
+        _mg = max(_mg + 1, int(_mg * 1.5))
+    return _big
 
 
 class HybridDecoder:
@@ -85,7 +143,7 @@ class HybridDecoder:
         except Exception:
             keys = []
         try:
-            specs = type(self._ex)._keyframe_every_chunks(
+            specs = _keyframe_every_chunks(
                 fr, keys, fr[0], fr[-1] + 1,
                 max(1, int(getattr(self._ex, '_sample_stride', 1))),
                 self._min_gap, self._max_chunks)
