@@ -360,3 +360,31 @@ sharp 用 int64 精确累加 + summary float64 直传，保证近平局选帧与
   引用；删除无调用方方法（`_decode_all` / `_segment` / `_dual_pipeline_available`
   / `_start_ocr_session._store_result`）与 extractor 顶层未使用导入（csv /
   `_gray` / `_gray_batch` / `_preprocess_standard`）；删除过时生成产物 build/。
+
+### CPU+NVDEC 混合解码 v2 复活（2026-08-25，默认关闭）
+
+v1 曾因无净收益被删除（见 docs/PERFORMANCE.md §4）。2026-08-25 以新设计
+复活（来自 Race 侧子模块实验，随同步并入引擎仓）：
+
+- **设计**：固定 split 无法跨机器自适应（CPU 慢时 NVDEC 被饿、CPU 快时
+  反之）。v2 改用 dual_pipeline kfe 同款思路——采样帧序列按关键帧边界切成
+  分片（复用 `_keyframe_every_chunks`），CPU 与 NVDEC 两个解码器线程作为
+  生产者从共享分片队列动态取片，谁快谁多拿；解出的 ROI 帧按全局帧序交付
+  给唯一消费者（宿主校准/分段/OCR 零改动，单 TRT 后端不变）。in-flight
+  分片数上限约束内存（默认 2 片）；分片边界落关键帧使跳片 seek 便宜，
+  相邻片连续时免 seek。
+- **对外接口**：仍是 VideoReader 同形替身（`len` / `get_batch` /
+  `next_roi` / `seek_accurate` / `get_*`），正确性依赖 decord fork v0.7.8+
+  双后端 YUV420 逐位一致。
+- **激活条件**（`extractor.py` open 路径，全部满足才生效）：decode 标号为
+  GPU 且 backend==auto、`_sample_stride==1`、未开双流水线、不在 dual worker
+  内（`_in_dual_worker` 守卫，双流水线 worker 内禁止再嵌套）、未开 GPU
+  全驻留管线、编码非 AV1（CPU 软解 AV1 已知净负）；环境变量
+  `RVTOL_HYBRID_DECODE=1`（`engine_config.HYBRID_DECODE_ENV`）开启，
+  `RVTOL_HYBRID_CPU_THREADS`（0=核数//2）、`RVTOL_HYBRID_MAX_CHUNKS`（默认 16）
+  可调。初始化失败 try/except 回退纯 GPU 不致命。
+- **流程钩子**：采样帧序列就绪后 producer 调 `vr.hybrid_begin(frames)`
+  才生成关键帧分片并启动双生产者竞争（先校准后建片，避免预取与校准竞态）。
+- **动机**：h264 CPU 软解吞吐可达 NVDEC 两倍以上——闲置 CPU 的正确用途是
+  帮解码（Race 全负载端到端均为 NVDEC 解码受限）。默认关闭，待 Race 侧
+  全量实测后再定是否转正。

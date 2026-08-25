@@ -50,6 +50,14 @@ TEXT_SEP_MERGE_ENV: str = "TEXT_SEP_MERGE"                      # 相似段合�
 GPU_PIPELINE_ENV: str = "GPU_PIPELINE"                          # 0 关闭 GPU 全驻留管线
 GPU_CTC_ENV: str = "GPU_CTC"                                    # 0 关闭 TRT 输出 GPU 归约
 ENGINE_PROFILE_ENV: str = "ENGINE_PROFILE"                      # 1 开启引擎级性能剖面
+# CPU+NVDEC 混合解码（2026-08-25 复活，hybrid_decode.HybridDecoder）：
+# 仅 auto/nvdec 且非 AV1、stride==1、未开 dual/GPU 管线时生效。
+# split=CPU 段占窗口比例；cpu_threads=0 表示 cores//2。h264 CPU 软解
+# 吞吐可达 NVDEC 两倍以上——闲置 CPU 的正确用途是帮解码（Race 全负载
+# 端到端均为 NVDEC 解码受限）。
+HYBRID_DECODE_ENV: str = "RVTOL_HYBRID_DECODE"                  # 1 开启混合解码
+HYBRID_CPU_THREADS_ENV: str = "RVTOL_HYBRID_CPU_THREADS"        # CPU reader 线程数(0=核数//2)
+HYBRID_MAX_CHUNKS_ENV: str = "RVTOL_HYBRID_MAX_CHUNKS"          # 竞争分片上限
 TRT_SUBPROBE_ENV: str = "TRT_SUBPROBE"                          # 1 开启 TRT 子相位探针
 DEBUG_BOUNDS_ENV: str = "DEBUG_BOUNDS"                          # 1 打印分段边界调试信息
 

@@ -572,6 +572,28 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
             except Exception:
                 self._codec = ''
         self._remember_color_range(vr)
+        # CPU+NVDEC 混合解码（闲置 CPU 帮解码）：仅 auto/nvdec、非 AV1、
+        # stride==1、未开 dual/GPU 管线时生效；失败回退纯 GPU 不致命。
+        if (label == 'GPU' and backend == 'auto'
+                and self._sample_stride == 1
+                and not self._dual_pipeline
+                and not getattr(self, '_in_dual_worker', False)
+                and not self._gpu_pipeline_enabled()
+                and self._codec not in ('', 'av1')
+                and config.env_bool(config.HYBRID_DECODE_ENV)):
+            try:
+                from hybrid_decode import HybridDecoder
+                _mc = int(_os.environ.get(
+                    config.HYBRID_MAX_CHUNKS_ENV, '16') or 16)
+                _ct = int(_os.environ.get(
+                    config.HYBRID_CPU_THREADS_ENV, '0') or 0)
+                vr = HybridDecoder(self, vr, max_chunks=_mc,
+                                   cpu_threads=_ct)
+                self._backend = 'decord/GPU+CPU-hybrid'
+                logger.info('混合解码开启(kfe竞争): codec=%s chunks<=%d cpuT=%d',
+                            self._codec, _mc, _ct)
+            except Exception as e:  # noqa: BLE001
+                logger.warning('混合解码初始化失败，回退纯 GPU: %s', e)
         return vr
 
     def _decord_format(self) -> str:
@@ -1002,6 +1024,10 @@ class FieldExtractor(_GpuPipelineMixin, _DualPipelineMixin):
             raise ValueError(
                 f"帧区间为空: frame_start={self._frame_start}, "
                 f"frame_end={end}, total={total}")
+        # 混合解码（hybrid_begin）：采样帧序列就绪后才生成关键帧分片并
+        # 启动双解码生产者竞争。
+        if hasattr(vr, 'hybrid_begin'):
+            vr.hybrid_begin(frames)
         self._prof_end('producer', 'open_and_fps', _t_open)
         _t_cal = time.perf_counter()
         # 宿主校准统一走 _host_calibrate（stride>1 用 get_batch 等差快速路径、

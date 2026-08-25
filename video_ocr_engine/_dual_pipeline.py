@@ -186,6 +186,7 @@ class _DualPipelineMixin:
             merge_similar=self._merge_similar,
             merge_similar_threshold=self._merge_similar_threshold,
             dual_pipeline=False)
+        worker._in_dual_worker = True  # 禁止 worker 内再嵌套混合解码
 
     def _dual_ocr_num_threads(self, ocr_backend: str = "",
                               n_cpu_peers: int = 1,
