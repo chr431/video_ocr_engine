@@ -56,6 +56,17 @@ def test_np_resize_identity_and_shape():
     assert out.dtype == np.float32
 
 
+def test_np_resize_2d_gray_input():
+    # 2D 灰度（D2H 代表帧直通宿主预处理等场景）：resize 后仍是 2D，
+    # 且与 (H,W,1) 通道输入逐值一致。
+    img = np.random.default_rng(3).integers(0, 256, (33, 106), dtype=np.uint8)
+    out = _np_resize(img, 154, 48)
+    assert out.shape == (48, 154)
+    assert out.dtype == np.float32
+    out3 = _np_resize(img[..., None], 154, 48)
+    assert np.array_equal(out, out3[..., 0])
+
+
 def test_preprocess_standard_target_height_and_gamma(monkeypatch):
     monkeypatch.delenv("OCR_GAMMA", raising=False)
     crop = np.random.default_rng(1).integers(0, 256, (60, 200, 3), dtype=np.uint8)

@@ -175,6 +175,29 @@ python -m pytest tests/ -v
 纯单元测试无需视频 / decord / GPU（OCR 用例用 onnxruntime CPU + 仓库内模型）。
 解码集成测试在缺 decord 时显式跳过。
 
+### 端到端冒烟 / 性能工具（真实视频）
+
+`tools/e2e_smoke.py`：同一视频窗口跑配置矩阵（GPU 零拷贝 / GPU 灰度 raw /
+keep 关闭 / 宿主+TRT / CPU+ONNX / hybrid / GPU 分段+ONNX），校验跨路径文本
+一致性、代表帧格式、段序/置信度，可对照 Race ground-truth CSV 验证匹配率，
+并可重复跑测墙钟与分相耗时。示例：
+
+```bash
+# 功能矩阵 + 真值验证（ROI/帧区间可自动从 truth CSV 头读）
+python tools/e2e_smoke.py --video D:\Videos\racelog_test\test5.mp4 \
+    --roi 843,993,948,1025 \
+    --truth D:\Videos\racelog_test\ground_truth_csv\test5_ref.csv \
+    --frames 5000 --stride 8 --verify
+
+# 只探视频/后端元数据；性能测试（重复跑 + ENGINE_PROFILE）
+python tools/e2e_smoke.py --video X --roi A --probe
+python tools/e2e_smoke.py --video X --roi A --perf --runs 3 --frames 3000
+```
+
+运行 GPU 路径需：decord fork（ROI-first / GPU gray / yuv420）、`cuda-python`
+（分段/校准/CTC kernel）、TensorRT thin binding（`tensorrt-cu13-bindings`
++ `tensorrt-cu13` 元包 shim，DLL 从系统 PATH 加载）。
+
 ## 许可证
 
 **Apache-2.0**。本引擎是独立通用库：不依赖 Qt/GUI 组件，无 copyleft 传染，

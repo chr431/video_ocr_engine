@@ -152,6 +152,8 @@ def _np_resize(img: "np.ndarray", new_w: int, new_h: int) -> "np.ndarray":
 
     坐标映射复刻 OpenCV：src = (dst + 0.5) * scale - 0.5（像素中心对齐）。
     与 cv2 的数值差 <= 1e-5（浮点累加顺序），无实际影响；输出 float32。
+    支持 2D 灰度（(H,W)、3D 单通道（(H,W,1)）与 RGB（(H,W,3)）；
+    2D/单通道输入输出保持原通道语义（2D 输出 2D）。
     移除 cv2 依赖后的轻量替代（EXE -83MB）。
     """
     src_h, src_w = img.shape[:2]
@@ -159,12 +161,16 @@ def _np_resize(img: "np.ndarray", new_w: int, new_h: int) -> "np.ndarray":
         return img.astype(np.float32)
     x0, x1, y0, y1, wx, wy = _resize_map(src_w, src_h, new_w, new_h)
     f = img.astype(np.float32)
+    one_ch = f.ndim == 2
+    if one_ch:
+        f = f[..., None]
     wx3 = wx[None, :, None]
     wy3 = wy[:, None, None]
-    return ((1 - wx3) * (1 - wy3) * f[y0[:, None], x0[None, :]] +
-            wx3 * (1 - wy3) * f[y0[:, None], x1[None, :]] +
-            (1 - wx3) * wy3 * f[y1[:, None], x0[None, :]] +
-            wx3 * wy3 * f[y1[:, None], x1[None, :]])
+    out = ((1 - wx3) * (1 - wy3) * f[y0[:, None], x0[None, :]] +
+           wx3 * (1 - wy3) * f[y0[:, None], x1[None, :]] +
+           (1 - wx3) * wy3 * f[y1[:, None], x0[None, :]] +
+           wx3 * wy3 * f[y1[:, None], x1[None, :]])
+    return out[..., 0] if one_ch else out
 
 
 def _preprocess_standard(crop: "np.ndarray", force_aspect: float = 0.0,

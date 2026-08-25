@@ -16,6 +16,20 @@ from ._helpers import (_ndarray_device_ptr, _otsu_from_hist,
                        _read_fps_from_vr)
 
 
+def _cuda_python_available() -> bool:
+    """cuda-python（cuda.core / cuda.bindings）是否可导入。
+
+    GPU 分段/校准/CTC kernel 依赖它；缺失时 GPU 管线会初始化失败——
+    门控直接判不可用（避免带 NVDEC 但无 cuda-python 的环境崩在
+    GpuFrameAnalyzer()）。
+    """
+    try:
+        import importlib.util as _u
+        return _u.find_spec('cuda') is not None
+    except Exception:
+        return False
+
+
 class _YFrame:
     """池化的单帧设备 Y 缓冲（yuv 代表帧 Y 平面提取用）。
 
@@ -98,6 +112,8 @@ class _GpuPipelineMixin:
             # GPU raw 直通（process_gray_raw）按自然宽高比缩放，不支持强制
             # 宽高比；宿主路径支持 → 有 force_aspect 时走宿主，避免与宿主
             # 路径的 OCR 输入不一致（文本结果漂移）。
+            return False
+        if not _cuda_python_available():
             return False
         return nvdec_available(str(self._video_path))
 
