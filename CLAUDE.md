@@ -322,6 +322,27 @@ sharp 用 int64 精确累加 + summary float64 直传，保证近平局选帧与
 "严格大于保先者"语义对齐。
 - 当前仍存在 1 次原始 ROI D2H（decord asnumpy） + 1 次 DtoH（TRT 输出）。
 
+### 内部恒为单通道灰度 + rep_crop_format（yuv/gray）
+
+- **引擎内部取消 RGB 链路**：decord 输出只有 `'yuv420'`（keep_crops 且
+  `rep_crop_format="yuv"`，默认）或 `'gray'`；RGB→灰度转换移到解码侧/fork 内
+  （调研结论：内部灰度性能更好且不影响准确度）。`keep_crops=False` 时自动
+  退化为 `gray` 输出（省 0.5B/px UV 传输）。
+- `rep_crop_format` 语义（取代旧 `gray_output`/`yuv_output` 组合；旧参数
+  保留为 deprecated 别名）：`"yuv"`=packed NV12（内部只取 Y 平面，外部
+  `nv12_to_rgb` 转 RGB——预览只对代表帧调用，毫秒级）；`"gray"`=灰度。
+- GPU 管线对 yuv 的支持：新增 `luma_nv12` kernel 在 GPU 完成 packed NV12 →
+  Y + range 展开（与宿主 `_nv12_luma_full` 逐位一致，含 limited/tv 的
+  floor(x+0.5) clip 语义）；hist/analyze/校准均消费 Y 缓冲；代表帧 D2H
+  保留完整 NV12（含 UV）。yuv 或 ONNX/无 TRT 时 OCR 走宿主预处理
+  （raw 直通仅限 gray + 单 TRT 引擎）。
+- **GPU 分段与 OCR 后端解耦**：`_gpu_pipeline_enabled` 不再要求
+  `ocr_backend≠cpu` 或 `tensorrt_available` —— 分段/校准 kernel 只依赖
+  CUDA；`raw_ok` 仍由 `_trt` 存在性 + 非 yuv + `_gpu_pipeline_mode` 共同
+  判定（部分引擎为 ONNX 时代表帧 D2H + 宿主 OCR）。
+- 未做：hybrid + GPU 管线合并（Phase 4，建议开关保护）；`gray_output`
+  旧默认（RGB）已移除——上游应用需迁移为 `rep_crop_format` / `nv12_to_rgb`。
+
 ### 相似段合并的分离模式（生产默认 binary）
 
 - `merge_similar` 的代表帧比较在分离图上进行，默认 binary（黑底白字）。

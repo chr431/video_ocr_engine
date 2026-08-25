@@ -14,7 +14,7 @@ import os
 import sys
 from pathlib import Path
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 # ═══════════════════ 环境变量助手与名称常量 ═══════════════════
 # 引擎全部 env 开关/覆写在此收敛（单一事实源）。布尔开关统一走 env_bool：
@@ -84,6 +84,10 @@ def app_logs_dir() -> Path:
 
 # ═══════════════════ 用户可配置默认值 ═══════════════════
 DEFAULT_OCR_MODEL: str = "v6_small"     # 唯一 OCR 模型（v2.13 起移除 tiny / 重 OCR）
+DEFAULT_REP_CROP_FORMAT: str = "yuv"    # 代表帧 keep_crops 默认格式：
+                                        # "yuv"=packed NV12（内部只取 Y 平面，
+                                        # 外部用 nv12_to_rgb 转 RGB——内部恒为
+                                        # 单通道灰度链路，不产 RGB 帧）；"gray"=灰度
 DEFAULT_BUFFER_SIZE: int = 128          # 解码∥OCR 流水线队列缓冲（段数）
                                         # 64→128：GPU 解码突发时缓冲背压，减少
                                         # 解码线程 q.put 阻塞等待（GPU+CPU wall

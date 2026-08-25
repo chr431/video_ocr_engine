@@ -15,9 +15,8 @@ def _make(**kwargs):
 
 @pytest.fixture
 def gpu_ok(monkeypatch):
-    """模拟 NVDEC+TRT 均可用。"""
+    """模拟 NVDEC 可用（分段/校准 kernel 只依赖 CUDA，不依赖 TRT）。"""
     monkeypatch.setattr(_gpu, "nvdec_available", lambda p: True)
-    monkeypatch.setattr(_gpu, "tensorrt_available", lambda: True)
 
 
 def test_gpu_pipeline_default_on_for_gray_nvdec_trt(gpu_ok):
@@ -31,9 +30,28 @@ def test_gpu_pipeline_opt_out_env(gpu_ok, monkeypatch):
     assert ex._gpu_pipeline_enabled() is False
 
 
-def test_gpu_pipeline_requires_gray(gpu_ok):
-    assert _make()._gpu_pipeline_enabled() is False          # rgb 输出
-    assert _make(yuv_output=True)._gpu_pipeline_enabled() is False
+def test_gpu_pipeline_default_yuv_supported(gpu_ok):
+    # 默认 rep_crop_format="yuv"（keep_crops 时内部 yuv420，GPU 侧用
+    # luma_nv12 kernel 提取 Y 平面）——GPU 管线应启用（此前 yuv 门控回退宿主）。
+    ex = _make()
+    assert ex._rep_crop_format == "yuv"
+    assert ex._yuv_output is True
+    assert ex._gpu_pipeline_enabled() is True
+    assert _make(yuv_output=True)._gpu_pipeline_enabled() is True
+
+
+def test_gpu_pipeline_keep_crops_false_no_yuv(gpu_ok):
+    # keep_crops=False：无 UV 需求 → decord 直接 gray 输出（省 0.5B/px 传输）
+    ex = _make(rep_crop_format="yuv", keep_crops=False)
+    assert ex._yuv_output is False
+    assert ex._gpu_pipeline_enabled() is True
+
+
+def test_gpu_pipeline_ocr_backend_independent(gpu_ok):
+    # GPU 分段与 OCR 后端解耦：ocr_backend="cpu"（ONNX）也走 GPU 分段
+    #（OCR 阶段代表帧 D2H + 宿主预处理）。
+    ex = _make(gray_output=True, ocr_backend="cpu")
+    assert ex._gpu_pipeline_enabled() is True
 
 
 def test_gpu_pipeline_requires_nvdec_decode(gpu_ok):
@@ -41,14 +59,8 @@ def test_gpu_pipeline_requires_nvdec_decode(gpu_ok):
     assert ex._gpu_pipeline_enabled() is False
 
 
-def test_gpu_pipeline_requires_trt_ocr(gpu_ok):
-    ex = _make(gray_output=True, ocr_backend="cpu")
-    assert ex._gpu_pipeline_enabled() is False
-
-
 def test_gpu_pipeline_unavailable_backends(monkeypatch):
     monkeypatch.setattr(_gpu, "nvdec_available", lambda p: False)
-    monkeypatch.setattr(_gpu, "tensorrt_available", lambda: False)
     ex = _make(gray_output=True)
     assert ex._gpu_pipeline_enabled() is False
 

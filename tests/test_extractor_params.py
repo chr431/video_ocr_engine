@@ -90,6 +90,23 @@ def test_merge_similar_default_on_and_custom():
     assert ex2._merge_text_sep == "contrast"
 
 
+def test_rep_crop_format_resolution_and_alias():
+    # 新默认 = "yuv"（旧 gray_output=False 曾是 RGB，内部已无 RGB 链路）
+    assert _make()._rep_crop_format == "yuv"
+    assert _make()._yuv_output is True
+    # yuv_output=True / gray_output=True 为 deprecated 别名
+    assert _make(yuv_output=True)._rep_crop_format == "yuv"
+    assert _make(gray_output=True)._rep_crop_format == "gray"
+    assert _make(gray_output=True)._yuv_output is False
+    # rep_crop_format 显式优先
+    assert _make(rep_crop_format="gray")._rep_crop_format == "gray"
+    assert _make(rep_crop_format="yuv")._rep_crop_format == "yuv"
+    # keep_crops=False 时无 UV 需求 → 内部退化为 gray 输出
+    assert _make(rep_crop_format="yuv", keep_crops=False)._yuv_output is False
+    with pytest.raises(ValueError, match="rep_crop_format"):
+        _make(rep_crop_format="rgb")
+
+
 def test_gray_mean_abs_diff():
     a = np.zeros((4, 5), dtype=np.uint8)
     b = a.copy()

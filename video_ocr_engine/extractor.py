@@ -228,7 +228,11 @@ class FieldExtractor(_GpuPipelineMixin):
     构造参数（识别链用）：video_path / roi / frame_start / frame_end /
     force_aspect / decode_backend / ocr_backend / buffer_size / fill_width /
     sample_stride / progress_cb / cancel_check / gray_output / yuv_output /
-    keep_crops / keep_frames / merge_similar / merge_similar_threshold。
+    rep_crop_format / keep_crops / keep_frames / merge_similar /
+    merge_similar_threshold。
+    内部链恒为单通道灰度（yuv420 时取 Y 平面、否则 decord gray），不再输出
+    RGB 帧；代表帧像素格式由 rep_crop_format 决定（"yuv"=packed NV12 默认 /
+    "gray"），外部用 nv12_to_rgb 转 RGB。
     分段阈值 C 取自 engine_config.SEG_C；引擎不含领域后处理参数。
     sample_stride：分频采样步长（默认 1 = 逐帧处理）。>1 时只解码/分段每个
     第 N 帧（字幕等慢更新内容可显著降低处理压力；需要 decord fork ≥0.7.12
@@ -242,7 +246,9 @@ class FieldExtractor(_GpuPipelineMixin):
                  C: float | None = None, fps: float | None = None,
                  sample_stride: int = config.DEFAULT_SAMPLE_STRIDE,
                  progress_cb=None, cancel_check=None, gray_output: bool = False,
-                 yuv_output: bool = False, keep_crops: bool = True,
+                 yuv_output: bool = False,
+                 rep_crop_format: str | None = None,
+                 keep_crops: bool = True,
                  keep_frames: bool = True,
                  merge_similar: bool = config.DEFAULT_MERGE_SIMILAR,
                  merge_similar_threshold: float | None = None,
@@ -266,9 +272,26 @@ class FieldExtractor(_GpuPipelineMixin):
                             else config.DEFAULT_FILL_WIDTH)
         self._C = (C if C is not None else config.SEG_C)  # 分段聚类阈值
         self._sample_stride = max(1, int(sample_stride))
-        self._gray_output = gray_output
-        self._yuv_output = yuv_output
         self._keep_crops = bool(keep_crops)
+        # rep_crop_format：代表帧 keep_crops 的像素格式。内部链恒为单通道
+        # 灰度（不产 RGB 帧——RGB→灰度在解码侧/fork 内完成）：
+        #   "yuv"  —— packed NV12（默认；内部只取 Y 平面，外部 nv12_to_rgb 转 RGB）
+        #   "gray" —— 灰度
+        # 旧参数 gray_output / yuv_output 保留为 deprecated 别名：
+        #   yuv_output=True  → "yuv"；gray_output=True → "gray"；
+        #   两者均 False（旧默认 = RGB）→ 新默认 "yuv"（行为变更，见 README）。
+        fmt = (rep_crop_format or '').strip().lower()
+        if not fmt:
+            fmt = 'yuv' if yuv_output else ('gray' if gray_output else
+                                            config.DEFAULT_REP_CROP_FORMAT)
+        if fmt not in ('yuv', 'gray'):
+            raise ValueError(
+                f"rep_crop_format 必须为 'yuv' 或 'gray'，收到 {fmt!r}")
+        self._rep_crop_format = fmt
+        # 实际 decord 输出格式：keep_crops=False 时无 UV 平面需求 → 直接 gray
+        #（省 0.5B/px 解码转换/传输）；yuv420 仅在 keep YUV 时启用。
+        self._yuv_output = bool(self._keep_crops and fmt == 'yuv')
+        self._gray_output = not self._yuv_output   # deprecated 兼容别名
         self._keep_frames = bool(keep_frames)
         self._merge_similar = bool(merge_similar)
         self._merge_similar_threshold = (
@@ -535,10 +558,14 @@ class FieldExtractor(_GpuPipelineMixin):
         return vr
 
     def _decord_format(self) -> str:
-        """当前管线请求的 decord output_format。"""
-        if self._yuv_output:
-            return 'yuv420'
-        return 'gray' if self._gray_output else 'rgb'
+        """当前管线请求的 decord output_format。
+
+        内部链永远只消费单通道（Y 平面 / decord gray，不再输出 RGB）：
+        - keep_crops 需要 YUV 代表帧 → 'yuv420'（packed NV12；内部取 Y 平面，
+          等价灰度，另保留 UV 供外部 nv12_to_rgb）
+        - 否则 'gray'
+        """
+        return 'yuv420' if self._yuv_output else 'gray'
 
     def _decode_num_threads(self, codec: str | None=None) -> int | None:
         """CPU 软解的 decord FFmpeg 帧线程数（少核/AV1 分核）。
@@ -744,12 +771,16 @@ class FieldExtractor(_GpuPipelineMixin):
                 def flush() -> None:
                     if not b_idx:
                         return
-                    # GPU 直通：只有单 TRT 引擎且代表帧全部带 GPU 指针时走
+                    # GPU 直通：只有单 TRT 引擎且代表帧全部带 GPU 指针时走。
+                    # yuv420（rep_crop_format="yuv"）时代表帧是 packed NV12
+                    # （UV 需保留给外部转换），raw gray kernel 只吃单通道
+                    # → 走宿主预处理（D2H 后的 crop 已含 UV）。
                     raw_ok = (
                         len(engines) == 1
                         and getattr(engines[0], '_trt', None) is not None
                         and b_devs and all(d is not None for d in b_devs)
-                        and getattr(self, '_gpu_pipeline_mode', False))
+                        and getattr(self, '_gpu_pipeline_mode', False)
+                        and not self._yuv_output)
                     if raw_ok:
                         # 把 raw 任务交给 infer 线程异步执行，避免 OCR worker
                         # 被 GPU 预处理 + TRT 同步阻塞。

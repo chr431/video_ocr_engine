@@ -54,7 +54,9 @@ ex = FieldExtractor(
     frame_end=None,                   # 可选
     decode_backend="auto",            # auto/cpu/nvdec/hybrid
     ocr_backend="cpu",                # auto/cpu/tensorrt
-    yuv_output=True,                  # 代表帧保留 YUV（转 RGB 预览用）
+    rep_crop_format="yuv",            # 代表帧格式："yuv"=packed NV12（默认；
+                                      # 内部链恒为单通道灰度，外部用
+                                      # video_utils.nv12_to_rgb 转 RGB）或 "gray"
     keep_crops=True,                  # 是否在结果中保留每段代表帧图像
     keep_frames=True,                 # 是否在结果中保留每段帧号序列
     merge_similar=True,               # 是否合并视觉相似相邻段（默认开启）
@@ -87,6 +89,16 @@ NVDEC/CPU）。
 | `timing` | 各阶段耗时 |
 | `meta` | `backend / ocr_backend / codec / n_segments` |
 
+> 引擎内部链恒为单通道灰度（解码输出 `yuv420` 或 `gray`，不再输出 RGB 帧——
+> RGB→灰度转换由解码侧/fork 完成）。`rep_crop` 的像素格式由
+> `rep_crop_format` 决定：默认 `"yuv"` = packed NV12（`video_utils.nv12_to_rgb`
+> 转 RGB 预览，BT.601 limited 矩阵，仅代表帧调用、毫秒级）；`"gray"` = 灰度。
+> `keep_crops=False` 时自动退化为 `gray` 解码输出（省 UV 传输）。
+> 旧参数 `gray_output` / `yuv_output` 保留为 deprecated 别名
+> （`yuv_output=True` ≡ `rep_crop_format="yuv"`；`gray_output=True` ≡
+> `rep_crop_format="gray"`；两者均未设置时的新默认是 `"yuv"`——旧默认 RGB
+> 已移除）。
+
 ## 分频采样（sample_stride 参数）
 
 `FieldExtractor(sample_stride=N)`（默认 1）：`>1` 时只解码/分段/OCR 每个第 N 帧——
@@ -113,17 +125,21 @@ NVDEC/CPU）。
 解码∥分段∥OCR 三级流水线 + 有界队列背压（`OCR_BATCH_SIZE` / `buffer_size`），
 解码与 OCR 线程重叠摊薄墙钟。
 
-### 显存全驻留管线（gray + NVDEC + TRT 时默认启用）
+### 显存全驻留管线（NVDEC 可用时默认启用）
 
-`gray_output=True` 且 NVDEC+TRT 可用时，识别链自动切换为**显存全驻留**
-路径：NVDEC 解码、灰度、sharp/聚类分段、Otsu 校准、OCR 预处理、TensorRT
-推理、CTC 预归约全部在 GPU 内闭环，过 RAM 的只有每帧两个标量、校准直方
-图表与归约后的索引/概率。分段/合并/输出与宿主路径逐位一致。
+NVDEC 可用（`decode_backend∈{auto,nvdec}` 且无 `force_aspect`、merge 非
+contrast）时，识别链自动切换为**显存全驻留**路径：NVDEC 解码、灰度
+（`yuv420` 时由 `luma_nv12` kernel 在 GPU 提取 Y 平面，与宿主逐位一致）、
+sharp/聚类分段、Otsu 校准、TensorRT 推理（单 TRT 引擎且 `rep_crop_format
+="gray"` 时走 raw 直通）、CTC 预归约全部在 GPU 内闭环，过 RAM 的只有每帧
+两个标量、校准直方图表、归约后的索引/概率与代表帧（gray ~10KB / NV12
+~15KB 每段）。分段/合并/输出与宿主路径逐位一致。OCR 后端任意：`cpu`/ONNX
+或无 TRT 时代表帧 D2H 后走宿主预处理。
 
 - 干净环境小幅更快（窗口实测 -13%），对端大内存流量时显著更稳
   （对端 ~100GB/s 流拷贝下 -24%，退化 ×1.43 vs 宿主 ×1.64）
 - 整集 stride=8 场景两路径同受 NVDEC 跳帧解码供给率限制，速度持平
-- env `GPU_PIPELINE=0` 显式关闭；YUV 输出场景仍走宿主管线
+- env `GPU_PIPELINE=0` 显式关闭；`decode_backend="hybrid"`/`"cpu"` 走宿主
 
 ## 环境变量钩子（实验）
 

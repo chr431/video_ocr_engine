@@ -17,7 +17,9 @@ class ExtractedSegment:
     rep_frame: int = -1             # 代表帧号（段内最清晰帧）
     text: Optional[str] = None      # OCR 原始文本（None=未读出）
     confidence: float = 0.0         # OCR 置信度 0-1
-    rep_crop: Any = None            # 代表帧 ROI 图像（YUV420 或 RGB）
+    rep_crop: Any = None            # 代表帧 ROI 图像（rep_crop_format 决定：
+                                    # "yuv"=packed NV12，外部用 nv12_to_rgb
+                                    # 转 RGB；"gray"=灰度 (H,W) uint8）
 
 
 @dataclass

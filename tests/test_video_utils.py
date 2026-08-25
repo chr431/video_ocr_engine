@@ -74,3 +74,12 @@ def test_gray_weights_rec601():
     rgb = np.zeros((1, 1, 3), dtype=np.uint8)
     rgb[..., 0] = 255
     assert int(_gray(rgb)[0, 0]) == 76
+
+
+def test_preprocess_standard_2d_gray_input(monkeypatch):
+    # 2D 灰度输入（GPU 管线/代表帧 D2H 等场景）：直接 gamma，不按 RGB matmul
+    monkeypatch.delenv("OCR_GAMMA", raising=False)
+    crop = np.random.default_rng(2).integers(0, 256, (48, 90), dtype=np.uint8)
+    out = _preprocess_standard(crop)
+    assert out.shape == (48, 90, 3)
+    assert out.dtype == np.float32

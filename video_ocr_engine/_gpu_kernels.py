@@ -414,6 +414,32 @@ extern "C" __global__ void hist_gray_perframe(
     if (threadIdx.x < 256 && priv[threadIdx.x] > 0)
         atomicAdd(&hists[b * 256 + threadIdx.x], priv[threadIdx.x]);
 }
+
+extern "C" __global__ void luma_nv12(
+    const unsigned char* __restrict__ src,   // packed NV12: (B, H+ceil(H/2), W)
+    unsigned char* __restrict__ out,         // (B, H, W) 灰度 Y
+    int B, int H, int W, int limited) {
+    // 与宿主 _nv12_luma_full 逐位一致：limited/tv 时
+    // (y-16)*(255/219) → floor(x+0.5) → clip 0..255；full/pc 原样。
+    long long total = (long long)B * H * W;
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if ((long long)i >= total) return;
+    int b = (int)((long long)i / ((long long)H * W));
+    int rem = (int)((long long)i % ((long long)H * W));
+    long long rows = (long long)H + (H + 1) / 2;
+    const unsigned char* base = src + ((long long)b * rows + rem / W) * W
+        + (rem % W);
+    int v = *base;
+    if (limited) {
+        float val = (float)(v - 16) * (255.0f / 219.0f);
+        float f = floorf(val + 0.5f);
+        if (f < 0.0f) f = 0.0f;
+        else if (f > 255.0f) f = 255.0f;
+        out[i] = (unsigned char)f;
+    } else {
+        out[i] = (unsigned char)v;
+    }
+}
 '''
 
     def __init__(self) -> None:
@@ -427,9 +453,10 @@ extern "C" __global__ void hist_gray_perframe(
         self._mod = self._prog.compile(
             "cubin",
             name_expressions=("analyze_gray",
-                              "hist_gray_perframe"))
+                              "hist_gray_perframe", "luma_nv12"))
         self._kernel = self._mod.get_kernel("analyze_gray")
         self._kernel_hist_pf = self._mod.get_kernel("hist_gray_perframe")
+        self._kernel_luma = self._mod.get_kernel("luma_nv12")
         from cuda.bindings import runtime as cudart
         _err, self._stream = cudart.cudaStreamCreate()
         self._summary_size = 0
@@ -438,6 +465,8 @@ extern "C" __global__ void hist_gray_perframe(
         self._prev_dev = None
         self._histpf_size = 0
         self._histpf_dev = None
+        self._luma_size = 0
+        self._luma_dev = None
 
     def _ensure_prev(self, nbytes: int) -> int:
         from cuda.bindings import runtime as cudart
@@ -473,6 +502,34 @@ extern "C" __global__ void hist_gray_perframe(
             hists.ctypes.data, self._histpf_dev, nbytes,
             cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
         return hists
+
+    def extract_luma(self, src_ptr: int, B: int, H: int, W: int,
+                     limited: bool) -> int:
+        """packed NV12 → 灰度 Y 平面（D2D），与宿主 _nv12_luma_full 逐位一致。
+
+        src: (B, H+ceil(H/2), W) packed NV12 device 指针；返回 Y 缓冲
+        (B, H, W) device 指针。缓冲在本对象内自适应复用——同一批的后续
+        kernel 完成前不被覆盖（同一批内安全；跨批重新调用会覆盖内容，
+        前批引用须在覆盖前消费完）。
+        """
+        import numpy as np
+        from cuda.bindings import runtime as cudart
+        from cuda.core import Buffer, LaunchConfig, launch
+        nbytes = B * H * W
+        if self._luma_size < nbytes:
+            if self._luma_dev is not None:
+                cudart.cudaFree(self._luma_dev)
+            _err, self._luma_dev = cudart.cudaMalloc(nbytes)
+            self._luma_size = nbytes
+        block = 256
+        grid = (nbytes + block - 1) // block
+        launch(self._stream, LaunchConfig(grid=grid, block=block),
+               self._kernel_luma,
+               Buffer.from_handle(src_ptr, B * (H + (H + 1) // 2) * W),
+               Buffer.from_handle(self._luma_dev, nbytes),
+               np.int32(B), np.int32(H), np.int32(W),
+               np.int32(1 if limited else 0))
+        return self._luma_dev
 
     def analyze_batch(self, raw_ptr: int, prev_ptr: int, B: int,
                       H: int, W: int, th: float) -> "np.ndarray":

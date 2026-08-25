@@ -201,7 +201,9 @@ def _preprocess_standard(crop: "np.ndarray", force_aspect: float = 0.0,
     if gamma > 0:
         # 灰度 + gamma（正式预处理）：RGB 逐通道 gamma 视觉差异小、回归多
         # （tools/_gamma_misread_montage 对比），灰度版视觉更清晰、回归少。
-        if resized.shape[-1] == 1:
+        if resized.ndim == 2:
+            gray = resized                                # 2D (H,W) 灰度输入
+        elif resized.shape[-1] == 1:
             gray = resized[..., 0]                        # decord gray 输出
         else:
             gray = resized @ _GRAY_W                      # (h, w) float32
