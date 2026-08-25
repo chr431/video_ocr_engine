@@ -15,8 +15,9 @@ def _make(**kwargs):
 
 @pytest.fixture
 def gpu_ok(monkeypatch):
-    """模拟 NVDEC 可用（分段/校准 kernel 只依赖 CUDA，不依赖 TRT）。"""
+    """模拟 NVDEC + TensorRT 可用（默认规则要求两者，全程 raw 才启用）。"""
     monkeypatch.setattr(_gpu, "nvdec_available", lambda p: True)
+    monkeypatch.setattr(_gpu, "tensorrt_available", lambda: True)
 
 
 def test_gpu_pipeline_default_on_for_gray_nvdec_trt(gpu_ok):
@@ -32,7 +33,7 @@ def test_gpu_pipeline_opt_out_env(gpu_ok, monkeypatch):
 
 def test_gpu_pipeline_default_yuv_supported(gpu_ok):
     # 默认 rep_crop_format="yuv"（keep_crops 时内部 yuv420，GPU 侧用
-    # luma_nv12 kernel 提取 Y 平面）——GPU 管线应启用（此前 yuv 门控回退宿主）。
+    # luma_nv12 kernel 提取 Y 平面）——GPU 管线应启用。
     ex = _make()
     assert ex._rep_crop_format == "yuv"
     assert ex._yuv_output is True
@@ -47,11 +48,25 @@ def test_gpu_pipeline_keep_crops_false_no_yuv(gpu_ok):
     assert ex._gpu_pipeline_enabled() is True
 
 
-def test_gpu_pipeline_ocr_backend_independent(gpu_ok):
-    # GPU 分段与 OCR 后端解耦：ocr_backend="cpu"（ONNX）也走 GPU 分段
-    #（OCR 阶段代表帧 D2H + 宿主预处理）。
+def test_gpu_pipeline_default_requires_trt(gpu_ok, monkeypatch):
+    # 默认规则：无 TRT → GPU 分段+ONNX 实测无净收益 → 走宿主管线
+    monkeypatch.setattr(_gpu, "tensorrt_available", lambda: False)
+    ex = _make(gray_output=True)
+    assert ex._gpu_pipeline_enabled() is False
+
+
+def test_gpu_pipeline_forced_without_trt(gpu_ok, monkeypatch):
+    # GPU_PIPELINE=1 强制尝试：允许 GPU 分段+ONNX 等实验组合
+    monkeypatch.setattr(_gpu, "tensorrt_available", lambda: False)
+    monkeypatch.setenv("GPU_PIPELINE", "1")
     ex = _make(gray_output=True, ocr_backend="cpu")
     assert ex._gpu_pipeline_enabled() is True
+
+
+def test_gpu_pipeline_ocr_cpu_host_by_default(gpu_ok):
+    # 默认规则：ocr_backend="cpu"（ONNX）→ 宿主管线（无全程 raw 收益）
+    ex = _make(gray_output=True, ocr_backend="cpu")
+    assert ex._gpu_pipeline_enabled() is False
 
 
 def test_gpu_pipeline_requires_nvdec_decode(gpu_ok):
@@ -65,17 +80,17 @@ def test_gpu_pipeline_unavailable_backends(monkeypatch):
     assert ex._gpu_pipeline_enabled() is False
 
 
-def test_gpu_pipeline_contrast_merge_falls_back(gpu_ok, monkeypatch):
+def test_gpu_pipeline_contrast_supported(gpu_ok, monkeypatch):
+    # contrast 合并判定：边界时 D2H 两帧 → 宿主 _segments_similar（已支持）
     monkeypatch.setenv("TEXT_SEP_MERGE", "contrast")
     ex = _make(gray_output=True)
-    assert ex._gpu_pipeline_enabled() is False
+    assert ex._gpu_pipeline_enabled() is True
 
 
-def test_gpu_pipeline_force_aspect_falls_back(gpu_ok):
-    # GPU raw 直通（process_gray_raw）按自然宽高比缩放，不支持强制宽高比；
-    # 有 force_aspect 时必须走宿主路径，否则两路径 OCR 输入/结果不一致。
-    ex = _make(gray_output=True, force_aspect=2.0)
-    assert ex._gpu_pipeline_enabled() is False
+def test_gpu_pipeline_force_aspect_supported(gpu_ok):
+    # force_aspect：process_gray_raw 支持强制 content 宽（round 语义）
+    ex = _make(gray_output=True, force_aspect=1.5)
+    assert ex._gpu_pipeline_enabled() is True
 
 
 def test_merge_effective_mode_resolution(monkeypatch):

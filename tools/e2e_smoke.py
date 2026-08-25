@@ -4,11 +4,12 @@
   1. gpu_yuv   decode=auto ocr=auto rep=yuv  —— GPU 零拷贝管线（默认路线）
   2. gpu_gray  decode=auto ocr=auto rep=gray —— GPU 管线 + raw 直通（灰度帧）
   3. gpu_keepoff decode=auto ocr=auto rep=gray keep_crops=False（零 D2H 输出）
-  4. host_trt  decode=auto ocr=auto rep=yuv force_aspect=1.5 —— 宿主+TRT
-     （truth 对齐口径；force_aspect 使 GPU 管线门控回退宿主）
+  4. host_trt  decode=auto ocr=auto rep=yuv force_aspect=1.5 —— 全程 raw +
+     force_aspect（GPU 管线；无 TRT 时自动宿主+TRT 口径）
   5. host_cpu  decode=cpu  ocr=cpu  rep=yuv —— 全宿主 CPU 软解 + ONNX
   6. hybrid    decode=hybrid ocr=auto rep=yuv —— CPU+NVDEC 双解码生产者
   7. gpu_onnx  decode=auto ocr=cpu  rep=yuv —— GPU 分段 + ONNX 宿主 OCR
+     （GPU_PIPELINE=1 强制开启；默认门控只允许 NVDEC+TRT）
 
 用法：
   python tools/e2e_smoke.py --video D:\\Videos\\racelog_test\\test5.mp4 \\
@@ -111,15 +112,26 @@ def run_once(video, roi, frames, stride, cfg, truth_meta):
     kwargs = dict(CONFIGS[cfg])
     if truth_meta and cfg.startswith("host_trt") and "force_aspect" not in kwargs:
         pass  # host_trt 固定 force_aspect=1.5
-    ex = FieldExtractor(
-        video, roi,
-        frame_start=truth_meta.get("frame_start", 0),
-        frame_end=(truth_meta.get("frame_start", 0) + frames
-                   if truth_meta.get("frame_start") is not None else frames),
-        sample_stride=stride, keep_frames=True, **kwargs)
-    t0 = time.perf_counter()
-    result = ex.extract()
-    wall = time.perf_counter() - t0
+    # gpu_onnx：默认门控只允许 NVDEC+TRT，实验组合需强制开关
+    forced_env = (cfg == "gpu_onnx")
+    old_env = os.environ.get("GPU_PIPELINE")
+    if forced_env:
+        os.environ["GPU_PIPELINE"] = "1"
+    try:
+        ex = FieldExtractor(
+            video, roi,
+            frame_start=truth_meta.get("frame_start", 0),
+            frame_end=(truth_meta.get("frame_start", 0) + frames
+                       if truth_meta.get("frame_start") is not None else frames),
+            sample_stride=stride, keep_frames=True, **kwargs)
+        t0 = time.perf_counter()
+        result = ex.extract()
+        wall = time.perf_counter() - t0
+    finally:
+        if forced_env and old_env is None:
+            os.environ.pop("GPU_PIPELINE", None)
+        elif forced_env:
+            os.environ["GPU_PIPELINE"] = old_env
     return ex, result, wall
 
 

@@ -749,7 +749,8 @@ class FieldExtractor(_GpuPipelineMixin):
                             idxs, reps, procs, fracs, raw_infos = item
                             _t_i = time.perf_counter()
                             if raw_infos is not None:
-                                res = eng.call_gpu_raw(raw_infos)
+                                res = eng.call_gpu_raw(
+                                    raw_infos[1], force_aspect=raw_infos[0])
                             else:
                                 res = eng(procs)
                             self._prof_end('ocr', 'infer', _t_i)
@@ -790,13 +791,15 @@ class FieldExtractor(_GpuPipelineMixin):
                         and getattr(self, '_gpu_pipeline_mode', False)]
                     if raw_sel:
                         # 把 raw 任务交给 infer 线程异步执行，避免 OCR worker
-                        # 被 GPU 预处理 + TRT 同步阻塞。
+                        # 被 GPU 预处理 + TRT 同步阻塞。载荷 = (force_aspect,
+                        # infos)——raw 内核需按 force_aspect 决定 content 宽。
                         infos = [(d[1], d[2], d[3], d[0])
                                  for d in (b_devs[i] for i in raw_sel)]
                         if not _put_infer((
                                 [b_idx[i] for i in raw_sel],
                                 [b_reps[i] for i in raw_sel], None,
-                                [b_fracs[i] for i in raw_sel], infos)):
+                                [b_fracs[i] for i in raw_sel],
+                                (float(self._force_aspect), infos))):
                             return
                     host_sel = [
                         i for i in range(len(b_crops))

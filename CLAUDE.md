@@ -331,17 +331,20 @@ sharp 用 int64 精确累加 + summary float64 直传，保证近平局选帧与
 - `rep_crop_format` 语义（取代旧 `gray_output`/`yuv_output` 组合；旧参数
   保留为 deprecated 别名）：`"yuv"`=packed NV12（内部只取 Y 平面，外部
   `nv12_to_rgb` 转 RGB——预览只对代表帧调用，毫秒级）；`"gray"`=灰度。
-- **GPU 管线 = 零拷贝闭环（默认路线）**：分段/校准（hist/analyze kernel）、
-  merge_similar 判定（`sim_pair` kernel，整数精确；与宿主 float32 均值仅差
-  对比阈值处的末位舍入）、代表帧保活（gray=decord NDArray 指针 / yuv=NV12
-  NDArray 保留，Y 平面按需经 `luma_into` 提取到 `_YFramePool` 池帧，~10KB
-  D2D/次）、raw OCR（single TRT）：过 RAM 的只有每帧两标量、校准直方图表、
-  merge 两标量、CTC 归约结果与 keep_crops 输出（每段一张 D2H，结果必须给
-  外部）。ONNX/无 TRT/引擎未就绪 → 代表帧 D2H + 宿主 OCR（回退路径）。
-  yuv 模式下代表帧 D2H 保留完整 NV12（含 UV），供外部 `nv12_to_rgb`。
-- **GPU 分段与 OCR 后端解耦**：`_gpu_pipeline_enabled` 不要求
-  `ocr_backend≠cpu` 或 `tensorrt_available` —— 分段/校准 kernel 只依赖
-  CUDA；raw 可用性由 OCR 会话 `raw_ready` 标志（worker 引擎就绪后置位，
+- **GPU 管线 = 零拷贝闭环（默认仅 NVDEC+TRT）**：分段/校准（hist/analyze
+  kernel）、merge_similar 判定（`sim_pair` kernel，整数精确；contrast 模式
+  在边界时 D2H 两帧 → 宿主 `_segments_similar`，kernel 化无净收益）、代表帧
+  保活（gray=decord NDArray 指针 / yuv=NV12 NDArray 保留，Y 平面按需经
+  `luma_into` 提取到 `_YFramePool` 池帧，~10KB D2D/次）、raw OCR（single
+  TRT，`force_aspect` 已支持：content_w = round(48*aspect)，与宿主
+  `_preprocess_standard` 语义一致）：过 RAM 的只有每帧两标量、校准直方图表、
+  merge 标量（contrast 时两帧）、CTC 归约结果与 keep_crops 输出（每段一张
+  D2H，结果必须给外部）。ONNX/无 TRT/引擎未就绪 → 代表帧 D2H + 宿主 OCR（
+  仅经 `GPU_PIPELINE=1` 强制时才会出现 GPU+ONNX 组合——实测无净收益，见
+  docs/PERFORMANCE.md §9，默认门控只放行 NVDEC+TRT）。
+- **门控与 OCR 后端**：`_gpu_pipeline_enabled` 默认要求 NVDEC + TRT +
+  cuda-python 且 `ocr_backend≠cpu`（`GPU_PIPELINE=0` 关 / `=1` 强制跳过 TRT
+  要求）；raw 可用性由 OCR 会话 `raw_ready` 标志（worker 引擎就绪后置位，
   单 TRT）决定，flush 按 item 分流（不混批）。
 - **待实测**：零拷贝路径的端到端/争抢数字尚未在本机重测（需真实 NVDEC+
   TRT 环境），补测后追加 docs/PERFORMANCE.md。

@@ -154,10 +154,14 @@ extern "C" __global__ void prep_gray_raw(
             self._out_size = nbytes
         return self._out_dev
 
-    def process_gray_raw(self, infos: list, out_width: int):
+    def process_gray_raw(self, infos: list, out_width: int,
+                         force_aspect: float = 0.0):
         """处理 decord GPU 灰度帧：D2D 聚批 → GPU resize+gamma+normalize+pad。
 
         infos: [(dev_ptr, src_h, src_w, owner), ...]，frame 已位于显存。
+        force_aspect > 0：强制 OCR 输入宽 = OCR_TARGET_H × force_aspect
+        （内容整体拉伸到该宽度，与宿主 _preprocess_standard 的 force_aspect
+        语义一致；边界吸附用 round）。
         返回 (device_ptr, output_shape)。调用方必须保持 owner/本对象存活。
         """
         import numpy as np
@@ -166,7 +170,10 @@ extern "C" __global__ void prep_gray_raw(
         src_h = int(infos[0][1])
         src_w = int(infos[0][2])
         dst_h = int(config.OCR_TARGET_H)
-        content_w = max(1, int(src_w * dst_h / src_h))
+        if force_aspect and force_aspect > 0:
+            content_w = max(1, int(round(dst_h * force_aspect)))
+        else:
+            content_w = max(1, int(src_w * dst_h / src_h))
         dst_w = int(out_width)
         if content_w > dst_w:
             dst_w = content_w

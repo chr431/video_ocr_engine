@@ -125,22 +125,25 @@ NVDEC/CPU）。
 解码∥分段∥OCR 三级流水线 + 有界队列背压（`OCR_BATCH_SIZE` / `buffer_size`），
 解码与 OCR 线程重叠摊薄墙钟。
 
-### 显存全驻留零拷贝管线（NVDEC 可用时默认启用）
+### 显存全驻留零拷贝管线（NVDEC+TRT 时默认启用）
 
-NVDEC 可用（`decode_backend∈{auto,nvdec}` 且无 `force_aspect`、merge 非
-contrast）时，识别链自动切换为**显存全驻留零拷贝**路径：NVDEC 解码、灰度
-（`yuv420` 时由 `luma_nv12` kernel 在 GPU 提取 Y 平面，与宿主逐位一致）、
-sharp/聚类分段、Otsu 校准、merge_similar 判定（GPU `sim_pair`）、代表帧
-保活（gray 直通 decord 指针 / yuv 用 `_YFramePool` 池帧按需提取 Y）、
-TensorRT 推理（single TRT 引擎）与 CTC 预归约全部在 GPU 内闭环——过 RAM 的
-只有每帧两个标量、校准直方图表、合并判定两标量、CTC 归约结果与
-`keep_crops` 输出（每段一张，结果给外部）。分段/合并判定/输出与宿主路径
-一致。OCR 后端任意：`cpu`/ONNX 或无 TRT 时代表帧 D2H 后走宿主预处理。
+NVDEC+TensorRT 可用（`decode_backend∈{auto,nvdec}`、`ocr_backend≠cpu`）时，
+识别链默认切换为**显存全驻留零拷贝**路径：NVDEC 解码、灰度（`yuv420` 时由
+`luma_nv12` kernel 在 GPU 提取 Y 平面，与宿主逐位一致）、sharp/聚类分段、
+Otsu 校准、merge_similar 判定（GPU `sim_pair`；contrast 模式在边界时 D2H 两
+帧走宿主判定）、代表帧保活（gray 直通 decord 指针 / yuv 用 `_YFramePool`
+池帧按需提取 Y）、TensorRT 推理（single TRT 引擎，`force_aspect` 已支持）
+与 CTC 预归约全部在 GPU 内闭环——过 RAM 的只有每帧两个标量、校准直方图表、
+合并判定标量（contrast 时两帧）、CTC 归约结果与 `keep_crops` 输出（每段一
+张，结果给外部）。分段/合并判定/输出与宿主路径一致。
 
 - 干净环境小幅更快（窗口实测 -13%），对端大内存流量时显著更稳
   （对端 ~100GB/s 流拷贝下 -24%，退化 ×1.43 vs 宿主 ×1.64）
 - 整集 stride=8 场景两路径同受 NVDEC 跳帧解码供给率限制，速度持平
-- env `GPU_PIPELINE=0` 显式关闭；`decode_backend="hybrid"`/`"cpu"` 走宿主
+- 默认只放行"全程 raw"（NVDEC+TRT）；GPU 分段 + ONNX OCR 实测无净收益
+  （见 `docs/PERFORMANCE.md` §9）→ 无 TRT / `ocr_backend="cpu"` 走宿主
+- env `GPU_PIPELINE=0` 显式关闭；`=1` 强制启用（含 GPU 分段+ONNX 实验组合）；
+  `decode_backend="hybrid"`/`"cpu"` 走宿主
 
 ## 环境变量钩子（实验）
 

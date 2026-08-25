@@ -10,7 +10,7 @@ import time
 import numpy as np
 
 import engine_config as config
-from video_utils import nvdec_available
+from video_utils import _nv12_luma_full, nvdec_available, tensorrt_available
 from ._helpers import (_ndarray_device_ptr, _otsu_from_hist,
                        _decode_progress_pct, _otsu_median_threshold,
                        _read_fps_from_vr)
@@ -88,33 +88,34 @@ class _GpuPipelineMixin:
     # ═══════════════ GPU 全驻留管线（NVDEC） ═══════════════
 
     def _gpu_pipeline_enabled(self) -> bool:
-        """GPU 全驻留管线：NVDEC 场景的默认主路径（内部恒为单通道灰度）。
+        """GPU 全驻留零拷贝管线：默认仅 NVDEC+TRT 组合启用。
 
-        默认启用条件（全部满足）：
+        默认（GPU_PIPELINE 未设置）启用条件（全部满足）：
         - decode_backend ∈ {auto, nvdec} 且 NVDEC 实际可用
-        - merge_similar 的分离模式不是 contrast（GPU 路径支持 raw/binary）
-        - force_aspect == 0（GPU raw 直通不支持强制宽高比）
-        代表帧格式：rep_crop_format="gray" 或 "yuv" 均可 —— yuv 由
-        luma_nv12 kernel 在 GPU 提取 Y 平面，OCR 走宿主预处理（代表帧
-        D2H 含 UV）；gray 由 raw 直通（单 TRT 引擎时）。OCR 后端任意：
-        TRT 时 raw 直通，ONNX/无 TRT 时 D2H 代表帧走宿主 OCR。
+        - TensorRT 可用且 ocr_backend ≠ cpu —— 全程 raw 才有净收益
+          （GPU 分段+ONNX 实测无优势，默认走宿主管线，配置面更简）
+        - cuda-python（cuda.core / cuda.bindings）可导入
+        force_aspect 与 merge contrast 模式均已支持（不再门控回退）。
 
-        env GPU_PIPELINE：'0' 显式关闭；'1' 强制尝试（条件不满足时
-        内部自动回退宿主管线）。不设置 = 按上述默认规则。
+        env GPU_PIPELINE：'0' 显式关闭；'1' 强制尝试（跳过 TRT 要求，
+        允许 GPU 分段+ONNX 等实验组合）；不设置 = 上述默认规则。
         """
-        if not config.env_bool(config.GPU_PIPELINE_ENV, default=True):
-            return False
+        _env = _os.environ.get(config.GPU_PIPELINE_ENV)
+        if _env is not None:
+            if not config.env_bool(config.GPU_PIPELINE_ENV, default=False):
+                return False
+            forced = True
+        else:
+            forced = False
         if (self._decode_backend or 'auto').lower() not in ('auto', 'nvdec'):
-            return False
-        if self._merge_similar and self._merge_effective_mode() == 'contrast':
-            return False
-        if self._force_aspect > 0:
-            # GPU raw 直通（process_gray_raw）按自然宽高比缩放，不支持强制
-            # 宽高比；宿主路径支持 → 有 force_aspect 时走宿主，避免与宿主
-            # 路径的 OCR 输入不一致（文本结果漂移）。
             return False
         if not _cuda_python_available():
             return False
+        if not forced:
+            if (self._ocr_backend or 'auto').lower() == 'cpu':
+                return False
+            if not tensorrt_available():
+                return False
         return nvdec_available(str(self._video_path))
 
     def _run_pipelined_gpu(self):
@@ -326,12 +327,21 @@ class _GpuPipelineMixin:
         _limited = self._color_range != 1
 
         def _similar_device(a_dev, b_dev) -> bool:
-            """merge_similar 的 GPU 判定，语义与宿主 _segments_similar 对应：
-            平均绝对差（整数精确，与宿主 float32 均值仅差末位舍入）≤ 阈值
-            且显著变化像素数 ≤ max_changed。contrast 模式已被门控排除。"""
+            """merge_similar 判定：binary/raw 走 GPU sim_pair（整数精确，
+            与宿主 float32 均值仅差末位舍入）；contrast 走宿主
+            _segments_similar —— _text_sep_gray 的 contrast 模式含盒式模糊
+            + 分位数归一，kernel 化无净收益，边界时 D2H 两帧即可
+            （仅 contrast 模式产生该流量，~26KB/边界）。"""
             if not (self._merge_similar and a_dev is not None
                     and b_dev is not None):
                 return False
+            if self._merge_effective_mode() == 'contrast':
+                a_h = _d2h_rep(a_dev)
+                b_h = _d2h_rep(b_dev)
+                if self._yuv_output:
+                    a_h = _nv12_luma_full(a_h, self._color_range)
+                    b_h = _nv12_luma_full(b_h, self._color_range)
+                return self._segments_similar(a_h, b_h)
             use_bin = 1 if self._merge_effective_mode() == 'binary' else 0
             ya = yb = None
             if yuv:
