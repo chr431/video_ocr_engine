@@ -21,6 +21,23 @@
 - 性能实验结论（尤其失败/无收益/最优参数）追加到 `docs/PERFORMANCE.md`，
   避免重复投入。
 
+### 公共 API 清理（0.7.0，破坏性）
+
+为收敛易用性，0.7.0 删除了一批遗留（下游两项目已独立维护、风险接受）：
+
+- 构造参数 `fps`（此前即被静默忽略）；`gray_output`/`yuv_output` 降级为
+  "已废弃别名"（仍接受，勿再使用；主参数 `rep_crop_format`）；
+- 实例旧属性轨：`segments`(dict)/`rows`/`segment_frames`/`ocr_values`/
+  `n_segments`/`ocr_texts`/`ocr_confidences` 属性（新 API 一律走
+  `extract() → ExtractionResult`）；
+- 方法 `prepare_review_rgb()`（新 API 下为 no-op，且会清 `crops`）、
+  `timing_flat()`；
+- `video_utils.open_decord_vr/rss_mb/sum_nbytes/VideoMetadata/format_duration`
+  （仓库内零调用）；
+- 保持：`FieldExtractor.frames` 属性（单测依赖）；`self.crops`（内部存储）。
+
+后续新增遗留面一律先标 deprecated、两个版本后删除。
+
 ## 单实例双完整流水线并行（历史，已删除 — e8b2637）
 
 > **本节全部为已删除功能的历史记录**，代码中不存在（基准：e8b2637 提交）。

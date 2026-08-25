@@ -1,7 +1,6 @@
 """视频/数据通用工具。"""
 from __future__ import annotations
 import os as _os
-from dataclasses import dataclass
 from pathlib import Path
 
 from functools import lru_cache
@@ -104,27 +103,6 @@ def nv12_to_rgb(crop: "np.ndarray") -> "np.ndarray":
     rgb = np.stack([r, g, b], axis=-1)
     np.clip(rgb, 0.0, 1.0, out=rgb)
     return (rgb * 255.0).astype(np.uint8)
-
-
-@dataclass
-class VideoMetadata:
-    path: Path
-    duration_sec: float
-    width: int
-    height: int
-    fps: float
-    codec: str
-    frame_count: int
-
-
-def format_duration(seconds: float) -> str:
-    seconds = max(0.0, float(seconds))
-    total = int(round(seconds))
-    hours, remainder = divmod(total, 3600)
-    minutes, secs = divmod(remainder, 60)
-    if hours:
-        return f"{hours:d}:{minutes:02d}:{secs:02d}"
-    return f"{minutes:d}:{secs:02d}"
 
 
 @lru_cache(maxsize=64)
@@ -250,42 +228,6 @@ def _text_sep_gray(gray: "np.ndarray", mode: str = "contrast",
     return sep.astype(np.float32)
 
 
-def open_decord_vr(video_path, force_cpu: bool = False):
-    """Open video with decord — GPU (NVDEC) preferred, CPU fallback.
-
-    Returns (VideoReader, label) where label is ``'GPU'`` or ``'CPU'``.
-    Set ``DECORD_FORCE_CPU=1`` in the environment or pass *force_cpu=True*
-    to skip GPU even when available.
-    """
-    from decord import VideoReader as _VR
-
-    _vr = None
-    _label = "CPU"
-    _force = force_cpu or _os.environ.get(
-        config.DECORD_FORCE_CPU_ENV, "").strip() == "1"
-
-    if not _force:
-        try:
-            from decord import gpu as _decord_gpu
-            _vr = _VR(str(video_path), ctx=_decord_gpu(0))
-            _label = "GPU"
-        except Exception:
-            pass
-
-    if _vr is None:
-        try:
-            from decord import cpu as _decord_cpu
-            _vr = _VR(str(video_path), ctx=_decord_cpu(0))
-        except ModuleNotFoundError:
-            raise RuntimeError(
-                "decord 未安装（需要自建 fork，PyPI 版不支持）。"
-                "请运行 setup_venv.bat 或从 chr431/decord 获取发布产物到 _decord_build\\")
-        except Exception as _e:
-            raise RuntimeError(f"decord 无法打开视频: {_e}")
-
-    return _vr, _label
-
-
 def nvdec_available(video_path=None) -> bool:
     """轻量探测 NVDEC 解码是否可用（尝试用 GPU reader 打开视频）。
 
@@ -322,24 +264,3 @@ def tensorrt_available() -> bool:
         return bool(candidates)
     except Exception:
         return False
-
-
-def rss_mb() -> float:
-    """当前进程 RSS（MB）。psutil 缺失返回 -1。"""
-    try:
-        import psutil
-        return psutil.Process(_os.getpid()).memory_info().rss / (1024 * 1024)
-    except ImportError:
-        return -1.0
-
-
-def sum_nbytes(seq) -> int:
-    """序列中 ndarray/bytes 元素的总字节数（兼容 (frame, bytes) 二元组）。"""
-    s = 0
-    for x in seq:
-        if hasattr(x, "nbytes"):
-            s += x.nbytes
-        elif hasattr(x, "__len__") and len(x) == 2:
-            if hasattr(x[1], "nbytes"):
-                s += x[1].nbytes
-    return s

@@ -16,7 +16,8 @@ from pathlib import Path
 import numpy as np
 
 import engine_config as config
-from video_ocr_engine._gpu_kernels import (  # noqa: F401 — 兼容旧导入路径
+# 下划线私有模块的内部类，re-export 仅为旧导入路径兼容，勿直接 import。
+from video_ocr_engine._gpu_kernels import (  # noqa: F401
     GpuPreprocessor, GpuOutputReducer, GpuFrameAnalyzer,
 )
 

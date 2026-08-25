@@ -27,9 +27,10 @@ from segmentation import (
     _cluster_win3, _gray_seg, _gray_seg_batch,
     _gray_seg_yuv, _gray_seg_yuv_batch, _otsu,
 )
-from video_utils import (_nv12_luma_full,
-                         _text_sep_gray, nv12_to_rgb)
-# 下列 re-export 保持外部兼容（__init__ / 上层应用仍从 extractor 取）。
+from video_utils import (_nv12_luma_full, _text_sep_gray)
+# 下列 re-export 为引擎内部结构（_helpers/_result_types 均属下划线私有命名，
+# 从 extractor 再导出仅为旧导入路径兼容，勿直接 import；公共入口是
+# video_ocr_engine.__init__ 的三件套）。
 from ._result_types import (  # noqa: F401
     ExtractedSegment, ExtractionResult,
 )
@@ -225,15 +226,19 @@ def _host_segment_frames(ex, frames, stream, *, debug_tag, progress_prefix,
 class FieldExtractor(_GpuPipelineMixin):
     """从视频固定区域提取文本的通用引擎（识别链：解码∥分段∥OCR）。
 
-    构造参数（识别链用）：video_path / roi / frame_start / frame_end /
-    force_aspect / decode_backend / ocr_backend / buffer_size / fill_width /
-    sample_stride / progress_cb / cancel_check / gray_output / yuv_output /
-    rep_crop_format / keep_crops / keep_frames / merge_similar /
-    merge_similar_threshold。
+    构造参数：
+      常用 —— video_path / roi / frame_start / frame_end / force_aspect /
+      decode_backend(auto|cpu|nvdec|hybrid) / ocr_backend(auto|cpu|tensorrt) /
+      sample_stride / rep_crop_format(yuv|gray) / keep_crops / keep_frames /
+      merge_similar / merge_text_sep / progress_cb / cancel_check。
+      高级（默认即最优，改动前读 docs/PERFORMANCE.md）—— buffer_size /
+      fill_width / C（分段聚类阈值，默认取 engine_config.SEG_C）/
+      merge_similar_threshold。
+    已废弃别名（勿再使用）：gray_output / yuv_output —— rep_crop_format
+    的旧名（yuv_output=True≡"yuv"；gray_output=True≡"gray"）。
     内部链恒为单通道灰度（yuv420 时取 Y 平面、否则 decord gray），不再输出
     RGB 帧；代表帧像素格式由 rep_crop_format 决定（"yuv"=packed NV12 默认 /
     "gray"），外部用 nv12_to_rgb 转 RGB。
-    分段阈值 C 取自 engine_config.SEG_C；引擎不含领域后处理参数。
     sample_stride：分频采样步长（默认 1 = 逐帧处理）。>1 时只解码/分段每个
     第 N 帧（字幕等慢更新内容可显著降低处理压力；需要 decord fork ≥0.7.12
     的等差步长快速路径，否则退化为逐索引 seek）。
@@ -243,7 +248,7 @@ class FieldExtractor(_GpuPipelineMixin):
                  frame_end=None, force_aspect: float = 0.0,
                  decode_backend: str = "auto", ocr_backend: str = "auto",
                  buffer_size: int | None = None, fill_width: int | None = None,
-                 C: float | None = None, fps: float | None = None,
+                 C: float | None = None,
                  sample_stride: int = config.DEFAULT_SAMPLE_STRIDE,
                  progress_cb=None, cancel_check=None, gray_output: bool = False,
                  yuv_output: bool = False,
@@ -255,9 +260,8 @@ class FieldExtractor(_GpuPipelineMixin):
                  merge_text_sep: str | None = None):
         self._video_path = Path(video_path)
         self._roi = tuple(roi)
-        # fps 强制自测：open decoder 后从 get_avg_fps/get_fps 读，忽略外部
-        # 传入（truth 头的 fps 可能与视频实际帧率偏离；自测无额外解码开销，
-        # 只在打开时读一次元数据）。fps 参数保留仅为 API 兼容（已废弃）。
+        # fps 强制自测：open decoder 后从 get_avg_fps/get_fps 读（truth 头的
+        # fps 可能与视频实际帧率偏离；自测无额外解码开销，只在打开时读一次）。
         self._fps = None
         self._frame_start = frame_start or 0
         self._frame_end = frame_end
@@ -307,13 +311,9 @@ class FieldExtractor(_GpuPipelineMixin):
         self._bin_thresh = 0
         self._progress = progress_cb or (lambda m, p: None)
         self._cancel = cancel_check or (lambda: None)
-        self.rows: list = []
         self.timing: dict = {}
-        self.segments: list[dict] = []
         self.crops: dict = {}
-        self._segs: list = []
         self._frames: list = []
-        self._ocr_vals: list = []
         self._ocr_texts: list = []
         self._ocr_confs: list = []
         self._n_segments = 0
@@ -422,51 +422,6 @@ class FieldExtractor(_GpuPipelineMixin):
     @frames.setter
     def frames(self, v: list) -> None:
         self._frames = v
-
-    @property
-    def segment_frames(self) -> list:
-        """每段的帧号序列（[[start..end], ...]）。"""
-        return self._segs
-
-    @segment_frames.setter
-    def segment_frames(self, v: list) -> None:
-        self._segs = v
-
-    @property
-    def ocr_values(self) -> list:
-        """每段 OCR 原始读数（None=该段未读出）。"""
-        return self._ocr_vals
-
-    @ocr_values.setter
-    def ocr_values(self, v: list) -> None:
-        self._ocr_vals = v
-
-    @property
-    def ocr_texts(self) -> list:
-        """每段 OCR 原始文本（识别层原始输出；速度解析前的源，None=未读出）。"""
-        return self._ocr_texts
-
-    @ocr_texts.setter
-    def ocr_texts(self, v: list) -> None:
-        self._ocr_texts = v
-
-    @property
-    def ocr_confidences(self) -> list:
-        """每段 OCR 置信度（0-1，0.0=不可用）。"""
-        return self._ocr_confs
-
-    @ocr_confidences.setter
-    def ocr_confidences(self, v: list) -> None:
-        self._ocr_confs = v
-
-    @property
-    def n_segments(self) -> int:
-        """段总数（run 后有效；无段时 0）。"""
-        return getattr(self, '_n_segments', 0)
-
-    @n_segments.setter
-    def n_segments(self, v: int) -> None:
-        self._n_segments = v
 
     def _prof_end(self, group: str, key: str, t0: float) -> None:
         """累加一段耗时到 profile（线程安全；关闭时仅一次属性判断）。"""
@@ -977,22 +932,3 @@ class FieldExtractor(_GpuPipelineMixin):
         self._ocr_confs = [results[i][1] for i in range(seg_idx)]
         return (frames, segs, self._ocr_texts, self._ocr_confs,
                 [results[i][2] for i in range(seg_idx)])
-
-    def prepare_review_rgb(self) -> None:
-        """最终检查前：把全部代表帧 packed YUV420 就地转成 RGB。
-
-            只转换代表帧（每段一张，不转换全片帧）：test5 ~2.5k 段、
-            test6 ~8.1k 段均为毫秒~亚秒级 numpy 操作。转换后释放
-            self.crops 的 YUV 引用（segments 内已换成 RGB，finalize 不需要）。
-            """
-        if not self._yuv_output:
-            return
-        for seg in self.segments:
-            crop = seg.get('rep_crop')
-            if crop is not None and crop.ndim == 2:
-                seg['rep_crop'] = nv12_to_rgb(crop)
-        self.crops.clear()
-
-    def timing_flat(self) -> dict:
-        """展平 timing dict（丢弃嵌套值），兼容 headless/gui_export 调用。"""
-        return {k: v for k, v in self.timing.items() if isinstance(v, (int, float))}

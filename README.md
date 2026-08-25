@@ -145,23 +145,42 @@ Otsu 校准、merge_similar 判定（GPU `sim_pair`；contrast 模式在边界�
 - env `GPU_PIPELINE=0` 显式关闭；`=1` 强制启用（含 GPU 分段+ONNX 实验组合）；
   `decode_backend="hybrid"`/`"cpu"` 走宿主
 
-## 环境变量钩子（实验）
+## 环境变量钩子
+
+> 构造参数已覆盖绝大多数用法；环境变量仅在**批量调优/诊断**时使用。
+> 未设置 = 引擎默认值（已按实测调优，见 `docs/PERFORMANCE.md`"已锁定参数"）。
+
+### 用户调参（了解影响后再动）
 
 | 变量 | 作用 |
 |------|------|
-| `GPU_PIPELINE` | GPU 全驻留管线：`0` 关闭回退宿主路径（gray+NVDEC+TRT 时默认启用） |
-| `GPU_CTC` | `0` 关闭 TRT 输出的 GPU argmax 归约（默认开启，仅影响 GPU 管线） |
+| `GPU_PIPELINE` | 零拷贝管线：未设置 = NVDEC+TRT 时默认启用；`0` 显式关闭；`1` 强制启用（含 GPU 分段+ONNX 等实验组合） |
 | `OCR_THREADS` | OCR 推理线程数覆盖（默认全物理核） |
 | `OCR_BATCH` | OCR 批大小覆盖（默认 16） |
 | `OCR_PAD_SMALL` | OCR 输入 pad 宽度下限覆盖 |
 | `OCR_GAMMA` | OCR 预处理 gamma（默认 2.0） |
-| `OCR_INSTANCES` | `0` 关闭并行双 ONNX 实例（CPU 核数≥8 默认开） |
-| `HYBRID_MAX_CHUNKS` | 混合解码竞争分片数量上限（默认 16）：关键帧过密时自动放大间距合并，防片数过多导致 seek 总耗时线性增长 |
+| `TEXT_SEP_MERGE` | 相似段合并分离模式（contrast/binary/off） |
+| `HYBRID_MAX_CHUNKS` | 混合解码竞争分片上限（默认 16） |
 | `HYBRID_CPU_THREADS` | 混合解码中 CPU 软解线程数（默认 0=核数//2） |
-| `TEXT_SEP_MERGE` | 相似段合并使用的分离模式（contrast/binary/off） |
+
+### 实验/诊断（排查问题时用）
+
+| 变量 | 作用 |
+|------|------|
+| `GPU_CTC` | `0` 关闭 TRT 输出的 GPU argmax 归约（默认开；仅影响 GPU 管线） |
+| `OCR_INSTANCES` | `0` 关闭并行双 ONNX 实例（CPU 核数≥8 默认开） |
 | `ENGINE_PROFILE` | `1` 开启引擎细粒度性能剖面 |
 | `TRT_SUBPROBE` | `1` 开启 TRT 子相位探针 |
 | `DEBUG_BOUNDS` | `1` 打印分段边界调试信息 |
+
+### 已废弃/兼容（勿再依赖）
+
+| 变量 | 说明 |
+|------|------|
+| `DECORD_FORCE_CPU` | 旧强制 CPU 解码钩子；仅 `decode_backend="auto"` 时兼容生效，请改用 `decode_backend="cpu"` |
+
+内部实现（`engine_config` 常量、`_gpu_pipeline` 门控等）不在本表；如需深入，
+以 `engine_config.py` 为唯一事实源。
 
 ## 文档
 
