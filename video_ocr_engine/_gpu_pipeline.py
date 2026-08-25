@@ -1,4 +1,4 @@
-"""GPU 全驻留管线（_GpuPipelineMixin）：NVDEC 下的 host 最小化路径。
+"""GPU 全驻留零拷贝管线（_GpuPipelineMixin）：NVDEC 默认主路径。
 
 从 extractor.py 拆出：_gpu_pipeline_enabled / _run_pipelined_gpu。GPU 预处理/
 归约/帧分析内核位于 video_ocr_engine._gpu_kernels（ocr_trt re-export）。
@@ -10,10 +10,64 @@ import time
 import numpy as np
 
 import engine_config as config
-from video_utils import _nv12_luma_full, nvdec_available
+from video_utils import nvdec_available
 from ._helpers import (_ndarray_device_ptr, _otsu_from_hist,
                        _decode_progress_pct, _otsu_median_threshold,
                        _read_fps_from_vr)
+
+
+class _YFrame:
+    """池化的单帧设备 Y 缓冲（yuv 代表帧 Y 平面提取用）。
+
+    随队列/闭包传递（作为 dev 元组的 owner），引用归零（GC）时自动
+    归还 _YFramePool，不阻塞调用方。
+    """
+
+    __slots__ = ("pool", "ptr", "size")
+
+    def __init__(self, pool, ptr, size):
+        self.pool = pool
+        self.ptr = ptr
+        self.size = size
+
+    def __del__(self):
+        try:
+            self.pool._release(self)
+        except Exception:
+            pass
+
+
+class _YFramePool:
+    """单帧灰度 (H*W) device 缓冲池：yuv 模式零拷贝的关键件。
+
+    raw OCR（call_gpu_raw）与 GPU 端 merge_similar 判定消费"帧的 Y 平面"。
+    yuv 模式下代表帧以 packed NV12 保留在 decord NDArray（owner 保活），
+    Y 提取（luma_into，~10KB D2D）按需落到池帧；池帧随队列流入 OCR
+    worker，GC 时自动归还（跨线程安全，释放走 CUDA runtime）。
+    """
+
+    _MAX = 32   # ≥ OCR 批上限（16）+ 合并判定 2，避免高频 cudaMalloc 抖动
+
+    def __init__(self, fnb: int):
+        self._fnb = int(fnb)
+        self._free: list = []
+
+    def acquire(self) -> _YFrame:
+        if self._free:
+            return self._free.pop()
+        from cuda.bindings import runtime as cudart
+        _err, ptr = cudart.cudaMalloc(self._fnb)
+        return _YFrame(self, int(ptr), self._fnb)
+
+    def _release(self, frame: _YFrame) -> None:
+        if len(self._free) < self._MAX:
+            self._free.append(frame)
+            return
+        try:
+            from cuda.bindings import runtime as cudart
+            cudart.cudaFree(frame.ptr)
+        except Exception:
+            pass
 
 
 class _GpuPipelineMixin:
@@ -48,16 +102,19 @@ class _GpuPipelineMixin:
         return nvdec_available(str(self._video_path))
 
     def _run_pipelined_gpu(self):
-        """GPU 全驻留路径：灰度/sharp/聚类变化分都在 GPU 计算，host 只收标量。
+        """GPU 全驻留零拷贝路径：灰度/sharp/聚类/合并判定/OCR 全在 GPU。
 
+        过 RAM 的只有：每帧两个标量（sharp/cluster）、校准直方图表、
+        merge_similar 两标量、keep_crops 输出（每段一张 D2H，结果必须
+        给外部）与 OCR 回退路径（ONNX/无 TRT/引擎未就绪时代表帧 D2H）。
         两种代表帧格式：
-        - gray（rep_crop_format="gray"）：代表帧留在显存，OCR 走
-          call_gpu_raw 直通（单 TRT 引擎时）；
-        - yuv（rep_crop_format="yuv"，默认）：luma_nv12 kernel 在 GPU 提取
-          Y 平面供分段/校准（与宿主逐位一致），代表帧 D2H 保留完整
-          packed NV12（含 UV，供外部 nv12_to_rgb），OCR 走宿主预处理。
-        OCR 后端任意：ONNX/无 TRT 或 yuv 时自动走宿主 OCR（D2H 代表帧）。
-        校准阈值仍取前 50 帧 D2H（量小，可接受）。
+        - gray：代表帧即 decord gray NDArray（owner 保活），raw OCR 直通；
+        - yuv：代表帧为 packed NV12（owner 保活），Y 平面按需提取到
+          _YFramePool 池帧供 raw OCR / GPU 合并判定（~10KB D2D/次）；
+          完整 NV12 仅 keep_crops 时 D2H。
+        合并判定（sim_pair kernel）与宿主 _segments_similar 语义对应
+        （整数精确；除对比阈值处的 float32 末位舍入外逐位一致）。
+        contrast 模式已被门控排除（走宿主）。
         返回格式与 _run_pipelined 相同。
         """
         from queue import Queue
@@ -236,26 +293,78 @@ class _GpuPipelineMixin:
         seg_idx = 0
         s = 0
         rep_frame = frames[0]
-        rep_dev = None
+        rep_dev = None           # 代表帧设备元组：gray=(nds,yptr,H,W)；
+                                 # yuv=(nds,nv12ptr,rows,W)。owner 保活，
+                                 # 全程留显存，不做持续 D2H。
+        last_rep_dev = None      # 上一"已发出"段的代表帧设备元组
         rep_sharp = -1.0
-        rep_h = None            # 当前代表帧宿主副本：yuv = packed NV12 (rows,W)，
-                                # gray = 灰度 (H,W)（D2H，每段仅一张小 ROI）
-        last_rep_h = None       # 上一"已发出"段的代表帧宿主副本
         prev_seen = False
         k = 0
         t0 = time.perf_counter()
-        # 代表帧宿主副本：merge_similar 判定直接复用宿主 _segments_similar
-        # （逐位一致），且避免每个段边界一次内核启动+同步的开销。每段仅
-        # 一张 ROI（gray ~10KB / NV12 ~15KB）过 RAM，整片流量可忽略。
-        # yuv 模式下 similarity/OCR 需要纯 Y：_rep_gray 按需做
-        # NV12 行切片 + range 展开（与宿主 _nv12_luma_full 逐位一致）。
+        # 零拷贝管线：代表帧只在两处过 RAM —— keep_crops 输出（每段一张
+        # D2H）与 OCR 回退路径（ONNX/无 TRT/引擎未就绪）。merge_similar
+        # 判定在 GPU（sim_pair 整数精确）；yuv 的 Y 平面按需从保留的 NV12
+        # 提取（luma_into → 池帧，~10KB D2D/次）。
+        raw_ready_ref = ocr_session["raw_ready"]
+        _y_pool = _YFramePool(src_h * src_w) if yuv else None
+        _limited = self._color_range != 1
 
-        def _rep_gray(h):
-            if h is None:
-                return None
-            if self._yuv_output:
-                return _nv12_luma_full(h, self._color_range)
-            return h
+        def _similar_device(a_dev, b_dev) -> bool:
+            """merge_similar 的 GPU 判定，语义与宿主 _segments_similar 对应：
+            平均绝对差（整数精确，与宿主 float32 均值仅差末位舍入）≤ 阈值
+            且显著变化像素数 ≤ max_changed。contrast 模式已被门控排除。"""
+            if not (self._merge_similar and a_dev is not None
+                    and b_dev is not None):
+                return False
+            use_bin = 1 if self._merge_effective_mode() == 'binary' else 0
+            ya = yb = None
+            if yuv:
+                ya = _y_pool.acquire()
+                yb = _y_pool.acquire()
+                analyzer.luma_into(int(a_dev[1]), int(ya.ptr), src_h,
+                                   src_w, _limited)
+                analyzer.luma_into(int(b_dev[1]), int(yb.ptr), src_h,
+                                   src_w, _limited)
+                ap, bp = ya.ptr, yb.ptr
+            else:
+                ap, bp = int(a_dev[1]), int(b_dev[1])
+            try:
+                mad, chg = analyzer.compare_pair(ap, bp, src_h, src_w,
+                                                 self._bin_thresh, use_bin)
+            finally:
+                # 池帧引用释放（GC 归还）
+                ya = yb = None
+            n = src_h * src_w
+            mean = 255.0 * mad / n if use_bin else mad / n
+            if mean > self._merge_similar_threshold:
+                return False
+            return chg <= self._merge_max_changed_pixels
+
+        def _emit_ocr(idx, r_frame, r_dev, frac) -> None:
+            _t_push = time.perf_counter()
+            _raw = raw_ready_ref[0] and r_dev is not None
+            crop_h = None
+            dev_ocr = None
+            if _raw:
+                # 零拷贝：gray 直接 decord NDArray 指针；yuv 提取 Y 到池帧
+                #（owner=池帧，OCR worker 用毕 GC 归还）。
+                if yuv:
+                    yf = _y_pool.acquire()
+                    analyzer.luma_into(int(r_dev[1]), int(yf.ptr), src_h,
+                                       src_w, _limited)
+                    dev_ocr = (yf, yf.ptr, src_h, src_w)
+                else:
+                    dev_ocr = r_dev
+            else:
+                # 回退（ONNX/无 TRT/引擎未就绪）：代表帧 D2H → 宿主预处理，
+                # crop 与 keep_crops 共用同一副本。
+                crop_h = _d2h_rep(r_dev)
+            _put_ocr((idx, r_frame, crop_h, dev_ocr, frac))
+            if self._keep_crops:
+                # keep_crops 是结果输出（给外部转 RGB），不可避免的 D2H
+                rep_crops[r_frame] = (crop_h if crop_h is not None
+                                      else _d2h_rep(r_dev))
+            self._prof_end('producer', 'q_put_block', _t_push)
 
         def _d2h_rep(dev):
             """代表帧 D2H：gray = (H,W)；yuv = packed NV12 (rows,W) 原样保留。"""
@@ -280,38 +389,28 @@ class _GpuPipelineMixin:
                         if config.env_bool(config.DEBUG_BOUNDS_ENV):
                             print(f'[GB]{fi}:{float(cluster):.0f}',
                                   flush=True)
-                        similar = (
-                            self._merge_similar and segs
-                            and self._segments_similar(_rep_gray(last_rep_h),
-                                                       _rep_gray(rep_h)))
+                        similar = _similar_device(last_rep_dev, rep_dev)
                         if similar:
                             segs[-1].extend(seg)
                         else:
                             segs.append(seg)
-                            _put_ocr((seg_idx, rep_frame, rep_h, rep_dev,
-                                      k / max(len(frames), 1)))
-                            if self._keep_crops:
-                                rep_crops[rep_frame] = rep_h
+                            _emit_ocr(seg_idx, rep_frame, rep_dev,
+                                      k / max(len(frames), 1))
                             seg_idx += 1
-                            last_rep_h = rep_h
+                            last_rep_dev = rep_dev
                         s = k
                         rep_frame = fi
                         rep_dev = dev
                         rep_sharp = sharp
-                        rep_h = None
                     elif sharp > rep_sharp:
                         rep_sharp = sharp
                         rep_frame = fi
                         rep_dev = dev
-                        rep_h = None
                 else:
                     rep_frame = fi
                     rep_dev = dev
                     rep_sharp = sharp
-                    rep_h = None
                     prev_seen = True
-                if rep_h is None and rep_dev is not None:
-                    rep_h = _d2h_rep(rep_dev)
                 if k % 100 == 0:
                     self._cancel()
                 if k % 500 == 0:
@@ -322,17 +421,12 @@ class _GpuPipelineMixin:
             if producer_err:
                 raise producer_err[0]
             seg = frames[s:]
-            similar = (
-                self._merge_similar and segs
-                and self._segments_similar(_rep_gray(last_rep_h),
-                                           _rep_gray(rep_h)))
+            similar = _similar_device(last_rep_dev, rep_dev)
             if similar:
                 segs[-1].extend(seg)
             else:
                 segs.append(seg)
-                _put_ocr((seg_idx, rep_frame, rep_h, rep_dev, 1.0))
-                if self._keep_crops:
-                    rep_crops[rep_frame] = rep_h
+                _emit_ocr(seg_idx, rep_frame, rep_dev, 1.0)
                 seg_idx += 1
         finally:
             _t_consume_end = time.perf_counter()

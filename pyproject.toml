@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "video-ocr-engine"
-version = "0.4.0"
+version = "0.5.0"
 description = "通用视频文本提取引擎：解码 → 像素分段 → 代表帧 → OCR 文本（含置信度）。速度数字识别、字幕提取等通用场景。"
 readme = "README.md"
 requires-python = ">=3.11"

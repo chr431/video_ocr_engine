@@ -14,7 +14,7 @@ import os
 import sys
 from pathlib import Path
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 # ═══════════════════ 环境变量助手与名称常量 ═══════════════════
 # 引擎全部 env 开关/覆写在此收敛（单一事实源）。布尔开关统一走 env_bool：

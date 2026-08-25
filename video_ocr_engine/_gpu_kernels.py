@@ -398,6 +398,43 @@ extern "C" __global__ void analyze_gray(
     }
 }
 
+extern "C" __global__ void sim_pair(
+    const unsigned char* __restrict__ a,
+    const unsigned char* __restrict__ b,
+    double* __restrict__ out,
+    int n, int th, int use_bin) {
+    // merge_similar 判定的差异标量：out[0]=MAD 累加和，out[1]=显著变化数。
+    // use_bin=1 按二值化域（阈值穿越 ⇔ |0-255| 差），否则按原始灰度域。
+    // 与宿主 _segments_similar（binary text_sep / raw）语义一一对应：
+    // 整数精确累加（与 numpy 的 float32 均值仅差末位舍入，见 _similar_device）。
+    __shared__ double s_mad[256];
+    __shared__ unsigned long long s_chg[256];
+    int t = threadIdx.x;
+    double mad = 0.0;
+    unsigned long long chg = 0;
+    for (int p = t; p < n; p += 256) {
+        if (use_bin) {
+            int d = ((a[p] > th) != (b[p] > th)) ? 1 : 0;
+            mad += d;
+            chg += d;
+        } else {
+            int d = abs((int)a[p] - (int)b[p]);
+            mad += d;
+            chg += d > 10 ? 1 : 0;
+        }
+    }
+    s_mad[t] = mad; s_chg[t] = chg;
+    __syncthreads();
+    for (int s = 128; s > 0; s >>= 1) {
+        if (t < s) {
+            s_mad[t] += s_mad[t + s];
+            s_chg[t] += s_chg[t + s];
+        }
+        __syncthreads();
+    }
+    if (t == 0) { out[0] = s_mad[0]; out[1] = (double)s_chg[0]; }
+}
+
 extern "C" __global__ void hist_gray_perframe(
     const unsigned char* __restrict__ raw,
     int* __restrict__ hists,   // (B, 256)
@@ -453,10 +490,12 @@ extern "C" __global__ void luma_nv12(
         self._mod = self._prog.compile(
             "cubin",
             name_expressions=("analyze_gray",
-                              "hist_gray_perframe", "luma_nv12"))
+                              "hist_gray_perframe", "luma_nv12",
+                              "sim_pair"))
         self._kernel = self._mod.get_kernel("analyze_gray")
         self._kernel_hist_pf = self._mod.get_kernel("hist_gray_perframe")
         self._kernel_luma = self._mod.get_kernel("luma_nv12")
+        self._kernel_sim = self._mod.get_kernel("sim_pair")
         from cuda.bindings import runtime as cudart
         _err, self._stream = cudart.cudaStreamCreate()
         self._summary_size = 0
@@ -503,6 +542,26 @@ extern "C" __global__ void luma_nv12(
             cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
         return hists
 
+    def luma_into(self, src_ptr: int, dst_ptr: int, H: int, W: int,
+                  limited: bool, B: int = 1) -> None:
+        """packed NV12 → 灰度 Y，写入指定 dst（B 帧连续）。
+
+        src: (B, H+ceil(H/2), W) packed；dst: (B, H, W)。与宿主
+        _nv12_luma_full 逐位一致。调用方负责 dst 的生命周期/对齐。
+        """
+        import numpy as np
+        from cuda.bindings import runtime as cudart
+        from cuda.core import Buffer, LaunchConfig, launch
+        nbytes = B * H * W
+        block = 256
+        grid = (nbytes + block - 1) // block
+        launch(self._stream, LaunchConfig(grid=grid, block=block),
+               self._kernel_luma,
+               Buffer.from_handle(src_ptr, B * (H + (H + 1) // 2) * W),
+               Buffer.from_handle(dst_ptr, nbytes),
+               np.int32(B), np.int32(H), np.int32(W),
+               np.int32(1 if limited else 0))
+
     def extract_luma(self, src_ptr: int, B: int, H: int, W: int,
                      limited: bool) -> int:
         """packed NV12 → 灰度 Y 平面（D2D），与宿主 _nv12_luma_full 逐位一致。
@@ -512,24 +571,44 @@ extern "C" __global__ void luma_nv12(
         kernel 完成前不被覆盖（同一批内安全；跨批重新调用会覆盖内容，
         前批引用须在覆盖前消费完）。
         """
-        import numpy as np
         from cuda.bindings import runtime as cudart
-        from cuda.core import Buffer, LaunchConfig, launch
         nbytes = B * H * W
         if self._luma_size < nbytes:
             if self._luma_dev is not None:
                 cudart.cudaFree(self._luma_dev)
             _err, self._luma_dev = cudart.cudaMalloc(nbytes)
             self._luma_size = nbytes
-        block = 256
-        grid = (nbytes + block - 1) // block
-        launch(self._stream, LaunchConfig(grid=grid, block=block),
-               self._kernel_luma,
-               Buffer.from_handle(src_ptr, B * (H + (H + 1) // 2) * W),
-               Buffer.from_handle(self._luma_dev, nbytes),
-               np.int32(B), np.int32(H), np.int32(W),
-               np.int32(1 if limited else 0))
+        self.luma_into(src_ptr, self._luma_dev, H, W, limited, B)
         return self._luma_dev
+
+    def compare_pair(self, a_ptr: int, b_ptr: int, H: int, W: int,
+                     th: int, use_bin: bool) -> "tuple[int, int]":
+        """两帧差异标量（merge_similar 判定）：(mad_sum, changed_count)。
+
+        use_bin=True 按二值化域：mad_sum = 阈值穿越像素数（宿主换算
+        MAD = 255*mad_sum/n），changed = 同一计数（|0-255|>10 恒真）。
+        use_bin=False 按原始灰度域：mad_sum = |a-b| 整数和，changed =
+        count(|a-b|>10)。整数精确累加（double 归约，值域 < 2^53），
+        与宿主 _segments_similar 的两个条件一一对应。
+        """
+        import numpy as np
+        from cuda.bindings import runtime as cudart
+        from cuda.core import Buffer, LaunchConfig, launch
+        if getattr(self, "_sim_dev", None) is None:
+            _err, self._sim_dev = cudart.cudaMalloc(2 * 8)
+        n = H * W
+        out_buf = Buffer.from_handle(self._sim_dev, 2 * 8)
+        launch(self._stream, LaunchConfig(grid=1, block=256),
+               self._kernel_sim,
+               Buffer.from_handle(a_ptr, n),
+               Buffer.from_handle(b_ptr, n),
+               out_buf, np.int32(n), np.int32(th),
+               np.int32(1 if use_bin else 0))
+        cudart.cudaStreamSynchronize(self._stream)
+        out = np.empty(2, dtype=np.float64)
+        cudart.cudaMemcpy(out.ctypes.data, self._sim_dev, 2 * 8,
+                          cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
+        return int(out[0]), int(out[1])
 
     def analyze_batch(self, raw_ptr: int, prev_ptr: int, B: int,
                       H: int, W: int, th: float) -> "np.ndarray":

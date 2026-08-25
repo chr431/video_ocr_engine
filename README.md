@@ -125,16 +125,17 @@ NVDEC/CPU）。
 解码∥分段∥OCR 三级流水线 + 有界队列背压（`OCR_BATCH_SIZE` / `buffer_size`），
 解码与 OCR 线程重叠摊薄墙钟。
 
-### 显存全驻留管线（NVDEC 可用时默认启用）
+### 显存全驻留零拷贝管线（NVDEC 可用时默认启用）
 
 NVDEC 可用（`decode_backend∈{auto,nvdec}` 且无 `force_aspect`、merge 非
-contrast）时，识别链自动切换为**显存全驻留**路径：NVDEC 解码、灰度
+contrast）时，识别链自动切换为**显存全驻留零拷贝**路径：NVDEC 解码、灰度
 （`yuv420` 时由 `luma_nv12` kernel 在 GPU 提取 Y 平面，与宿主逐位一致）、
-sharp/聚类分段、Otsu 校准、TensorRT 推理（单 TRT 引擎且 `rep_crop_format
-="gray"` 时走 raw 直通）、CTC 预归约全部在 GPU 内闭环，过 RAM 的只有每帧
-两个标量、校准直方图表、归约后的索引/概率与代表帧（gray ~10KB / NV12
-~15KB 每段）。分段/合并/输出与宿主路径逐位一致。OCR 后端任意：`cpu`/ONNX
-或无 TRT 时代表帧 D2H 后走宿主预处理。
+sharp/聚类分段、Otsu 校准、merge_similar 判定（GPU `sim_pair`）、代表帧
+保活（gray 直通 decord 指针 / yuv 用 `_YFramePool` 池帧按需提取 Y）、
+TensorRT 推理（single TRT 引擎）与 CTC 预归约全部在 GPU 内闭环——过 RAM 的
+只有每帧两个标量、校准直方图表、合并判定两标量、CTC 归约结果与
+`keep_crops` 输出（每段一张，结果给外部）。分段/合并判定/输出与宿主路径
+一致。OCR 后端任意：`cpu`/ONNX 或无 TRT 时代表帧 D2H 后走宿主预处理。
 
 - 干净环境小幅更快（窗口实测 -13%），对端大内存流量时显著更稳
   （对端 ~100GB/s 流拷贝下 -24%，退化 ×1.43 vs 宿主 ×1.64）

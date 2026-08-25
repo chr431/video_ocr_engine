@@ -680,6 +680,7 @@ class FieldExtractor(_GpuPipelineMixin):
         results: dict = {}
         ocr_err: list = []
         ocr_wall = [0.0]
+        ocr_ready = [False]   # raw 直通可用：worker 引擎就绪后置位（单 TRT）
 
         def _put(item) -> None:
             while True:
@@ -715,6 +716,11 @@ class FieldExtractor(_GpuPipelineMixin):
                         engines = [OcrEngine(self._ocr_model, self._ocr_engine_type(), fill_width=self._fill_width, num_threads=ot, progress_cb=_engine_progress)]
                     self._ocr_backend_used = engines[0].backend_name
                     self._prof_end('ocr', 'engine_init', _t_eng)
+                # 引擎就绪 → 供 GPU 管线 emit 决策（raw 直通需单 TRT 引擎；
+                # 置位后该会话内代表帧可全程留显存，仅输出/回退时 D2H）。
+                ocr_ready[0] = (len(engines) == 1
+                                and getattr(engines[0], '_trt', None)
+                                is not None)
                 B = _ocr_batch_size()
                 infer_q: Queue = Queue(maxsize=config.OCR_INFER_QUEUE_SIZE)
                 ocr_progress_frac = [0.0]
@@ -771,35 +777,43 @@ class FieldExtractor(_GpuPipelineMixin):
                 def flush() -> None:
                     if not b_idx:
                         return
-                    # GPU 直通：只有单 TRT 引擎且代表帧全部带 GPU 指针时走。
-                    # yuv420（rep_crop_format="yuv"）时代表帧是 packed NV12
-                    # （UV 需保留给外部转换），raw gray kernel 只吃单通道
-                    # → 走宿主预处理（D2H 后的 crop 已含 UV）。
-                    raw_ok = (
-                        len(engines) == 1
+                    # 分流：带 dev 的项走 raw 直通（单 TRT 引擎时），带 crop 的
+                    # 项走宿主预处理。两类可能并存于同一批（引擎就绪切换仅有
+                    # 一批；ONNX/回退引擎全程 crop）→ 拆批投递，不混流。
+                    # raw 代表帧：gray = decord gray NDArray 指针；yuv =
+                    # _YFramePool 池帧提取的 Y 平面（由 GPU 管线保证）。
+                    raw_sel = [
+                        i for i in range(len(b_devs))
+                        if b_devs[i] is not None
+                        and len(engines) == 1
                         and getattr(engines[0], '_trt', None) is not None
-                        and b_devs and all(d is not None for d in b_devs)
-                        and getattr(self, '_gpu_pipeline_mode', False)
-                        and not self._yuv_output)
-                    if raw_ok:
+                        and getattr(self, '_gpu_pipeline_mode', False)]
+                    if raw_sel:
                         # 把 raw 任务交给 infer 线程异步执行，避免 OCR worker
                         # 被 GPU 预处理 + TRT 同步阻塞。
-                        infos = [(d[1], d[2], d[3], d[0]) for d in b_devs]
+                        infos = [(d[1], d[2], d[3], d[0])
+                                 for d in (b_devs[i] for i in raw_sel)]
                         if not _put_infer((
-                                list(b_idx), list(b_reps), None,
-                                list(b_fracs), infos)):
+                                [b_idx[i] for i in raw_sel],
+                                [b_reps[i] for i in raw_sel], None,
+                                [b_fracs[i] for i in raw_sel], infos)):
                             return
-                        b_idx.clear(); b_reps.clear(); b_crops.clear()
-                        b_devs.clear(); b_fracs.clear()
-                        return
-                    _t_p = time.perf_counter()
-                    procs = [_preprocess_standard(
-                        _nv12_luma_full(c, self._color_range)[..., None]
-                        if self._yuv_output else c,
-                        force_aspect=self._force_aspect) for c in b_crops]
-                    self._prof_end('ocr', 'preprocess', _t_p)
-                    if not _put_infer((list(b_idx), list(b_reps), procs, list(b_fracs), None)):
-                        return
+                    host_sel = [
+                        i for i in range(len(b_crops))
+                        if b_crops[i] is not None]
+                    if host_sel:
+                        _t_p = time.perf_counter()
+                        procs = [_preprocess_standard(
+                            _nv12_luma_full(c, self._color_range)[..., None]
+                            if self._yuv_output else c,
+                            force_aspect=self._force_aspect)
+                            for c in (b_crops[i] for i in host_sel)]
+                        self._prof_end('ocr', 'preprocess', _t_p)
+                        if not _put_infer((
+                                [b_idx[i] for i in host_sel],
+                                [b_reps[i] for i in host_sel], procs,
+                                [b_fracs[i] for i in host_sel], None)):
+                            return
                     b_idx.clear()
                     b_reps.clear()
                     b_crops.clear()
@@ -860,6 +874,7 @@ class FieldExtractor(_GpuPipelineMixin):
             "put": _put,
             "finish": _finish,
             "seg_idx": 0,
+            "raw_ready": ocr_ready,
         }
 
 
