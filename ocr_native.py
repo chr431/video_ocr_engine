@@ -222,6 +222,11 @@ class OcrEngine:
             # 消除每个子批一次 host-GPU 往返同步，让 GPU 连续执行。
             for i in range(0, len(batch_np), self._trt.max_batch):
                 n = min(self._trt.max_batch, len(batch_np) - i)
+                if i > 0 and n < self._trt.max_batch:
+                    # 末批 batch 维与前批不同 → execute_async 内会重设
+                    # context shape；TRT 不支持 in-flight 修改 context 形状，
+                    # 先同步再入队（仅超大批触发一次，代价可忽略）。
+                    self._trt.synchronize()
                 self._trt.execute_async(
                     batch_np[i:i + n], out_host=preds[i:i + n])
             self._trt.synchronize()
@@ -244,7 +249,7 @@ class OcrEngine:
     # ═══════════════ 后处理（复刻 CTCLabelDecode）═══════════════
 
     def _ctc_decode(self, pred: np.ndarray) -> RecOut:
-        """单帧 (seq, 6906) → (文本, 置信度)。
+        """单帧 (seq, vocab) → (文本, 置信度)（vocab = 字符表长度）。
 
         CTC：argmax → 相邻去重 → 移除 blank(0) → 字符映射。
         置信度 = 选中帧概率均值（round 5，与 rapidocr 一致）。
@@ -298,6 +303,12 @@ class OcrEngine:
             return []
         heights = [im.shape[0] for im in img_list]
         h0 = heights[0]
+        # 高度不一致（如直接调 OcrEngine 传入混合尺寸）时拒绝：预处理按
+        # h0 归一化整批，且 GPU 路径的 out_width/批 buffer 也假设等高；
+        # 静默拉伸会让结果偏离 rapidocr 语义。引擎内部批（同一 ROI）恒等高。
+        if any(h != h0 for h in heights[1:]):
+            raise ValueError("OcrEngine 批内图像高度必须一致（收到 "
+                             f"{sorted(set(heights))}）")
         # 按宽度排序（rapidocr 的加速策略；结果映射回原顺序）
         order = np.argsort([im.shape[1] for im in img_list])
         # pad 宽度 = max(批内最大宽高比, 本模型下限/OCR_TARGET_H)。速度数字
@@ -397,7 +408,6 @@ class OcrEngine:
         """从 GPU 归约后的 (B,S) 索引/概率做 CTC 解码（与
         _ctc_decode_batch 语义一致：相邻去重 → 去 blank → 字符映射，
         置信度 = 保留位置概率均值 round5）。"""
-        import numpy as np
         out: list = []
         for b in range(len(idx)):
             ib = idx[b]
@@ -425,6 +435,10 @@ class OcrEngine:
         elem_floats = int(np.prod(shape[1:]))
         for i in range(0, B, max_batch):
             n = min(max_batch, B - i)
+            if i > 0 and n < max_batch:
+                # 同 _infer_locked：末批 shape 变更前先同步（TRT 不允许
+                # in-flight 修改 context 形状）。
+                self._trt.synchronize()
             off = i * elem_floats * 4
             self._trt.execute_device_async(
                 dev_ptr + off, (n,) + tuple(shape[1:]),

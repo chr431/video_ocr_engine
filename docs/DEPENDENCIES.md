@@ -32,7 +32,8 @@
 ### decord（自建 fork）
 - 必须使用 `chr431/decord` release 构建，不能使用 PyPI 版。
 - 需与对应 FFmpeg DLL 同目录（Windows）。
-- 无 NVIDIA GPU 时自动回退 CPU 软解；`DECORD_FORCE_CPU=1` 可强制 CPU。
+- 无 NVIDIA GPU 时自动回退 CPU 软解；`DECORD_FORCE_CPU=1` 可强制 CPU
+  （仅当 `decode_backend="auto"` 时生效；显式 `"cpu"` 参数为现行首选）。
 - `sample_stride>1` 的等差步长快速路径需要 fork ≥v0.7.12；旧版退化为逐索引
   seek，仍正确但更慢。
 

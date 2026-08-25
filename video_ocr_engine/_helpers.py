@@ -16,8 +16,8 @@ def _ocr_batch_size() -> int:
     return config.OCR_BATCH_SIZE
 
 
-# 进度百分比映射（解码 3→58，OCR 58→86；与旧版进度条语义一致）。三条流水线
-# 路径（单 / 双并行 / GPU 全驻留）各自写一遍 `3+frac*55` / `58+frac*28` 是
+# 进度百分比映射（解码 3→58，OCR 58→86；与旧版进度条语义一致）。两条流水线
+# 路径（单 / GPU 全驻留）各自写一遍 `3+frac*55` / `58+frac*28` 是
 # 可维护性债务：调进度区间需同步多处。此处收敛唯一出处，各路径只传 frac。
 def _decode_progress_pct(frac: float) -> float:
     """解码/分段阶段进度百分比：3 + frac*55（frac∈[0,1]，输出 [3, 58]）。"""

@@ -1,9 +1,9 @@
 """TensorRT 引擎构建 / 缓存 / 执行（OcrEngine 的 GPU 后端）。
 
 与 ONNX 路径共享 OCR 预处理与 CTC 后处理；本模块只负责 TRT 特有逻辑：
-引擎候选查找（模型目录 → 程序目录缓存 → 旧 LOCALAPPDATA 只读回退）、
-反序列化校验、本地构建缓存与 CUDA 显存执行。GPU 预处理/归约/帧分析
-内核类已拆至 video_ocr_engine._gpu_kernels（本模块 re-export 保持兼容）。
+引擎候选查找（模型目录 → 程序目录缓存）→ 反序列化校验 → 本地构建缓存
+→ CUDA 显存执行。GPU 预处理/归约/帧分析内核类已拆至
+video_ocr_engine._gpu_kernels（本模块 re-export 保持兼容）。
 """
 from __future__ import annotations
 
@@ -312,9 +312,6 @@ class TrtEngine:
         """
         from cuda.bindings import runtime as cudart
         stream = self._ensure_stream()
-        first_shape = (min(int(shape[0]), self.max_batch),) + tuple(shape[1:])
-        out_shape = self._prepare_shape(first_shape)
-        cdim = int(out_shape[-1])
         elem_floats = int(np.prod(shape[1:], dtype=np.int64))
         B = int(shape[0])
         reducer = getattr(self, "_reducer", None)
@@ -325,8 +322,14 @@ class TrtEngine:
         prob_parts = []
         for i in range(0, B, self.max_batch):
             nb = min(self.max_batch, B - i)
+            if i > 0 and nb < self.max_batch:
+                # 末批 batch 维与前批不同：先同步再改 context shape
+                # （TRT 不支持 in-flight 修改 context 形状；且若按前批
+                # batch 维执行，末批会越界读输入/写出多余行）。
+                self.synchronize()
             sub_shape = (nb,) + tuple(shape[1:])
-            out_nbytes = int(np.prod((nb,) + tuple(out_shape[1:]))) * 4
+            out_shape = self._prepare_shape(sub_shape)
+            out_nbytes = int(np.prod(out_shape)) * 4
             if self._dev_out is None or out_nbytes > self._out_nbytes:
                 if self._dev_out is not None:
                     cudart.cudaFree(self._dev_out)
@@ -336,8 +339,7 @@ class TrtEngine:
                 self.in_name, dev_input + i * elem_floats * 4)
             self.context.set_tensor_address(self.out_name, self._dev_out)
             self.context.execute_async_v3(stream)
-            idx, prob = reducer.reduce(self._dev_out,
-                                       (nb,) + tuple(out_shape[1:]))
+            idx, prob = reducer.reduce(self._dev_out, out_shape)
             idx_parts.append(idx)
             prob_parts.append(prob)
         idx_all = np.concatenate(idx_parts) if len(idx_parts) > 1 \

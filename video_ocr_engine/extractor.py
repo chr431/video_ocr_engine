@@ -135,7 +135,7 @@ def _host_frame_stream(ex, frames, vr, calib, th, *, with_dev=False):
 
 
 def _host_segment_frames(ex, frames, stream, *, debug_tag, progress_prefix,
-                         emit, segs, rep_crops):
+                         emit, segs):
     """宿主分段状态机（单流水线统一入口）。
 
     ex: FieldExtractor。
@@ -143,7 +143,7 @@ def _host_segment_frames(ex, frames, stream, *, debug_tag, progress_prefix,
     emit(seg, rep_frame, rep_crop, rep_dev, rep_gray, frac)：段闭合时投递
         OCR，由调用方闭包实现（入队/全局段号/keys/reps/rep_crops 收敛在
         闭包里；调用方在 emit 前已把 seg 追加进 segs）。
-    segs/rep_crops 由调用方传入（emit 闭包直写 rep_crops）。
+    segs 由调用方传入（emit 闭包直写 rep_crops）。
     debug_tag 非 None 且 DEBUG_BOUNDS 开启时打印边界（[HB]=单流水线，与
     GPU 路径 [GB] 对齐）。
     返回 (first_rep_gray, last_rep_gray)：首发射段代表灰度与末发射段代表灰度。
@@ -161,13 +161,14 @@ def _host_segment_frames(ex, frames, stream, *, debug_tag, progress_prefix,
         if prev_b is not None:
             d = prev_b != b
             _t_seg = time.perf_counter()
-            changed = _cluster_win3(d) >= ex._C
+            c3 = _cluster_win3(d)
+            changed = c3 >= ex._C
             ex._prof_end('producer', 'segmentation', _t_seg)
             if changed:
                 seg = frames[s:k]
                 if (debug_tag is not None
                         and config.env_bool(config.DEBUG_BOUNDS_ENV)):
-                    print(f'[{debug_tag}]{fi}:{_cluster_win3(d):.0f}',
+                    print(f'[{debug_tag}]{fi}:{c3:.0f}',
                           flush=True)
                 similar = (
                     ex._merge_similar and segs
@@ -292,7 +293,6 @@ class FieldExtractor(_GpuPipelineMixin):
         self._ocr_vals: list = []
         self._ocr_texts: list = []
         self._ocr_confs: list = []
-        self._pinned: set = set()
         self._n_segments = 0
         self._profile_enabled = config.env_bool(config.ENGINE_PROFILE_ENV)
         self.profile: dict = {}
@@ -458,7 +458,9 @@ class FieldExtractor(_GpuPipelineMixin):
         """按 decode_backend 打开解码器（auto/cpu/nvdec/hybrid）。
 
             auto: 尝试 GPU (NVDEC) 失败回退 CPU。cpu: 强制 CPU。
-            nvdec: 强制 GPU（失败回退 CPU 并警告）。替代旧 DECORD_FORCE_CPU env。
+            nvdec: 强制 GPU（失败回退 CPU 并警告）。
+            旧 DECORD_FORCE_CPU env 在 backend=auto 时仍作为兼容钩子生效
+            （decode_backend 参数是现行首选，下游仍设钩子的场景保底）。
             hybrid: CPU+NVDEC 混合解码（HybridDecoder，kfe 分片双生产者竞争）；
                 NVDEC 不可用时回退 CPU 并警告；激活安全门见下方条件。
 
@@ -475,6 +477,9 @@ class FieldExtractor(_GpuPipelineMixin):
         roi = (self._roi[0], self._roi[1], self._roi[2] + 1, self._roi[3] + 1)
         roi_kw = {'roi': roi} if _has_roi_api else {}
         backend = (self._decode_backend or 'auto').lower()
+        if (backend == 'auto'
+                and config.env_bool(config.DECORD_FORCE_CPU_ENV)):
+            backend = 'cpu'
         vr = None
         label = 'CPU'
         if backend in ('auto', 'nvdec', 'hybrid'):
@@ -538,16 +543,18 @@ class FieldExtractor(_GpuPipelineMixin):
     def _decode_num_threads(self, codec: str | None=None) -> int | None:
         """CPU 软解的 decord FFmpeg 帧线程数（少核/AV1 分核）。
 
-            物理核 ≤ CPU_CORES_SPLIT_THRESHOLD（8）时返回 cores//2：FFmpeg
-            fork 默认 2 帧线程只用 2 核，少核下解码成瓶颈，且 OCR 全核会与
-            解码过订阅；实测（test5，affinity 模拟）4 核 28.0 vs 33.1s、
+            物理核 ≤ CPU_CORES_SPLIT_THRESHOLD（8）时返回 max(2, cores//2)：
+            FFmpeg fork 默认 2 帧线程只用 2 核，少核下解码成瓶颈，且 OCR 全核
+            会与解码过订阅；实测（test5，affinity 模拟）4 核 28.0 vs 33.1s、
             8 核 17.8 vs 20.7s。核数多时（16）分核反而更差（12.0 vs 9.5s）
             → 返回 None（decord 默认，FFmpeg 帧线程落在 SMT 份额上）。
             codec='av1'：AV1 软解吞吐极低（~270fps vs h264 ~1247fps），解码
-            是绝对瓶颈 → 解码分 max(2, min(cores*3//4, cores-2)) 核、OCR 保
-            至少 2 线程。实测（test6）：16 核 dcd=12/ocrT=4 → 78.8s vs 现状
-            87.4s（-10%）、8 核 dcd=6/ocrT=2 → 81.7s vs 101.2s（-19%）、
-            4 核 dcd=2/ocrT=2 持平（ocrT=1 是灾难，ONNX 单线程追不上段率）。
+            是绝对瓶颈 → 同样返回 max(2, cores//2)，OCR 由 _ocr_num_threads
+            保至少 2 线程。
+            注：旧实现曾对 AV1 返回 max(2, min(cores*3//4, cores-2))，
+            旧 docstring 的实测数字（16 核 dcd=12/ocrT=4 → 78.8s、8 核
+            dcd=6/ocrT=2 → 81.7s）属于该旧公式；现实现已统一收敛为
+            cores//2，勿按旧数值调参。
             GPU(NVDEC) 不调用本方法。
             """
         from ocr_native import auto_ocr_thread_count
@@ -639,7 +646,6 @@ class FieldExtractor(_GpuPipelineMixin):
         OCR worker / infer 线程造成屏障。
         """
         from queue import Full, Queue
-        import threading
         from ocr_native import OcrEngine
         from video_utils import _preprocess_standard
 
@@ -827,21 +833,25 @@ class FieldExtractor(_GpuPipelineMixin):
 
 
     def _run_pipelined(self, _ocr_engines: list | None = None):
-        """流水线：解码线程增量分段，OCR 线程批处理已闭合段的代表帧。
+        """入口分发：GPU 全驻留管线（_run_pipelined_gpu）或宿主管线。"""
+        if self._gpu_pipeline_enabled():
+            return self._run_pipelined_gpu()
+        return self._run_pipelined_host(_ocr_engines)
+
+    def _run_pipelined_host(self, _ocr_engines: list | None = None):
+        """宿主流水线：解码线程增量分段，OCR 线程批处理已闭合段的代表帧。
         _ocr_engines：内部复用 OCR 引擎时传入；None 走常规创建。
 
             解码是 I/O 瓶颈（CPU 占用低），段边界（win3）在解码循环内增量计算，
             段一闭合就把代表帧（最清晰）交给 OCR 工作线程 —— 解码∥OCR 重叠摊薄
-            总墙钟。代表帧选择与串行 _segment/_ocr_segments 完全一致（每段 max
-            灰度 std），OCR 批 _ocr_batch_size()。
+            总墙钟。代表帧选择为段内灰度 std 最大帧，OCR 批 _ocr_batch_size()。
 
             返回 (frames, segs, ocr_texts, ocr_confs, rep_frames)；
             self.crops = {rep_frame: crop}（仅代表帧，供 review 预览，
             比存全帧省内存）。分段/代表帧选择语义由模块级共享状态机
             _host_segment_frames 承担。
             """
-        if self._gpu_pipeline_enabled():
-            return self._run_pipelined_gpu()
+        self._gpu_pipeline_mode = False
         _t_open = time.perf_counter()
         vr = self._open_vr()
         if self._fps is None:
@@ -858,14 +868,19 @@ class FieldExtractor(_GpuPipelineMixin):
                 f"frame_end={end}, total={total}")
         # 混合解码（hybrid_begin）：采样帧序列就绪后才生成关键帧分片并
         # 启动双解码生产者竞争。
-        if hasattr(vr, 'hybrid_begin'):
+        hybrid = hasattr(vr, 'hybrid_begin')
+        if hybrid:
             vr.hybrid_begin(frames)
         self._prof_end('producer', 'open_and_fps', _t_open)
         _t_cal = time.perf_counter()
         # 宿主校准统一走 _host_calibrate（stride>1 用 get_batch 等差快速路径、
         # stride==1 用 next_roi 顺序流——校准帧号与后续流水线帧号一致）。
         # with_dev=True：保留 GPU 单通道帧的 DLPack 指针供 GPU raw OCR 直通。
-        calib, th = _host_calibrate(self, vr, frames, with_dev=True)
+        # 混合解码（HybridDecoder）交付的是 asnumpy() 宿主数组（_Batch 无
+        # to_dlpack），不存在可为 raw OCR 直通的 GPU 指针 —— 4D 单通道
+        # gray 时强采 _ndarray_device_ptr 会 AttributeError 崩溃，必须跳过。
+        _with_dev = not hybrid
+        calib, th = _host_calibrate(self, vr, frames, with_dev=_with_dev)
         self._bin_thresh = th
         self._prof_end('producer', 'calib_total', _t_cal)
         ocr_session = self._start_ocr_session(_ocr_engines)
@@ -893,10 +908,10 @@ class FieldExtractor(_GpuPipelineMixin):
             _host_segment_frames(
                 self, frames,
                 _host_frame_stream(self, frames, vr, calib, th,
-                                   with_dev=True),
+                                   with_dev=_with_dev),
                 debug_tag='HB',
                 progress_prefix=f'[{self._backend}] 解码+分段',
-                emit=_emit_ocr, segs=segs, rep_crops=rep_crops)
+                emit=_emit_ocr, segs=segs)
         finally:
             _t_consume_end = time.perf_counter()
             self.timing['decode'] = _t_consume_end - t0

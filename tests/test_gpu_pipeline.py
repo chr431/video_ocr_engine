@@ -59,6 +59,13 @@ def test_gpu_pipeline_contrast_merge_falls_back(gpu_ok, monkeypatch):
     assert ex._gpu_pipeline_enabled() is False
 
 
+def test_gpu_pipeline_force_aspect_falls_back(gpu_ok):
+    # GPU raw 直通（process_gray_raw）按自然宽高比缩放，不支持强制宽高比；
+    # 有 force_aspect 时必须走宿主路径，否则两路径 OCR 输入/结果不一致。
+    ex = _make(gray_output=True, force_aspect=2.0)
+    assert ex._gpu_pipeline_enabled() is False
+
+
 def test_merge_effective_mode_resolution(monkeypatch):
     ex = _make()
     # 引擎默认 binary

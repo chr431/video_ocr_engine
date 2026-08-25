@@ -1,7 +1,7 @@
 """GPU 全驻留管线（_GpuPipelineMixin）：NVDEC+TRT 下的 host 最小化路径。
 
 从 extractor.py 拆出：_gpu_pipeline_enabled / _run_pipelined_gpu。GPU 预处理/
-归约/帧分析内核位于 ocr_trt（GpuPreprocessor/GpuOutputReducer/GpuFrameAnalyzer）。
+归约/帧分析内核位于 video_ocr_engine._gpu_kernels（ocr_trt re-export）。
 FieldExtractor 组合本 mixin 获得这两个方法。
 """
 import os as _os
@@ -42,10 +42,15 @@ class _GpuPipelineMixin:
             return False
         if self._merge_similar and self._merge_effective_mode() == 'contrast':
             return False
+        if self._force_aspect > 0:
+            # GPU raw 直通（process_gray_raw）按自然宽高比缩放，不支持强制
+            # 宽高比；宿主路径支持 → 有 force_aspect 时走宿主，避免与宿主
+            # 路径的 OCR 输入不一致（文本结果漂移）。
+            return False
         return nvdec_available(str(self._video_path)) and tensorrt_available()
 
     def _run_pipelined_gpu(self):
-        """实验：灰度/sharp/聚类变化分都在 GPU 计算，host 只收标量。
+        """GPU 全驻留路径：灰度/sharp/聚类变化分都在 GPU 计算，host 只收标量。
 
         代表帧保留 GPU device pointer，OCR 走 call_gpu_raw 路径。
         校准阈值仍取前 50 帧 D2H（量小，可接受）。
@@ -57,7 +62,10 @@ class _GpuPipelineMixin:
         _t_open = time.perf_counter()
         vr = self._open_vr()
         if not self._backend.startswith('decord/GPU'):
-            return self._run_pipelined()
+            # NVDEC 打开失败（nvdec_available 探测仍可能为真）：走宿主流水线。
+            # 必须直接调 _run_pipelined_host —— 经 _run_pipelined 会重新判定
+            # _gpu_pipeline_enabled() 并再次进入本方法（原实现无限递归）。
+            return self._run_pipelined_host(None)
         if self._fps is None:
             _fps = _read_fps_from_vr(vr)
             self._fps = _fps if _fps else config.DEFAULT_FPS_FALLBACK
@@ -78,7 +86,9 @@ class _GpuPipelineMixin:
         calib_base, calib_shape = _ndarray_device_ptr(calib_nds)
         calib_c = calib_shape[-1] if len(calib_shape) == 4 else 0
         if calib_c != 1:
-            return self._run_pipelined()
+            # 灰度帧非 4D 单通道（部分 decord fork 输出 (B,H,W)）：GPU 分段
+            # 不支持，回退宿主。同样必须直接 _run_pipelined_host（防递归）。
+            return self._run_pipelined_host(None)
         src_h, src_w = calib_shape[1], calib_shape[2]
         analyzer = GpuFrameAnalyzer()
         # 逐帧直方图校准：与单流水线"前 50 帧 Otsu 取中位数"语义逐位一致

@@ -25,7 +25,12 @@ import numpy as np
 
 
 class _Batch:
-    """最小 decord NDArray 兼容壳：asnumpy() / shape。"""
+    """最小 decord NDArray 兼容壳：asnumpy() / shape。
+
+    注意：帧数据是解码后 asnumpy() 的宿主数组（非 decord GPU NDArray），
+    **有意不提供 to_dlpack** —— 调用方不应从这里取 device 指针
+    （extractor 已对 HybridDecoder 关闭 dev_info 采集）。
+    """
 
     def __init__(self, arr):
         self._arr = arr
@@ -41,7 +46,6 @@ class _Batch:
 def _nearest_keyframe_sample(target: int, key_frames: list[int],
                              frames: list[int]) -> int:
     """返回离 target 最近的关键帧，再吸附到最近的采样帧号（保持采样网格）。"""
-    import bisect
     if not key_frames or not frames:
         return target
     idx = bisect.bisect_left(key_frames, target)

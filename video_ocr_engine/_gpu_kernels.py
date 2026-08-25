@@ -26,6 +26,7 @@ class GpuPreprocessor:
 extern "C" __global__ void prep(
     const float* __restrict__ raw,
     const int* __restrict__ widths,
+    const long long* __restrict__ bases,
     float* __restrict__ out,
     int B, int H, int W_out, int C) {
     int total = B * C * H * W_out;
@@ -39,7 +40,8 @@ extern "C" __global__ void prep(
     int x = rem2 % W_out;
     int w = widths[b];
     if (x < w) {
-        int src = ((b * H + y) * w + x) * C + c;
+        // bases[b] = 图 b 在拼接缓冲中的元素基址（宽度不齐时不能假设等宽）
+        long long src = bases[b] + (long long)y * w * C + (long long)x * C + c;
         float v = raw[src];
         out[i] = (v / 255.0f - 0.5f) / 0.5f;
     } else {
@@ -82,7 +84,6 @@ extern "C" __global__ void prep_gray_raw(
 '''
 
     def __init__(self) -> None:
-        import numpy as np  # noqa: F401
         from cuda.core import (Buffer, Device, LaunchConfig, Program,
                                ProgramOptions, launch)
         self._dev = Device()
@@ -109,6 +110,9 @@ extern "C" __global__ void prep_gray_raw(
         self._width_size = 0
         self._width_dev = None
         self._width_buf = None
+        self._bases_size = 0
+        self._bases_dev = None
+        self._bases_buf = None
 
     def _ensure_raw(self, nbytes: int) -> int:
         from cuda.bindings import runtime as cudart
@@ -129,6 +133,16 @@ extern "C" __global__ void prep_gray_raw(
             self._width_buf = self._buffer_cls.from_handle(self._width_dev, nbytes)
             self._width_size = nbytes
         return self._width_dev
+
+    def _ensure_bases(self, nbytes: int) -> int:
+        from cuda.bindings import runtime as cudart
+        if self._bases_size < nbytes:
+            if self._bases_dev is not None:
+                cudart.cudaFree(self._bases_dev)
+            _err, self._bases_dev = cudart.cudaMalloc(nbytes)
+            self._bases_buf = self._buffer_cls.from_handle(self._bases_dev, nbytes)
+            self._bases_size = nbytes
+        return self._bases_dev
 
     def _ensure_out(self, nbytes: int) -> int:
         from cuda.bindings import runtime as cudart
@@ -198,9 +212,15 @@ extern "C" __global__ void prep_gray_raw(
         raw = np.concatenate(
             [im.reshape(-1) for im in images]).astype(np.float32, copy=False)
         widths = np.array([int(im.shape[1]) for im in images], dtype=np.int32)
+        # 各图在拼接缓冲中的元素基址（批内宽度可能不齐；kernel 按
+        # widths[b] 索引，没有基址表会对非首图错位/越界）。
+        bases = np.zeros(B, dtype=np.int64)
+        if B > 1:
+            bases[1:] = np.cumsum(widths.astype(np.int64) * H * C)[:-1]
 
         raw_dev = self._ensure_raw(raw.nbytes)
         width_dev = self._ensure_width(widths.nbytes)
+        bases_dev = self._ensure_bases(bases.nbytes)
         out_nbytes = B * C * H * out_width * 4
         out_dev = self._ensure_out(out_nbytes)
 
@@ -209,6 +229,9 @@ extern "C" __global__ void prep_gray_raw(
             cudart.cudaMemcpyKind.cudaMemcpyHostToDevice, self._stream)
         cudart.cudaMemcpyAsync(
             width_dev, widths.ctypes.data, widths.nbytes,
+            cudart.cudaMemcpyKind.cudaMemcpyHostToDevice, self._stream)
+        cudart.cudaMemcpyAsync(
+            bases_dev, bases.ctypes.data, bases.nbytes,
             cudart.cudaMemcpyKind.cudaMemcpyHostToDevice, self._stream)
 
         shape = (B, C, H, out_width)
@@ -219,7 +242,7 @@ extern "C" __global__ void prep_gray_raw(
             self._stream,
             self._launch_cls(grid=grid, block=block),
             self._kernel,
-            self._raw_buf, self._width_buf, self._out_buf,
+            self._raw_buf, self._width_buf, self._bases_buf, self._out_buf,
             np.int32(B), np.int32(H), np.int32(out_width), np.int32(C))
         return int(out_dev), shape
 
@@ -253,7 +276,6 @@ extern "C" __global__ void argmax_last(
 '''
 
     def __init__(self, stream: int | None = None) -> None:
-        import numpy as np  # noqa: F401
         from cuda.core import (Buffer, Device, LaunchConfig, Program,
                                ProgramOptions, launch)
         self._dev = Device()
@@ -315,8 +337,7 @@ class GpuFrameAnalyzer:
 
     GPU 分段路径专用：只把每帧的 (sharp, cluster_score) 小数组 D2H，
     不再把整帧 ROI 灰度拷贝回 host。analyze_gray 为 block=一帧 的并行
-    归约实现；sim_pair 计算两帧在二值化/原始域的差异标量（merge_similar
-    判定用），同样只回传标量。
+    归约实现。
     """
     _KERNEL = r'''
 extern "C" __global__ void analyze_gray(
@@ -377,42 +398,6 @@ extern "C" __global__ void analyze_gray(
     }
 }
 
-extern "C" __global__ void sim_pair(
-    const unsigned char* __restrict__ a,
-    const unsigned char* __restrict__ b,
-    double* __restrict__ out,
-    int n, int th, int use_bin) {
-    // merge_similar 判定的差异标量：out[0]=MAD 累加和，out[1]=显著变化数。
-    // use_bin=1 按二值化域（|0-255|差 ⇔ 阈值穿越），否则按原始灰度域。
-    // 与宿主 _segments_similar（binary text_sep / raw）语义一一对应。
-    __shared__ double s_mad[256];
-    __shared__ unsigned long long s_chg[256];
-    int t = threadIdx.x;
-    double mad = 0.0;
-    unsigned long long chg = 0;
-    for (int p = t; p < n; p += 256) {
-        if (use_bin) {
-            int d = ((a[p] > th) != (b[p] > th)) ? 1 : 0;
-            mad += d;
-            chg += d;
-        } else {
-            int d = abs((int)a[p] - (int)b[p]);
-            mad += d;
-            chg += d > 10 ? 1 : 0;
-        }
-    }
-    s_mad[t] = mad; s_chg[t] = chg;
-    __syncthreads();
-    for (int s = 128; s > 0; s >>= 1) {
-        if (t < s) {
-            s_mad[t] += s_mad[t + s];
-            s_chg[t] += s_chg[t + s];
-        }
-        __syncthreads();
-    }
-    if (t == 0) { out[0] = s_mad[0]; out[1] = (double)s_chg[0]; }
-}
-
 extern "C" __global__ void hist_gray_perframe(
     const unsigned char* __restrict__ raw,
     int* __restrict__ hists,   // (B, 256)
@@ -432,7 +417,6 @@ extern "C" __global__ void hist_gray_perframe(
 '''
 
     def __init__(self) -> None:
-        import numpy as np  # noqa: F401
         from cuda.core import Device, Program, ProgramOptions
         self._dev = Device()
         self._dev.set_current()
@@ -443,10 +427,9 @@ extern "C" __global__ void hist_gray_perframe(
         self._mod = self._prog.compile(
             "cubin",
             name_expressions=("analyze_gray",
-                              "hist_gray_perframe", "sim_pair"))
+                              "hist_gray_perframe"))
         self._kernel = self._mod.get_kernel("analyze_gray")
         self._kernel_hist_pf = self._mod.get_kernel("hist_gray_perframe")
-        self._kernel_sim = self._mod.get_kernel("sim_pair")
         from cuda.bindings import runtime as cudart
         _err, self._stream = cudart.cudaStreamCreate()
         self._summary_size = 0
@@ -514,33 +497,5 @@ extern "C" __global__ void hist_gray_perframe(
             out.ctypes.data, self._summary_dev, nbytes,
             cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
         return out
-
-    def compare_pair(self, a_ptr: int, b_ptr: int, H: int, W: int,
-                     th: int, use_bin: bool) -> "tuple[float, int]":
-        """两帧差异标量（merge_similar 判定）：(mad_sum, changed_count)。
-
-        use_bin=True 按二值化域：mad_sum = 穿越阈值像素数（宿主换算
-        MAD = 255*mad_sum/n），changed = 同一计数（|0-255|>10 恒真）。
-        use_bin=False 按原始灰度域：mad_sum = |a-b| 整数和，changed =
-        count(|a-b|>10)。与宿主 _segments_similar 的两个条件一一对应。
-        """
-        import numpy as np
-        from cuda.bindings import runtime as cudart
-        from cuda.core import Buffer, LaunchConfig, launch
-        if getattr(self, "_sim_dev", None) is None:
-            _err, self._sim_dev = cudart.cudaMalloc(2 * 8)
-        n = H * W
-        out_buf = Buffer.from_handle(self._sim_dev, 2 * 8)
-        launch(self._stream, LaunchConfig(grid=1, block=256),
-               self._kernel_sim,
-               Buffer.from_handle(a_ptr, n),
-               Buffer.from_handle(b_ptr, n),
-               out_buf, np.int32(n), np.int32(th),
-               np.int32(1 if use_bin else 0))
-        cudart.cudaStreamSynchronize(self._stream)
-        out = np.empty(2, dtype=np.float64)
-        cudart.cudaMemcpy(out.ctypes.data, self._sim_dev, 2 * 8,
-                          cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
-        return float(out[0]), int(out[1])
 
 
