@@ -376,7 +376,10 @@ class FieldExtractor(_GpuPipelineMixin):
             b = _text_sep_gray(b, 'binary', th=self._bin_thresh)
         if a is None or b is None or a.shape != b.shape:
             return False
-        diff = np.abs(a.astype(np.float32) - b.astype(np.float32))
+        # int16 精确差：避免 float32 双全帧临时数组（a/b 为 uint8 灰度或
+        # float32 分离图，255.0/0.0 转 int16 精确）。与 GPU sim_pair 的
+        # 整数精确累加一致（阈值处仅 float32 末位舍入差异，文档已承认）。
+        diff = np.abs(a.astype(np.int16) - b.astype(np.int16))
         if float(diff.mean()) > self._merge_similar_threshold:
             return False
         changed = int(np.sum(diff > 10))

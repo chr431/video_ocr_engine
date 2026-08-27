@@ -300,13 +300,20 @@ class HybridDecoder:
             self._starts.append(fis[0])
         n = len(self._chunks)
         # ── 速率校准（并行测速，双线程） ──
+        # 多轮取中位数（HYBRID_CALIB_ROUNDS>1）：单轮测速对 NVDEC 启动抖动
+        # 敏感，速率比漂移会让分界偏向慢端；多轮中位稳定分界。成本 = 每轮
+        # 256 帧测速（双线程并行，~0.3s/轮），默认 1 轮保持现状。
         calib = min(self._calib_frames, len(fr))
+        calib_rounds = max(1, int(os.environ.get("HYBRID_CALIB_ROUNDS", "1") or 1))
         rates: dict = {}
 
         def _calib(tag, reader):
             try:
                 reader.seek_accurate(fr[0])
-                rates[tag] = _measure_rate(reader, fr, self._roi, calib)
+                vals = [_measure_rate(reader, fr, self._roi, calib)
+                        for _ in range(calib_rounds)]
+                vals.sort()
+                rates[tag] = vals[len(vals) // 2]
             except Exception as e:
                 rates[tag] = 0.0
                 with self._cv:
@@ -471,35 +478,51 @@ class HybridDecoder:
     def _chunk_index(self, fi: int) -> int:
         return max(bisect.bisect_right(self._starts, fi) - 1, 0)
 
-    def _pop_frame(self, fi: int):
-        ci = self._chunk_index(fi)
-        ch = self._chunks[ci]
-        stalled = 0
-        while True:
-            with self._cv:
-                if ch['off'] < len(ch['data']):
-                    got, crop = ch['data'][ch['off']]
-                    ch['off'] += 1
-                    if got != fi:
-                        raise RuntimeError(
-                            'hybrid 序错位: want=%d got=%d' % (fi, got))
-                    if ch['off'] == len(ch['fis']):
-                        # 该片已全部交付：释放"未消费"计数
-                        own = ch.get('owner')
-                        if own and own in self._unconsumed:
-                            self._unconsumed[own] -= 1
-                        self._cv.notify_all()
-                    return crop
-                if self._err:
-                    raise RuntimeError('hybrid 解码失败: %r'
-                                       % self._err[:1])
-            if self._stop.is_set():
-                raise RuntimeError('hybrid 解码被取消')
-            stalled += 1
-            if stalled > 6000:   # ~20min 无进展防御
-                raise RuntimeError('hybrid 解码停滞')
-            with self._cv:
-                self._cv.wait(0.05)
+    def _pop_frames(self, fis: list[int]) -> list:
+        """批量弹出连续帧：同片内一次锁取尽可能多的帧，减少锁/等待次数。
+
+        帧必须按序（fis 递增且落在同一片）；跨片边界逐片处理。保持
+        _pop_frame 的交付序与"片排空释放未消费计数"语义。
+        """
+        out: list = []
+        i = 0
+        while i < len(fis):
+            fi = fis[i]
+            ci = self._chunk_index(fi)
+            ch = self._chunks[ci]
+            stalled = 0
+            while True:
+                with self._cv:
+                    if ch['off'] < len(ch['data']):
+                        # 一次锁内取本片连续可用的帧（保持 fis 序）
+                        while (i < len(fis) and ch['off'] < len(ch['data'])
+                               and self._chunk_index(fis[i]) == ci):
+                            got, crop = ch['data'][ch['off']]
+                            ch['off'] += 1
+                            if got != fis[i]:
+                                raise RuntimeError(
+                                    'hybrid 序错位: want=%d got=%d'
+                                    % (fis[i], got))
+                            out.append(crop)
+                            i += 1
+                        if ch['off'] == len(ch['fis']):
+                            # 该片已全部交付：释放"未消费"计数
+                            own = ch.get('owner')
+                            if own and own in self._unconsumed:
+                                self._unconsumed[own] -= 1
+                            self._cv.notify_all()
+                        break
+                    if self._err:
+                        raise RuntimeError('hybrid 解码失败: %r'
+                                           % self._err[:1])
+                if self._stop.is_set():
+                    raise RuntimeError('hybrid 解码被取消')
+                stalled += 1
+                if stalled > 6000:   # ~20min 无进展防御
+                    raise RuntimeError('hybrid 解码停滞')
+                with self._cv:
+                    self._cv.wait(0.05)
+        return out
 
     # ─────────────── VideoReader 兼容接口 ───────────────
 
@@ -507,14 +530,14 @@ class HybridDecoder:
         return len(self._gpu)
 
     def get_batch(self, frame_list, roi=None):
-        arrs = [self._pop_frame(fi) for fi in frame_list]
+        arrs = self._pop_frames(list(frame_list))
         return _Batch(np.stack(arrs))
 
     def next_roi(self, x1, y1, x2, y2):
         """stride==1 校准顺序流：与 get_batch 共享同一交付序。"""
         if self._seq_fi is None:
             self._seq_fi = self._starts[0] if self._starts else self._f0
-        crop = self._pop_frame(self._seq_fi)
+        crop = self._pop_frames([self._seq_fi])[0]
         fi = self._seq_fi
         self._seq_fi = fi + 1
         return _Batch(crop)

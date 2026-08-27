@@ -228,10 +228,13 @@ def _text_sep_gray(gray: "np.ndarray", mode: str = "contrast",
     return sep.astype(np.float32)
 
 
+@lru_cache(maxsize=64)
 def nvdec_available(video_path=None) -> bool:
     """轻量探测 NVDEC 解码是否可用（尝试用 GPU reader 打开视频）。
 
     video_path 为 None 时只探测 decord GPU 模块/上下文是否可用，不打开文件。
+    结果按参数缓存（批量多集调用时避免每次重新打开视频探测；
+    GPU 上下文在进程生命周期内稳定，缓存安全）。
     """
     try:
         from decord import VideoReader, gpu
@@ -246,8 +249,12 @@ def nvdec_available(video_path=None) -> bool:
         return False
 
 
+@lru_cache(maxsize=1)
 def tensorrt_available() -> bool:
-    """轻量探测 TensorRT 是否可用（存在 nvinfer DLL 且绑定可导入）。"""
+    """轻量探测 TensorRT 是否可用（存在 nvinfer DLL 且绑定可导入）。
+
+    结果缓存：DLL 搜索路径在进程内稳定，批量调用避免重复 glob 扫描。
+    """
     try:
         import tensorrt  # noqa: F401 — shim / binding 导入
         import tensorrt_bindings
