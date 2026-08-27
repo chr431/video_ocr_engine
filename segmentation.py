@@ -19,6 +19,18 @@ def _gray_batch(crops: np.ndarray) -> np.ndarray:
     return (crops.astype(np.float32) @ _GRAY_W).astype(np.uint8)
 
 
+def _gray_batch_out(crops: np.ndarray, out: np.ndarray) -> np.ndarray:
+    """批量灰度写入预分配 out（形状必须与 crops 匹配）。
+
+    省去每批临时 float32 全帧数组（_gray_batch 的 astype 临时）与结果分配；
+    数值路径与 _gray_batch 逐位一致（同一 float32 权重乘法 + uint8 截断）。
+    """
+    if crops.shape[-1] == 1:
+        out[...] = crops[..., 0]
+        return out
+    tmp = crops.astype(np.float32, copy=False) @ _GRAY_W
+    out[...] = np.clip(tmp, 0, 255)
+    return out
 def _gray_seg(crop: np.ndarray) -> np.ndarray:
     """分段/代表帧选择用灰度（raw，已锁定基线）。"""
     return _gray(crop)
@@ -37,6 +49,24 @@ def _gray_seg_yuv(crop: np.ndarray, color_range: int = 0) -> np.ndarray:
 def _gray_seg_yuv_batch(crops: np.ndarray, color_range: int = 0) -> np.ndarray:
     """decord yuv420 批量 crops → 批量分段灰度。"""
     return _nv12_batch_luma_full(crops, color_range)
+
+
+def _nv12_batch_luma_full_out(crops: np.ndarray, color_range: int,
+                              out: np.ndarray) -> np.ndarray:
+    """批量 Y 平面 + range 展开，写入预分配 out（形状必须匹配）。
+
+    数值路径与 _nv12_batch_luma_full 逐位一致；省每批 float32 临时数组
+    与结果分配（主流水线每批形状恒定，缓冲可跨批复用）。
+    """
+    h = crops.shape[1] * 2 // 3
+    w = crops.shape[2]
+    out = out[:crops.shape[0], :h, :w]   # 末批可能不满 B；按实际 Y 高/宽取切片
+    if color_range == 1:
+        out[...] = crops[:, :h]
+        return out
+    v = (crops[:, :h].astype(np.float32) - 16.0) * (255.0 / 219.0)
+    out[...] = np.clip(np.floor(v + 0.5), 0, 255)
+    return out
 
 
 def _otsu(g: np.ndarray) -> int:

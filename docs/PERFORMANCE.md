@@ -940,3 +940,104 @@ test5 全片 hybrid 峰值 RSS 1022MB（大头不在 ch['data']，而在 decord
   多轮校准（成本>收益）、跨 extract 复用 OCR 引擎（已被实验②覆盖）。
 - **测试集限制**：所有测试视频 GOP ~300 帧 → 无法验证长 GOP 内存
   场景；如后续有长 GOP 片源应补测实验①。
+
+---
+
+## 11. 三条主力生产管线性能实验（2026-08，7945HX + RTX 4060 Laptop）
+
+本机环境：test5.mp4（h264，7761 帧，59.8fps，ROI 843,993,948,1025 ≈
+33×106 窄 ROI），新三国01.mkv（h264 标清，ROI 144,398,551,423 ≈
+407×25 宽 ROI 字幕条）。三条主力管线：
+
+- **CPU+ONNX**（decode=cpu, ocr=cpu）
+- **NVDEC+ONNX**（decode=auto, ocr=cpu；默认门控 → 宿主管线）
+- **NVDEC+TRT**（decode=auto, ocr=auto；默认 GPU 全驻留零拷贝管线）
+
+### 11.1 基线（优化前，单跑串行中位）
+
+| 管线 | test5 3000帧 stride1 | 新三国01 6000帧 stride8 |
+|---|---:|---:|
+| CPU+ONNX | 3.65s（decode 3.27 / ocr 3.56） | 2.27s（decode 1.51 / ocr 1.92） |
+| NVDEC+ONNX | 3.39~3.65s（decode 2.97 / ocr 3.32） | 2.18s（decode 1.48 / ocr 1.87） |
+| NVDEC+TRT | 3.18s（decode 3.03 / ocr 3.17） | 2.03s（decode 1.54 / ocr 1.71） |
+
+段数/文本三条管线完全一致（test5：1083 段/265 唯一文本；新三国01：
+77 段/40 唯一文本），为空文本比例与 OCR 后端无关的分段一致性提供基准。
+
+### 11.2 探针定位（分相 profile + 微基准，勿再猜）
+
+- **decode 是全部管线的绝对主项**（墙钟 92~98%）：NVDEC ~1000fps、
+  CPU 软解 ~810fps（test5 h264，3000 帧 stride1）。
+- **ONNX OCR infer = 第二主项**：单实例 16 线程 ~385 段/s、双实例
+  8+8 ~458 段/s（批 16，宽 ROI 预处理输入）；`infer` 相位在
+  CPU+ONNX 5.2s / NVDEC+ONNX 4.4~4.7s（含 OCR worker 排队重叠）。
+- **TRT OCR infer 相位仅 ~1.0~1.3s**：批 16 全路径（pre+3×6 子批+
+  DtoH+同步）微基准 ~10ms/批 → 1600 段/s，接近硬件上限；批 4 小批
+  1255 段/s、批 6 1637 段/s、批 12 1654 段/s——**批 16 拆 6+6+4 子批
+  是生产最优近似**。
+- **拆批固定损耗 ~2ms/批**（ORT 单次 run 16 38ms vs 6 16ms 是线性
+  计算量，不是拆批损耗；真正的拆批损耗是『同形状 3×6 50ms vs
+  6+6+4 变形状 45ms vs 单次 16 38ms』中的 ~2ms/批固定调度开销）。
+- **GPU 管线 producer 无 gray/sharp/bin/seg 分相**（_producer 线程
+  内 profile 未接线）；decode 3.0s = NVDEC 供给率上限，GPU 分段
+  kernel/同步/拷贝均非瓶颈（raw 聚批 16 帧仅 0.044ms，量级可忽略）。
+
+### 11.3 落地优化（低风险）
+
+1. **host 帧流 batch luma 预分配复用**（extractor._host_frame_stream
+   + segmentation._gray_batch_out / _nv12_batch_luma_full_out）：
+   复用每批灰度缓冲，避免每批临时数组分配。微基准 yuv 批量转换
+   0.159→0.086ms/批（-46%）；端到端在测量波动内（decode 相位
+   2.61→2.61s 持平，wall 3.65→3.66s 持平）。**净收益 <1%**，作为
+   一致性改进保留（消除每批分配，数值逐位一致，76 单测 + e2e 全过）。
+2. **TRT 输出 host 缓冲复用**（ocr_trt.execute_async /
+   execute_device_async）：无 out_host 调用时复用『最大尺寸』
+   np.float32 连续缓冲，避免每批重新分配。微基准 execute_device(6)
+   4.16ms 持平；**生产路径（有 out_host）不受影响**（本就预分配整批
+   输出），保持零风险。
+
+### 11.4 已验证死路（勿再投入）
+
+- **ONNX 分片粒度调整**：16→8/6/4 全部更慢（串行 16 38.3ms vs
+  8 41.2ms vs 6 45.2ms vs 4 47.6ms/批16）；尾批 12+4 拆批损耗 ~4.5ms
+  ——批 16 已是吞吐最优，`OCR_ONNX_CHUNK=16` 保持。
+- **ORT 图内动态 batch 分片**：手动模拟 split（同形状/变形状）
+  全部 ≥ 单批 16；ORT 1.27 下批 16 单次 38ms 是纯计算量线性
+  （n=4 11.5ms → n=16 38.6ms），拆批只会加固定开销。
+- **GpuPreprocessor 小批 D2D 聚批改批量接口**：raw 聚批 16/32/128
+  帧全部 ~0.04ms，量级可忽略；聚批不是瓶颈，改动无收益。
+- **pinned host 缓冲**：本机 DtoH 12.6MB/批与 enqueue 重叠，pinned
+  只省 host 侧分配；复用普通缓冲已足够（见 11.3-2），不引入 pinned
+  复杂度。
+- **GPU 管线 producer 线程内补 profile 分相**：decode 是 NVDEC
+  硬件上限，补分相无收益（保留为诊断空窗）。
+
+### 11.5 优化后终测（交错 3 轮中位，与 11.1 同口径）
+
+| 管线 | test5 3000帧 stride1 | 新三国01 6000帧 stride8 |
+|---|---:|---:|
+| CPU+ONNX | 3.66s（-0%） | 2.27s（-0%） |
+| NVDEC+ONNX | 3.59s（-0%） | 2.37s（-0%） |
+| NVDEC+TRT | 3.18s（-0%） | 2.02s（-0%） |
+
+结论：**三条主力管线的墙钟瓶颈均为解码供给率（NVDEC/CPU 顺序吞吐），
+OCR 侧（ONNX/TRT）已接近各自硬件上限；低风险优化只能做到零风险零
+退化（batch luma 复用、TRT 输出缓冲复用），量级收益需来自解码侧
+（hybrid 双解码 / NVDEC 供给率），非本次改动范围。**
+
+### 11.6 代码结构拆分（2026-08，extractor.py 969 → 568 行）
+
+`extractor.py` 过长（969 行）且宿主流水线逻辑与引擎骨架混杂，按已有
+`_gpu_pipeline.py` 的 mixin 模式同构拆分：
+
+- **`video_ocr_engine/_host_pipeline.py`（新，441 行）**：宿主路径
+  模块级函数 `_host_calibrate` / `_host_frame_stream` /
+  `_host_segment_frames`（原样迁移，含 batch luma 复用优化）+ 新
+  `_HostPipelineMixin`（`_start_ocr_session` OCR 会话原样迁移）；
+- **`extractor.py`（568 行）**：保留 FieldExtractor 骨架（构造/参数
+  校验/`_open_vr` 解码器/`_run_pipelined` 分发/结果组装），类基类
+  改为 `(_GpuPipelineMixin, _HostPipelineMixin)`；
+- **兼容**：extractor 顶部 re-export 全部模块级函数与
+  `_HostPipelineMixin`，旧导入路径
+  `from video_ocr_engine.extractor import _host_calibrate` 等不变；
+  公共 API 与行为零变化（76 单测全过，三管线 e2e 段数/文本逐位一致）。

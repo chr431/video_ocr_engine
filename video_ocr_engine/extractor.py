@@ -7,7 +7,10 @@
 抽取；独立成仓后随引擎维护，不再依赖任何下游仓库。
 
 模块划分（2026-08 七轮修正后按逻辑拆分）：
-  extractor.py      — 引擎核心：解码/校准/分段/OCR 会话/流水线分发/结果组装
+  extractor.py      — 引擎骨架：构造/参数校验/解码器打开/流水线分发/结果组装
+  _host_pipeline.py — 宿主流水线：校准/帧流/分段状态机/OCR 会话
+                      （_host_calibrate / _host_frame_stream /
+                      _host_segment_frames / _HostPipelineMixin）
   _helpers.py       — 无类依赖的独立工具函数
   _result_types.py  — ExtractedSegment / ExtractionResult
   _gpu_pipeline.py  — _GpuPipelineMixin（GPU 全驻留管线）
@@ -24,13 +27,13 @@ import numpy as np
 
 import engine_config as config
 from segmentation import (
-    _cluster_win3, _gray_seg, _gray_seg_batch,
-    _gray_seg_yuv, _gray_seg_yuv_batch, _otsu,
+    _gray_seg, _gray_seg_batch,
+    _gray_seg_yuv, _gray_seg_yuv_batch,
 )
-from video_utils import (_nv12_luma_full, _text_sep_gray)
-# 下列 re-export 为引擎内部结构（_helpers/_result_types 均属下划线私有命名，
-# 从 extractor 再导出仅为旧导入路径兼容，勿直接 import；公共入口是
-# video_ocr_engine.__init__ 的三件套）。
+from video_utils import _text_sep_gray
+# 下列 re-export 为引擎内部结构（_helpers/_result_types/_host_pipeline 均
+# 属下划线私有命名，从 extractor 再导出仅为旧导入路径兼容，勿直接 import；
+# 公共入口是 video_ocr_engine.__init__ 的三件套）。
 from ._result_types import (  # noqa: F401
     ExtractedSegment, ExtractionResult,
 )
@@ -39,191 +42,16 @@ from ._helpers import (  # noqa: F401
     _decode_progress_pct, _ocr_progress_pct,
     _otsu_median_threshold, _read_fps_from_vr,
 )
+from ._host_pipeline import (  # noqa: F401
+    _host_calibrate, _host_frame_stream, _host_segment_frames,
+    _HostPipelineMixin,
+)
 from ._gpu_pipeline import _GpuPipelineMixin
 
 logger = logging.getLogger(__name__)
 
 
-def _host_calibrate(ex, vr, frames, *, with_dev=False):
-    """宿主路径 Otsu 校准（单流水线统一入口）。
-
-    ex: FieldExtractor——只调用 _crop_is_expected / _crop_luma /
-        _prof_end。
-    with_dev: True 时保留 decord GPU 单通道帧的 DLPack 指针（GPU raw OCR
-        直通用）；stride==1 时同时捕获 next_roi 的（shape 3D）帧指针。
-    stride>1 走 get_batch 等差步长快速路径（校准帧号与后续帧流一致），
-    stride==1 走 next_roi 顺序流。
-    返回 (calib, th)。calib 元素统一 (fi, crop, gray, sharp, dev_info)，
-    dev_info 仅在 with_dev 且帧为 GPU 单通道时非 None。
-    """
-    x1, y1, x2, y2 = ex._roi
-    calib_n = min(config.SEG_CALIB_FRAMES, len(frames))
-    calib: list = []
-    if ex._sample_stride > 1:
-        nds = vr.get_batch(frames[:calib_n], roi=(x1, y1, x2 + 1, y2 + 1))
-        crops = nds.asnumpy()
-        base, shape = (0, ())
-        dev_c = 0
-        if with_dev:
-            # 与旧单流水线一致：只要请求设备指针就捕获（不先看 shape）——
-            # channel 判定由捕获后的 shape 完成（非 GPU 单通道自然 dev_c=0）。
-            base, shape = _ndarray_device_ptr(nds)
-            dev_c = shape[-1] if len(shape) == 4 else 0
-        for k in range(calib_n):
-            c = crops[k]
-            if not ex._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
-                c = c[y1:y2 + 1, x1:x2 + 1]
-            g = ex._crop_luma(c)
-            dev_info = None
-            if dev_c == 1 and len(shape) == 4:
-                src_h, src_w = shape[1], shape[2]
-                dev_info = (nds, base + k * src_h * src_w, src_h, src_w)
-            calib.append((frames[k], c, g, float(g.std()), dev_info))
-    else:
-        for k in range(calib_n):
-            nd = vr.next_roi(x1, y1, x2 + 1, y2 + 1)
-            c = nd.asnumpy()
-            if not ex._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
-                c = c[y1:y2 + 1, x1:x2 + 1]
-            g = ex._crop_luma(c)
-            dev_info = None
-            if with_dev and len(nd.shape) == 3 and nd.shape[-1] == 1:
-                base, shape = _ndarray_device_ptr(nd)
-                dev_info = (nd, base, shape[0], shape[1])
-            calib.append((frames[k], c, g, float(g.std()), dev_info))
-    ths = [_otsu(g) for _fi, _c, g, _s, _dev in calib]
-    return calib, _otsu_median_threshold(ths)
-
-
-def _host_frame_stream(ex, frames, vr, calib, th, *, with_dev=False):
-    """宿主帧流：先产出校准帧，再批量流式解码剩余帧。
-
-    ex: FieldExtractor——只调用 _batch_luma/_prof_end。
-    calib 元素统一 (fi, crop, gray, sharp, dev_info)（可为空列表）。
-    with_dev=True 时随帧产出 decord GPU NDArray 设备信息 (owner, ptr, h, w)
-    供 GPU raw OCR 直通（仅 gray 单通道输出路径有效）。
-    yield (frame_idx, crop, gray, sharp, bin, dev_info)。
-    """
-    DECODE_BATCH = config.DECODE_BATCH_SIZE
-    x1, y1, x2, y2 = ex._roi
-    for fi, c, g, s, *dev_rest in calib:
-        yield (fi, c, g, s, g > th, dev_rest[0] if dev_rest else None)
-    for bstart in range(len(calib), len(frames), DECODE_BATCH):
-        bend = min(bstart + DECODE_BATCH, len(frames))
-        _t_d = time.perf_counter()
-        nds = vr.get_batch(frames[bstart:bend], roi=(x1, y1, x2 + 1, y2 + 1))
-        crops = nds.asnumpy()
-        ex._prof_end('producer', 'decode_batch', _t_d)
-        _t_g = time.perf_counter()
-        g = ex._batch_luma(crops)
-        ex._prof_end('producer', 'gray_batch', _t_g)
-        _t_s = time.perf_counter()
-        sharp = g.std(axis=(1, 2))
-        ex._prof_end('producer', 'sharp_batch', _t_s)
-        _t_b = time.perf_counter()
-        bs = g > th
-        ex._prof_end('producer', 'bin_batch', _t_b)
-        dev_base = 0
-        src_h = src_w = 0
-        if with_dev and len(nds.shape) == 4 and nds.shape[-1] == 1:
-            dev_base, shape = _ndarray_device_ptr(nds)
-            src_h, src_w = shape[1], shape[2]
-        for k, gi in enumerate(range(bstart, bend)):
-            d = None
-            if dev_base:
-                d = (nds, dev_base + k * src_h * src_w, src_h, src_w)
-            yield (frames[gi], crops[k], g[k], float(sharp[k]), bs[k], d)
-
-
-def _host_segment_frames(ex, frames, stream, *, debug_tag, progress_prefix,
-                         emit, segs):
-    """宿主分段状态机（单流水线统一入口）。
-
-    ex: FieldExtractor。
-    stream: (fi, crop, gray, sharp, bin, dev_info) 迭代器（_host_frame_stream）。
-    emit(seg, rep_frame, rep_crop, rep_dev, rep_gray, frac)：段闭合时投递
-        OCR，由调用方闭包实现（入队/全局段号/keys/reps/rep_crops 收敛在
-        闭包里；调用方在 emit 前已把 seg 追加进 segs）。
-    segs 由调用方传入（emit 闭包直写 rep_crops）。
-    debug_tag 非 None 且 DEBUG_BOUNDS 开启时打印边界（[HB]=单流水线，与
-    GPU 路径 [GB] 对齐）。
-    返回 (first_rep_gray, last_rep_gray)：首发射段代表灰度与末发射段代表灰度。
-    """
-    s = 0
-    rep_frame = frames[0]
-    rep_crop = None
-    rep_dev = None
-    rep_sharp = -1.0
-    rep_gray = None
-    last_rep_gray = None
-    first_rep_gray = None
-    prev_b = None
-    for k, (fi, c, g, sharp, b, dev_info) in enumerate(stream):
-        if prev_b is not None:
-            d = prev_b != b
-            _t_seg = time.perf_counter()
-            c3 = _cluster_win3(d)
-            changed = c3 >= ex._C
-            ex._prof_end('producer', 'segmentation', _t_seg)
-            if changed:
-                seg = frames[s:k]
-                if (debug_tag is not None
-                        and config.env_bool(config.DEBUG_BOUNDS_ENV)):
-                    print(f'[{debug_tag}]{fi}:{c3:.0f}',
-                          flush=True)
-                similar = (
-                    ex._merge_similar and segs
-                    and ex._segments_similar(last_rep_gray, rep_gray))
-                if similar:
-                    # 同一视觉内容被噪声切成多段：并入前一段，不产生新的
-                    # OCR 任务，保留前一段代表帧/文本。
-                    segs[-1].extend(seg)
-                else:
-                    segs.append(seg)
-                    emit(seg, rep_frame, rep_crop, rep_dev, rep_gray,
-                         k / max(len(frames), 1))
-                    if first_rep_gray is None:
-                        first_rep_gray = rep_gray
-                    last_rep_gray = rep_gray
-                s = k
-                rep_frame = fi
-                rep_crop = c
-                rep_dev = dev_info
-                rep_sharp = sharp
-                rep_gray = g
-            elif sharp > rep_sharp:
-                rep_sharp = sharp
-                rep_frame = fi
-                rep_crop = c
-                rep_dev = dev_info
-                rep_gray = g
-        else:
-            rep_frame = fi
-            rep_crop = c
-            rep_dev = dev_info
-            rep_sharp = sharp
-            rep_gray = g
-        prev_b = b
-        if k % 100 == 0:
-            ex._cancel()
-        if k % 500 == 0:
-            ex._progress(f'{progress_prefix}: {k}/{len(frames)}',
-                         _decode_progress_pct(k / max(len(frames), 1)))
-    seg = frames[s:]
-    similar = (
-        ex._merge_similar and segs
-        and ex._segments_similar(last_rep_gray, rep_gray))
-    if similar:
-        segs[-1].extend(seg)
-    else:
-        segs.append(seg)
-        emit(seg, rep_frame, rep_crop, rep_dev, rep_gray, 1.0)
-        if first_rep_gray is None:
-            first_rep_gray = rep_gray
-    return first_rep_gray, last_rep_gray
-
-
-class FieldExtractor(_GpuPipelineMixin):
+class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
     """从视频固定区域提取文本的通用引擎（识别链：解码∥分段∥OCR）。
 
     构造参数：
@@ -595,6 +423,15 @@ class FieldExtractor(_GpuPipelineMixin):
             return _gray_seg_yuv_batch(crops, self._color_range)
         return _gray_seg_batch(crops)
 
+    def _batch_luma_out(self, crops: np.ndarray,
+                        out: np.ndarray) -> np.ndarray:
+        """批量灰度写入预分配 out（省每批临时数组分配；形状恒定才可复用）。"""
+        if self._yuv_output:
+            from segmentation import _nv12_batch_luma_full_out
+            return _nv12_batch_luma_full_out(crops, self._color_range, out)
+        from segmentation import _gray_batch_out
+        return _gray_batch_out(crops, out)
+
     def _crop_is_expected(self, c: np.ndarray, roi_h: int, roi_w: int) -> bool:
         """ROI-first 输出尺寸是否符合当前输出格式（旧路径全帧则 False）。"""
         if self._yuv_output:
@@ -625,223 +462,6 @@ class FieldExtractor(_GpuPipelineMixin):
         if getattr(self, '_backend', '').startswith('decord/CPU') and cores <= config.CPU_CORES_SPLIT_THRESHOLD:
             return max(2, cores // 2)
         return cores
-
-    def _start_ocr_session(self, _ocr_engines: list | None = None) -> dict:
-        """启动一个可跨多个切片持续复用的 OCR 会话。
-
-        返回 dict：q（段任务队列）、results（全局段索引 → text/conf/rep）、
-        err、wall、put（投递段任务）、finish（哨兵并 join OCR worker）。
-        引擎统一使用单一 OCR 会话；跨切片持续复用，避免每片重建
-        OCR worker / infer 线程造成屏障。
-        """
-        from queue import Full, Queue
-        from ocr_native import OcrEngine
-        from video_utils import _preprocess_standard
-
-        q: Queue = Queue(maxsize=max(1, self._buffer_size))
-        results: dict = {}
-        ocr_err: list = []
-        ocr_wall = [0.0]
-        ocr_ready = [False]   # raw 直通可用：worker 引擎就绪后置位（单 TRT）
-
-        def _put(item) -> None:
-            while True:
-                if ocr_err:
-                    raise ocr_err[0]
-                try:
-                    q.put(item, timeout=0.2)
-                    return
-                except Full:
-                    continue
-
-        def ocr_worker() -> None:
-            t0 = time.perf_counter()
-            try:
-                if _ocr_engines is not None:
-                    engines = list(_ocr_engines)
-                    self._ocr_backend_used = (
-                        'tensorrt+onnxruntime'
-                        if len(engines) == 2 and engines[0].backend_name != engines[1].backend_name
-                        else engines[0].backend_name)
-                else:
-                    _t_eng = time.perf_counter()
-                    _engine_progress = lambda msg: self._progress(msg, 2.5)
-                    ot = self._ocr_num_threads()
-                    ocr_instances = (self._ocr_engine_type() == 'onnxruntime'
-                                     and ot >= config.OCR_INSTANCES_MIN_THREADS
-                                     and config.env_bool(config.OCR_INSTANCES_ENV,
-                                                         default=True))
-                    if ocr_instances:
-                        half = max(2, ot // 2)
-                        engines = [OcrEngine(self._ocr_model, 'onnxruntime', fill_width=self._fill_width, num_threads=half, progress_cb=_engine_progress) for _ in range(2)]
-                    else:
-                        engines = [OcrEngine(self._ocr_model, self._ocr_engine_type(), fill_width=self._fill_width, num_threads=ot, progress_cb=_engine_progress)]
-                    self._ocr_backend_used = engines[0].backend_name
-                    self._prof_end('ocr', 'engine_init', _t_eng)
-                # 引擎就绪 → 供 GPU 管线 emit 决策（raw 直通需单 TRT 引擎；
-                # 置位后该会话内代表帧可全程留显存，仅输出/回退时 D2H）。
-                ocr_ready[0] = (len(engines) == 1
-                                and getattr(engines[0], '_trt', None)
-                                is not None)
-                B = _ocr_batch_size()
-                infer_q: Queue = Queue(maxsize=config.OCR_INFER_QUEUE_SIZE)
-                ocr_progress_frac = [0.0]
-
-                def _put_infer(item) -> bool:
-                    while True:
-                        if ocr_err:
-                            return False
-                        try:
-                            infer_q.put(item, timeout=0.2)
-                            return True
-                        except Full:
-                            continue
-
-                def _report_ocr_progress(idx: int, frac: float) -> None:
-                    if frac - ocr_progress_frac[0] >= 0.01 or frac >= 1.0:
-                        ocr_progress_frac[0] = frac
-                        self._progress(f'[OCR] 段 {idx + 1}', _ocr_progress_pct(frac))
-
-                def infer_worker(eng) -> None:
-                    try:
-                        while True:
-                            item = infer_q.get()
-                            if item is None:
-                                return
-                            idxs, reps, procs, fracs, raw_infos = item
-                            _t_i = time.perf_counter()
-                            if raw_infos is not None:
-                                res = eng.call_gpu_raw(
-                                    raw_infos[1], force_aspect=raw_infos[0])
-                            else:
-                                res = eng(procs)
-                            self._prof_end('ocr', 'infer', _t_i)
-                            _t_c = time.perf_counter()
-                            for idx, rep, r, frac in zip(idxs, reps, res, fracs):
-                                if hasattr(r, 'txts'):
-                                    raw_text = str(r.txts[0]) if r.txts and r.txts[0] else None
-                                    scores = getattr(r, 'scores', [])
-                                    ocr_conf = float(scores[0]) if scores else 0.0
-                                else:
-                                    raw_text, ocr_conf = (None, 0.0)
-                                results[idx] = (raw_text, ocr_conf, rep)
-                                _report_ocr_progress(idx, frac)
-                            self._prof_end('ocr', 'ctc_decode', _t_c)
-                    except Exception as e:
-                        ocr_err.append(e)
-
-                infer_threads = [
-                    threading.Thread(target=infer_worker, args=(eng,), daemon=True)
-                    for eng in engines]
-                for t in infer_threads:
-                    t.start()
-                b_idx, b_reps, b_crops, b_devs, b_fracs = ([], [], [], [], [])
-
-                def flush() -> None:
-                    if not b_idx:
-                        return
-                    # 分流：带 dev 的项走 raw 直通（单 TRT 引擎时），带 crop 的
-                    # 项走宿主预处理。两类可能并存于同一批（引擎就绪切换仅有
-                    # 一批；ONNX/回退引擎全程 crop）→ 拆批投递，不混流。
-                    # raw 代表帧：gray = decord gray NDArray 指针；yuv =
-                    # _YFramePool 池帧提取的 Y 平面（由 GPU 管线保证）。
-                    raw_sel = [
-                        i for i in range(len(b_devs))
-                        if b_devs[i] is not None
-                        and len(engines) == 1
-                        and getattr(engines[0], '_trt', None) is not None
-                        and getattr(self, '_gpu_pipeline_mode', False)]
-                    if raw_sel:
-                        # 把 raw 任务交给 infer 线程异步执行，避免 OCR worker
-                        # 被 GPU 预处理 + TRT 同步阻塞。载荷 = (force_aspect,
-                        # infos)——raw 内核需按 force_aspect 决定 content 宽。
-                        infos = [(d[1], d[2], d[3], d[0])
-                                 for d in (b_devs[i] for i in raw_sel)]
-                        if not _put_infer((
-                                [b_idx[i] for i in raw_sel],
-                                [b_reps[i] for i in raw_sel], None,
-                                [b_fracs[i] for i in raw_sel],
-                                (float(self._force_aspect), infos))):
-                            return
-                    host_sel = [
-                        i for i in range(len(b_crops))
-                        if b_crops[i] is not None]
-                    if host_sel:
-                        _t_p = time.perf_counter()
-                        procs = [_preprocess_standard(
-                            _nv12_luma_full(c, self._color_range)[..., None]
-                            if self._yuv_output else c,
-                            force_aspect=self._force_aspect)
-                            for c in (b_crops[i] for i in host_sel)]
-                        self._prof_end('ocr', 'preprocess', _t_p)
-                        if not _put_infer((
-                                [b_idx[i] for i in host_sel],
-                                [b_reps[i] for i in host_sel], procs,
-                                [b_fracs[i] for i in host_sel], None)):
-                            return
-                    b_idx.clear()
-                    b_reps.clear()
-                    b_crops.clear()
-                    b_devs.clear()
-                    b_fracs.clear()
-
-                while True:
-                    _t_w = time.perf_counter()
-                    item = q.get()
-                    self._prof_end('ocr', 'q_get_wait', _t_w)
-                    if item is None:
-                        break
-                    if ocr_err:
-                        break
-                    idx, rep, crop, dev, frac = item
-                    b_idx.append(idx)
-                    b_reps.append(rep)
-                    b_crops.append(crop)
-                    b_devs.append(dev)
-                    b_fracs.append(frac)
-                    if len(b_idx) >= B:
-                        flush()
-                flush()
-                for _ in infer_threads:
-                    while True:
-                        try:
-                            infer_q.put(None, timeout=0.2)
-                            break
-                        except Full:
-                            if not any(t.is_alive() for t in infer_threads):
-                                break
-                for t in infer_threads:
-                    t.join()
-            except Exception as e:
-                ocr_err.append(e)
-            finally:
-                ocr_wall[0] = time.perf_counter() - t0
-
-        ocr_thread = threading.Thread(target=ocr_worker, daemon=True)
-        ocr_thread.start()
-
-        def _finish() -> None:
-            while True:
-                try:
-                    q.put(None, timeout=0.2)
-                    break
-                except Full:
-                    if not ocr_thread.is_alive():
-                        break
-            ocr_thread.join()
-
-        return {
-            "q": q,
-            "results": results,
-            "err": ocr_err,
-            "wall": ocr_wall,
-            "thread": ocr_thread,
-            "put": _put,
-            "finish": _finish,
-            "seg_idx": 0,
-            "raw_ready": ocr_ready,
-        }
-
 
     def _run_pipelined(self, _ocr_engines: list | None = None):
         """入口分发：GPU 全驻留管线（_run_pipelined_gpu）或宿主管线。"""

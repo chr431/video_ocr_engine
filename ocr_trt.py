@@ -101,6 +101,10 @@ class TrtEngine:
         self._dev_out: int | None = None
         self._out_nbytes = 0
         self._stream = None  # CUDA stream：异步 HtoD/execute/DtoH 流水线用
+        # 输出 DtoH 目标：复用一块『最大尺寸』np.float32 连续缓冲，避免每
+        # 子批/每批重新分配（生产路径批 16 输出 ~12.6MB，分配 + 拷贝是
+        # 稳定开销；缓冲按需增长，不主动释放）。
+        self._out_host: "np.ndarray | None" = None
 
     @staticmethod
     def _engine_candidates(size: str) -> list[Path]:
@@ -248,7 +252,10 @@ class TrtEngine:
             if SUBPROBE_ON:
                 SUBPROBE['n'] += 1
             return out_host
-        host_out = np.empty(out_shape, dtype=np.float32)
+        # 复用内部输出缓冲：只返回前 out_nbytes 对应的视图，避免逐批分配
+        if self._out_host is None or self._out_host.nbytes < out_nbytes:
+            self._out_host = np.empty(out_shape, dtype=np.float32)
+        host_out = self._out_host.reshape(out_shape)
         _t_sp = time.perf_counter() if SUBPROBE_ON else 0.0
         cudart.cudaMemcpyAsync(
             host_out.ctypes.data, dev_out, out_nbytes,
@@ -291,10 +298,18 @@ class TrtEngine:
             if SUBPROBE_ON:
                 SUBPROBE['n'] += 1
             return out_host
-        host_out = np.empty(out_shape, dtype=np.float32)
+        # 复用内部输出缓冲（见 execute_async 注释）
+        if self._out_host is None or self._out_host.nbytes < out_nbytes:
+            self._out_host = np.empty(tuple(int(v) for v in out_shape),
+                                      dtype=np.float32)
+        host_out = self._out_host.reshape(tuple(int(v) for v in out_shape))
+        _t_sp = time.perf_counter() if SUBPROBE_ON else 0.0
         cudart.cudaMemcpyAsync(
             host_out.ctypes.data, dev_out, out_nbytes,
             cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, stream)
+        _sp_tick('dtoh', _t_sp)
+        if SUBPROBE_ON:
+            SUBPROBE['n'] += 1
         return host_out
 
     def execute_device(self, dev_input: int, shape: tuple,
