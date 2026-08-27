@@ -20,7 +20,16 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
-def probe(video: str, roi: tuple, n_frames: int = 4000, batch: int = 64):
+def probe(video: str, roi: tuple, n_frames: int = 4000, batch: int = 64,
+          affinity: int = 0):
+    if affinity > 0:
+        try:
+            import psutil
+            ids = list(range(min(affinity, psutil.cpu_count() or 1)))
+            psutil.Process().cpu_affinity(ids)
+            print(f"affinity → {ids}")
+        except Exception as e:
+            print(f"affinity 设置失败: {e}")
     from decord import VideoReader, cpu, gpu
 
     print(f"视频: {video}")
@@ -104,9 +113,11 @@ def main():
     ap.add_argument("--video", required=True)
     ap.add_argument("--roi", required=True)
     ap.add_argument("--frames", type=int, default=4000)
+    ap.add_argument("--affinity", type=int, default=0,
+                    help="绑定前 N 个逻辑 CPU（弱 CPU 模拟；0=不限制）")
     args = ap.parse_args()
     roi = tuple(int(v) for v in args.roi.split(","))
-    probe(args.video, roi, args.frames)
+    probe(args.video, roi, args.frames, affinity=args.affinity)
 
 
 if __name__ == "__main__":

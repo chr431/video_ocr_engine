@@ -181,7 +181,7 @@ def _split_oversized(specs, frames: list[int], key_frames: list[int],
 
 
 def _measure_rate(reader, frames: list[int], roi: tuple, n: int,
-                  batch: int = 64, warmup: int = 16) -> float:
+                  batch: int = 64, warmup: int = 8) -> float:
     """顺序解码测速（帧/s）。调用方负责先 seek 到起始帧。
 
     warmup 帧先丢弃（解码会话/队列初始化开销会污染首批速率——
@@ -206,20 +206,62 @@ def _measure_rate(reader, frames: list[int], roi: tuple, n: int,
     return measured / max(dt, 1e-9)
 
 
+def _dynamic_split(counts: list[int], rf: float, rs: float, *,
+                   slow_is_cpu: bool, max_share: float = 0.45,
+                   safety: float = 0.95,
+                   discount_cpu: float = 0.45,
+                   discount_gpu: float = 0.85) -> int:
+    """动态分界（v4 纯函数）：返回快端片数 split_idx（慢端 = [split_idx, n)）。
+
+    约束：慢端生产时间 ≤ 快端生产时间 × safety（慢端不拖尾）；在满足
+    约束前提下给慢端尽量多的片（慢端贡献最大化）。慢端稳态速率 = rs ×
+    折扣（慢端=CPU 软解 ×0.45 修正缓冲衰减高估；=NVDEC ×0.85）。
+    返回 split_idx ∈ [1, n-1]（两端各至少 1 片）。
+    """
+    n = len(counts)
+    if n <= 1:
+        return n
+    total_fr = sum(counts)
+    if total_fr <= 0 or rf <= 0 or rs <= 0:
+        return max(1, n - 1)
+    disc = discount_cpu if slow_is_cpu else discount_gpu
+    rs_eff = rs * disc
+    best_split = n            # 快端片数（慢端 = n - best_split）
+    for k in range(1, n):     # k = 慢端片数
+        slow_fr = sum(counts[n - k:])
+        fast_fr = total_fr - slow_fr
+        if fast_fr <= 0:
+            break
+        t_slow = slow_fr / max(rs_eff, 1e-9)
+        t_fast = fast_fr / max(rf, 1e-9)
+        if t_slow > t_fast * safety:
+            break
+        if slow_fr / total_fr > max_share:
+            break
+        best_split = n - k
+    return max(1, min(n - 1, best_split))
+
+
 class HybridDecoder:
     """双解码读取器 v3：速率比例分界 + 两端连续扫掠（对下游透明）。"""
 
-    # 慢端份额夹持：最多 45%（防校准把过多给慢端）、最少 15%
+    # 慢端份额上限：45%（防校准把过多给慢端）。下限 = 至少 1 片
+    #（按片数动态取，见 hybrid_begin）。
     _SLOW_MAX_SHARE = 0.45
-    _SLOW_MIN_SHARE = 0.15
 
     def __init__(self, ex, gpu_vr, *, max_chunks: int = 16,
                  cpu_threads: int = 0, inflight: int = 2,
-                 min_gap: int = 16, calib_frames: int = 256,
+                 min_gap: int = 16, calib_frames: int = 0,
                  max_chunk_frames: int = 0):
         # 分片粒度上限：>0 时把超过该帧数的片继续拆小（内存上界 =
         # inflight × max_chunk_frames 帧）。0 = 不拆（兼容 v3）。
         self._max_chunk_frames = max(0, int(max_chunk_frames))
+        # 速率校准帧数：0 = 用 env HYBRID_CALIB_FRAMES，缺省 40（弱 CPU
+        # 下 256 帧校准 ~0.4s，会吃掉混合解码的收益；40 帧 ~0.06-0.12s
+        # 已足够稳定，且 seek 是固定成本与帧数无关；短校准配合稳态折扣
+        # HYBRID_SLOW_DISCOUNT 修正 CPU 软解的缓冲衰减高估）。
+        calib = int(calib_frames or os.environ.get("HYBRID_CALIB_FRAMES", "40") or 40)
+        self._calib_frames = max(32, calib)
         self._gpu = gpu_vr
         self._ex = ex
         self._roi = (ex._roi[0], ex._roi[1], ex._roi[2] + 1, ex._roi[3] + 1)
@@ -232,7 +274,13 @@ class HybridDecoder:
         self._max_chunks = max(2, int(max_chunks))
         self._min_gap = max(1, int(min_gap))
         self._inflight = max(1, int(inflight))
-        self._calib_frames = max(16, int(calib_frames))
+        # 慢端预取上限：慢端解码尾段，消费者要等快端前段消费完才轮到它；
+        # inflight=2 时慢端只能提前 2 片，消费者到尾段时慢端才刚起步 →
+        # decode 结束更早但 OCR 尾批堆积（ocr_tail 增大，墙钟净亏）。
+        # 慢端允许更多预取（默认 4 片）让尾段提前就绪、消费者连续消费。
+        self._inflight_slow = max(
+            self._inflight,
+            int(os.environ.get("HYBRID_SLOW_INFLIGHT", "4") or 4))
         nt_kw = {}
         if cpu_threads and cpu_threads > 0:
             nt_kw['num_threads'] = cpu_threads
@@ -345,22 +393,30 @@ class HybridDecoder:
             self._fast_reader = self._cpu
             self._slow_reader = self._gpu
             rf, rs = max(r_cpu, 1.0), max(r_gpu, 1.0)
-        # 速率比例分界；但慢端贡献为负的情况（慢端 < 快端/2.5）只给
-        # 最小 1 片试探——快端扫完自己区后立即接管剩余慢端片（对称接管
-        # 已实现），慢端份额小反而让快端更快接管、总时间更接近快端单跑。
-        slow_share = rs / (rf + rs)
-        if rf > rs * 1.8:
-            # 慢端显著慢（>1.8x）：只给 1 片试探——快端扫完自己区后立即
-            # 对称接管剩余慢端片，总时间接近快端单跑（慢端 seek/生产
-            # 不再叠加到消费者关键路径上）
-            slow_share = 1.0 / max(n, 2)
-        else:
-            slow_share = max(self._SLOW_MIN_SHARE,
-                             min(self._SLOW_MAX_SHARE, slow_share))
-        self._split_idx = max(1, min(n - 1, int(round(n * (1 - slow_share)))))
+        # ── 动态分界（v4）：在"慢端不拖尾"约束下给慢端尽量多的片 ──
+        # 理论最优 = 速率比例（两端同时完成 → decode = N/(rf+rs)）；但
+        # 并发解码时慢端速率会打折（争抢），比例份额会给慢端过多片 →
+        # 慢端拖尾、decode 反被拖慢（实测 HEVC 8 核：比例 25% → 慢端 3 片
+        # 1.36s > 快端 1.16s，decode 被拖到 1.36s）。
+        # 另：短校准会高估慢端稳态速率（HEVC 软解有缓冲衰减：48 帧测
+        # 495fps、384 帧测 205fps，快测高估 2 倍+）→ 需按稳态折扣修正。
+        # 慢端 = CPU 软解：×0.45（缓冲衰减，48 帧快测 ≈ 稳态的 2.2 倍）；
+        # 慢端 = NVDEC：×0.85（NVDEC 稳态略降）。env HYBRID_SLOW_DISCOUNT
+        # 可覆盖。
+        counts = [len(ch['fis']) for ch in self._chunks]
+        slow_is_cpu = (self._slow_reader is self._cpu)
+        default_disc = 0.45 if slow_is_cpu else 0.85
+        slow_disc = float(os.environ.get("HYBRID_SLOW_DISCOUNT",
+                                         str(default_disc)) or default_disc)
+        self._split_idx = _dynamic_split(
+            counts, rf, rs, slow_is_cpu=slow_is_cpu,
+            discount_cpu=slow_disc, discount_gpu=slow_disc)
         if self._probe:
             print(f"[hybrid] split: fast={self._fast_tag}->[0,{self._split_idx}) "
-                  f"slow->[{self._split_idx},{n})", flush=True)
+                  f"slow->[{self._split_idx},{len(self._chunks)}) "
+                  f"rf={rf:.0f} rs={rs:.0f} "
+                  f"rs_eff={rs*slow_disc:.0f} disc={slow_disc:.2f}",
+                  flush=True)
         self._pname[id(self._gpu)] = "gpu"
         self._pname[id(self._cpu)] = "cpu"
         for tag, reader in ((self._fast_tag, self._fast_reader),
@@ -388,7 +444,9 @@ class HybridDecoder:
         """
         while not self._stop.is_set():
             with self._cv:
-                if self._unconsumed[who] >= self._inflight:
+                limit = (self._inflight_slow if who == "slow"
+                         else self._inflight)
+                if self._unconsumed[who] >= limit:
                     self._cv.wait(0.05)
                     continue
                 lo, hi = self._zone(who)

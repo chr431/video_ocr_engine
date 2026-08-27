@@ -63,7 +63,18 @@ def main():
     ap.add_argument("--envs", default="GPU_PIPELINE=0",
                     help="逗号分隔 K=V（如 GPU_PIPELINE=0,HYBRID_PROBE=1）")
     ap.add_argument("--hybrid-max-chunks", type=int, default=16)
+    ap.add_argument("--affinity", type=int, default=0,
+                    help="把进程绑定到前 N 个逻辑 CPU（弱 CPU 模拟；0=不限制）")
     args = ap.parse_args()
+
+    if args.affinity > 0:
+        try:
+            import psutil
+            ids = list(range(min(args.affinity, psutil.cpu_count() or 1)))
+            psutil.Process().cpu_affinity(ids)
+            print(f"affinity → {ids}")
+        except Exception as e:
+            print(f"affinity 设置失败: {e}")
 
     roi = tuple(int(v) for v in args.roi.split(","))
     envs = {}

@@ -468,3 +468,47 @@ v1 曾因无净收益被删除（见 docs/PERFORMANCE.md §4）；v2（kfe 共�
 
   文本一致性：全部 100%（唯一文本集与单路径一致）。诊断开关
   `HYBRID_PROBE=1`（逐片时序）保留。
+
+### CPU+NVDEC 混合解码 v4（2026-08，动态分界 + 稳态折扣 + 短校准）
+
+v3 的短板：**CPU 明显慢于 NVDEC（8 核亲和模拟弱 CPU）时 hybrid 无收益**。
+本机实测（7945HX + RTX 4060 Laptop，进程亲和 8 逻辑核，GPU_PIPELINE=0）：
+- h264 test5：CPU 754fps vs NVDEC 980fps（CPU 慢 23%）→ v3 hybrid decode
+  反而慢（+20%）；HEVC test.mp4：CPU 464fps vs NVDEC 2121fps（CPU 慢 4.6×）
+  → v3 hybrid decode 慢（+7%）。
+
+探针定位（并行争抢探针 + 分相 profile，勿再猜）：
+1. **NVDEC 与 CPU 软解本身互不拖慢**（并行解码 GPU 仅降 9-16%）；
+2. **慢端拖尾**：v3 在 rf>rs*1.8 时只给慢端 1 片试探，收益极小；而按速率
+   比例给慢端多片时，短校准高估 CPU 稳态速率（HEVC 软解缓冲衰减：48 帧
+   测 495fps、384 帧测 205fps，快测高估 2.2 倍）→ 慢端分到过多片 →
+   慢端拖尾、decode 反被拖慢（比例 25% → 慢端 3 片 1.36s > 快端 1.16s）；
+3. **OCR 尾批堆积**：hybrid decode 结束更早，OCR（TRT/ONNX）尾批来不及
+   在 decode 阶段排空 → ocr_tail 增大（+0.1-0.2s），墙钟被 OCR 吃掉；
+4. **校准固定开销**：256 帧校准在弱 CPU 下 ~0.4s（CPU 侧 256/631≈0.4s），
+   完全吃掉 decode 收益。
+
+**v4 设计**（`hybrid_decode.py`，2026-08）：
+- **短校准**：默认 40 帧 + 8 帧 warmup（`HYBRID_CALIB_FRAMES` 可调），
+  弱 CPU 下校准 ~0.1s；
+- **稳态折扣**：慢端稳态速率 = 校准速率 × 折扣（慢端=CPU 软解 ×0.45 修正
+  缓冲衰减高估、=NVDEC ×0.85；`HYBRID_SLOW_DISCOUNT` 可覆盖）；
+- **动态分界**（`_dynamic_split` 纯函数，可单测）：慢端片数从 1 递增，
+  只要"慢端生产时间 ≤ 快端生产时间 × 0.95"就继续，超过即停——慢端
+  贡献最大化且永不拖尾；两端各至少 1 片；
+- **慢端预取**（`HYBRID_SLOW_INFLIGHT`，默认 4 片）：慢端可提前产 4 片，
+  消费者到尾段时连续消费，减少 OCR 尾批堆积；
+- 其余（连续扫掠 / 对称接管 / inflight / 对外接口 / 激活条件）同 v3。
+
+**实测**（TRT venv，进程亲和 8 逻辑核 = 模拟弱 CPU，交错 A/B 3 轮中位）：
+
+| 场景 | 编码 | NVDEC decode | hybrid v4 decode | Δ | 墙钟 Δ |
+|---|---|---|---|---|---|
+| test5 3000帧 | h264（CPU 慢 23%） | 2.956s | 2.420s | **-18.1%** | **-2.0%** |
+| test.mp4 3000帧 | hevc（CPU 慢 4.6×） | 1.345s | 1.300s | **-3.3%** | +11.4% |
+
+16 核无亲和回归：test5 h264 decode -24.5%、wall -12.7%（与 v3 持平）。
+文本一致性：全部 100%。结论：**CPU 明显慢于 NVDEC 时 hybrid 的 decode
+确实提升（h264 -18%、HEVC -3%）；h264 墙钟也转正（-2%）；HEVC 墙钟
+仍受 OCR 尾批/争抢影响（+11%）——decode 收益 < OCR 固定开销时属物理
+限制（CPU 慢 4.6× 时慢端最多 1-2 片，贡献上限 ~5%）。

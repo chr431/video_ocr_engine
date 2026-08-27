@@ -74,13 +74,20 @@ for seg in result.segments:
 `decode_backend="auto"` 的默认逻辑：**优先 NVDEC，不可用时回退 CPU**。在强多核
 CPU 且片源为 h264 时，可手动选 `"cpu"` 获得更高软解吞吐（NVDEC h264 解码器约
 2Gp/s 上限，FFmpeg CPU 解码器最多可利用约 13 核）；弱 CPU / HEVC / AV1 场景仍
-建议保持 `auto` 或 `nvdec`。若 NVDEC 解码是瓶颈且 CPU 有空闲，可显式选
-`"hybrid"`：同一实例内 NVDEC 与 CPU 软解按**实测速率比例分界**并行解码——
-快端从头连续扫掠前半、慢端 seek 一次后连续扫掠后半，快端扫完自动接管慢端
-剩余片（校准误差自愈）。要求 NVDEC 可用、`sample_stride==1`；不可用时自动
-回退纯 NVDEC/CPU。编码不限（含 AV1）：CPU 慢于 NVDEC 的 HEVC/AV1 场景与
-纯 NVDEC 持平不退化，CPU 快于 NVDEC 的 h264 场景显著更快（见
-`docs/PERFORMANCE.md`）。
+建议保持 `auto` 或 `nvdec`。
+
+`decode_backend="hybrid"` 是**实验性功能**：同一实例内 NVDEC 与 CPU 软解并行
+解码（动态分界：慢端在"不拖尾"约束下尽量多分片，快端从头连续扫掠、扫完
+自动接管慢端剩余片，校准误差自愈）。要求 NVDEC 可用、`sample_stride==1`；
+不可用时自动回退纯 NVDEC/CPU。
+
+> ⚠️ **适用限制（务必先读）**：hybrid 仅在 **h264 + 较强 CPU** 上有明显
+> 优势（本机 8 核亲和模拟实测 h264 decode -18%、墙钟 -2%）；**其他情况
+> （HEVC / AV1 / 弱 CPU / OCR 为 CPU 后端）可能相比单 NVDEC 更慢**——CPU
+> 明显慢于 NVDEC 时 decode 提升有限（HEVC 实测仅 -3%），且 CPU 解码线程会
+> 与 CPU 侧 OCR 争抢资源、校准与预取带来固定开销，墙钟可能不降反升。
+> 不确定时请保持默认 `"auto"`，并对你的实际片源 A/B 后再启用。详细数据与
+> 机制见 `docs/PERFORMANCE.md`。
 
 `result` 为 `ExtractionResult`：
 

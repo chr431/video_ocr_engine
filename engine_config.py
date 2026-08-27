@@ -14,7 +14,7 @@ import os
 import sys
 from pathlib import Path
 
-__version__ = "0.8.0"
+__version__ = "0.8.1"
 
 # ═══════════════════ 环境变量助手与名称常量 ═══════════════════
 # 引擎全部 env 开关/覆写在此收敛（单一事实源）。布尔开关统一走 env_bool：
@@ -53,16 +53,26 @@ GPU_CTC_ENV: str = "GPU_CTC"                                    # 0 关闭 TRT �
 ENGINE_PROFILE_ENV: str = "ENGINE_PROFILE"                      # 1 开启引擎级性能剖面
 TRT_SUBPROBE_ENV: str = "TRT_SUBPROBE"                          # 1 开启 TRT 子相位探针
 DEBUG_BOUNDS_ENV: str = "DEBUG_BOUNDS"                          # 1 打印分段边界调试信息
-# CPU+NVDEC 混合解码（hybrid_decode.HybridDecoder v3，decode_backend="hybrid"）：
+# CPU+NVDEC 混合解码（hybrid_decode.HybridDecoder v4，decode_backend="hybrid"）：
 # 仅 GPU(NVDEC) 可用、stride==1、未开 GPU 全驻留管线时生效（编码不限，
-# 含 AV1——v3 速率比例分界已实测不退化）；cpu_threads=0 表示 cores//2。
-# h264 CPU 软解吞吐可达 NVDEC 两倍以上，闲置 CPU 的正确用途是帮解码。
+# 含 AV1）；v4 = 动态分界（慢端不拖尾约束下给慢端尽量多片）+ 稳态速率
+# 折扣（短校准高估 CPU 软解稳态速率）+ 缩短校准帧数（弱 CPU 下 256 帧
+# 校准 ~0.4s 会吃掉混合收益）。
+# h264 CPU 软解吞吐可达 NVDEC 两倍以上，闲置 CPU 的正确用途是帮解码；
+# CPU 明显慢于 NVDEC（HEVC/AV1/弱 CPU）时 decode 仍可提升（8 核亲和
+# 模拟实测 h264 decode -18%、HEVC decode -3%）。
 HYBRID_CPU_THREADS_ENV: str = "HYBRID_CPU_THREADS"              # CPU reader 线程数(0=核数//2)
 HYBRID_MAX_CHUNKS_ENV: str = "HYBRID_MAX_CHUNKS"                # 分片上限
 # 分片粒度上限：>0 时 hybrid 分片超过该采样帧数继续拆小（内存上界 =
 # inflight × 该上限，防宽 ROI 字幕整集单大片 2000+ 帧一次性缓存在
 # ch['data']）；0=不拆（默认，兼容 v3）。仅 decode_backend="hybrid" 生效。
 HYBRID_MAX_CHUNK_FRAMES_ENV: str = "HYBRID_MAX_CHUNK_FRAMES"
+# v4 新增：慢端预取上限（默认 4 片，防 decode 早结束导致 OCR 尾批堆积）；
+# 慢端速率折扣（慢端=CPU 默认 0.45 修正软解缓冲衰减、=NVDEC 默认 0.85）；
+# 速率校准帧数（默认 40，弱 CPU 下压缩固定开销）。
+HYBRID_SLOW_INFLIGHT_ENV: str = "HYBRID_SLOW_INFLIGHT"
+HYBRID_SLOW_DISCOUNT_ENV: str = "HYBRID_SLOW_DISCOUNT"
+HYBRID_CALIB_FRAMES_ENV: str = "HYBRID_CALIB_FRAMES"
 # 并行双 ONNX 实例的启动门限（OCR 线程数 ≥ 此值才默认拆两个实例）
 OCR_INSTANCES_MIN_THREADS: int = 8
 
