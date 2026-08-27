@@ -158,6 +158,16 @@ class _GpuPipelineMixin:
                 f"帧区间为空: frame_start={self._frame_start}, "
                 f"frame_end={end}, total={total}")
         self._prof_end('producer', 'open_and_fps', _t_open)
+        # OCR 会话（引擎初始化/模型加载）提前到校准前启动：worker 线程内
+        # 构建引擎，与校准（前 50 帧 hist+Otsu）并行重叠；引擎就绪前
+        # _emit_ocr 自动走 host 回退（raw_ready=False），语义不变。
+        ocr_session = self._start_ocr_session(None)
+        q = ocr_session["q"]
+        results = ocr_session["results"]
+        ocr_err = ocr_session["err"]
+        ocr_wall = ocr_session["wall"]
+        _put_ocr = ocr_session["put"]
+
         calib_n = min(config.SEG_CALIB_FRAMES, len(frames))
         calib_nds = vr.get_batch(
             frames[:calib_n], roi=(x1, y1, x2 + 1, y2 + 1))
@@ -192,12 +202,6 @@ class _GpuPipelineMixin:
         self._bin_thresh = th
 
         self._gpu_pipeline_mode = True
-        ocr_session = self._start_ocr_session(None)
-        q = ocr_session["q"]
-        results = ocr_session["results"]
-        ocr_err = ocr_session["err"]
-        ocr_wall = ocr_session["wall"]
-        _put_ocr = ocr_session["put"]
 
         prev_holder = calib_nds      # 保住前一 decord NDArray（防解码池复用）
         prev_ptr = calib_base        # 灰色模式：上一批/校准末帧 device 指针

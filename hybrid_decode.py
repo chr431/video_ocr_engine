@@ -167,12 +167,14 @@ def _split_oversized(specs, frames: list[int], key_frames: list[int],
                         chosen = c
             if chosen is None:
                 left_fis = seg_fis[:max_frames]
-                chosen = left_fis[-1] + 1
-                # 切点必须是采样帧边界（chosen 可能不是采样帧：取 ≤chosen 的
-                # 最近采样帧 +1）
-                cand = [f for f in frames if f < chosen]
-                if cand:
-                    chosen = cand[-1] + 1
+                last = left_fis[-1]
+                # 切点必须是采样帧边界（半开区间 [seg_start, chosen)）：
+                # chosen = 左片最后采样帧的下一个采样帧。frames 严格递增，
+                # 用 index+1 取下一个；已是最后一个采样帧则切到片尾。
+                pos = frames.index(last)
+                chosen = frames[pos + 1] if pos + 1 < len(frames) else b
+                if chosen <= seg_start:
+                    chosen = b
             out.append((seg_start, chosen))
             seg_start = chosen
     return out

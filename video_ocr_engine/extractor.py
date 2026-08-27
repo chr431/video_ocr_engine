@@ -900,12 +900,6 @@ class FieldExtractor(_GpuPipelineMixin):
         calib, th = _host_calibrate(self, vr, frames, with_dev=_with_dev)
         self._bin_thresh = th
         self._prof_end('producer', 'calib_total', _t_cal)
-        ocr_session = self._start_ocr_session(_ocr_engines)
-        q = ocr_session["q"]
-        results = ocr_session["results"]
-        ocr_err = ocr_session["err"]
-        ocr_wall = ocr_session["wall"]
-        _put_ocr = ocr_session["put"]
 
         segs: list = []
         rep_crops: dict = {}
