@@ -140,8 +140,8 @@ Otsu 校准、merge_similar 判定（GPU `sim_pair`；contrast 模式在边界�
 合并判定标量（contrast 时两帧）、CTC 归约结果与 `keep_crops` 输出（每段一
 张，结果给外部）。分段/合并判定/输出与宿主路径一致。
 
-- 干净环境小幅更快（窗口实测 -13%），对端大内存流量时显著更稳
-  （对端 ~100GB/s 流拷贝下 -24%，退化 ×1.43 vs 宿主 ×1.64）
+- 干净环境小幅更快（窗口实测约 -10%），对端大内存流量时显著更稳
+  （对端 ~100GB/s 流拷贝下退化 ×1.36 vs 宿主 ×1.70）
 - 整集 stride=8 场景两路径同受 NVDEC 跳帧解码供给率限制，速度持平
 - 默认只放行"全程 raw"（NVDEC+TRT）；GPU 分段 + ONNX OCR 实测无净收益
   （见 `docs/PERFORMANCE.md` §9）→ 无 TRT / `ocr_backend="cpu"` 走宿主
@@ -165,6 +165,7 @@ Otsu 校准、merge_similar 判定（GPU `sim_pair`；contrast 模式在边界�
 | `TEXT_SEP_MERGE` | 相似段合并分离模式（contrast/binary/off） |
 | `HYBRID_MAX_CHUNKS` | 混合解码分片上限（默认 16） |
 | `HYBRID_CPU_THREADS` | 混合解码中 CPU 软解线程数（默认 0=核数//2） |
+| `HYBRID_MAX_CHUNK_FRAMES` | 混合解码单片采样帧数上限（默认 0=不拆；>0 时超限片按关键帧/等分拆小，内存上界 = inflight × 上限） |
 
 ### 实验/诊断（排查问题时用）
 
@@ -176,6 +177,8 @@ Otsu 校准、merge_similar 判定（GPU `sim_pair`；contrast 模式在边界�
 | `TRT_SUBPROBE` | `1` 开启 TRT 子相位探针 |
 | `DEBUG_BOUNDS` | `1` 打印分段边界调试信息 |
 | `HYBRID_PROBE` | `1` 打印混合解码逐片时序（速率校准/分界/接管诊断） |
+| `HYBRID_PROBE_CSV` | 设为 CSV 路径时，`HYBRID_PROBE` 逐片时序另落盘一份明细 |
+| `HYBRID_CALIB_ROUNDS` | 混合解码速率校准轮数（默认 1；>1 取中位数更稳，但每轮约 +0.3s 成本） |
 
 ### 已废弃/兼容（勿再依赖）
 
@@ -199,7 +202,8 @@ python -m pytest tests/ -v
 ```
 
 纯单元测试无需视频 / decord / GPU（OCR 用例用 onnxruntime CPU + 仓库内模型）。
-解码集成测试在缺 decord 时显式跳过。
+解码路径的集成验证不在单元测试内——真实视频/decord 的端到端验收由下面的
+`tools/e2e_smoke.py` 承担。
 
 ### 端到端冒烟 / 性能工具（真实视频）
 
