@@ -1,27 +1,55 @@
-"""CPU+NVDEC 双解码读取器 v2：kfe 分片 + 双解码生产者竞争。
+"""CPU+NVDEC 双解码读取器 v3：速率比例分界 + 两端连续扫掠（对称接管）。
 
 入口：`FieldExtractor(decode_backend="hybrid")`（与 auto/cpu/nvdec 并列的
 解码后端选择；无环境变量入口，仅显式参数选择）。
-设计（2026-08-25 起，双流水线移除后本模块独立承担 kfe 分片）：
 
-  - 采样帧序列按关键帧边界切成分片（kfe：每关键帧一片，见本模块
-    `_keyframe_every_chunks`——原属双流水线 mixin 的纯函数随其移除迁入）；
-  - CPU 与 NVDEC 两个解码器线程作为生产者，从共享分片队列动态取片，
-    谁快谁多拿（机器自适应，无饿死）；
-  - 解出的 ROI 帧按全局帧序交付给唯一消费者（宿主校准/分段/OCR 零改动，
-    单 TRT 后端不变）；
-  - in-flight 分片数上限约束内存（默认 2 片）；分片边界落关键帧使两个
-    生产者的跳片 seek 都落在关键帧上（便宜）；相邻片连续时免 seek。
+v3 设计（2026-08，探针定位 v2 退化后重写）：
 
-对外仍是 VideoReader 同形替身：len / get_batch / next_roi / seek_accurate
-/ get_*；正确性依赖 v0.7.8+ 双后端 YUV420 逐位一致。
+  v2（kfe 共享队列竞争）实测退化根因（HEVC，CPU 慢 4.5×）：
+    1. FIFO 竞争 + in-flight 令牌使分片在 GPU/CPU 间严格交替领取；
+       消费者按全局帧序取帧 → 慢生产者的每一片都是关键路径串行等待，
+       快生产者被令牌限制无法超前；
+    2. 交替领取使"连续扫掠免 seek"失效：每个生产者除首片外几乎每片
+       seek（GPU ~50-190ms/次、CPU ~35-65ms/次）；
+    3. 结果：HEVC hybrid decode 2.4-2.8s 反而比纯 NVDEC 2.0s 慢
+       20-40%；h264（CPU 快）时 hybrid 赢但靠 CPU 单端而非并行。
+
+  v3（速率比例分界 + 两端连续扫掠 + 快端接管）：
+    1. 采样帧序列仍按关键帧边界切分片（kfe，边界 seek 便宜）；
+    2. hybrid_begin 时并行实测两后端顺序解码速率（256 帧 + 16 帧
+       warmup 丢弃，双线程）；
+    3. 按帧数速率比例把分片切成两段：快端从头连续扫掠前半（0 次 seek），
+       慢端 seek 一次到分界片首后连续扫掠后半（1 次 seek）；
+       慢端份额夹在 [15%, 45%]，速率比 >1.8x 时只给 1 片试探
+       （防校准误差放大）；
+    4. 快端接管：快端扫完自己区后逐片接管慢端区未开始片（一次 seek
+       连续扫掠）——校准误差自愈；慢端只做自己区、区空即退出（不反向
+       接管快端区，避免破坏快端连续扫掠）；
+    5. 内存上界：每生产者"已产出未消费"片数 ≤ inflight（默认 2），
+       消费者按序排空后才继续产下一片（字幕宽 ROI 防内存暴涨）；
+    6. 消费者仍按全局帧序取帧（零改动），交付序不变。
+
+  对外仍是 VideoReader 同形替身：len / get_batch / next_roi / seek_accurate
+  / get_*；正确性依赖 v0.7.8+ 双后端 YUV420 逐位一致。
 """
 from __future__ import annotations
 
 import bisect
+import os
 import threading
+import time
 
 import numpy as np
+
+# ── 探针（诊断）：HYBRID_PROBE=1 时打印各生产者的分片时序与速率；
+# HYBRID_PROBE_CSV 为输出 CSV 路径时追加逐片明细。 ──
+_HYBRID_PROBE = os.environ.get("HYBRID_PROBE", "0") == "1"
+_HYBRID_PROBE_CSV = os.environ.get("HYBRID_PROBE_CSV", "") or None
+
+# 分片粒度上限（HYBRID_MAX_CHUNK_FRAMES>0）：hybrid_begin 生成的分片若
+# 超过该帧数则继续按关键帧边界/等分拆小（内存上界 = inflight × 该上限；
+# 宽 ROI 字幕整集防单大片 2000+ 帧一次性缓存在 ch['data']）。0 = 不拆
+#（兼容 v3 原行为）。env 读取在 extractor 构造 HybridDecoder 时完成。
 
 
 class _Batch:
@@ -67,7 +95,7 @@ def _nearest_keyframe_sample(target: int, key_frames: list[int],
 def _keyframe_every_chunks(frames: list[int], key_frames: list[int],
                            rest_start: int, last_end: int, stride: int,
                            min_gap: int, max_chunks: int) -> list[tuple[int, int]]:
-    """每关键帧一片（kfe）——双解码（CPU∥NVDEC）唯一分片方法：竞争区切片生成。
+    """每关键帧一片（kfe）——双解码分片生成。
 
     按基础最小片间距切；若关键帧过密（mkv 重编码 ~每 30-140 源帧一个
     关键帧）导致片数超过上限，逐步放大间距合并，片数受控在 max_chunks
@@ -98,12 +126,98 @@ def _keyframe_every_chunks(frames: list[int], key_frames: list[int],
     return _big
 
 
+def _split_oversized(specs, frames: list[int], key_frames: list[int],
+                     max_frames: int) -> list[tuple[int, int]]:
+    """把超过 max_frames 采样帧的片拆小（内存上界 = inflight × max_frames）。
+
+    优先按已有关键帧边界切（seek 便宜）；关键帧不足时按帧数等分，
+    保证拆后每片帧数 ≤ max_frames、且覆盖完整无缝隙。max_frames<=0 原样返回。
+    """
+    if max_frames <= 0 or not specs:
+        return specs
+    out: list[tuple[int, int]] = []
+    _key_list = sorted(k for k in key_frames)
+    for a, b in specs:
+        fis = [f for f in frames if a <= f < b]
+        if len(fis) <= max_frames:
+            out.append((a, b))
+            continue
+        # 候选切点：片内关键帧（吸附到采样帧，去重、排除端点）
+        cuts = []
+        for k in _key_list:
+            if a < k < b:
+                s = _nearest_keyframe_sample(k, key_frames, frames)
+                if a < s < b and s not in cuts:
+                    cuts.append(s)
+        cuts.sort()
+        # 从片首开始，按"当前片 + 下一关键帧 ≤ 上限"贪心切；关键帧不够时
+        # 按帧数等分补足
+        seg_start = a
+        while True:
+            seg_fis = [f for f in frames if seg_start <= f < b]
+            if len(seg_fis) <= max_frames:
+                out.append((seg_start, b))
+                break
+            # 找最远的关键帧切点，使左片 ≤ 上限；无则等分
+            chosen = None
+            for c in cuts:
+                if seg_start < c < b:
+                    left = [f for f in frames if seg_start <= f < c]
+                    if len(left) <= max_frames:
+                        chosen = c
+            if chosen is None:
+                left_fis = seg_fis[:max_frames]
+                chosen = left_fis[-1] + 1
+                # 切点必须是采样帧边界（chosen 可能不是采样帧：取 ≤chosen 的
+                # 最近采样帧 +1）
+                cand = [f for f in frames if f < chosen]
+                if cand:
+                    chosen = cand[-1] + 1
+            out.append((seg_start, chosen))
+            seg_start = chosen
+    return out
+
+
+def _measure_rate(reader, frames: list[int], roi: tuple, n: int,
+                  batch: int = 64, warmup: int = 16) -> float:
+    """顺序解码测速（帧/s）。调用方负责先 seek 到起始帧。
+
+    warmup 帧先丢弃（解码会话/队列初始化开销会污染首批速率——
+    NVDEC 首个 get_batch 可能含 ~50ms 启动成本），再测 n 帧。
+    """
+    if n <= 1:
+        return 0.0
+    fr = frames[:n]
+    i = 0
+    if warmup > 0:
+        w = min(warmup, len(fr) - 1)   # 至少保留 1 帧用于测速
+        reader.get_batch(fr[:w], roi=roi).asnumpy()
+        i = w
+    t0 = time.perf_counter()
+    measured = 0
+    while i < len(fr):
+        be = min(i + batch, len(fr))
+        reader.get_batch(fr[i:be], roi=roi).asnumpy()
+        measured += be - i
+        i = be
+    dt = time.perf_counter() - t0
+    return measured / max(dt, 1e-9)
+
+
 class HybridDecoder:
-    """双解码生产者竞争分片的混合读取器（对下游透明）。"""
+    """双解码读取器 v3：速率比例分界 + 两端连续扫掠（对下游透明）。"""
+
+    # 慢端份额夹持：最多 45%（防校准把过多给慢端）、最少 15%
+    _SLOW_MAX_SHARE = 0.45
+    _SLOW_MIN_SHARE = 0.15
 
     def __init__(self, ex, gpu_vr, *, max_chunks: int = 16,
                  cpu_threads: int = 0, inflight: int = 2,
-                 min_gap: int = 16):
+                 min_gap: int = 16, calib_frames: int = 256,
+                 max_chunk_frames: int = 0):
+        # 分片粒度上限：>0 时把超过该帧数的片继续拆小（内存上界 =
+        # inflight × max_chunk_frames 帧）。0 = 不拆（兼容 v3）。
+        self._max_chunk_frames = max(0, int(max_chunk_frames))
         self._gpu = gpu_vr
         self._ex = ex
         self._roi = (ex._roi[0], ex._roi[1], ex._roi[2] + 1, ex._roi[3] + 1)
@@ -116,6 +230,7 @@ class HybridDecoder:
         self._max_chunks = max(2, int(max_chunks))
         self._min_gap = max(1, int(min_gap))
         self._inflight = max(1, int(inflight))
+        self._calib_frames = max(16, int(calib_frames))
         nt_kw = {}
         if cpu_threads and cpu_threads > 0:
             nt_kw['num_threads'] = cpu_threads
@@ -125,13 +240,24 @@ class HybridDecoder:
         self._stop = threading.Event()
         self._err = []
         self._cv = threading.Condition()
-        self._chunks = []      # {'fis','data','off','done'}
+        self._chunks = []      # {'fis','data','off','done','owner','started'}
         self._starts = []      # 每片首帧（bisect 用）
-        self._pending = []     # 待领取的分片下标（FIFO）
-        self._tokens = 0       # 可新开分片的容量令牌
         self._begun = False
         self._seq_fi = None
         self._threads = []
+        # ── v3 状态 ──
+        self._fast_tag = "gpu"
+        self._fast_reader = None
+        self._slow_reader = None
+        self._split_idx = 0
+        # 每生产者"已产出未消费"计数（内存上界 = inflight 片）
+        self._unconsumed = {"fast": 0, "slow": 0}
+        # ── 探针状态 ──
+        self._probe = _HYBRID_PROBE
+        self._probe_csv = _HYBRID_PROBE_CSV
+        self._probe_rows: list = []
+        self._pname = {}       # id(reader) -> 'gpu'/'cpu'
+        self._probe_lock = threading.Lock()
 
     # ─────────────── 分片生成与启动（frames 就绪后调用） ───────────────
 
@@ -158,49 +284,153 @@ class HybridDecoder:
             step = (len(fr) + n - 1) // n
             specs = [(fr[i], fr[min(i + step, len(fr)) - 1] + 1)
                      for i in range(0, len(fr), step)]
+        # 分片粒度上限（HYBRID_MAX_CHUNK_FRAMES>0）：超过上限的片继续拆小。
+        # 优先按已有关键帧边界切（seek 便宜），否则等分到 ≤ 上限。
+        if self._max_chunk_frames > 0:
+            specs = self._split_oversized(specs, fr, keys)
         for a, b in specs:
             fis = [f for f in fr if a <= f < b]
             if not fis:
                 continue
             self._chunks.append({'fis': fis, 'data': [], 'off': 0,
-                                 'done': False})
+                                 'done': False, 'owner': None,
+                                 'started': False})
             self._starts.append(fis[0])
         n = len(self._chunks)
-        self._pending = list(range(n))
-        with self._cv:
-            self._tokens = min(self._inflight, n)
-            self._cv.notify_all()
-        for reader in (self._gpu, self._cpu):
+        # ── 速率校准（并行测速，双线程） ──
+        calib = min(self._calib_frames, len(fr))
+        rates: dict = {}
+
+        def _calib(tag, reader):
+            try:
+                reader.seek_accurate(fr[0])
+                rates[tag] = _measure_rate(reader, fr, self._roi, calib)
+            except Exception as e:
+                rates[tag] = 0.0
+                with self._cv:
+                    self._err.append(e)
+
+        ths = []
+        for tag, reader in (("gpu", self._gpu), ("cpu", self._cpu)):
+            t = threading.Thread(target=_calib, args=(tag, reader),
+                                 daemon=True)
+            t.start()
+            ths.append(t)
+        for t in ths:
+            t.join()
+        if self._err:
+            raise self._err[0]
+        r_gpu = rates.get("gpu", 0.0)
+        r_cpu = rates.get("cpu", 0.0)
+        if self._probe:
+            print(f"[hybrid] calib: gpu={r_gpu:.0f}fps cpu={r_cpu:.0f}fps "
+                  f"chunks={n}", flush=True)
+        # ── 速率比例分界（快端在前） ──
+        if r_gpu >= r_cpu:
+            self._fast_tag = "gpu"
+            self._fast_reader = self._gpu
+            self._slow_reader = self._cpu
+            rf, rs = max(r_gpu, 1.0), max(r_cpu, 1.0)
+        else:
+            self._fast_tag = "cpu"
+            self._fast_reader = self._cpu
+            self._slow_reader = self._gpu
+            rf, rs = max(r_cpu, 1.0), max(r_gpu, 1.0)
+        # 速率比例分界；但慢端贡献为负的情况（慢端 < 快端/2.5）只给
+        # 最小 1 片试探——快端扫完自己区后立即接管剩余慢端片（对称接管
+        # 已实现），慢端份额小反而让快端更快接管、总时间更接近快端单跑。
+        slow_share = rs / (rf + rs)
+        if rf > rs * 1.8:
+            # 慢端显著慢（>1.8x）：只给 1 片试探——快端扫完自己区后立即
+            # 对称接管剩余慢端片，总时间接近快端单跑（慢端 seek/生产
+            # 不再叠加到消费者关键路径上）
+            slow_share = 1.0 / max(n, 2)
+        else:
+            slow_share = max(self._SLOW_MIN_SHARE,
+                             min(self._SLOW_MAX_SHARE, slow_share))
+        self._split_idx = max(1, min(n - 1, int(round(n * (1 - slow_share)))))
+        if self._probe:
+            print(f"[hybrid] split: fast={self._fast_tag}->[0,{self._split_idx}) "
+                  f"slow->[{self._split_idx},{n})", flush=True)
+        self._pname[id(self._gpu)] = "gpu"
+        self._pname[id(self._cpu)] = "cpu"
+        for tag, reader in ((self._fast_tag, self._fast_reader),
+                            ("slow", self._slow_reader)):
             t = threading.Thread(target=self._producer, args=(reader,),
                                  daemon=True)
             t.start()
             self._threads.append(t)
+        if self._probe:
+            print(f"[hybrid] begin chunks={n} frames={len(fr)}", flush=True)
 
     # ─────────────── 生产者 ───────────────
 
-    def _take_chunk(self):
-        """领一个分片下标；无容量令牌或队列空时等待。返回 -1 = 终止。"""
-        deadline_wait = 0.2
+    def _zone(self, who: str) -> tuple[int, int]:
+        if who == "fast":
+            return 0, self._split_idx
+        return self._split_idx, len(self._chunks)
+
+    def _take_chunk(self, who: str):
+        """取一片。who='fast'/'slow'。
+
+        优先取自己区未认领片（连续扫掠）；快端自己区空后逐片接管慢端区
+        未认领片（一次 seek 连续扫掠，校准误差自愈）；慢端区空即退出
+        （不反向接管快端区，避免破坏快端连续扫掠）。
+        """
         while not self._stop.is_set():
             with self._cv:
-                if self._pending and self._tokens > 0:
-                    idx = self._pending.pop(0)
-                    self._tokens -= 1
+                if self._unconsumed[who] >= self._inflight:
+                    self._cv.wait(0.05)
+                    continue
+                lo, hi = self._zone(who)
+                idx = self._next_unclaimed(lo, hi)
+                if idx is not None:
+                    self._claim(idx, who)
                     return idx
-                self._cv.wait(deadline_wait)
+                if who == "slow":
+                    # 慢端只做自己区；区空即退出（不反向接管快端区——
+                    # 会破坏快端连续扫掠并引入额外 seek）
+                    return -1
+                # 快端自己区空 → 接管慢端未认领尾段（逐片认领，避免
+                # "认领整段但只生产第一片"后 _next_unclaimed 全为
+                # started 导致退出的漏片 bug）
+                oidx = self._next_unclaimed(self._split_idx, len(self._chunks))
+                if oidx is None:
+                    return -1   # 全认领完，退出
+                self._claim(oidx, who)
+                return oidx
         return -1
 
+    def _next_unclaimed(self, lo: int, hi: int):
+        for j in range(lo, hi):
+            if not self._chunks[j]['started']:
+                return j
+        return None
+
+    def _claim(self, idx: int, who: str):
+        ch = self._chunks[idx]
+        ch['owner'] = who
+        ch['started'] = True
+        ch['claim_t'] = time.perf_counter()
+        ch['claim_by'] = who
+
     def _producer(self, reader):
+        fast = (reader is self._fast_reader)
+        who = "fast" if fast else "slow"
         prev_end = None
         while not self._stop.is_set():
-            idx = self._take_chunk()
+            idx = self._take_chunk(who)
             if idx < 0:
                 return
             ch = self._chunks[idx]
             fis = ch['fis']
+            t_chunk = time.perf_counter()
+            t_seek = 0.0
             try:
                 if prev_end is None or fis[0] != prev_end:
+                    t_s = time.perf_counter()
                     reader.seek_accurate(fis[0])
+                    t_seek = time.perf_counter() - t_s
                 i = 0
                 batch = 64
                 while i < len(fis) and not self._stop.is_set():
@@ -214,8 +444,19 @@ class HybridDecoder:
                     i = be
                 with self._cv:
                     ch['done'] = True
+                    self._unconsumed[who] += 1
                     self._cv.notify_all()
                 prev_end = fis[-1] + 1
+                t_done = time.perf_counter()
+                ch['produce_s'] = t_done - t_chunk
+                ch['seek_s'] = t_seek
+                if self._probe:
+                    with self._probe_lock:
+                        self._probe_rows.append(
+                            (idx, self._pname.get(id(reader), who),
+                             len(fis), fis[0], fis[-1], t_chunk,
+                             t_done, t_seek, ch.get('claim_t', 0.0),
+                             ch.get('claim_by', '')))
             except Exception as e:  # noqa: BLE001
                 self._err.append(e)
                 with self._cv:
@@ -241,8 +482,10 @@ class HybridDecoder:
                         raise RuntimeError(
                             'hybrid 序错位: want=%d got=%d' % (fi, got))
                     if ch['off'] == len(ch['fis']):
-                        #该片交付完毕：归还容量令牌，生产者可开新片
-                        self._tokens += 1
+                        # 该片已全部交付：释放"未消费"计数
+                        own = ch.get('owner')
+                        if own and own in self._unconsumed:
+                            self._unconsumed[own] -= 1
                         self._cv.notify_all()
                     return crop
                 if self._err:
@@ -309,6 +552,49 @@ class HybridDecoder:
         self._stop.set()
         with self._cv:
             self._cv.notify_all()
+        if self._probe and self._probe_rows:
+            rows, self._probe_rows = self._probe_rows, []
+            self._dump_probe(rows)
+
+    def _dump_probe(self, rows):
+        """打印/落盘逐片时序；close 时调用（消费侧已完成，队列已空）。"""
+        rows = sorted(rows)
+        by_who: dict = {}
+        for idx, who, nf, f0, f1, claim_t, done_t, seek, ct, cb in rows:
+            by_who.setdefault(who, []).append(
+                (idx, nf, f0, f1, claim_t, done_t, seek, ct, cb))
+        print("\n[hybrid probe] 逐片时序 (claim→done)：", flush=True)
+        for who in ("gpu", "cpu"):
+            if who not in by_who:
+                continue
+            # lst 元组: (idx,nf,f0,f1,claim_t,done_t,seek,ct,cb)
+            lst = by_who[who]
+            n_fr = sum(r[1] for r in lst)
+            prod = sum(r[5] - r[4] for r in lst)
+            n_seek = sum(1 for r in lst if r[6] > 0.005)
+            seek_t = sum(r[6] for r in lst)
+            print(f"  [{who}] 片={len(lst)} 帧={n_fr} 生产耗时={prod:.3f}s "
+                  f"seek次数={n_seek} seek总={seek_t:.3f}s", flush=True)
+            for r in lst:
+                idx, nf, f0, f1, claim_t, done_t, seek, ct, cb = r
+                print(f"    #{idx} claim_by={cb} n={nf} [{f0}..{f1}] "
+                      f"claim+{claim_t-ct:.3f}s produce={done_t-claim_t:.3f}s "
+                      f"seek={seek:.3f}s", flush=True)
+        if self._probe_csv:
+            try:
+                import csv
+                with open(self._probe_csv, "w", newline="") as f:
+                    w = csv.writer(f)
+                    w.writerow(["idx", "producer", "n_frames", "f0", "f1",
+                                "claim_t", "done_t", "seek_s", "claim_wait_s",
+                                "claim_by"])
+                    for idx, who, nf, f0, f1, t0, t1, seek, ct, cb in rows:
+                        w.writerow([idx, who, nf, f0, f1,
+                                    round(t0, 4), round(t1, 4),
+                                    round(seek, 4), round(t0 - ct, 4), cb])
+                print(f"[hybrid probe] CSV → {self._probe_csv}", flush=True)
+            except Exception as e:
+                print(f"[hybrid probe] CSV 写入失败: {e}", flush=True)
 
     def __del__(self):
         try:

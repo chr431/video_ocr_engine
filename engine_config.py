@@ -53,12 +53,16 @@ GPU_CTC_ENV: str = "GPU_CTC"                                    # 0 关闭 TRT �
 ENGINE_PROFILE_ENV: str = "ENGINE_PROFILE"                      # 1 开启引擎级性能剖面
 TRT_SUBPROBE_ENV: str = "TRT_SUBPROBE"                          # 1 开启 TRT 子相位探针
 DEBUG_BOUNDS_ENV: str = "DEBUG_BOUNDS"                          # 1 打印分段边界调试信息
-# CPU+NVDEC 混合解码（hybrid_decode.HybridDecoder，decode_backend="hybrid"）：
-# 仅 GPU(NVDEC) 可用、非 AV1、stride==1、未开 GPU 全驻留管线时生效；
-# cpu_threads=0 表示 cores//2。h264 CPU 软解吞吐可达 NVDEC 两倍以上，
-# 闲置 CPU 的正确用途是帮解码（全负载场景多为 NVDEC 解码受限）。
+# CPU+NVDEC 混合解码（hybrid_decode.HybridDecoder v3，decode_backend="hybrid"）：
+# 仅 GPU(NVDEC) 可用、stride==1、未开 GPU 全驻留管线时生效（编码不限，
+# 含 AV1——v3 速率比例分界已实测不退化）；cpu_threads=0 表示 cores//2。
+# h264 CPU 软解吞吐可达 NVDEC 两倍以上，闲置 CPU 的正确用途是帮解码。
 HYBRID_CPU_THREADS_ENV: str = "HYBRID_CPU_THREADS"              # CPU reader 线程数(0=核数//2)
-HYBRID_MAX_CHUNKS_ENV: str = "HYBRID_MAX_CHUNKS"                # 竞争分片上限
+HYBRID_MAX_CHUNKS_ENV: str = "HYBRID_MAX_CHUNKS"                # 分片上限
+# 分片粒度上限：>0 时 hybrid 分片超过该采样帧数继续拆小（内存上界 =
+# inflight × 该上限，防宽 ROI 字幕整集单大片 2000+ 帧一次性缓存在
+# ch['data']）；0=不拆（默认，兼容 v3）。仅 decode_backend="hybrid" 生效。
+HYBRID_MAX_CHUNK_FRAMES_ENV: str = "HYBRID_MAX_CHUNK_FRAMES"
 # 并行双 ONNX 实例的启动门限（OCR 线程数 ≥ 此值才默认拆两个实例）
 OCR_INSTANCES_MIN_THREADS: int = 8
 

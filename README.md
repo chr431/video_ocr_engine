@@ -75,9 +75,12 @@ for seg in result.segments:
 CPU 且片源为 h264 时，可手动选 `"cpu"` 获得更高软解吞吐（NVDEC h264 解码器约
 2Gp/s 上限，FFmpeg CPU 解码器最多可利用约 13 核）；弱 CPU / HEVC / AV1 场景仍
 建议保持 `auto` 或 `nvdec`。若 NVDEC 解码是瓶颈且 CPU 有空闲，可显式选
-`"hybrid"`：同一实例内 NVDEC 与 CPU 软解作为双生产者按关键帧分片竞争，谁快
-谁多拿（要求 NVDEC 可用、`sample_stride==1`、编码非 AV1；不可用时自动回退纯
-NVDEC/CPU）。
+`"hybrid"`：同一实例内 NVDEC 与 CPU 软解按**实测速率比例分界**并行解码——
+快端从头连续扫掠前半、慢端 seek 一次后连续扫掠后半，快端扫完自动接管慢端
+剩余片（校准误差自愈）。要求 NVDEC 可用、`sample_stride==1`；不可用时自动
+回退纯 NVDEC/CPU。编码不限（含 AV1）：CPU 慢于 NVDEC 的 HEVC/AV1 场景与
+纯 NVDEC 持平不退化，CPU 快于 NVDEC 的 h264 场景显著更快（见
+`docs/PERFORMANCE.md`）。
 
 `result` 为 `ExtractionResult`：
 
@@ -160,7 +163,7 @@ Otsu 校准、merge_similar 判定（GPU `sim_pair`；contrast 模式在边界�
 | `OCR_PAD_SMALL` | OCR 输入 pad 宽度下限覆盖 |
 | `OCR_GAMMA` | OCR 预处理 gamma（默认 2.0） |
 | `TEXT_SEP_MERGE` | 相似段合并分离模式（contrast/binary/off） |
-| `HYBRID_MAX_CHUNKS` | 混合解码竞争分片上限（默认 16） |
+| `HYBRID_MAX_CHUNKS` | 混合解码分片上限（默认 16） |
 | `HYBRID_CPU_THREADS` | 混合解码中 CPU 软解线程数（默认 0=核数//2） |
 
 ### 实验/诊断（排查问题时用）
@@ -172,6 +175,7 @@ Otsu 校准、merge_similar 判定（GPU `sim_pair`；contrast 模式在边界�
 | `ENGINE_PROFILE` | `1` 开启引擎细粒度性能剖面 |
 | `TRT_SUBPROBE` | `1` 开启 TRT 子相位探针 |
 | `DEBUG_BOUNDS` | `1` 打印分段边界调试信息 |
+| `HYBRID_PROBE` | `1` 打印混合解码逐片时序（速率校准/分界/接管诊断） |
 
 ### 已废弃/兼容（勿再依赖）
 

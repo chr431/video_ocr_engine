@@ -1,0 +1,17 @@
+# 统一行尾：仓库存储与检出均用 LF（Windows 下 autocrlf 会把工作区转 CRLF，
+# 导致混合行尾与 str_replace 多行匹配失败）。文本文件强制 eol=lf。
+* text=auto eol=lf
+
+# 二进制/大文件不转换
+*.onnx binary
+*.engine binary
+*.idx binary
+*.pyc binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.mp4 binary
+*.mkv binary
+*.avi binary

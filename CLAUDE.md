@@ -421,29 +421,50 @@ sharp 用 int64 精确累加 + summary float64 直传，保证近平局选帧与
   / `_start_ocr_session._store_result`）与 extractor 顶层未使用导入（csv /
   `_gray` / `_gray_batch` / `_preprocess_standard`）；删除过时生成产物 build/。
 
-### CPU+NVDEC 混合解码 v2 复活（2026-08-25，默认关闭）
+### CPU+NVDEC 混合解码 v3（2026-08，速率比例分界 + 两端连续扫掠）
 
-v1 曾因无净收益被删除（见 docs/PERFORMANCE.md §4）。2026-08-25 以新设计
-复活（来自 Race 侧子模块实验，随同步并入引擎仓）：
+v1 曾因无净收益被删除（见 docs/PERFORMANCE.md §4）；v2（kfe 共享队列竞争）
+2026-08-25 复活但实测退化（见下）；v3 以探针定位 v2 根因后重写为现役实现。
 
-- **设计**：固定 split 无法跨机器自适应（CPU 慢时 NVDEC 被饿、CPU 快时
-  反之）。v2 改用 dual_pipeline kfe 同款思路——采样帧序列按关键帧边界切成
-  分片（复用 `_keyframe_every_chunks`），CPU 与 NVDEC 两个解码器线程作为
-  生产者从共享分片队列动态取片，谁快谁多拿；解出的 ROI 帧按全局帧序交付
-  给唯一消费者（宿主校准/分段/OCR 零改动，单 TRT 后端不变）。in-flight
-  分片数上限约束内存（默认 2 片）；分片边界落关键帧使跳片 seek 便宜，
-  相邻片连续时免 seek。
-- **对外接口**：仍是 VideoReader 同形替身（`len` / `get_batch` /
-  `next_roi` / `seek_accurate` / `get_*`），正确性依赖 decord fork v0.7.8+
-  双后端 YUV420 逐位一致。
+**v2 退化根因（探针实测，HEVC CPU 慢 4.5× 场景）**：
+1. FIFO 竞争 + in-flight 令牌使分片在 GPU/CPU 间严格交替领取；消费者按
+   全局帧序取帧 → 慢生产者每一片都是关键路径串行等待，快生产者被令牌
+   限制无法超前；
+2. 交替领取使"连续扫掠免 seek"失效：每生产者除首片外几乎每片 seek
+   （GPU ~50-190ms/次、CPU ~35-65ms/次）；
+3. 结果：HEVC hybrid decode 2.4-2.8s 反比纯 NVDEC 2.0s 慢 20-40%。
+
+**v3 设计**（`hybrid_decode.py`，2026-08 重写）：
+- 采样帧序列仍按关键帧边界切分片（kfe，边界 seek 便宜）；
+- `hybrid_begin` 时并行实测两后端顺序解码速率（256 帧 + 16 帧 warmup
+  丢弃，双线程），按速率比例把分片切成两段：快端从头连续扫掠前半
+  （0 次 seek），慢端 seek 一次到分界片首后连续扫掠后半（1 次 seek）；
+  慢端份额夹在 [15%, 45%]，速率比 >1.8x 时只给 1 片试探；
+- **对称接管**：快端扫完自己区后从慢端区第一个未开始片逐片接管（一次
+  seek 连续扫掠）——校准误差自愈；慢端只做自己区、区空即退出（不反向
+  接管快端区，避免破坏快端连续扫掠）；
+- **内存上界**：每生产者"已产出未消费"片数 ≤ inflight（默认 2），
+  消费者按序排空后才继续产下一片（字幕宽 ROI 防内存暴涨）；
+- **对外接口不变**：VideoReader 同形替身（`len` / `get_batch` /
+  `next_roi` / `seek_accurate` / `get_*`），正确性依赖 decord fork
+  v0.7.8+ 双后端 YUV420 逐位一致。
 - **激活条件**（`extractor.py` open 路径，全部满足才生效）：显式
   `decode_backend="hybrid"` 且 NVDEC 实际可用（否则回退 CPU 并警告）、
-  `_sample_stride==1`、未开 GPU 全驻留管线、编码非 AV1（CPU 软解 AV1
-  已知净负）；无环境变量入口（仅显式参数选择）；`HYBRID_CPU_THREADS`
-  （0=核数//2）、`HYBRID_MAX_CHUNKS`（默认 16）可调。
-  初始化失败 try/except 回退纯 GPU 不致命。
+  `_sample_stride==1`（next_roi 顺序交付语义）、未开 GPU 全驻留管线
+  （互斥）。**编码门控已移除**（含 AV1——v3 实测 AV1 不再退化，尊重用户
+  显式选择）；`HYBRID_CPU_THREADS`（0=核数//2）、`HYBRID_MAX_CHUNKS`
+  （默认 16）可调。初始化失败 try/except 回退纯 GPU 不致命。
 - **流程钩子**：采样帧序列就绪后 producer 调 `vr.hybrid_begin(frames)`
-  才生成关键帧分片并启动双生产者竞争（先校准后建片，避免预取与校准竞态）。
-- **动机**：h264 CPU 软解吞吐可达 NVDEC 两倍以上——闲置 CPU 的正确用途是
-  帮解码（Race 全负载端到端均为 NVDEC 解码受限）。默认关闭，待 Race 侧
-  全量实测后再定是否转正。
+  才生成关键帧分片、测速并启动双生产者（先校准后建片）。
+- **实测**（7945HX + RTX 4060 Laptop，A/B 单跑；decode 阶段耗时）：
+
+  | 视频 | 编码 | NVDEC | CPU | hybrid v3 | vs NVDEC |
+  |---|---|---|---|---|---|
+  | test5 6000帧 | h264 | 5.99s | 5.17s | **4.37s** | -27% |
+  | test3 3000帧 | h264 | 2.91s | 2.84s | **2.44s** | -16% |
+  | test.mp4 3000帧 | hevc | 1.97-2.28s | 4.47s | 2.05-2.22s | 持平 |
+  | test2 3000帧 | hevc | 2.10s | 4.41s | **1.77s** | -16% |
+  | test6 3000帧 | av1 | 1.86-2.22s | 6.19s | 1.80-1.98s | -10~19% |
+
+  文本一致性：全部 100%（唯一文本集与单路径一致）。诊断开关
+  `HYBRID_PROBE=1`（逐片时序）保留。

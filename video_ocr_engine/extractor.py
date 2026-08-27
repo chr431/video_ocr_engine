@@ -489,25 +489,29 @@ class FieldExtractor(_GpuPipelineMixin):
                 self._codec = ''
         self._remember_color_range(vr)
         # CPU+NVDEC 混合解码（decode_backend="hybrid" 显式选择，与 auto/cpu/nvdec
-        # 并列）：NVDEC 与 CPU 软解作为双生产者按 kfe 分片竞争（HybridDecoder）。
-        # 安全门保留：stride==1（顺序交付语义）、未开 GPU 全驻留管线、编码非
-        # AV1（CPU 软解 AV1 已知净负）；NVDEC 不可用时上面已回退 CPU 并警告。
-        # 初始化失败回退纯 GPU 不致命。
+        # 并列）：速率比例分界 + 两端连续扫掠（HybridDecoder v3）。
+        # 安全门仅保留架构/接口限制：stride==1（next_roi 顺序交付语义）、
+        # 未开 GPU 全驻留管线（互斥）。编码（含 AV1）不再回退——v3 的
+        # 速率比例分界已实测：CPU 慢于 NVDEC 的 HEVC/AV1 场景与纯 NVDEC
+        # 持平不退化，CPU 快于 NVDEC 的 h264 场景显著更快；尊重用户显式
+        # 选择。NVDEC 不可用时上面已回退 CPU 并警告；初始化失败回退纯
+        # GPU 不致命。
         if (backend == 'hybrid' and label == 'GPU'
                 and self._sample_stride == 1
-                and not self._gpu_pipeline_enabled()
-                and self._codec not in ('', 'av1')):
+                and not self._gpu_pipeline_enabled()):
             try:
                 from hybrid_decode import HybridDecoder
                 _mc = int(_os.environ.get(
                     config.HYBRID_MAX_CHUNKS_ENV, '16') or 16)
                 _ct = int(_os.environ.get(
                     config.HYBRID_CPU_THREADS_ENV, '0') or 0)
+                _mcf = int(_os.environ.get(
+                    config.HYBRID_MAX_CHUNK_FRAMES_ENV, '0') or 0)
                 vr = HybridDecoder(self, vr, max_chunks=_mc,
-                                   cpu_threads=_ct)
+                                   cpu_threads=_ct, max_chunk_frames=_mcf)
                 self._backend = 'decord/GPU+CPU-hybrid'
-                logger.info('混合解码开启(kfe竞争): codec=%s chunks<=%d cpuT=%d',
-                            self._codec, _mc, _ct)
+                logger.info('混合解码开启(速率分界): codec=%s chunks<=%d cpuT=%d mcf=%d',
+                            self._codec, _mc, _ct, _mcf)
             except Exception as e:  # noqa: BLE001
                 logger.warning('混合解码初始化失败，回退纯 GPU: %s', e)
         return vr
@@ -876,6 +880,15 @@ class FieldExtractor(_GpuPipelineMixin):
         if hybrid:
             vr.hybrid_begin(frames)
         self._prof_end('producer', 'open_and_fps', _t_open)
+        # OCR 会话（引擎初始化/模型加载）提前到校准前启动：worker 线程内
+        # 构建引擎，与校准（_host_calibrate，前 50 帧解码+Otsu）并行重叠，
+        # 引擎就绪前 _emit_ocr 自动走 host 回退，语义不变。
+        ocr_session = self._start_ocr_session(_ocr_engines)
+        q = ocr_session["q"]
+        results = ocr_session["results"]
+        ocr_err = ocr_session["err"]
+        ocr_wall = ocr_session["wall"]
+        _put_ocr = ocr_session["put"]
         _t_cal = time.perf_counter()
         # 宿主校准统一走 _host_calibrate（stride>1 用 get_batch 等差快速路径、
         # stride==1 用 next_roi 顺序流——校准帧号与后续流水线帧号一致）。
@@ -922,6 +935,10 @@ class FieldExtractor(_GpuPipelineMixin):
             self._prof_end('producer', 'consumer_total', t0)
             ocr_session["finish"]()
             self.timing['ocr_tail'] = time.perf_counter() - _t_consume_end
+            try:
+                vr.close()   # hybrid 探针/资源释放：显式停止生产者线程
+            except Exception:
+                pass
         if ocr_err:
             raise ocr_err[0]
         self.timing['ocr'] = ocr_wall[0]
