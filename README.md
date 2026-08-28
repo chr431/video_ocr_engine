@@ -165,6 +165,7 @@ Otsu 校准、merge_similar 判定（GPU `sim_pair`；contrast 模式在边界�
 | 变量 | 作用 |
 |------|------|
 | `GPU_PIPELINE` | 零拷贝管线：未设置 = NVDEC+TRT 时默认启用；`0` 显式关闭；`1` 强制启用（含 GPU 分段+ONNX 等实验组合） |
+| `GPU_PIPELINE_ASYNC` | `1` 开启 GPU 分段 kernel 的异步实验路径（默认关；同步语义不变，性能待真机 A/B） |
 | `OCR_THREADS` | OCR 推理线程数覆盖（默认全物理核） |
 | `OCR_BATCH` | OCR 批大小覆盖（默认 16） |
 | `OCR_PAD_SMALL` | OCR 输入 pad 宽度下限覆盖 |

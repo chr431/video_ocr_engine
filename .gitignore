@@ -27,3 +27,6 @@ index/
 *.avi
 *_log.csv
 *_output.csv
+
+# Agent 工作区（会话记忆 / 中间态，非项目源码）
+.workbuddy/

@@ -332,12 +332,9 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
                 and not self._gpu_pipeline_enabled()):
             try:
                 from hybrid_decode import HybridDecoder
-                _mc = int(_os.environ.get(
-                    config.HYBRID_MAX_CHUNKS_ENV, '16') or 16)
-                _ct = int(_os.environ.get(
-                    config.HYBRID_CPU_THREADS_ENV, '0') or 0)
-                _mcf = int(_os.environ.get(
-                    config.HYBRID_MAX_CHUNK_FRAMES_ENV, '0') or 0)
+                _mc = config.env_int(config.HYBRID_MAX_CHUNKS_ENV, 16)
+                _ct = config.env_int(config.HYBRID_CPU_THREADS_ENV, 0)
+                _mcf = config.env_int(config.HYBRID_MAX_CHUNK_FRAMES_ENV, 0)
                 vr = HybridDecoder(self, vr, max_chunks=_mc,
                                    cpu_threads=_ct, max_chunk_frames=_mcf)
                 self._backend = 'decord/GPU+CPU-hybrid'
@@ -357,27 +354,52 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         """
         return 'yuv420' if self._yuv_output else 'gray'
 
-    def _decode_num_threads(self, codec: str | None=None) -> int | None:
-        """CPU 软解的 decord FFmpeg 帧线程数（少核/AV1 分核）。
+    def _ocr_on_gpu(self) -> bool:
+        """OCR 推理是否卸载到 GPU（TensorRT）。
 
-            物理核 ≤ CPU_CORES_SPLIT_THRESHOLD（8）时返回 max(2, cores//2)：
-            FFmpeg fork 默认 2 帧线程只用 2 核，少核下解码成瓶颈，且 OCR 全核
-            会与解码过订阅；实测（test5，affinity 模拟）4 核 28.0 vs 33.1s、
-            8 核 17.8 vs 20.7s。核数多时（16）分核反而更差（12.0 vs 9.5s）
-            → 返回 None（decord 默认，FFmpeg 帧线程落在 SMT 份额上）。
-            codec='av1'：AV1 软解吞吐极低（~270fps vs h264 ~1247fps），解码
-            是绝对瓶颈 → 同样返回 max(2, cores//2)，OCR 由 _ocr_num_threads
-            保至少 2 线程。
-            注：旧实现曾对 AV1 返回 max(2, min(cores*3//4, cores-2))，
-            旧 docstring 的实测数字（16 核 dcd=12/ocrT=4 → 78.8s、8 核
-            dcd=6/ocrT=2 → 81.7s）属于该旧公式；现实现已统一收敛为
-            cores//2，勿按旧数值调参。
+            为 True 时 host CPU 在解码阶段基本空闲（TRT 只占少量提交线程），
+            解码可以放宽线程预算（见 _decode_num_threads）。
+            仅按配置判断，不表示 TRT 一定可用（不可用时 OcrEngine 内部回退
+            ONNX，此时解码线程偏多只是轻微过订阅，实测不劣化）。
+            """
+        return (self._ocr_backend or 'auto').lower() != 'cpu'
+
+    def _decode_num_threads(self, codec: str | None=None) -> int | None:
+        """CPU 软解的 decord FFmpeg 帧线程数（按 OCR 是否在 GPU 分档）。
+
+            ── OCR 在 GPU（TRT，现役默认）────────────────────────────
+            host CPU 空闲 → 解码吃满逻辑核（上下限见
+            config.DECODE_THREADS_GPU_OCR_MIN/MAX）。
+            背景：decord fork 在引擎不传 num_threads 时落到
+            DECORD_FFMPEG_THREAD_COUNT = clamp(hw/4, 2, 8)，把 CPU 软解钉在
+            8 线程。实测（7945HX 16C32T + RTX 4060，test5 1080p h264 全片
+            7223 帧，TRT）：8 线程 6.452s → 16 线程 4.875s（-24%）→ 32 线程
+            5.085s；新三国01 标清整集 73430 源帧 stride8：8 线程 15.897s →
+            32 线程 10.812s（-32%）。相对现役默认（NVDEC+TRT）为 -45%/-50%。
+            绑核 8 逻辑核模拟弱 CPU 时不劣化（1080p -6%、标清 -35%）。
+
+            ── OCR 在 CPU（ONNX，无 NVIDIA 显卡场景）───────────────
+            解码与 ORT 抢核，保持现役分核策略（勿按上面 TRT 的数字调参）：
+            物理核 ≤ CPU_CORES_SPLIT_THRESHOLD（8）时返回 max(2, cores//2)
+            —— 4 核 28.0 vs 33.1s、8 核 17.8 vs 20.7s；核数多时返回 None
+            （fork 默认 8 线程）：16 核上给解码更多线程会挤压 ORT，实测
+            1080p 高段数场景反而变慢（8 线程 3.881s → 24 线程 4.152s）。
+            注：标清低段数场景（解码占比高）加线程仍有收益，是否按 ROI/
+            段密度细分待实测（见 docs/PERFORMANCE-ROADMAP.md 下一步）。
+
+            codec='av1'：dav1d 自带线程池，吞吐**不随** FFmpeg 帧线程数
+            扩展（实测 8/16/24/32 线程全为 5.8~5.9s）→ 一律 cores//2，
+            把核留给 OCR。
             GPU(NVDEC) 不调用本方法。
             """
         from ocr_native import auto_ocr_thread_count
         cores = auto_ocr_thread_count()
         if codec == 'av1':
             return max(2, cores // 2)
+        if self._ocr_on_gpu():
+            logical = _os.cpu_count() or cores
+            return max(config.DECODE_THREADS_GPU_OCR_MIN,
+                       min(config.DECODE_THREADS_GPU_OCR_MAX, logical))
         if cores <= config.CPU_CORES_SPLIT_THRESHOLD:
             return max(2, cores // 2)
         return None
@@ -453,9 +475,9 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
             差 → 保持全核。显式参数传入引擎，不污染全局 env。
             """
         from ocr_native import auto_ocr_thread_count
-        _env = _os.environ.get(config.OCR_THREADS_ENV)
+        _env = config.env_int(config.OCR_THREADS_ENV, 0)
         if _env:
-            return max(1, int(_env))
+            return max(1, _env)
         cores = auto_ocr_thread_count()
         if getattr(self, '_codec', '') == 'av1' and getattr(self, '_backend', '').startswith('decord/CPU'):
             return max(2, cores // 2)

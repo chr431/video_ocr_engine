@@ -41,10 +41,12 @@ import time
 
 import numpy as np
 
+import engine_config as config
+
 # ── 探针（诊断）：HYBRID_PROBE=1 时打印各生产者的分片时序与速率；
 # HYBRID_PROBE_CSV 为输出 CSV 路径时追加逐片明细。 ──
-_HYBRID_PROBE = os.environ.get("HYBRID_PROBE", "0") == "1"
-_HYBRID_PROBE_CSV = os.environ.get("HYBRID_PROBE_CSV", "") or None
+_HYBRID_PROBE = os.environ.get(config.HYBRID_PROBE_ENV, "0") == "1"
+_HYBRID_PROBE_CSV = os.environ.get(config.HYBRID_PROBE_CSV_ENV, "") or None
 
 # 分片粒度上限（HYBRID_MAX_CHUNK_FRAMES>0）：hybrid_begin 生成的分片若
 # 超过该帧数则继续按关键帧边界/等分拆小（内存上界 = inflight × 该上限；
@@ -260,7 +262,9 @@ class HybridDecoder:
         # 下 256 帧校准 ~0.4s，会吃掉混合解码的收益；40 帧 ~0.06-0.12s
         # 已足够稳定，且 seek 是固定成本与帧数无关；短校准配合稳态折扣
         # HYBRID_SLOW_DISCOUNT 修正 CPU 软解的缓冲衰减高估）。
-        calib = int(calib_frames or os.environ.get("HYBRID_CALIB_FRAMES", "40") or 40)
+        calib = config.env_int(
+            config.HYBRID_CALIB_FRAMES_ENV,
+            config.HYBRID_CALIB_FRAMES_DEFAULT) if calib_frames <= 0 else int(calib_frames)
         self._calib_frames = max(32, calib)
         self._gpu = gpu_vr
         self._ex = ex
@@ -280,7 +284,8 @@ class HybridDecoder:
         # 慢端允许更多预取（默认 4 片）让尾段提前就绪、消费者连续消费。
         self._inflight_slow = max(
             self._inflight,
-            int(os.environ.get("HYBRID_SLOW_INFLIGHT", "4") or 4))
+            config.env_int(config.HYBRID_SLOW_INFLIGHT_ENV,
+                           config.HYBRID_SLOW_INFLIGHT_DEFAULT))
         nt_kw = {}
         if cpu_threads and cpu_threads > 0:
             nt_kw['num_threads'] = cpu_threads
@@ -352,7 +357,9 @@ class HybridDecoder:
         # 敏感，速率比漂移会让分界偏向慢端；多轮中位稳定分界。成本 = 每轮
         # 256 帧测速（双线程并行，~0.3s/轮），默认 1 轮保持现状。
         calib = min(self._calib_frames, len(fr))
-        calib_rounds = max(1, int(os.environ.get("HYBRID_CALIB_ROUNDS", "1") or 1))
+        calib_rounds = max(1, config.env_int(
+            config.HYBRID_CALIB_ROUNDS_ENV,
+            config.HYBRID_CALIB_ROUNDS_DEFAULT))
         rates: dict = {}
 
         def _calib(tag, reader):
@@ -405,9 +412,10 @@ class HybridDecoder:
         # 可覆盖。
         counts = [len(ch['fis']) for ch in self._chunks]
         slow_is_cpu = (self._slow_reader is self._cpu)
-        default_disc = 0.45 if slow_is_cpu else 0.85
-        slow_disc = float(os.environ.get("HYBRID_SLOW_DISCOUNT",
-                                         str(default_disc)) or default_disc)
+        default_disc = (config.HYBRID_SLOW_DISCOUNT_DEFAULT_CPU if slow_is_cpu
+                        else config.HYBRID_SLOW_DISCOUNT_DEFAULT_GPU)
+        slow_disc = config.env_float(config.HYBRID_SLOW_DISCOUNT_ENV,
+                                     default_disc)
         self._split_idx = _dynamic_split(
             counts, rf, rs, slow_is_cpu=slow_is_cpu,
             discount_cpu=slow_disc, discount_gpu=slow_disc)
@@ -592,12 +600,18 @@ class HybridDecoder:
         return _Batch(np.stack(arrs))
 
     def next_roi(self, x1, y1, x2, y2):
-        """stride==1 校准顺序流：与 get_batch 共享同一交付序。"""
+        """校准顺序流：与 get_batch 共享同一交付序。
+
+        步长取采样网格 stride（缺省 1）。现役 hybrid 安全门要求 stride==1
+        （_open_vr），但此接口的帧号推进必须与采样网格一致，否则放宽安全门
+        后校准帧号会错位（曾为隐性缺陷：硬编码 +1）。
+        """
+        stride = max(1, int(getattr(self._ex, '_sample_stride', 1)))
         if self._seq_fi is None:
             self._seq_fi = self._starts[0] if self._starts else self._f0
         crop = self._pop_frames([self._seq_fi])[0]
         fi = self._seq_fi
-        self._seq_fi = fi + 1
+        self._seq_fi = fi + stride
         return _Batch(crop)
 
     def seek_accurate(self, fi: int):

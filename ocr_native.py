@@ -160,9 +160,9 @@ class OcrEngine:
         if self._num_threads:
             n = max(1, int(self._num_threads))
         else:
-            _env_t = os.environ.get(config.OCR_THREADS_ENV)
+            _env_t = config.env_int(config.OCR_THREADS_ENV, 0)
             if _env_t:
-                n = max(1, int(_env_t))
+                n = max(1, _env_t)
         so.intra_op_num_threads = n
         so.inter_op_num_threads = 2
         model_path = models / f"PP-OCRv6_rec_{size}.onnx"
@@ -321,9 +321,9 @@ class OcrEngine:
         else:
             _floor = config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(
                 self._variant, config.OCR_PAD_WIDTH_MIN)
-            _env = os.environ.get(config.OCR_PAD_SMALL_ENV)
-            if _env and _env.isdigit():
-                _floor = int(_env)
+            _env = config.env_int(config.OCR_PAD_SMALL_ENV, 0)
+            if _env:
+                _floor = _env
         max_wh = max(_floor / config.OCR_TARGET_H,
                      *(float(im.shape[1]) / im.shape[0] for im in img_list))
         if self._trt is not None:
@@ -386,9 +386,9 @@ class OcrEngine:
         else:
             _floor = config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(
                 self._variant, config.OCR_PAD_WIDTH_MIN)
-            _env = os.environ.get(config.OCR_PAD_SMALL_ENV)
-            if _env and _env.isdigit():
-                _floor = int(_env)
+            _env = config.env_int(config.OCR_PAD_SMALL_ENV, 0)
+            if _env:
+                _floor = _env
         _ratio = (float(force_aspect) if force_aspect and force_aspect > 0
                   else float(src_w) / float(src_h))
         max_wh = max(_floor / config.OCR_TARGET_H, _ratio)

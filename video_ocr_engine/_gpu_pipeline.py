@@ -99,6 +99,8 @@ class _GpuPipelineMixin:
 
         env GPU_PIPELINE：'0' 显式关闭；'1' 强制尝试（跳过 TRT 要求，
         允许 GPU 分段+ONNX 等实验组合）；不设置 = 上述默认规则。
+        GPU_PIPELINE_ASYNC：实验开关（默认关）——GPU 分段 kernel 的
+        同步点改异步（见 _gpu_kernels async 路径），默认同步语义不变。
         """
         _env = _os.environ.get(config.GPU_PIPELINE_ENV)
         if _env is not None:
@@ -107,6 +109,8 @@ class _GpuPipelineMixin:
             forced = True
         else:
             forced = False
+        self._gpu_pipeline_async = config.env_bool(
+            config.GPU_PIPELINE_ASYNC_ENV, default=False)
         if (self._decode_backend or 'auto').lower() not in ('auto', 'nvdec'):
             return False
         if not _cuda_python_available():
@@ -195,8 +199,9 @@ class _GpuPipelineMixin:
         # （含退化双值帧的阈值行为），D2H 仅 B×1KB 标量表，校准帧不落 RAM。
         # 注意必须用 _otsu_from_hist（输入是直方图行）；_otsu 接收的是
         # 灰度图像并在内部做直方图——传错曾产生"直方图的直方图"垃圾阈值。
-        _hist_mat = analyzer.histograms_perframe(calib_gray, calib_n,
-                                                 src_h, src_w)
+        _hist_mat = analyzer.histograms_perframe(
+            calib_gray, calib_n, src_h, src_w,
+            async_mode=getattr(self, '_gpu_pipeline_async', False))
         ths = [_otsu_from_hist(_hist_mat[k]) for k in range(calib_n)]
         th = _otsu_median_threshold(ths)
         self._bin_thresh = th
@@ -227,7 +232,9 @@ class _GpuPipelineMixin:
                     max(B, DECODE_BATCH) * fnb)
                 _fill_prev(prev_buf, gray_base, B, fnb, prev_single)
                 return analyzer.analyze_batch(
-                    gray_base, prev_buf, B, H, W, th), fnb
+                    gray_base, prev_buf, B, H, W, th,
+                    async_mode=getattr(self, '_gpu_pipeline_async',
+                                       False)), fnb
 
             # ── 校准帧整批分析（yuv 已在外部提取 Y → calib_gray）──
             B = calib_n
@@ -359,8 +366,9 @@ class _GpuPipelineMixin:
             else:
                 ap, bp = int(a_dev[1]), int(b_dev[1])
             try:
-                mad, chg = analyzer.compare_pair(ap, bp, src_h, src_w,
-                                                 self._bin_thresh, use_bin)
+                mad, chg = analyzer.compare_pair(
+                    ap, bp, src_h, src_w, self._bin_thresh, use_bin,
+                    async_mode=getattr(self, '_gpu_pipeline_async', False))
             finally:
                 # 池帧引用释放（GC 归还）
                 ya = yb = None

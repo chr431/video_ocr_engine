@@ -512,3 +512,39 @@ v3 的短板：**CPU 明显慢于 NVDEC（8 核亲和模拟弱 CPU）时 hybrid 
 确实提升（h264 -18%、HEVC -3%）；h264 墙钟也转正（-2%）；HEVC 墙钟
 仍受 OCR 尾批/争抢影响（+11%）——decode 收益 < OCR 固定开销时属物理
 限制（CPU 慢 4.6× 时慢端最多 1-2 片，贡献上限 ~5%）。
+
+### 底层重构轮（2026-08，维护性收尾：env 收敛 + next_roi 步长修复 + GPU 异步开关 + 文档归档）
+
+按"维护性修复为主 + 性能收尾"结论落地的零风险改动（A/B 语义不变）：
+
+1. **`HybridDecoder.next_roi` 步长修复**：`_seq_fi = fi + 1` 硬编码漏
+   `sample_stride`（现役 hybrid 安全门要求 stride==1 故未触发；放宽安全门
+   后校准帧号会错位）。已改为按 `ex._sample_stride` 推进，新增
+   `tests/test_hybrid_next_roi.py` 防回归。
+2. **env 解析收敛**：`engine_config` 新增 `env_int` / `env_float` 统一解析
+   （缺省/空/非法 → default），全部 HYBRID_*/OCR_* 数值解析从调用点迁移：
+   `HYBRID_CALIB_FRAMES` / `HYBRID_SLOW_INFLIGHT` / `HYBRID_SLOW_DISCOUNT`
+   / `HYBRID_CALIB_ROUNDS` / `HYBRID_MAX_CHUNKS` / `HYBRID_CPU_THREADS` /
+   `HYBRID_MAX_CHUNK_FRAMES` / `OCR_THREADS` / `OCR_BATCH` / `OCR_PAD_SMALL`
+   / `OCR_GAMMA`。魔法值收敛为 `HYBRID_*_DEFAULT` 常量（0.45/0.85/40/4/1）。
+3. **GPU 分段 kernel 同步点可选异步**：`GpuFrameAnalyzer.analyze_batch` /
+   `histograms_perframe` / `compare_pair` 增加 `async_mode` 参数（默认
+   False = 历史同步语义逐位不变）；`GPU_PIPELINE_ASYNC=1` 开启异步 D2H +
+   立即同步的实验路径（kernel 启动与 D2H 重叠）。**默认关闭，纯实验开关**。
+   **真机 A/B（test5 3000帧 stride8，3 轮中位）：3.278s（默认）vs 3.281s
+   （ASYNC）——严格持平（±0.1%），无净收益；decode 仍为绝对瓶颈（占墙钟
+   ~83%）。保持实验态、不转正**（避免后人按 §9 的"同步点串行化 producer"
+   推断重复投入；该推断对 GPU+ONNX 路径成立，对 NVDEC+TRT 主路径不成立——
+   分段 kernel 时间被 decode 完全掩盖）。
+4. **文档归档**：`docs/PERFORMANCE.md` 中 dual_pipeline 全部历史档案迁移到
+   `docs/ARCHIVE.md`（§A 混合 OCR/解码旧档案、§B 双流水线全史），正文只留
+   指针与现役结论；新增 `tools/trim_perf_doc.py` 维护工具（后续归档章节可
+   一键剪切）。
+5. **新增单测**：`tests/test_hybrid_next_roi.py`（stride 1/2/3 推进、起始帧
+   取 starts[0]）。
+
+> 真机验证已完成（test5 3000帧 stride8，3 轮中位）：`GPU_PIPELINE_ASYNC=1`
+> 与默认严格持平（3.281 vs 3.278s，±0.1%）——无净收益，保持实验态不转正
+> （见第 3 条）。hybrid 转正的工程化收尾仍待做（现役为显式
+> `decode_backend="hybrid"` + 7 个 HYBRID_* env 旋钮，需决策默认值与
+> 长视频回归后再考虑默认启用）。

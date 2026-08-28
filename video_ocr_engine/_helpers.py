@@ -3,17 +3,12 @@
 _ocr_batch_size / _ndarray_device_ptr / _otsu_from_hist / _gray_mean_abs_diff。
 extractor 与各 mixin 直接引用；为保持外部兼容，extractor 仍 re-export。
 """
-import os as _os
-
 import numpy as np
 
 import engine_config as config
 
 def _ocr_batch_size() -> int:
-    _env = _os.environ.get(config.OCR_BATCH_ENV)
-    if _env and _env.isdigit():
-        return max(1, int(_env))
-    return config.OCR_BATCH_SIZE
+    return max(1, config.env_int(config.OCR_BATCH_ENV, config.OCR_BATCH_SIZE))
 
 
 # 进度百分比映射（解码 3→58，OCR 58→86；与旧版进度条语义一致）。两条流水线

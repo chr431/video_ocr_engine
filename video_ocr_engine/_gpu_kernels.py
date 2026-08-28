@@ -187,13 +187,7 @@ extern "C" __global__ void prep_gray_raw(
                 self._stream)
         out_nbytes = B * 3 * dst_h * dst_w * 4
         out_dev = self._ensure_out(out_nbytes)
-        gamma = float(config.OCR_GAMMA)
-        _env_g = os.environ.get(config.OCR_GAMMA_ENV)
-        if _env_g:
-            try:
-                gamma = float(_env_g)
-            except ValueError:
-                pass
+        gamma = config.env_float(config.OCR_GAMMA_ENV, float(config.OCR_GAMMA))
         shape = (B, 3, dst_h, dst_w)
         total = int(np.prod(shape))
         block = 256
@@ -524,10 +518,16 @@ extern "C" __global__ void luma_nv12(
         return self._prev_dev
 
     def histograms_perframe(self, raw_ptr: int, B: int,
-                            H: int, W: int) -> "np.ndarray":
+                            H: int, W: int,
+                            async_mode: bool = False) -> "np.ndarray":
         """逐帧直方图：(B,256) int32 回传 host（B×1KB），供宿主复刻
         '逐帧 Otsu 取中位数' 校准语义——与单流水线阈值行为完全一致，
-        且校准帧不落 RAM（仅 50KB 标量表）。"""
+        且校准帧不落 RAM（仅 50KB 标量表）。
+
+        async_mode=False（默认）：kernel 后同步 stream 再 D2H（同步语义，
+        与历史一致）；True：异步 D2H + 立即同步（GPU_PIPELINE_ASYNC=1
+        实验路径——kernel 启动与 D2H 重叠，无正确性差异）。
+        """
         import numpy as np
         from cuda.bindings import runtime as cudart
         from cuda.core import Buffer, LaunchConfig, launch
@@ -542,11 +542,13 @@ extern "C" __global__ void luma_nv12(
         launch(self._stream, LaunchConfig(grid=B, block=256),
                self._kernel_hist_pf,
                Buffer.from_handle(raw_ptr, B * H * W), buf, np.int32(H * W))
-        cudart.cudaStreamSynchronize(self._stream)
+        if not async_mode:
+            cudart.cudaStreamSynchronize(self._stream)
         hists = np.empty((B, 256), dtype=np.int32)
-        cudart.cudaMemcpy(
+        cudart.cudaMemcpyAsync(
             hists.ctypes.data, self._histpf_dev, nbytes,
-            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
+            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, self._stream)
+        cudart.cudaStreamSynchronize(self._stream)
         return hists
 
     def luma_into(self, src_ptr: int, dst_ptr: int, H: int, W: int,
@@ -589,7 +591,8 @@ extern "C" __global__ void luma_nv12(
         return self._luma_dev
 
     def compare_pair(self, a_ptr: int, b_ptr: int, H: int, W: int,
-                     th: int, use_bin: bool) -> "tuple[int, int]":
+                     th: int, use_bin: bool,
+                     async_mode: bool = False) -> "tuple[int, int]":
         """两帧差异标量（merge_similar 判定）：(mad_sum, changed_count)。
 
         use_bin=True 按二值化域：mad_sum = 阈值穿越像素数（宿主换算
@@ -597,6 +600,9 @@ extern "C" __global__ void luma_nv12(
         use_bin=False 按原始灰度域：mad_sum = |a-b| 整数和，changed =
         count(|a-b|>10)。整数精确累加（double 归约，值域 < 2^53），
         与宿主 _segments_similar 的两个条件一一对应。
+
+        async_mode=False（默认）：kernel 后同步再 D2H（历史语义）；
+        True：异步 D2H + 立即同步（GPU_PIPELINE_ASYNC=1 实验路径）。
         """
         import numpy as np
         from cuda.bindings import runtime as cudart
@@ -611,15 +617,24 @@ extern "C" __global__ void luma_nv12(
                Buffer.from_handle(b_ptr, n),
                out_buf, np.int32(n), np.int32(th),
                np.int32(1 if use_bin else 0))
-        cudart.cudaStreamSynchronize(self._stream)
+        if not async_mode:
+            cudart.cudaStreamSynchronize(self._stream)
         out = np.empty(2, dtype=np.float64)
-        cudart.cudaMemcpy(out.ctypes.data, self._sim_dev, 2 * 8,
-                          cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
+        cudart.cudaMemcpyAsync(
+            out.ctypes.data, self._sim_dev, 2 * 8,
+            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, self._stream)
+        cudart.cudaStreamSynchronize(self._stream)
         return int(out[0]), int(out[1])
 
     def analyze_batch(self, raw_ptr: int, prev_ptr: int, B: int,
-                      H: int, W: int, th: float) -> "np.ndarray":
-        """一次 kernel 分析 B 帧；prev_ptr 必须是已准备好的 B 帧前帧缓冲。"""
+                      H: int, W: int, th: float,
+                      async_mode: bool = False) -> "np.ndarray":
+        """一次 kernel 分析 B 帧；prev_ptr 必须是已准备好的 B 帧前帧缓冲。
+
+        async_mode=False（默认）：kernel 后同步再 D2H（历史语义）；
+        True：异步 D2H + 立即同步（GPU_PIPELINE_ASYNC=1 实验路径——
+        kernel 启动与 D2H 重叠，减少 producer 串行等待）。
+        """
         import numpy as np
         from cuda.bindings import runtime as cudart
         from cuda.core import Buffer, LaunchConfig, launch
@@ -634,11 +649,13 @@ extern "C" __global__ void luma_nv12(
                Buffer.from_handle(raw_ptr, B * H * W),
                Buffer.from_handle(prev_ptr, B * H * W),
                buf, np.int32(B), np.int32(H), np.int32(W), np.float32(th))
-        cudart.cudaStreamSynchronize(self._stream)
+        if not async_mode:
+            cudart.cudaStreamSynchronize(self._stream)
         out = np.empty((B, 2), dtype=np.float64)
-        cudart.cudaMemcpy(
+        cudart.cudaMemcpyAsync(
             out.ctypes.data, self._summary_dev, nbytes,
-            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
+            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, self._stream)
+        cudart.cudaStreamSynchronize(self._stream)
         return out
 
 

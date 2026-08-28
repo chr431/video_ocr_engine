@@ -39,6 +39,28 @@ def env_bool(name: str, default: bool = False) -> bool:
     return default
 
 
+def env_int(name: str, default: int) -> int:
+    """读取整数型 env：缺省/空/非法 → default（解析收敛点，调用点不再各自 int()）。"""
+    v = os.environ.get(name)
+    if v is None or not v.strip():
+        return default
+    try:
+        return int(v.strip())
+    except ValueError:
+        return default
+
+
+def env_float(name: str, default: float) -> float:
+    """读取浮点型 env：缺省/空/非法 → default（解析收敛点，调用点不再各自 float()）。"""
+    v = os.environ.get(name)
+    if v is None or not v.strip():
+        return default
+    try:
+        return float(v.strip())
+    except ValueError:
+        return default
+
+
 # 解码 / OCR / 分段
 DECORD_FORCE_CPU_ENV: str = "DECORD_FORCE_CPU"                  # 1 强制 CPU 解码（旧钩子）
 OCR_THREADS_ENV: str = "OCR_THREADS"                            # OCR 推理线程数覆盖（值型）
@@ -49,10 +71,13 @@ OCR_INSTANCES_ENV: str = "OCR_INSTANCES"                        # 0 关闭并行
 TEXT_SEP_MERGE_ENV: str = "TEXT_SEP_MERGE"                      # 相似段合并分离模式
 # 实验/诊断开关
 GPU_PIPELINE_ENV: str = "GPU_PIPELINE"                          # 0 关闭 GPU 全驻留管线
+GPU_PIPELINE_ASYNC_ENV: str = "GPU_PIPELINE_ASYNC"              # 1 开启 GPU 分段 kernel 异步实验路径
 GPU_CTC_ENV: str = "GPU_CTC"                                    # 0 关闭 TRT 输出 GPU 归约
 ENGINE_PROFILE_ENV: str = "ENGINE_PROFILE"                      # 1 开启引擎级性能剖面
 TRT_SUBPROBE_ENV: str = "TRT_SUBPROBE"                          # 1 开启 TRT 子相位探针
 DEBUG_BOUNDS_ENV: str = "DEBUG_BOUNDS"                          # 1 打印分段边界调试信息
+HYBRID_PROBE_ENV: str = "HYBRID_PROBE"                          # 1 打印混合解码逐片时序
+HYBRID_PROBE_CSV_ENV: str = "HYBRID_PROBE_CSV"                  # 逐片时序另落盘 CSV 路径
 # CPU+NVDEC 混合解码（hybrid_decode.HybridDecoder v4，decode_backend="hybrid"）：
 # 仅 GPU(NVDEC) 可用、stride==1、未开 GPU 全驻留管线时生效（编码不限，
 # 含 AV1）；v4 = 动态分界（慢端不拖尾约束下给慢端尽量多片）+ 稳态速率
@@ -73,6 +98,30 @@ HYBRID_MAX_CHUNK_FRAMES_ENV: str = "HYBRID_MAX_CHUNK_FRAMES"
 HYBRID_SLOW_INFLIGHT_ENV: str = "HYBRID_SLOW_INFLIGHT"
 HYBRID_SLOW_DISCOUNT_ENV: str = "HYBRID_SLOW_DISCOUNT"
 HYBRID_CALIB_FRAMES_ENV: str = "HYBRID_CALIB_FRAMES"
+HYBRID_CALIB_ROUNDS_ENV: str = "HYBRID_CALIB_ROUNDS"
+# v4 默认值（解析收敛：调用点统一走 env_int / env_float，勿再各自解析）
+HYBRID_SLOW_INFLIGHT_DEFAULT: int = 4      # 慢端预取上限（片）
+HYBRID_SLOW_DISCOUNT_DEFAULT_CPU: float = 0.45  # 慢端=CPU 软解稳态折扣
+HYBRID_SLOW_DISCOUNT_DEFAULT_GPU: float = 0.85  # 慢端=NVDEC 稳态折扣
+HYBRID_CALIB_FRAMES_DEFAULT: int = 40      # 速率校准帧数（弱 CPU 下压缩固定开销）
+HYBRID_CALIB_ROUNDS_DEFAULT: int = 1       # 校准轮数（>1 取中位数更稳，成本 ~0.3s/轮）
+# ═══════════════════ CPU 软解线程预算（按 OCR 是否在 GPU 分档）═══════════════
+# 背景：decord fork 在引擎不显式传 num_threads 时，CPU 解码线程数落到
+# DECORD_FFMPEG_THREAD_COUNT = clamp(hw/4, 2, 8)（fork 源码
+# src/video/video_reader.cc），即把 CPU 软解钉在 8 线程。该默认值是在
+# "OCR 跑 ONNX 占满物理核"的时代定的；TensorRT 成为默认后 host CPU 在解码
+# 阶段基本空闲，旧上限反而成为瓶颈。
+# 实测（7945HX 16C32T + RTX 4060 Laptop，TRT；段数/唯一文本逐位一致）：
+#   test5 1080p h264 全片 7223 帧  ：8 线程 6.452s → 16 线程 4.875s
+#   新三国01 标清整集 73430 帧 s8  ：8 线程 15.897s → 32 线程 10.812s
+#   相对现役默认（NVDEC+TRT 8.112s / 21.785s）= -45% / -50%。
+#   绑核 8 逻辑核（模拟弱 CPU）不劣化：1080p -6%、标清 -35%。
+# 上限 32：再多只增加 FFmpeg 帧缓冲（1080p 约 3MB/帧）与调度开销，无吞吐
+# 收益；下限 8：保证少核机不低于 fork 原默认值。
+# 仅当 OCR 后端非 cpu（TRT）时启用；ONNX 场景仍走 CPU_CORES_SPLIT_THRESHOLD
+# 分核逻辑（解码与 ORT 抢核，见 extractor._decode_num_threads 注释）。
+DECODE_THREADS_GPU_OCR_MIN: int = 8
+DECODE_THREADS_GPU_OCR_MAX: int = 32
 # 并行双 ONNX 实例的启动门限（OCR 线程数 ≥ 此值才默认拆两个实例）
 OCR_INSTANCES_MIN_THREADS: int = 8
 

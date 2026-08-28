@@ -1,0 +1,102 @@
+"""临时探针 F：hybrid 混合解码 × CPU 线程数 A/B。
+
+hybrid 的安全门：stride==1、NVDEC 可用、未开 GPU 全驻留管线。
+CPU 侧线程数由 HYBRID_CPU_THREADS 控制（0 = 核数//2）；
+DECORD_FFMPEG_THREAD_COUNT 决定其默认回退值。
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+import json
+
+PY = sys.executable
+
+WORKER = r"""
+import os, sys, time, json
+sys.path.insert(0, r"D:\Repo\video_ocr_engine")
+os.environ['ENGINE_PROFILE'] = '1'
+path, roi_s, n, dbe, obe = sys.argv[1:6]
+roi = tuple(int(x) for x in roi_s.split(','))
+from video_ocr_engine import FieldExtractor
+ex = FieldExtractor(path, roi, frame_end=int(n), sample_stride=1,
+                    decode_backend=dbe, ocr_backend=obe, keep_crops=False)
+t0 = time.perf_counter()
+r = ex.extract()
+wall = time.perf_counter() - t0
+texts = sorted({s.text for s in r.segments if s.text})
+print(json.dumps({
+    'wall': round(wall, 3), 'segs': len(r.segments), 'uniq': len(texts),
+    'timing': {k: round(v, 3) for k, v in ex.timing.items()},
+    'producer': {k: round(v, 3) for k, v in
+                 sorted(ex.profile.get('producer', {}).items(),
+                        key=lambda kv: -kv[1])[:5]},
+    'ocr': {k: round(v, 3) for k, v in
+            sorted(ex.profile.get('ocr', {}).items(),
+                   key=lambda kv: -kv[1])[:4]},
+    'backend': r.meta['backend'], 'ocr_backend': r.meta['ocr_backend'],
+}))
+"""
+
+
+def run(video, roi, n, dbe, obe, env=None, reps=2):
+    e = dict(os.environ)
+    if env:
+        e.update(env)
+    best = None
+    for _ in range(reps):
+        p = subprocess.run([PY, "-c", WORKER, video, roi, str(n), dbe, obe],
+                           capture_output=True, text=True, env=e)
+        out = (p.stdout or "").strip().splitlines()
+        if p.returncode != 0 or not out:
+            return {"err": (p.stderr or "").strip()[-300:]}
+        d = json.loads(out[-1])
+        if best is None or d["wall"] < best["wall"]:
+            best = d
+    return best
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--video", default=r"D:\Videos\racelog_test\test5.mp4")
+    ap.add_argument("--roi", default="843,993,948,1025")
+    ap.add_argument("--frames", type=int, default=3000)
+    ap.add_argument("--reps", type=int, default=2)
+    a = ap.parse_args()
+    roi = ",".join(str(x) for x in (int(x) for x in a.roi.split(",")))
+    print(f"=== hybrid A/B: {os.path.basename(a.video)} {a.frames}帧 "
+          f"stride=1 (取 {a.reps} 轮最快) ===")
+    cases = [
+        ("NVDEC+TRT (默认)", "auto", "auto", {}),
+        ("CPU+TRT dcdT=24", "cpu", "auto",
+         {"DECORD_FFMPEG_THREAD_COUNT": "24"}),
+        ("hybrid  (cpuT=0→auto, dft 8)", "hybrid", "auto", {}),
+        ("hybrid  dcdT=16", "hybrid", "auto",
+         {"DECORD_FFMPEG_THREAD_COUNT": "16"}),
+        ("hybrid  dcdT=24", "hybrid", "auto",
+         {"DECORD_FFMPEG_THREAD_COUNT": "24"}),
+        ("hybrid  dcdT=24 cpuT=16", "hybrid", "auto",
+         {"DECORD_FFMPEG_THREAD_COUNT": "24", "HYBRID_CPU_THREADS": "16"}),
+        ("hybrid  dcdT=32 cpuT=24", "hybrid", "auto",
+         {"DECORD_FFMPEG_THREAD_COUNT": "32", "HYBRID_CPU_THREADS": "24"}),
+    ]
+    base = None
+    for name, dbe, obe, env in cases:
+        d = run(a.video, roi, a.frames, dbe, obe, env, reps=a.reps)
+        if "err" in d:
+            print(f"  {name:26s}: FAIL {d['err']}")
+            continue
+        if base is None:
+            base = d["wall"]
+        print(f"  {name:26s}: wall={d['wall']:6.3f}s "
+              f"({d['wall']/base*100:5.1f}%)  segs={d['segs']:5d} "
+              f"uniq={d['uniq']:4d}  decode={d['timing'].get('decode',0):.3f} "
+              f"ocr_tail={d['timing'].get('ocr_tail',0):.3f} "
+              f"[{d['backend']}]")
+        print(f"      producer: {d['producer']}")
+
+
+if __name__ == "__main__":
+    main()

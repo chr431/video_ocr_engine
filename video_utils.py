@@ -180,8 +180,7 @@ def _preprocess_standard(crop: "np.ndarray", force_aspect: float = 0.0,
     else:
         resized = _np_resize(crop, new_w, target_h)
     if gamma is None:
-        _env = _os.environ.get(config.OCR_GAMMA_ENV)
-        gamma = float(_env) if _env else float(config.OCR_GAMMA)
+        gamma = config.env_float(config.OCR_GAMMA_ENV, float(config.OCR_GAMMA))
     if gamma > 0:
         # 灰度 + gamma（正式预处理）：RGB 逐通道 gamma 视觉差异小、回归多
         # （tools/_gamma_misread_montage 对比），灰度版视觉更清晰、回归少。
