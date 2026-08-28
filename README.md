@@ -170,9 +170,10 @@ Otsu 校准、merge_similar 判定（GPU `sim_pair`；contrast 模式在边界�
 | `OCR_BATCH` | OCR 批大小覆盖（默认 16） |
 | `OCR_PAD_SMALL` | OCR 输入 pad 宽度下限覆盖 |
 | `OCR_GAMMA` | OCR 预处理 gamma（默认 2.0） |
+| `DECODE_THREADS` | CPU 软解 FFmpeg 帧线程数覆盖（默认按 OCR 落点 + 采样步长分档：OCR 在 GPU 取满逻辑核钳 8~32；OCR 在 CPU 时 stride>1 取逻辑核 3/4 钳 8~24、stride==1 取 1/3 钳 8~12） |
 | `TEXT_SEP_MERGE` | 相似段合并分离模式（contrast/binary/off） |
 | `HYBRID_MAX_CHUNKS` | 混合解码分片上限（默认 16） |
-| `HYBRID_CPU_THREADS` | 混合解码中 CPU 软解线程数（默认 0=核数//2） |
+| `HYBRID_CPU_THREADS` | 混合解码中 CPU 软解线程数（默认 0 = fork 默认 8；实测给更多反而略差——CPU 生产者与消费者、NVDEC 抢 host CPU） |
 | `HYBRID_MAX_CHUNK_FRAMES` | 混合解码单片采样帧数上限（默认 0=不拆；>0 时超限片按关键帧/等分拆小，内存上界 = inflight × 上限） |
 
 ### 实验/诊断（排查问题时用）

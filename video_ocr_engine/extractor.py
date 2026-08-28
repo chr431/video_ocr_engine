@@ -321,14 +321,17 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         self._remember_color_range(vr)
         # CPU+NVDEC 混合解码（decode_backend="hybrid" 显式选择，与 auto/cpu/nvdec
         # 并列）：速率比例分界 + 两端连续扫掠（HybridDecoder v3）。
-        # 安全门仅保留架构/接口限制：stride==1（next_roi 顺序交付语义）、
-        # 未开 GPU 全驻留管线（互斥）。编码（含 AV1）不再回退——v3 的
-        # 速率比例分界已实测：CPU 慢于 NVDEC 的 HEVC/AV1 场景与纯 NVDEC
-        # 持平不退化，CPU 快于 NVDEC 的 h264 场景显著更快；尊重用户显式
-        # 选择。NVDEC 不可用时上面已回退 CPU 并警告；初始化失败回退纯
-        # GPU 不致命。
+        # 安全门仅保留架构/接口限制：未开 GPU 全驻留管线（互斥）。
+        # **stride>1 已解禁**（原门控要求 stride==1，理由是 next_roi 的
+        # 顺序交付语义）：next_roi 现在按 _sample_stride 推进（见
+        # hybrid_decode），且 stride>1 时宿主校准与主循环都走 get_batch
+        # 等差快速路径、不碰 next_roi。解禁的意义是 hybrid 只在"解码占
+        # 墙钟大头"时才可能赢，而 stride>1 恰恰把解码占比推到最高。
+        # 编码（含 AV1）不再回退——v3 的速率比例分界已实测：CPU 慢于
+        # NVDEC 的 HEVC/AV1 场景与纯 NVDEC 持平不退化，CPU 快于 NVDEC 的
+        # h264 场景显著更快；尊重用户显式选择。NVDEC 不可用时上面已回退
+        # CPU 并警告；初始化失败回退纯 GPU 不致命。
         if (backend == 'hybrid' and label == 'GPU'
-                and self._sample_stride == 1
                 and not self._gpu_pipeline_enabled()):
             try:
                 from hybrid_decode import HybridDecoder
@@ -379,19 +382,32 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
             绑核 8 逻辑核模拟弱 CPU 时不劣化（1080p -6%、标清 -35%）。
 
             ── OCR 在 CPU（ONNX，无 NVIDIA 显卡场景）───────────────
-            解码与 ORT 抢核，保持现役分核策略（勿按上面 TRT 的数字调参）：
-            物理核 ≤ CPU_CORES_SPLIT_THRESHOLD（8）时返回 max(2, cores//2)
-            —— 4 核 28.0 vs 33.1s、8 核 17.8 vs 20.7s；核数多时返回 None
-            （fork 默认 8 线程）：16 核上给解码更多线程会挤压 ORT，实测
-            1080p 高段数场景反而变慢（8 线程 3.881s → 24 线程 4.152s）。
-            注：标清低段数场景（解码占比高）加线程仍有收益，是否按 ROI/
-            段密度细分待实测（见 docs/PERFORMANCE-ROADMAP.md 下一步）。
+            解码与 ORT 真正抢核，但**不是"越少越好"**——取决于解码与 OCR
+            谁占墙钟，而段密度决定这一点：
+              · 物理核 ≤ CPU_CORES_SPLIT_THRESHOLD（8）：max(2, cores//2)
+                （4 核 28.0 vs 33.1s、8 核 17.8 vs 20.7s）
+              · 多核 + stride>1（解码受限）：逻辑核 3/4，钳 [8, 24]
+              · 多核 + stride==1（OCR 受限）：逻辑核 1/3，钳 [8, 12]
+            判据：stride>1 时采样帧数 ÷ stride 而解码帧数不变 → 解码占比
+            必然上升；stride==1 时段数可接近采样帧数 → OCR 占比上升。
+            实测（16C32T，test5 3000 帧，decode=cpu ocr=cpu）：
+              stride=8（339 段）  dcd 8 → 2.841s，24 → 2.026s（-27.8%）
+              stride=1（1083 段） dcd 8 → 3.746s，10 → 3.617s，16 → 3.811s
+            （旧实现的"多核返回 None"让解码一直跑 fork 默认 8 线程，
+            低段密度场景白丢 ~28%；且它引用的"加线程变慢"实测来自 OCR
+            受限的高段密度场景，被错误地当成了普适结论。）
 
             codec='av1'：dav1d 自带线程池，吞吐**不随** FFmpeg 帧线程数
             扩展（实测 8/16/24/32 线程全为 5.8~5.9s）→ 一律 cores//2，
             把核留给 OCR。
             GPU(NVDEC) 不调用本方法。
+
+            DECODE_THREADS env 覆盖（>0 时直接返回，与 OCR_THREADS 对齐）：
+            调参与 A/B 用；不设置时行为与上述分档一致。
             """
+        _ovr = config.env_int(config.DECODE_THREADS_ENV, 0)
+        if _ovr > 0:
+            return _ovr
         from ocr_native import auto_ocr_thread_count
         cores = auto_ocr_thread_count()
         if codec == 'av1':
@@ -402,7 +418,12 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
                        min(config.DECODE_THREADS_GPU_OCR_MAX, logical))
         if cores <= config.CPU_CORES_SPLIT_THRESHOLD:
             return max(2, cores // 2)
-        return None
+        logical = _os.cpu_count() or cores
+        if self._sample_stride > 1:
+            return max(8, min(config.DECODE_THREADS_CPU_OCR_MAX,
+                              logical * 3 // 4))
+        return max(8, min(config.DECODE_THREADS_CPU_OCR_STRIDE1_MAX,
+                          logical // 3))
 
     def _open_decord_reader(self, ctx, roi_kw: dict, num_threads=None):
         """按当前输出格式打开 decord reader。

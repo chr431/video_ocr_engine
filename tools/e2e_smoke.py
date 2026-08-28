@@ -266,9 +266,6 @@ def main():
     base_texts = None
     results = {}
     for cfg in cfgs:
-        if cfg == "hybrid" and args.stride != 1:
-            print(f"  [hybrid] 注：混合解码仅 stride==1 激活（安全门），"
-                  f"当前 stride={args.stride} → 按纯 GPU 跑")
         try:
             ex, res, wall = run_once(str(video), roi, frame_end - frame_start,
                                      args.stride, cfg, truth_meta)

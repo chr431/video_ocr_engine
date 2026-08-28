@@ -69,6 +69,7 @@ OCR_GAMMA_ENV: str = "OCR_GAMMA"                                # OCR 预处理 
 OCR_PAD_SMALL_ENV: str = "OCR_PAD_SMALL"                        # OCR 输入 pad 宽下限覆盖（值型）
 OCR_INSTANCES_ENV: str = "OCR_INSTANCES"                        # 0 关闭并行双 ONNX 实例
 TEXT_SEP_MERGE_ENV: str = "TEXT_SEP_MERGE"                      # 相似段合并分离模式
+DECODE_THREADS_ENV: str = "DECODE_THREADS"                      # CPU 软解 FFmpeg 帧线程数覆盖（值型；0=自动）
 # 实验/诊断开关
 GPU_PIPELINE_ENV: str = "GPU_PIPELINE"                          # 0 关闭 GPU 全驻留管线
 GPU_PIPELINE_ASYNC_ENV: str = "GPU_PIPELINE_ASYNC"              # 1 开启 GPU 分段 kernel 异步实验路径
@@ -118,10 +119,21 @@ HYBRID_CALIB_ROUNDS_DEFAULT: int = 1       # 校准轮数（>1 取中位数更�
 #   绑核 8 逻辑核（模拟弱 CPU）不劣化：1080p -6%、标清 -35%。
 # 上限 32：再多只增加 FFmpeg 帧缓冲（1080p 约 3MB/帧）与调度开销，无吞吐
 # 收益；下限 8：保证少核机不低于 fork 原默认值。
-# 仅当 OCR 后端非 cpu（TRT）时启用；ONNX 场景仍走 CPU_CORES_SPLIT_THRESHOLD
-# 分核逻辑（解码与 ORT 抢核，见 extractor._decode_num_threads 注释）。
+# 仅当 OCR 后端非 cpu（TRT）时启用；ONNX 场景按采样步长另行分档（见下）。
 DECODE_THREADS_GPU_OCR_MIN: int = 8
 DECODE_THREADS_GPU_OCR_MAX: int = 32
+# ── OCR 在 CPU（ONNX）时的解码线程分档（按 sample_stride 判段密度）──
+# 实测（7945HX 16C32T，decode=cpu ocr=cpu，test5 3000 帧；段数/唯一文本一致）：
+#   低段密度 stride=8（339 段，解码受限）  dcd=8  2.841s → 24  2.026s（-27.8%）
+#                                        16/20/28/32 = 2.09~2.12s（平台）
+#   高段密度 stride=1（1083 段，OCR 受限） dcd=8  3.746s → 10  3.617s（-3.4%）
+#                                        12 3.714 / 14 3.824 / 16 3.811（>12 劣化）
+# 判据是"解码与 OCR 谁占墙钟"：stride>1 时采样帧数 ÷ stride 而解码量不变
+# → 解码必然更占优；stride==1 时段数可接近采样帧数 → OCR 更占优。
+# 弱 CPU（绑 8 逻辑核）复核：stride8 最优 8（4/12/16 差 ≤4.6%）、
+# stride1 最优 12（8 差 2.8%）—— 取下面公式后误差 ≤5%，两端都不劣化。
+DECODE_THREADS_CPU_OCR_MAX: int = 24          # stride>1：逻辑核 3/4，上限 24
+DECODE_THREADS_CPU_OCR_STRIDE1_MAX: int = 12  # stride==1：逻辑核 1/3，上限 12
 # 并行双 ONNX 实例的启动门限（OCR 线程数 ≥ 此值才默认拆两个实例）
 OCR_INSTANCES_MIN_THREADS: int = 8
 

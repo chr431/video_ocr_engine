@@ -548,3 +548,72 @@ v3 的短板：**CPU 明显慢于 NVDEC（8 核亲和模拟弱 CPU）时 hybrid 
 > （见第 3 条）。hybrid 转正的工程化收尾仍待做（现役为显式
 > `decode_backend="hybrid"` + 7 个 HYBRID_* env 旋钮，需决策默认值与
 > 长视频回归后再考虑默认启用）。
+
+### 下一步三目标轮（2026-08）：真跳帧证伪 / CPU+ONNX 提速 / hybrid 修复
+
+按"1. 更好的 stride（真跳帧）2. 验证 CPU+ONNX 墙钟 3. 更好的 hybrid_decode"
+三目标推进，顺序按性价比重排为 2 → 1 → 3。
+
+1. **真跳帧（目标 1）—— 实测证伪，P1-1 封板**
+   - `tools/_probe_drop_nonref.py`：码流转 Annex-B，按 `first_mb_in_slice==0`
+     切 access unit，按 `nal_ref_idc` 生成丢帧流，与全量流解码后逐帧比对。
+   - **按 `nal_ref_idc==0` 整包丢 packet 是安全的**（剩余帧与原解码逐字节一致，
+     test5 2007/2007、新三国01 2268/2268）。这推翻了 `PERFORMANCE.md` §6
+     "丢 packet 必然破坏参考关系"的封板结论——旧结论针对的是**按 pict_type
+     丢 B 帧**（High profile 下 B 帧可能 `nal_ref_idc>0` 即仍是参考帧）。
+   - **但收益只有 1.03~1.48×**（原估 2~4×）：① 采样点与参考帧都不能跳，
+     stride=8 仍要保留 57~62% 的帧；② FFmpeg 帧线程下非参考 B 帧大量落在
+     关键路径之外，线程越多越"免费"（标清 16 线程丢 43% 的帧只快 3%）。
+     折算墙钟：整集仅 -9%，而 test5 最优配置是 stride=1，**stride=1 无法跳帧**。
+   - 唯一还值钱的分支是 `skip_loop_filter=all`（1.11~1.36×，线程越多越赚，
+     与丢包叠加 1.48~1.59×），代价是输出像素变化，**须先做端到端 OCR 质量回归**。
+   - 踩坑：`ffmpeg -frames:v N` 计的是**输出**帧（用它做 skip 实验会系统性
+     低估收益）；`-f rawvideo` 计时被落盘 I/O 污染，计时必须走 `-f null`。
+
+2. **CPU+ONNX（目标 2）—— 没变慢，但白丢 28%**
+   - HEAD vs HEAD~1：`decode=cpu ocr=cpu` **-0.6%（持平）**，`ocr=auto` 且
+     TRT 不可用（回退 ONNX）**-25.3%**（该路径判据 `_ocr_on_gpu()` 只看配置
+     不看 TRT 是否真可用，之前"意外正确"）。
+   - **现役多核分支返回 `None` → 解码落到 fork 默认 8 线程**，白丢性能。
+     "多核不该给解码加线程"其实是**高段密度（OCR 受限）**场景的结论，被当成普适结论。
+   - 改为按 `sample_stride` 判段密度分档（stride>1 → 逻辑核 3/4 钳 [8,24]；
+     stride==1 → 逻辑核 1/3 钳 [8,12]）。实测：低密度 -28.7%、高密度 -3.4%
+     （且 ≥14 线程劣化，故必须分档）、标清整集 -15.4%、弱 CPU 不劣化。
+   - 新增 env 钩子 `DECODE_THREADS`（与 `OCR_THREADS` 对齐）。
+
+3. **hybrid（目标 3）—— 两个 stride 相关 bug，修复后首次跑赢单端**
+   - **Bug A（致命）**：`_producer` 的 `prev_end = fis[-1] + 1` 漏 stride。
+     "片间连续扫掠免 seek"靠 `下一片首帧 == prev_end`；stride>1 时首帧是
+     `fis[-1]+stride`，判定永远失败 → **每片一次 seek**（GPU 50~190ms/次）。
+     实测 stride=8 下 hybrid 比纯 NVDEC 慢 **38~59%**，且比任一单端独跑都慢。
+     与上一轮 `next_roi` 的 `+1` 是同一类缺陷（stride==1 时恒等，长期潜伏）。
+   - **Bug B**：速率校准的 `calib` 按**采样帧**给，stride=8 时解 40×8=320 源帧，
+     比 stride=1 贵 8 倍。改为按源帧预算（校准只取两后端速率比值，信息量等价）。
+   - 解禁 stride==1 安全门（`next_roi` 已按 stride 推进；且 stride>1 时宿主
+     校准与主循环都走 `get_batch`，不碰 `next_roi`）。
+   - **实测（3000 帧，3 轮最快；括号内为相对最佳单端）**：
+
+     | codec | stride | 纯 NVDEC | 纯 CPU | hybrid 修复前 | hybrid 修复后 |
+     |---|---:|---:|---:|---:|---:|
+     | h264  | 8 | 3.869s | 2.070s | 2.587s | **2.111s（+2%）** |
+     | HEVC  | 8 | 2.124s | 2.353s | 3.145s | **1.687s（-20.6%）** |
+     | AV1   | 8 | 2.512s | 6.644s | 3.615s | **2.086s（-17.0%）** |
+     | h264  | 1 | 3.867s | 2.739s | 2.677s | 2.735s（并列最优） |
+     | HEVC  | 1 | 2.203s | 2.995s | 2.393s | 2.361s（+7%） |
+     | AV1   | 1 | 2.609s | 6.962s | 2.641s | 2.806s（+7.6%，噪声 ±6%） |
+
+     → **HEVC/AV1 + stride>1 上 hybrid 首次跑赢最佳单端**；h264 上纯 CPU 仍最优
+     （CPU 比 NVDEC 快 ~2×，两路合起来也追不上单路 CPU）。
+   - 新增单测 `tests/test_hybrid_producer_stride.py`（桩 reader 数 seek 次数，
+     stride=1/3/8 + 交付完整性；已验证改回 `+1` 会 FAIL）。
+     注意：`__new__` 绕过构造时 `_roi` 必须手动补，否则生产者在首帧抛异常、
+     seek 计数恰好也是 1 → **假通过**。
+
+> **遗留（按性价比排序，均未做）**：
+> ① **P0-3 `auto` 后端按"编码+核数"选择**——现役 `auto` 优先 NVDEC，但 h264 上
+> CPU 软解（24~32 线程）**快约 2×**（test5 3000f stride8：gpu_yuv 3.99s vs
+> host_cpu 2.03s）。**默认用户至今拿不到 P0-1 的收益**，纯 Python、改动小、收益最大。
+> ② **P0-2 host 输入的 TRT 批走 GPU argmax 归约**——原型已验证 test5 全片 -8.4%、
+> 3000 帧 -14.2%、整集 infer -39%，逐位一致；`execute_device_argmax` 已实现，
+> 只需在 `ocr_native._call_trt_gpu` 复用到 host 路径。
+> ③ `skip_loop_filter` 的端到端 OCR 质量回归（需先动 fork 才能端到端验证）。

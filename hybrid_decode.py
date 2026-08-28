@@ -354,9 +354,19 @@ class HybridDecoder:
         n = len(self._chunks)
         # ── 速率校准（并行测速，双线程） ──
         # 多轮取中位数（HYBRID_CALIB_ROUNDS>1）：单轮测速对 NVDEC 启动抖动
-        # 敏感，速率比漂移会让分界偏向慢端；多轮中位稳定分界。成本 = 每轮
-        # 256 帧测速（双线程并行，~0.3s/轮），默认 1 轮保持现状。
-        calib = min(self._calib_frames, len(fr))
+        # 敏感，速率比漂移会让分界偏向慢端；多轮中位稳定分界。
+        #
+        # **校准预算按"源帧"计，不按"采样帧"**（stride>1 才正确）：
+        # 采样帧数 = 源帧数 / stride，若按采样帧给预算，stride=8 时
+        # HYBRID_CALIB_FRAMES=40 要解 40×8=320 源帧，比 stride=1 贵 8 倍
+        # （实测 AV1 stride=8 的校准占满 ~0.19s，是 hybrid 启动开销的大头）。
+        # 而校准只取两后端速率的**比值**，解同样多的源帧信息量等价 ——
+        # 换算回采样帧数即可，stride==1 时与旧行为逐位一致。
+        _step = max(1, int(getattr(self._ex, '_sample_stride', 1)))
+        _src_budget = max(16, self._calib_frames)
+        calib = max(6, min(len(fr), _src_budget // _step))
+        # warmup 同样按采样帧折算，避免 stride 大时预热吃掉全部计时样本
+        _warm = max(1, min(8, calib // 3))
         calib_rounds = max(1, config.env_int(
             config.HYBRID_CALIB_ROUNDS_ENV,
             config.HYBRID_CALIB_ROUNDS_DEFAULT))
@@ -365,7 +375,8 @@ class HybridDecoder:
         def _calib(tag, reader):
             try:
                 reader.seek_accurate(fr[0])
-                vals = [_measure_rate(reader, fr, self._roi, calib)
+                vals = [_measure_rate(reader, fr, self._roi, calib,
+                                      warmup=_warm)
                         for _ in range(calib_rounds)]
                 vals.sort()
                 rates[tag] = vals[len(vals) // 2]
@@ -493,6 +504,13 @@ class HybridDecoder:
         fast = (reader is self._fast_reader)
         who = "fast" if fast else "slow"
         prev_end = None
+        # 片间"连续扫掠免 seek"依赖 prev_end 与下一片首帧严格相等。
+        # 步长必须取采样网格 stride：stride>1 时下一片首帧 = fis[-1]+stride，
+        # 用 +1 会导致**每片都 seek**（GPU 50~190ms/次、CPU 35~65ms/次，
+        # 16 片 ≈ 1.6s 纯开销，实测 HEVC/AV1 stride=8 反而比纯 NVDEC 慢
+        # ~55%，且比任一单端独跑都慢）。与 next_roi 的 +1 → +stride 是
+        # 同一类缺陷（stride==1 时两者恒等，故长期未被发现）。
+        step = max(1, int(getattr(self._ex, '_sample_stride', 1)))
         while not self._stop.is_set():
             idx = self._take_chunk(who)
             if idx < 0:
@@ -521,7 +539,7 @@ class HybridDecoder:
                     ch['done'] = True
                     self._unconsumed[who] += 1
                     self._cv.notify_all()
-                prev_end = fis[-1] + 1
+                prev_end = fis[-1] + step
                 t_done = time.perf_counter()
                 ch['produce_s'] = t_done - t_chunk
                 ch['seek_s'] = t_seek

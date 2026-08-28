@@ -18,10 +18,10 @@ WORKER = r"""
 import os, sys, time, json
 sys.path.insert(0, r"D:\Repo\video_ocr_engine")
 os.environ['ENGINE_PROFILE'] = '1'
-path, roi_s, n, dbe, obe = sys.argv[1:6]
+path, roi_s, n, dbe, obe, st = sys.argv[1:7]
 roi = tuple(int(x) for x in roi_s.split(','))
 from video_ocr_engine import FieldExtractor
-ex = FieldExtractor(path, roi, frame_end=int(n), sample_stride=1,
+ex = FieldExtractor(path, roi, frame_end=int(n), sample_stride=int(st),
                     decode_backend=dbe, ocr_backend=obe, keep_crops=False)
 t0 = time.perf_counter()
 r = ex.extract()
@@ -41,13 +41,14 @@ print(json.dumps({
 """
 
 
-def run(video, roi, n, dbe, obe, env=None, reps=2):
+def run(video, roi, n, dbe, obe, env=None, reps=2, stride=1):
     e = dict(os.environ)
     if env:
         e.update(env)
     best = None
     for _ in range(reps):
-        p = subprocess.run([PY, "-c", WORKER, video, roi, str(n), dbe, obe],
+        p = subprocess.run([PY, "-c", WORKER, video, roi, str(n), dbe, obe,
+                            str(stride)],
                            capture_output=True, text=True, env=e)
         out = (p.stdout or "").strip().splitlines()
         if p.returncode != 0 or not out:
@@ -64,27 +65,34 @@ def main():
     ap.add_argument("--roi", default="843,993,948,1025")
     ap.add_argument("--frames", type=int, default=3000)
     ap.add_argument("--reps", type=int, default=2)
+    ap.add_argument("--stride", type=int, default=1)
     a = ap.parse_args()
     roi = ",".join(str(x) for x in (int(x) for x in a.roi.split(",")))
     print(f"=== hybrid A/B: {os.path.basename(a.video)} {a.frames}帧 "
-          f"stride=1 (取 {a.reps} 轮最快) ===")
+          f"stride={a.stride} (取 {a.reps} 轮最快) ===")
+    # 注：DECODE_THREADS 是引擎侧钩子（extractor._decode_num_threads 覆盖），
+    # 只作用于 decode_backend="cpu"；HYBRID_CPU_THREADS 才是 hybrid 里
+    # CPU 生产者的线程数。两者独立，不要混用（旧版这里错用了
+    # DECORD_FFMPEG_THREAD_COUNT，对 hybrid 完全无效）。
     cases = [
         ("NVDEC+TRT (默认)", "auto", "auto", {}),
-        ("CPU+TRT dcdT=24", "cpu", "auto",
-         {"DECORD_FFMPEG_THREAD_COUNT": "24"}),
-        ("hybrid  (cpuT=0→auto, dft 8)", "hybrid", "auto", {}),
-        ("hybrid  dcdT=16", "hybrid", "auto",
-         {"DECORD_FFMPEG_THREAD_COUNT": "16"}),
-        ("hybrid  dcdT=24", "hybrid", "auto",
-         {"DECORD_FFMPEG_THREAD_COUNT": "24"}),
-        ("hybrid  dcdT=24 cpuT=16", "hybrid", "auto",
-         {"DECORD_FFMPEG_THREAD_COUNT": "24", "HYBRID_CPU_THREADS": "16"}),
-        ("hybrid  dcdT=32 cpuT=24", "hybrid", "auto",
-         {"DECORD_FFMPEG_THREAD_COUNT": "32", "HYBRID_CPU_THREADS": "24"}),
+        ("CPU+TRT (引擎分档)", "cpu", "auto", {}),
+        ("hybrid  cpuT=0（现役→fork 8线程）", "hybrid", "auto", {}),
+        ("hybrid  cpuT=16", "hybrid", "auto",
+         {"HYBRID_CPU_THREADS": "16"}),
+        ("hybrid  cpuT=24", "hybrid", "auto",
+         {"HYBRID_CPU_THREADS": "24"}),
+        ("hybrid  cpuT=32", "hybrid", "auto",
+         {"HYBRID_CPU_THREADS": "32"}),
+        ("hybrid  cpuT=32 chunks=32", "hybrid", "auto",
+         {"HYBRID_CPU_THREADS": "32", "HYBRID_MAX_CHUNKS": "32"}),
+        ("hybrid  cpuT=32 chunks=64", "hybrid", "auto",
+         {"HYBRID_CPU_THREADS": "32", "HYBRID_MAX_CHUNKS": "64"}),
     ]
     base = None
     for name, dbe, obe, env in cases:
-        d = run(a.video, roi, a.frames, dbe, obe, env, reps=a.reps)
+        d = run(a.video, roi, a.frames, dbe, obe, env, reps=a.reps,
+                stride=a.stride)
         if "err" in d:
             print(f"  {name:26s}: FAIL {d['err']}")
             continue
