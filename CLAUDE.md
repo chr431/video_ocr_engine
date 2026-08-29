@@ -767,3 +767,18 @@ v3 的短板：**CPU 明显慢于 NVDEC（8 核亲和模拟弱 CPU）时 hybrid 
 剥零、哨兵、时间基准）；②账面差异能确定复现 ≠ 正确，确定性复现的可能是
 "真值错误 × 像素变化"的交集；③分歧帧必须看图归因，tools/_probe_slf_adjudicate.py
 就是为此写的拼图工具。
+
+### §8 扫描轮落地（2026-08-29 晚）：TRT 批对齐 -9.1% + hybrid 合并 + NVDEC 同步证伪
+
+按新路线图 §8 落地：①TRT 批对齐 max_batch（单 TRT 引擎分块 16→18，
+CPU+TRT 墙钟 -9.1%；**flush 步长与切片必须同步改**，首版错位静默丢段，
+文本门拦截）；②批量实例并发 README 指南（NVDEC∥CPU ~1.4×）；③hybrid ×
+GPU 管线合并（互斥门控移除；**后端判定必须精确匹配**——decord/GPU+CPU-hybrid
+以 decord/GPU 开头，前缀判断会误入 NVDEC 分支对 _Batch 取 DLPack）；
+④fork NVDEC 逐帧同步错峰（延迟 sync+unmap）——**逐位等价但无显著收益
+（-0.3~-0.5%）**，P2-2 的 0.15ms/帧固定开销推断证伪（同步隐藏在解码
+间隔内），P2-1/P2-2 收口。fork 构建加 `/utf-8`：MSVC 按 936 代码页解码
+UTF-8 源码，CJK 注释行尾字节被 GBK 配对吞掉换行（行号漂移、成员声明
+丢失）——cuda_threaded_decoder.cc 首次重编时暴露；此前各轮只增量重编
+未触及该 obj，所以从未暴露。**教训：给 UTF-8 源码的 C++ 项目配 MSVC
+构建一律加 /utf-8；改 obj 未重编过的文件时要预期"首次编译"级别的坑。**
