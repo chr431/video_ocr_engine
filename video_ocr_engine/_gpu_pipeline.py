@@ -539,8 +539,8 @@ class _GpuPipelineMixin:
             宿主同一余量规则（_content_range_to_crop）。
 
             与宿主 _crop_to_content 同判据（g > th、每列 ≥2 墨迹像素、
-            余量 10%、满宽/低对比不裁）；sharp = rep 帧 GPU analyze 的
-            std（对 yuv 已是展开后的 Y，与宿主一致）。返回
+            余量与最小收益门槛同 `_content_range_to_crop`）；sharp = rep 帧
+            GPU analyze 的 std（对 yuv 已是展开后的 Y，与宿主一致）。返回
             (x_off, crop_w) 或 None（不裁）。"""
             # ⚠️ 这里**不能**再用 `force_aspect > 0` 跳过裁切。
             # 原判据是"宽度被强制，裁切只改缩放不省宽"——那是把裁后区间
@@ -548,9 +548,12 @@ class _GpuPipelineMixin:
             # （test5 9 vs 不裁 7）。改成"裁后按整幅同一比例缩放"
             # （顺序 ⑦，GPU 侧在 process_gray_raw 里实现）后，fa>0 下
             # 裁切从"无收益"变成**显著收益**：test5 7→0、test6 17→0。
-            # fa=0 的视频裁切仍会略差（test2 52→80、test 78→127），但那些
-            # 视频的 rep 帧内容基本满宽，_content_range_to_crop 会返回 None
-            # 不裁；真被裁到的少数段落由余量 10% 兜底。
+            #
+            # fa=0 的视频由 `_content_range_to_crop` 的最小收益门槛自动
+            # 处理：紧凑 ROI 的段裁掉量通常 <10%，低于门槛 → 不裁。
+            # （旧注释称"fa=0 时裁切退化 test2 52→80、test 78→127"，那是
+            #  实验变体探针的数据，非生产路径；生产门禁实测 fa=0 的
+            #  test/test2 在门槛下与不裁持平，见 config 中的实测表。）
             if not self._ocr_autocrop:
                 return None
             if src_w <= 8 or sharp < 3.0:

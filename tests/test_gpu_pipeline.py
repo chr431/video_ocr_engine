@@ -122,6 +122,28 @@ def test_autocrop_margin_follows_config(monkeypatch):
     assert ex._content_range_to_crop(29, 69, 100) is None
 
 
+def test_autocrop_min_gain(monkeypatch):
+    # 最小收益门槛：裁掉比例低于门槛就整段不裁。
+    # 这条比"加大余量"更根本 —— 余量是全局的，为规避紧凑 ROI 的误裁而
+    # 调大会连宽 ROI 的收益一起削掉；门槛则是逐段自适应。
+    monkeypatch.setenv("OCR_ROI_AUTOCROP_MARGIN", "10")
+    monkeypatch.setenv("OCR_ROI_AUTOCROP_MIN_GAIN", "10")
+    ex = _make(rep_crop_format="gray")
+    assert ex._ocr_autocrop_min_gain == 0.10
+    w = 100
+    m = 10  # = round(100 * 10%)，由上面的 env 固定
+    # 收益足够（裁掉 20%）→ 裁
+    rng = ex._content_range_to_crop(2 * m, w - 1 - 2 * m, w)
+    assert rng is not None
+    assert (w - rng[1]) / w >= 0.10
+    # 收益不足（内容几乎满宽，裁掉 3%）→ 不裁
+    assert ex._content_range_to_crop(12, 88, w) is None
+    # 门槛为 0 时退化成"只要不满宽就裁"
+    monkeypatch.setenv("OCR_ROI_AUTOCROP_MIN_GAIN", "0")
+    ex2 = _make(rep_crop_format="gray")
+    assert ex2._content_range_to_crop(12, 88, w) is not None
+
+
 def test_gpu_pipeline_unavailable_backends(monkeypatch):
     monkeypatch.setattr(_gpu, "nvdec_available", lambda p: False)
     ex = _make(rep_crop_format="gray")

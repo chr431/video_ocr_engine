@@ -135,6 +135,11 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         self._ocr_autocrop_margin_pct = config.env_int(
             config.OCR_ROI_AUTOCROP_MARGIN_ENV,
             config.OCR_ROI_AUTOCROP_MARGIN_PCT)
+        # 最小收益门槛：裁掉比例低于此值就整段不裁 —— 紧凑 ROI 自动不裁，
+        # 避免在几乎没留白的段上承担切笔画的风险。见 config 中的实测表。
+        self._ocr_autocrop_min_gain = max(0, config.env_int(
+            config.OCR_ROI_AUTOCROP_MIN_GAIN_ENV,
+            config.OCR_ROI_AUTOCROP_MIN_GAIN_PCT)) / 100.0
         self._ocr_reorder_window = max(1, config.env_int(
             config.OCR_REORDER_WINDOW_ENV,
             config.OCR_REORDER_WINDOW_DEFAULT))

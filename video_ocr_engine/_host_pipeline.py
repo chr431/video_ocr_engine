@@ -231,15 +231,26 @@ class _HostPipelineMixin:
 
         宿主 `_crop_to_content` 与 GPU 直通（`_run_pipelined_gpu` 的
         `_autocrop_device`）共用同一余量数学，保证两条路径对同一 rep 帧
-        给出同一裁切区间。余量 `OCR_ROI_AUTOCROP_MARGIN`（占 ROI 宽 %，
-        默认 10）——**不能省**：裁太紧会改变 CTC 序列长度，实测会插入
-        多余空格。
+        给出同一裁切区间。余量 `OCR_ROI_AUTOCROP_MARGIN`（占 ROI 宽 %）。
+
+        **最小收益门槛** `OCR_ROI_AUTOCROP_MIN_GAIN`（占 ROI 宽 %，默认 10）：
+        裁掉宽度占 ROI 宽的比例低于门槛时返回 None（整段不裁）。
+
+        这一条比"加大余量"更根本。余量是全局的，为规避紧凑 ROI 的误裁而
+        调大，会连宽 ROI 的收益一起削掉（test5 裁掉量中位数：余量 10 时
+        13.2% → 余量 20 时只剩 3.8%）。而误裁**只发生在"微裁"段** ——
+        test 在余量 10 下 72% 的段被裁、裁掉量中位数却只有 1.2%，61 段
+        误裁全在这些段里；test5/test6 裁掉 13% 且零误裁。
+        有了门槛后，紧凑 ROI 自动几乎不裁、宽 ROI 照裁，两者不再需要折中。
         """
         m = max(1, int(round(w * self._ocr_autocrop_margin_pct / 100.0)))
         lo = max(0, int(first) - m)
         hi = min(w, int(last) + 1 + m)
         if lo == 0 and hi == w:
             return None
+        if getattr(self, "_ocr_autocrop_min_gain", 0.0) > 0.0:
+            if (w - (hi - lo)) / w < self._ocr_autocrop_min_gain:
+                return None          # 收益太小：不值得承担切笔画的风险
         return lo, hi - lo
 
     def _crop_to_content(self, crop):
