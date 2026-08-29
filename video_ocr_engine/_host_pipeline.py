@@ -226,6 +226,22 @@ class _HostPipelineMixin:
 
     # ═══════════════ OCR 输入宽度自适应裁切 ═══════════════
 
+    def _content_range_to_crop(self, first: int, last: int, w: int):
+        """「有墨迹列范围」→ 裁切区间 (x_off, crop_w)；满宽返回 None。
+
+        宿主 `_crop_to_content` 与 GPU 直通（`_run_pipelined_gpu` 的
+        `_autocrop_device`）共用同一余量数学，保证两条路径对同一 rep 帧
+        给出同一裁切区间。余量 `OCR_ROI_AUTOCROP_MARGIN`（占 ROI 宽 %，
+        默认 10）——**不能省**：裁太紧会改变 CTC 序列长度，实测会插入
+        多余空格。
+        """
+        m = max(1, int(round(w * self._ocr_autocrop_margin_pct / 100.0)))
+        lo = max(0, int(first) - m)
+        hi = min(w, int(last) + 1 + m)
+        if lo == 0 and hi == w:
+            return None
+        return lo, hi - lo
+
     def _crop_to_content(self, crop):
         """按二值图的"有墨迹列范围"裁掉两侧空白（宽 ROI 字幕省 OCR 计算）。
 
@@ -263,12 +279,11 @@ class _HostPipelineMixin:
         cols = _np.nonzero((g > self._bin_thresh).sum(axis=0) >= 2)[0]
         if len(cols) == 0:
             return crop
-        m = max(1, int(round(w * self._ocr_autocrop_margin_pct / 100.0)))
-        lo = max(0, int(cols[0]) - m)
-        hi = min(w, int(cols[-1]) + 1 + m)
-        if lo == 0 and hi == w:
+        rng = self._content_range_to_crop(int(cols[0]), int(cols[-1]), w)
+        if rng is None:
             return crop
-        return crop[:, lo:hi]
+        lo, cw = rng
+        return crop[:, lo:lo + cw]
 
     def _start_ocr_session(self, _ocr_engines: list | None = None) -> dict:
         """启动一个可跨多个切片持续复用的 OCR 会话。
@@ -396,17 +411,36 @@ class _HostPipelineMixin:
                         and getattr(engines[0], '_trt', None) is not None
                         and getattr(self, '_gpu_pipeline_mode', False)]
                     if raw_sel:
+                        # 跨批按「裁后内容宽」分组（与宿主裁切路径同一策略）：
+                        # 顺序分批时每批几乎必有满宽成员 → pad 宽被顶回全宽，
+                        # 裁切收益归零；把宽度相近的段分到同一批才真的降下来。
+                        # 6 元组 dev = (owner, ptr, h, w, x_off, crop_w)。
+                        if self._ocr_reorder_window > 1:
+                            raw_sel.sort(
+                                key=lambda i: (b_devs[i][5]
+                                               if len(b_devs[i]) >= 6
+                                               else b_devs[i][3]))
                         # 把 raw 任务交给 infer 线程异步执行，避免 OCR worker
                         # 被 GPU 预处理 + TRT 同步阻塞。载荷 = (force_aspect,
-                        # infos)——raw 内核需按 force_aspect 决定 content 宽。
-                        infos = [(d[1], d[2], d[3], d[0])
-                                 for d in (b_devs[i] for i in raw_sel)]
-                        if not _put_infer((
-                                [b_idx[i] for i in raw_sel],
-                                [b_reps[i] for i in raw_sel], None,
-                                [b_fracs[i] for i in raw_sel],
-                                (float(self._force_aspect), infos))):
-                            return
+                        # infos)——raw 内核按 force_aspect / 逐项区间决定内容宽。
+                        # 按批大小拆子批投递：pad 宽 = 子批内最大内容宽
+                        # （与宿主裁切路径的子批结构一致）。
+                        for s in range(0, len(raw_sel), B):
+                            chk = raw_sel[s:s + B]
+                            infos = []
+                            for i in chk:
+                                d = b_devs[i]
+                                if len(d) >= 6:
+                                    infos.append((d[1], d[2], d[3], d[0],
+                                                  int(d[4]), int(d[5])))
+                                else:
+                                    infos.append((d[1], d[2], d[3], d[0]))
+                            if not _put_infer((
+                                    [b_idx[i] for i in chk],
+                                    [b_reps[i] for i in chk], None,
+                                    [b_fracs[i] for i in chk],
+                                    (float(self._force_aspect), infos))):
+                                return
                     host_sel = [
                         i for i in range(len(b_crops))
                         if b_crops[i] is not None]

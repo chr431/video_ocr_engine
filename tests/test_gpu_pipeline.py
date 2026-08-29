@@ -69,9 +69,33 @@ def test_gpu_pipeline_ocr_cpu_host_by_default(gpu_ok):
     assert ex._gpu_pipeline_enabled() is False
 
 
-def test_gpu_pipeline_requires_nvdec_decode(gpu_ok):
+def test_gpu_pipeline_cpu_decode_enabled_p13(gpu_ok, monkeypatch):
+    # P1-3 解耦：decode_backend="cpu"（显式 CPU 软解）+ TRT → GPU 管线
+    # （每批 H2D 进 GPU 分段/raw OCR，CPU 解码收益与零拷贝 OCR 叠加）
     ex = _make(gray_output=True, decode_backend="cpu")
+    assert ex._gpu_pipeline_enabled() is True
+    # CPU 解码分支跳过 NVDEC 探测：nvdec_available 为假也应启用
+    monkeypatch.setattr(_gpu, "nvdec_available", lambda p: False)
+    assert _make(gray_output=True, decode_backend="cpu")._gpu_pipeline_enabled() is True
+
+
+def test_gpu_pipeline_hybrid_excluded(gpu_ok):
+    # hybrid 与 GPU 管线互斥（HybridDecoder 交付宿主数组，自有门控）
+    ex = _make(gray_output=True, decode_backend="hybrid")
     assert ex._gpu_pipeline_enabled() is False
+
+
+def test_content_range_to_crop_margin_math():
+    # 宿主 _crop_to_content 与 GPU 直通共用的余量数学（margin 10%）：
+    # lo = max(0, first-m)、hi = min(w, last+1+m)、满宽 → None（不裁）。
+    ex = _make(gray_output=True)
+    assert ex._content_range_to_crop(0, 99, 100) is None      # 满宽
+    assert ex._content_range_to_crop(2, 97, 100) is None      # 加余量后满宽
+    assert ex._content_range_to_crop(20, 79, 100) == (10, 80)
+    assert ex._content_range_to_crop(50, 50, 100) == (40, 21)
+    # 下限钳制：余量不小于 1px
+    ex2 = FieldExtractor("dummy.mp4", (0, 0, 4, 2), gray_output=True)
+    assert ex2._content_range_to_crop(2, 2, 4) == (1, 3)
 
 
 def test_gpu_pipeline_unavailable_backends(monkeypatch):

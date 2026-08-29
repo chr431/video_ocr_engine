@@ -289,8 +289,26 @@ class HybridDecoder:
         nt_kw = {}
         if cpu_threads and cpu_threads > 0:
             nt_kw['num_threads'] = cpu_threads
-        from decord import cpu as _cpu
-        self._cpu = ex._open_decord_reader(_cpu(0), {}, **nt_kw)
+        # CPU reader 后台打开：与构造后到 hybrid_begin 之间的工作
+        # （fps 读取/帧序列/分片生成）以及 hybrid_begin 里**不依赖 CPU
+        # reader 的 GPU 端测速**重叠。实测（2026-08-29，热缓存）打开近零
+        # 成本、墙钟持平 —— 路线图"打开 ~0.12s"估算未复现；改动结构性
+        # 严格不劣（冷缓存/慢盘首次打开兜底）故保留。打开失败在
+        # hybrid_begin 里上抛（校准失败同为 hybrid_begin 的既有失败面；
+        # GPU reader 已成功打开的前提下 CPU 打开失败实际不可达）。
+        self._cpu = None
+        self._cpu_open_err: list = []
+
+        def _open_cpu() -> None:
+            try:
+                from decord import cpu as _cpu
+                self._cpu = self._ex._open_decord_reader(_cpu(0), {},
+                                                         **nt_kw)
+            except Exception as e:  # noqa: BLE001
+                self._cpu_open_err.append(e)
+
+        self._cpu_thread = threading.Thread(target=_open_cpu, daemon=True)
+        self._cpu_thread.start()
 
         self._stop = threading.Event()
         self._err = []
@@ -386,11 +404,24 @@ class HybridDecoder:
                     self._err.append(e)
 
         ths = []
-        for tag, reader in (("gpu", self._gpu), ("cpu", self._cpu)):
-            t = threading.Thread(target=_calib, args=(tag, reader),
-                                 daemon=True)
-            t.start()
-            ths.append(t)
+        # GPU 测速不依赖 CPU reader → 立即启动，与后台打开 CPU reader 重叠；
+        # CPU 测速等打开完成后再跑（见 __init__ 的后台打开注释）。
+        t = threading.Thread(target=_calib, args=("gpu", self._gpu),
+                             daemon=True)
+        t.start()
+        ths.append(t)
+
+        def _calib_cpu_when_ready() -> None:
+            self._cpu_thread.join()
+            if self._cpu_open_err:
+                with self._cv:
+                    self._err.append(self._cpu_open_err[0])
+                return
+            _calib("cpu", self._cpu)
+
+        t = threading.Thread(target=_calib_cpu_when_ready, daemon=True)
+        t.start()
+        ths.append(t)
         for t in ths:
             t.join()
         if self._err:

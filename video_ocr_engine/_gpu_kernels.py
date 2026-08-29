@@ -51,9 +51,16 @@ extern "C" __global__ void prep(
 
 extern "C" __global__ void prep_gray_raw(
     const unsigned char* __restrict__ raw,
+    const int* __restrict__ xoffs,
+    const int* __restrict__ crop_ws,
+    const int* __restrict__ content_ws,
     float* __restrict__ out,
     int B, int src_h, int src_w,
-    int dst_h, int dst_w, int content_w, float gamma) {
+    int dst_h, int dst_w, float gamma) {
+    // 逐项宽度裁切（P0-4 GPU 直通）：xoffs[b]/crop_ws[b] = 该帧参与 OCR 的
+    // 源列区间 [xoff, xoff+crop_w)，content_ws[b] = 裁后按 dst_h/src_h 缩放
+    // 的目标内容宽（host 侧按宿主 _preprocess_standard 同一 int 截断式计算）。
+    // 未裁切项 xoff=0、crop_w=src_w → 与旧全宽内核逐位一致。
     int total = B * 3 * dst_h * dst_w;
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= total) return;
@@ -63,10 +70,13 @@ extern "C" __global__ void prep_gray_raw(
     int rem2 = rem % (dst_h * dst_w);
     int y = rem2 / dst_w;
     int x = rem2 % dst_w;
+    int xoff = xoffs[b];
+    int cw = crop_ws[b];
+    int content_w = content_ws[b];
     if (x >= content_w) { out[i] = 0.0f; return; }
-    double sx = (x + 0.5) * ((double)src_w / (double)content_w) - 0.5;
+    double sx = (double)xoff + (x + 0.5) * ((double)cw / (double)content_w) - 0.5;
     double sy = (y + 0.5) * ((double)src_h / (double)dst_h) - 0.5;
-    sx = fmax(0.0, fmin(sx, (double)(src_w - 1)));
+    sx = fmax((double)xoff, fmin(sx, (double)(xoff + cw - 1)));
     sy = fmax(0.0, fmin(sy, (double)(src_h - 1)));
     int x0 = (int)sx, y0 = (int)sy;
     int x1 = min(x0 + 1, src_w - 1), y1 = min(y0 + 1, src_h - 1);
@@ -113,6 +123,8 @@ extern "C" __global__ void prep_gray_raw(
         self._bases_size = 0
         self._bases_dev = None
         self._bases_buf = None
+        self._i32_size = 0
+        self._i32_dev = None
 
     def _ensure_raw(self, nbytes: int) -> int:
         from cuda.bindings import runtime as cudart
@@ -154,14 +166,30 @@ extern "C" __global__ void prep_gray_raw(
             self._out_size = nbytes
         return self._out_dev
 
+    def _ensure_i32x3(self, nbytes: int):
+        """一块 B*3*4 的 int32 设备缓冲（prep_gray_raw 的 xoffs/crop_ws/
+        content_ws 三数组连续排布，单次 H2D 上载）。返回 (dev, buf)。"""
+        from cuda.bindings import runtime as cudart
+        if self._i32_size < nbytes:
+            if self._i32_dev is not None:
+                cudart.cudaFree(self._i32_dev)
+            _err, self._i32_dev = cudart.cudaMalloc(nbytes)
+            self._i32_size = nbytes
+        return self._i32_dev, self._buffer_cls.from_handle(self._i32_dev,
+                                                           nbytes)
+
     def process_gray_raw(self, infos: list, out_width: int,
                          force_aspect: float = 0.0):
-        """处理 decord GPU 灰度帧：D2D 聚批 → GPU resize+gamma+normalize+pad。
+        """处理 GPU 灰度帧：D2D 聚批 → GPU resize+gamma+normalize+pad。
 
-        infos: [(dev_ptr, src_h, src_w, owner), ...]，frame 已位于显存。
+        infos: [(dev_ptr, src_h, src_w, owner), ...]，frame 已位于显存；
+        也接受 6 元组 (dev_ptr, src_h, src_w, owner, x_off, crop_w) ——
+        该帧只把源列区间 [x_off, x_off+crop_w) 参与缩放（P0-4 宽度自适应
+        裁切的 GPU 直通；区间由 GPU col_ink + 宿主余量规则给出）。
         force_aspect > 0：强制 OCR 输入宽 = OCR_TARGET_H × force_aspect
         （内容整体拉伸到该宽度，与宿主 _preprocess_standard 的 force_aspect
-        语义一致；边界吸附用 round）。
+        语义一致；边界吸附用 round），此时忽略逐项裁切区间（与宿主
+        _crop_to_content 的 force_aspect 跳过语义一致）。
         返回 (device_ptr, output_shape)。调用方必须保持 owner/本对象存活。
         """
         import numpy as np
@@ -170,19 +198,31 @@ extern "C" __global__ void prep_gray_raw(
         src_h = int(infos[0][1])
         src_w = int(infos[0][2])
         dst_h = int(config.OCR_TARGET_H)
+        xoffs = np.zeros(B, dtype=np.int32)
+        crop_ws = np.full(B, src_w, dtype=np.int32)
+        content_ws = np.empty(B, dtype=np.int32)
         if force_aspect and force_aspect > 0:
-            content_w = max(1, int(round(dst_h * force_aspect)))
+            content_ws[:] = max(1, int(round(dst_h * force_aspect)))
         else:
-            content_w = max(1, int(src_w * dst_h / src_h))
+            for i, t in enumerate(infos):
+                if len(t) >= 6:
+                    xo, cwid = int(t[4]), int(t[5])
+                else:
+                    xo, cwid = 0, src_w
+                xoffs[i] = xo
+                crop_ws[i] = cwid
+                # 与宿主 _preprocess_standard 的 new_w 同式（int 截断），
+                # 未裁切项与旧全宽内核的 content_w 计算逐位一致。
+                content_ws[i] = max(1, int(cwid * dst_h / src_h))
         dst_w = int(out_width)
-        if content_w > dst_w:
-            dst_w = content_w
+        if int(content_ws.max()) > dst_w:
+            dst_w = int(content_ws.max())
         raw_nbytes = B * src_h * src_w
         raw_dev = self._ensure_raw(raw_nbytes)
-        for i, (src_dev, _sh, _sw, _owner) in enumerate(infos):
+        for i, t in enumerate(infos):
             cudart.cudaMemcpyAsync(
                 raw_dev + i * src_h * src_w,
-                int(src_dev), src_h * src_w,
+                int(t[0]), src_h * src_w,
                 cudart.cudaMemcpyKind.cudaMemcpyDeviceToDevice,
                 self._stream)
         out_nbytes = B * 3 * dst_h * dst_w * 4
@@ -192,13 +232,23 @@ extern "C" __global__ void prep_gray_raw(
         total = int(np.prod(shape))
         block = 256
         grid = (total + block - 1) // block
+        i32 = np.concatenate([xoffs, crop_ws, content_ws])
+        i32_dev, i32_buf = self._ensure_i32x3(i32.nbytes)
+        cudart.cudaMemcpyAsync(
+            i32_dev, i32.ctypes.data, i32.nbytes,
+            cudart.cudaMemcpyKind.cudaMemcpyHostToDevice, self._stream)
+        bnb = B * 4
         self._launch(
             self._stream,
             self._launch_cls(grid=grid, block=block),
             self._kernel_raw,
-            self._raw_buf, self._out_buf,
+            self._raw_buf,
+            self._buffer_cls.from_handle(i32_dev, bnb),
+            self._buffer_cls.from_handle(i32_dev + bnb, bnb),
+            self._buffer_cls.from_handle(i32_dev + 2 * bnb, bnb),
+            self._out_buf,
             np.int32(B), np.int32(src_h), np.int32(src_w),
-            np.int32(dst_h), np.int32(dst_w), np.int32(content_w),
+            np.int32(dst_h), np.int32(dst_w),
             np.float32(gamma))
         return int(out_dev), shape
 
@@ -399,6 +449,45 @@ extern "C" __global__ void analyze_gray(
     }
 }
 
+extern "C" __global__ void col_ink(
+    const unsigned char* __restrict__ raw,
+    int* __restrict__ range,   // [首列, 末列]，kernel 直接写出（无需初始化）
+    int H, int W, int th) {
+    // rep 帧的「有墨迹列范围」（P0-4 GPU 直通裁切的判据输入）：每列
+    // g > th 的像素数 ≥ 2 才算有效列（抗孤立噪点），与宿主
+    // _crop_to_content 的列判据一致。单 block 256 线程跨列分片 +
+    // shared 归约；无合格列时 range = (INT_MAX, -1)（host 判 first>last
+    // → None），故无需预先初始化或原子操作。
+    __shared__ int s_first[256];
+    __shared__ int s_last[256];
+    int t = threadIdx.x;
+    int first = 0x7fffffff, last = -1;
+    for (int x = t; x < W; x += 256) {
+        const unsigned char* col = raw + x;
+        int cnt = 0;
+        for (int y = 0; y < H; ++y)
+            cnt += (col[(size_t)y * W] > th) ? 1 : 0;
+        if (cnt >= 2) {
+            if (x < first) first = x;
+            last = x;   // x 递增扫描 → last 即最新合格列
+        }
+    }
+    s_first[t] = first;
+    s_last[t] = last;
+    __syncthreads();
+    for (int s = 128; s > 0; s >>= 1) {
+        if (t < s) {
+            if (s_first[t + s] < s_first[t]) s_first[t] = s_first[t + s];
+            if (s_last[t + s] > s_last[t]) s_last[t] = s_last[t + s];
+        }
+        __syncthreads();
+    }
+    if (t == 0) {
+        range[0] = s_first[0];
+        range[1] = s_last[0];
+    }
+}
+
 extern "C" __global__ void sim_pair(
     const unsigned char* __restrict__ a,
     const unsigned char* __restrict__ b,
@@ -492,11 +581,12 @@ extern "C" __global__ void luma_nv12(
             "cubin",
             name_expressions=("analyze_gray",
                               "hist_gray_perframe", "luma_nv12",
-                              "sim_pair"))
+                              "sim_pair", "col_ink"))
         self._kernel = self._mod.get_kernel("analyze_gray")
         self._kernel_hist_pf = self._mod.get_kernel("hist_gray_perframe")
         self._kernel_luma = self._mod.get_kernel("luma_nv12")
         self._kernel_sim = self._mod.get_kernel("sim_pair")
+        self._kernel_ink = self._mod.get_kernel("col_ink")
         from cuda.bindings import runtime as cudart
         _err, self._stream = cudart.cudaStreamCreate()
         self._summary_size = 0
@@ -507,6 +597,7 @@ extern "C" __global__ void luma_nv12(
         self._histpf_dev = None
         self._luma_size = 0
         self._luma_dev = None
+        self._range_dev = None
 
     def _ensure_prev(self, nbytes: int) -> int:
         from cuda.bindings import runtime as cudart
@@ -550,6 +641,33 @@ extern "C" __global__ void luma_nv12(
             cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, self._stream)
         cudart.cudaStreamSynchronize(self._stream)
         return hists
+
+    def content_range(self, raw_ptr: int, H: int, W: int,
+                      th: int) -> "tuple[int, int] | None":
+        """rep 帧的「有墨迹列范围」(first, last)：每列 g>th 计数 ≥2 的
+        首/末列，判据与宿主 _crop_to_content 一致（P0-4 GPU 直通裁切）。
+
+        DtoH 仅 8 字节；无合格列（全空帧）返回 None。调用方必须保证
+        raw_ptr 上的帧数据在本次同步前有效（owner 存活）。
+        """
+        import numpy as np
+        from cuda.bindings import runtime as cudart
+        from cuda.core import Buffer, LaunchConfig, launch
+        if self._range_dev is None:
+            _err, self._range_dev = cudart.cudaMalloc(2 * 4)
+        launch(self._stream, LaunchConfig(grid=1, block=256),
+               self._kernel_ink,
+               Buffer.from_handle(int(raw_ptr), H * W),
+               Buffer.from_handle(self._range_dev, 2 * 4),
+               np.int32(H), np.int32(W), np.int32(int(th)))
+        out = np.empty(2, dtype=np.int32)
+        cudart.cudaMemcpyAsync(
+            out.ctypes.data, self._range_dev, 2 * 4,
+            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, self._stream)
+        cudart.cudaStreamSynchronize(self._stream)
+        if int(out[0]) > int(out[1]):
+            return None
+        return int(out[0]), int(out[1])
 
     def luma_into(self, src_ptr: int, dst_ptr: int, H: int, W: int,
                   limited: bool, B: int = 1) -> None:
