@@ -202,7 +202,26 @@ extern "C" __global__ void prep_gray_raw(
         crop_ws = np.full(B, src_w, dtype=np.int32)
         content_ws = np.empty(B, dtype=np.int32)
         if force_aspect and force_aspect > 0:
-            content_ws[:] = max(1, int(round(dst_h * force_aspect)))
+            # 顺序 ⑦「先定比例、后裁」在 GPU 上的等价写法。
+            #
+            # 朴素做法是把裁后区间**拉伸**到 forced_w（= 顺序 ⑥），这会改变
+            # 内容宽高比 → 畸变。实测（生产口径 代表帧+tol=1 误读）：
+            #   ① 不裁 7 / ⑥ 先裁再定比例 9 / **⑦ 先定比例再裁 0**（test5）
+            #   ① 17 / ⑥ 5 / **⑦ 0**（test6）
+            #
+            # ⑦ 的等价实现：整幅的缩放比例 s = forced_w / src_w，裁后区间
+            # [xoff, xoff+cwid) 按 **同一个 s** 缩放 → content_w = cwid*s。
+            # 内核里 sx 用 cw/content_w 反算源坐标，等效缩放正是 src_w/forced_w，
+            # 与"整幅先缩到 forced_w 再裁"逐点一致。
+            forced_w = max(1, int(round(dst_h * force_aspect)))
+            for i, t in enumerate(infos):
+                if len(t) >= 6:
+                    xo, cwid = int(t[4]), int(t[5])
+                else:
+                    xo, cwid = 0, src_w
+                xoffs[i] = xo
+                crop_ws[i] = cwid
+                content_ws[i] = max(1, int(cwid * forced_w / src_w))
         else:
             for i, t in enumerate(infos):
                 if len(t) >= 6:

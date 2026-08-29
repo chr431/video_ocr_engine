@@ -285,6 +285,57 @@ class _HostPipelineMixin:
         lo, cw = rng
         return crop[:, lo:lo + cw]
 
+    def _crop_after_aspect(self, img):
+        """`force_aspect > 0` 时，在**已定比例**的图上再按内容列裁。
+
+        ## 顺序很关键：必须"先定比例、后裁切"（⑦），不能"先裁再定比例"（⑥）
+        实测（生产口径：段代表帧 + 数值 tol=1 误读数）：
+
+        | 顺序 | test5 | test6 |
+        |---|---:|---:|
+        | ① 不裁（原行为） | 7 | 17 |
+        | ⑥ 先裁再定比例 | 9 | 5 |
+        | **⑦ 先定比例再裁** | **0** | **0** |
+
+        先裁会改变内容的宽高比，再拉到 force 宽度就引入畸变；先定比例则
+        force 宽度作用于完整 ROI，裁掉的只是定比例后残留的空白边。
+
+        ## 只在 force_aspect>0 时调用
+        fa=0 时裁切**反而更差**（test2 52→80、test 78→127）：
+
+        | 视频 | fa | ① 不裁 | ⑦ |
+        |---|---:|---:|---:|
+        | test5 | 1.5 | 7 | **0** |
+        | test6 | 1.5 | 17 | **0** |
+        | test2 | 0.0 | 52 | 80 ✗ |
+        | test  | 0.0 | 78 | 127 ✗ |
+
+        所以调用方只在 `force_aspect > 0` 时调本函数；fa=0 继续走
+        `_crop_to_content`（前裁，按 ROI 原图判据）。
+
+        ## 阈值必须现算
+        不能用 `self._bin_thresh`——那是**原始灰度**的阈值，而这里输入已过
+        `force_aspect` 缩放 + `gamma=2.0`，数值分布完全不同 → 对当前图现算
+        Otsu。余量数学复用 `_content_range_to_crop`，与另两条路径保持一致。
+        """
+        if not self._ocr_autocrop:
+            return img
+        import numpy as _np
+        from segmentation import _otsu
+        g = img[..., 0] if img.ndim == 3 else img
+        w = int(g.shape[1])
+        if w <= 8 or float(g.std()) < 3.0:
+            return img
+        g8 = _np.clip(g, 0, 255).astype(_np.uint8)
+        cols = _np.nonzero((g > _otsu(g8)).sum(axis=0) >= 2)[0]
+        if len(cols) == 0:
+            return img
+        rng = self._content_range_to_crop(int(cols[0]), int(cols[-1]), w)
+        if rng is None:
+            return img
+        lo, cw = rng
+        return img[:, lo:lo + cw]
+
     def _start_ocr_session(self, _ocr_engines: list | None = None) -> dict:
         """启动一个可跨多个切片持续复用的 OCR 会话。
 
@@ -468,9 +519,19 @@ class _HostPipelineMixin:
                             if self._yuv_output:
                                 c = _nv12_luma_full(
                                     c, self._color_range)[..., None]
-                            prepped.append((i, _preprocess_standard(
-                                self._crop_to_content(c),
-                                force_aspect=self._force_aspect)))
+                            if self._force_aspect and self._force_aspect > 0:
+                                # force_aspect>0：**先定比例、后裁**（顺序 ⑦）。
+                                # 反序（先裁再定比例）会因内容宽高比被改变而
+                                # 引入畸变，实测更差（test5 9 vs 0）。
+                                # 见 _crop_after_aspect 的对照表。
+                                p = _preprocess_standard(
+                                    c, force_aspect=self._force_aspect)
+                                p = self._crop_after_aspect(p)
+                            else:
+                                p = _preprocess_standard(
+                                    self._crop_to_content(c),
+                                    force_aspect=self._force_aspect)
+                            prepped.append((i, p))
                         self._prof_end('ocr', 'preprocess', _t_p)
                         # 跨批按宽度分组：pad 宽 = 批内最大宽，顺序分批时
                         # 每批都被满宽成员顶上去（实测收益 0%），只有把宽度
