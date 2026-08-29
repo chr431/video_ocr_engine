@@ -343,6 +343,20 @@ class _HostPipelineMixin:
                                 and getattr(engines[0], '_trt', None)
                                 is not None)
                 B = _ocr_batch_size()
+                # TRT 批对齐 max_batch（§8.1）：TRT 按 profile max_batch 切
+                # 子批，末批 batch 维变化前必须 cudaStreamSynchronize（TRT
+                # 不允许 in-flight 改 context 形状）——OCR_BATCH=16 在
+                # max_batch=6 下切成 6+6+4，**每个 OCR 批一次全流水同步**
+                # （实测 test5 全片 CPU+TRT：批 16→18 墙钟 -10.3%、
+                # ocr_infer -13%）。单 TRT 引擎时分块对齐到 max_batch 整倍数
+                # 即零 sync；ONNX 路径保持 B（18=16+2 切伤 ONNX_CHUNK=16
+                # 尾批，实测 +3.7%），双实例同理。
+                _trt_max = (engines[0]._trt.max_batch
+                            if (len(engines) == 1 and
+                                getattr(engines[0], '_trt', None) is not None)
+                            else 0)
+                chunk = (max(B, -(-B // _trt_max) * _trt_max)
+                         if _trt_max else B)
                 infer_q: Queue = Queue(maxsize=config.OCR_INFER_QUEUE_SIZE)
                 ocr_progress_frac = [0.0]
 
@@ -425,8 +439,8 @@ class _HostPipelineMixin:
                         # infos)——raw 内核按 force_aspect / 逐项区间决定内容宽。
                         # 按批大小拆子批投递：pad 宽 = 子批内最大内容宽
                         # （与宿主裁切路径的子批结构一致）。
-                        for s in range(0, len(raw_sel), B):
-                            chk = raw_sel[s:s + B]
+                        for s in range(0, len(raw_sel), chunk):
+                            chk = raw_sel[s:s + chunk]
                             infos = []
                             for i in chk:
                                 d = b_devs[i]
@@ -465,8 +479,8 @@ class _HostPipelineMixin:
                         # host resize 顺序，不改变 pad 宽度。
                         if self._ocr_reorder_window > 1:
                             prepped.sort(key=lambda t: t[1].shape[1])
-                        for s in range(0, len(prepped), B):
-                            chk = prepped[s:s + B]
+                        for s in range(0, len(prepped), chunk):
+                            chk = prepped[s:s + chunk]
                             if not _put_infer((
                                     [b_idx[t[0]] for t in chk],
                                     [b_reps[t[0]] for t in chk],
@@ -496,7 +510,7 @@ class _HostPipelineMixin:
                     # 攒够"重排窗口"再 flush：窗口 = 1 批时与旧行为一致。
                     # 窗口更大 → 可选出宽度更接近的同批组合，pad 更省；
                     # 代价只是 OCR 起步稍晚（吞吐不变，尾批由收尾 flush 兜住）。
-                    if len(b_idx) >= max(B, self._ocr_reorder_window):
+                    if len(b_idx) >= max(chunk, self._ocr_reorder_window):
                         flush()
                 flush()
                 for _ in infer_threads:
