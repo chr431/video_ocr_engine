@@ -224,6 +224,53 @@ def _host_segment_frames(ex, frames, stream, *, debug_tag, progress_prefix,
 class _HostPipelineMixin:
     """宿主流水线 mixin：FieldExtractor 组合本类获得 OCR 会话与宿主管线。"""
 
+    # ═══════════════ OCR 输入宽度自适应裁切 ═══════════════
+
+    def _crop_to_content(self, crop):
+        """按二值图的"有墨迹列范围"裁掉两侧空白（宽 ROI 字幕省 OCR 计算）。
+
+        判据与分段完全一致（`g > self._bin_thresh`，墨迹为亮），
+        每列墨迹数 ≥ 2 才算有效列（抗孤立噪点）。
+
+        不裁的四类情况（无收益或有风险，一律原样返回）：
+          · 关闭 / `force_aspect > 0`（宽度被强制，裁切只改缩放不省宽）
+          · 动态范围过小（std < 3，纯黑/纯白帧，Otsu 阈值无意义）
+          · 内容已占满 ROI（cols 覆盖全宽）
+          · **裁后宽度仍 ≤ 被 OCR_PAD_WIDTH_MIN(224) pad 回去的门槛** ——
+            这时 OCR 输入宽一点没降（纯亏准确率），例如 test5 的窄 ROI
+            （106×33：门槛 = 224×33/48 = 154px > ROI 全宽 106px → 恒跳过）。
+            这条守卫让本优化在窄 ROI 上**自动失效**。
+        余量 `OCR_ROI_AUTOCROP_MARGIN`（占 ROI 宽 %，默认 10）——**不能省**：
+        裁太紧会改变 CTC 序列长度，实测会插入多余空格（一致率 98% → 100%）。
+        """
+        if not self._ocr_autocrop or getattr(self, '_force_aspect', 0):
+            return crop
+        import numpy as _np
+        g = crop[..., 0] if crop.ndim == 3 else crop
+        w = int(g.shape[1])
+        h = int(g.shape[0])
+        if w <= 8 or h <= 0 or float(g.std()) < 3.0:
+            return crop
+        # 收益门槛：OCR 输入宽 = OCR_TARGET_H × (cw / h)，低于 pad 下限
+        # 会被 pad 回去 → 省不到算力，却改变了内容在输入中的占比。
+        _floor = config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(
+            getattr(self, '_ocr_model', 'v6_small'),
+            config.OCR_PAD_WIDTH_MIN)
+        _min_cw = int(_floor * h / config.OCR_TARGET_H) + 1
+        if w <= _min_cw:
+            return crop
+        cols = _np.nonzero((g > self._bin_thresh).sum(axis=0) >= 2)[0]
+        if len(cols) == 0:
+            return crop
+        m = max(1, int(round(w * self._ocr_autocrop_margin_pct / 100.0)))
+        lo = max(0, int(cols[0]) - m)
+        hi = min(w, int(cols[-1]) + 1 + m)
+        if lo == 0 and hi == w:
+            return crop
+        if (hi - lo) < _min_cw:
+            return crop          # 裁过头 → pad 回去，无收益
+        return crop[:, lo:hi]
+
     def _start_ocr_session(self, _ocr_engines: list | None = None) -> dict:
         """启动一个可跨多个切片持续复用的 OCR 会话。
 
@@ -366,17 +413,33 @@ class _HostPipelineMixin:
                         if b_crops[i] is not None]
                     if host_sel:
                         _t_p = time.perf_counter()
-                        procs = [_preprocess_standard(
-                            _nv12_luma_full(c, self._color_range)[..., None]
-                            if self._yuv_output else c,
-                            force_aspect=self._force_aspect)
-                            for c in (b_crops[i] for i in host_sel)]
+                        # 内容宽度自适应裁切（宽 ROI 字幕省卷积；见
+                        # _crop_to_content 的实测与约束说明）
+                        prepped = []
+                        for i in host_sel:
+                            c = b_crops[i]
+                            if self._yuv_output:
+                                c = _nv12_luma_full(
+                                    c, self._color_range)[..., None]
+                            prepped.append((i, _preprocess_standard(
+                                self._crop_to_content(c),
+                                force_aspect=self._force_aspect)))
                         self._prof_end('ocr', 'preprocess', _t_p)
-                        if not _put_infer((
-                                [b_idx[i] for i in host_sel],
-                                [b_reps[i] for i in host_sel], procs,
-                                [b_fracs[i] for i in host_sel], None)):
-                            return
+                        # 跨批按宽度分组：pad 宽 = 批内最大宽，顺序分批时
+                        # 每批都被满宽成员顶上去（实测收益 0%），只有把宽度
+                        # 相近的段分到同一批才真的降下来（-23.9%）。
+                        # OcrEngine.__call__ 内部虽已按宽度排序，但那只优化
+                        # host resize 顺序，不改变 pad 宽度。
+                        if self._ocr_reorder_window > 1:
+                            prepped.sort(key=lambda t: t[1].shape[1])
+                        for s in range(0, len(prepped), B):
+                            chk = prepped[s:s + B]
+                            if not _put_infer((
+                                    [b_idx[t[0]] for t in chk],
+                                    [b_reps[t[0]] for t in chk],
+                                    [t[1] for t in chk],
+                                    [b_fracs[t[0]] for t in chk], None)):
+                                return
                     b_idx.clear()
                     b_reps.clear()
                     b_crops.clear()
@@ -397,7 +460,10 @@ class _HostPipelineMixin:
                     b_crops.append(crop)
                     b_devs.append(dev)
                     b_fracs.append(frac)
-                    if len(b_idx) >= B:
+                    # 攒够"重排窗口"再 flush：窗口 = 1 批时与旧行为一致。
+                    # 窗口更大 → 可选出宽度更接近的同批组合，pad 更省；
+                    # 代价只是 OCR 起步稍晚（吞吐不变，尾批由收尾 flush 兜住）。
+                    if len(b_idx) >= max(B, self._ocr_reorder_window):
                         flush()
                 flush()
                 for _ in infer_threads:

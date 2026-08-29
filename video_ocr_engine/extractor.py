@@ -137,6 +137,17 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         self._codec = ""                 # run 时从 decoder get_codec 探测
         self._backend = ""
         self._bin_thresh = 0
+        # OCR 输入宽度自适应裁切（宽 ROI 字幕省卷积）+ 跨批按宽度分组。
+        # 详见 _host_pipeline._crop_to_content 与 config 中的实测注释。
+        self._ocr_autocrop = config.env_bool(
+            config.OCR_ROI_AUTOCROP_ENV,
+            default=config.OCR_ROI_AUTOCROP_DEFAULT)
+        self._ocr_autocrop_margin_pct = config.env_int(
+            config.OCR_ROI_AUTOCROP_MARGIN_ENV,
+            config.OCR_ROI_AUTOCROP_MARGIN_PCT)
+        self._ocr_reorder_window = max(1, config.env_int(
+            config.OCR_REORDER_WINDOW_ENV,
+            config.OCR_REORDER_WINDOW_DEFAULT))
         self._progress = progress_cb or (lambda m, p: None)
         self._cancel = cancel_check or (lambda: None)
         self.timing: dict = {}

@@ -67,6 +67,10 @@ OCR_THREADS_ENV: str = "OCR_THREADS"                            # OCR 推理线�
 OCR_BATCH_ENV: str = "OCR_BATCH"                                # OCR 批大小覆盖（值型）
 OCR_GAMMA_ENV: str = "OCR_GAMMA"                                # OCR 预处理 gamma（值型）
 OCR_PAD_SMALL_ENV: str = "OCR_PAD_SMALL"                        # OCR 输入 pad 宽下限覆盖（值型）
+# ── OCR 输入宽度自适应裁切（宽 ROI 字幕省计算）──
+OCR_ROI_AUTOCROP_ENV: str = "OCR_ROI_AUTOCROP"                  # 0 关闭宽度自适应裁切
+OCR_ROI_AUTOCROP_MARGIN_ENV: str = "OCR_ROI_AUTOCROP_MARGIN"    # 内容两侧保留余量（占 ROI 宽 %）
+OCR_REORDER_WINDOW_ENV: str = "OCR_REORDER_WINDOW"              # OCR 重排窗口（段）；0=不重排
 OCR_INSTANCES_ENV: str = "OCR_INSTANCES"                        # 0 关闭并行双 ONNX 实例
 TEXT_SEP_MERGE_ENV: str = "TEXT_SEP_MERGE"                      # 相似段合并分离模式
 DECODE_THREADS_ENV: str = "DECODE_THREADS"                      # CPU 软解 FFmpeg 帧线程数覆盖（值型；0=自动）
@@ -221,6 +225,30 @@ OCR_PAD_WIDTH_MIN_BY_MODEL: dict[str, int] = {
 # ═══════════════════ 运行参数（v2.15.1 起从代码中收敛） ═══════════════════
 # OCR 模型固定输入高度（rapidocr resize_norm_img 语义，训练尺寸）
 OCR_TARGET_H: int = 48
+# ═══════════════════ OCR 输入宽度自适应裁切 ═══════════════════
+# 宽 ROI 字幕（如整集 407×25）里，绝大多数字幕不占满宽度，空白列照样参与
+# 卷积。用分段已算好的二值图求"有墨迹的列范围"，裁掉两侧空白再喂 OCR。
+#
+# 实测（新三国01 30000帧 stride8，503 段，TRT，离线对照）：
+#   内容宽/ROI宽：min 0.05  p10 0.23  中位 0.69  p90 1.00
+#   OCR 耗时    顺序分批 -1.7%（每批仍被满宽成员顶上去，几乎没用）
+#               **按宽度排序分批 -23.9%（余量 10%）**
+#   文本一致率  余量 0% → 98.0%；5% → 99.8%；**10% → 100.0%**；20% → 100%
+# （余量 0 的差异几乎全是"插入多余空格"，如 好酒好酒好酒 → 好酒 好酒 好酒；
+#   加 10% 余量后逐位一致。均值置信度 0.52715 → 0.52683，实质不变。）
+#
+# 两个前提，缺一不可：
+#   1. **必须跨批按宽度分组**。OcrEngine.__call__ 的 pad 宽 = 批内最大宽，
+#      它虽已在批内排序，但那只优化 host resize 顺序、不改 pad 宽。
+#   2. **余量不能省**。裁太紧会改变 CTC 序列长度进而插空格。
+#
+# 自动失效的场景（无收益则不动）：
+#   · 内容宽 ≥ ROI 宽（字幕满宽）→ 不裁
+#   · 裁后宽度仍 ≤ OCR_PAD_WIDTH_MIN（224）→ pad 回去，无收益（窄 ROI 常态）
+#   · force_aspect > 0 → 宽度被强制，裁切只改变缩放不省宽 → 跳过
+OCR_ROI_AUTOCROP_DEFAULT: bool = True
+OCR_ROI_AUTOCROP_MARGIN_PCT: int = 10        # 余量 = ROI 宽的百分比（每侧）
+OCR_REORDER_WINDOW_DEFAULT: int = 64         # 重排窗口（段）；= 4 × 默认 OCR 批 16
 # 高度已接近目标时跳过 resize 的相对容差（2%）
 OCR_RESIZE_TOL: float = 0.02
 # 灰度权重（Rec.601；分段与 OCR 预处理共用，逐位一致性依赖此权重）

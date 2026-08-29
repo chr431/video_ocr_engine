@@ -127,8 +127,9 @@ class OcrEngine:
         self._trt: TrtEngine | None = None
         self._gpu_pre = None  # TRT GPU 预处理（懒加载）
         # 显存全驻留 CTC：TRT 输出在 GPU 完成 vocab 维 argmax/max，输出
-        # 不落 RAM。仅在 call_gpu_raw（GPU 分段管线）路径生效，因此默认
-        # 开启是安全的；GPU_CTC=0 显式关闭。
+        # 不落 RAM。host 输入（`_call_trt_gpu`）与 NVDEC 直通
+        # （`call_gpu_raw`）两条路径都生效，语义等价、结果逐位一致
+        # （见 docs/PERFORMANCE-ROADMAP.md P0-2）；GPU_CTC=0 显式关闭。
         self._gpu_ctc_mode = (engine_type == "tensorrt" and
                               config.env_bool(config.GPU_CTC_ENV, default=True))
         if engine_type == "tensorrt":
@@ -356,10 +357,19 @@ class OcrEngine:
 
     def _call_trt_gpu(self, img_list: list, max_wh: float,
                       h0: int) -> list:
-        """TRT：GPU 端 transpose+normalize+pad → device tensor → 推理。"""
+        """TRT：GPU 端 transpose+normalize+pad → device tensor → 推理。
+
+        GPU_CTC=1（默认）时与 `call_gpu_raw` 一致：TRT 输出在 GPU 上完成
+        vocab 维 argmax/max，DtoH 只有 (B,S) 的 idx+prob（B=16/S≈80 时
+        ~12KB），而不是整批 (B,S,18710) float32（~95MB/批，约 1300×）。
+        见 P0-2：OCR 侧 -39%，墙钟 -8%~-14%，结果逐位一致。
+        """
         self._get_gpu_pre()
         out_width = int(h0 * max_wh)
         dev_ptr, shape = self._gpu_pre.process(img_list, out_width)
+        if getattr(self, "_gpu_ctc_mode", False):
+            idx2d, prob2d = self._trt.execute_device_argmax(dev_ptr, shape)
+            return self._ctc_from_idxprob(idx2d, prob2d)
         preds = self._infer_trt_device(dev_ptr, shape)
         results: list = []
         if preds.ndim == 3:
