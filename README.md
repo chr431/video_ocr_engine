@@ -168,11 +168,12 @@ Otsu 校准、merge_similar 判定（GPU `sim_pair`；contrast 模式在边界�
 | `GPU_PIPELINE_ASYNC` | `1` 开启 GPU 分段 kernel 的异步实验路径（默认关；同步语义不变，性能待真机 A/B） |
 | `OCR_THREADS` | OCR 推理线程数覆盖（默认全物理核） |
 | `OCR_BATCH` | OCR 批大小覆盖（默认 16） |
-| `OCR_PAD_SMALL` | OCR 输入 pad 宽度下限覆盖 |
+| `OCR_PAD_SMALL` | OCR 输入 pad 宽度下限覆盖（默认 160；优先级**高于**构造参数 `fill_width`，调这个就能改 pad 下限） |
 | `OCR_GAMMA` | OCR 预处理 gamma（默认 2.0） |
-| `OCR_ROI_AUTOCROP` | `0` 关闭 OCR 输入宽度自适应裁切（宽 ROI 字幕裁掉两侧空白；默认开，窄 ROI 自动失效） |
-| `OCR_ROI_AUTOCROP_MARGIN` | 裁切时内容两侧保留的余量（占 ROI 宽 %，默认 10；调小会引入多余空格） |
+| `OCR_ROI_AUTOCROP` | `0` 关闭 OCR 输入宽度自适应裁切（默认开；按二值图内容列裁掉两侧空白，**实测提准确率 +0.8pp**） |
+| `OCR_ROI_AUTOCROP_MARGIN` | 裁切时内容两侧保留的余量（占 ROI 宽 %，默认 10；**调小会插入多余空格且准确率下降**，见 `docs/PERFORMANCE-ROADMAP.md` P0-4） |
 | `OCR_REORDER_WINDOW` | OCR 重排窗口段数（默认 64；按宽度分组才能让 pad 宽真的降下来） |
+| `DECORD_SKIP_LOOP_FILTER` | `none\|default\|noref\|bidir\|nokey\|all` 关去块滤波（默认不启用）。HEVC 实测 **-8%~-14% 墙钟**、准确率在噪声内；AV1 无效。代价是输出像素有块状伪影 → 仅 CPU 软解生效 |
 | `DECODE_THREADS` | CPU 软解 FFmpeg 帧线程数覆盖（默认按 OCR 落点 + 采样步长分档：OCR 在 GPU 取满逻辑核钳 8~32；OCR 在 CPU 时 stride>1 取逻辑核 3/4 钳 8~24、stride==1 取 1/3 钳 8~12） |
 | `TEXT_SEP_MERGE` | 相似段合并分离模式（contrast/binary/off） |
 | `HYBRID_MAX_CHUNKS` | 混合解码分片上限（默认 16） |

@@ -312,19 +312,23 @@ class OcrEngine:
                              f"{sorted(set(heights))}）")
         # 按宽度排序（rapidocr 的加速策略；结果映射回原顺序）
         order = np.argsort([im.shape[1] for im in img_list])
-        # pad 宽度 = max(批内最大宽高比, 本模型下限/OCR_TARGET_H)。速度数字
+        # pad 宽度 = max(批内最大宽高比, 模型下限/OCR_TARGET_H)。速度数字
         # 是窄图（48 高后 78-160 宽），不设下限会让 GPU 白算过多宽度；
         # v6_small 对输入宽度敏感（窄图误读升高），必须有下限。
-        # 优先级：用户 fill_width > env OCR_PAD_SMALL >
-        # config.OCR_PAD_WIDTH_MIN_BY_MODEL。
-        if self._fill_width > 0:
+        # 优先级：**env OCR_PAD_SMALL > 用户 fill_width >
+        # config.OCR_PAD_WIDTH_MIN_BY_MODEL**。
+        # ⚠️ 旧实现的顺序是 fill_width 优先，而 extractor 默认就传
+        # fill_width=DEFAULT_FILL_WIDTH(224) → **OCR_PAD_SMALL 永远轮不到**，
+        # README 里那个"OCR 输入 pad 宽下限覆盖"的旋钮其实是死的。
+        # env 是"调参覆盖"语义，必须能盖过构造参数，故提到最前。
+        _env = config.env_int(config.OCR_PAD_SMALL_ENV, 0)
+        if _env > 0:
+            _floor = _env
+        elif self._fill_width > 0:
             _floor = self._fill_width
         else:
             _floor = config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(
                 self._variant, config.OCR_PAD_WIDTH_MIN)
-            _env = config.env_int(config.OCR_PAD_SMALL_ENV, 0)
-            if _env:
-                _floor = _env
         max_wh = max(_floor / config.OCR_TARGET_H,
                      *(float(im.shape[1]) / im.shape[0] for im in img_list))
         if self._trt is not None:
@@ -391,14 +395,15 @@ class OcrEngine:
         self._get_gpu_pre()
         src_h = int(infos[0][1])
         src_w = int(infos[0][2])
-        if self._fill_width > 0:
+        # 优先级同 __call__：env OCR_PAD_SMALL > fill_width > 模型下限。
+        _env = config.env_int(config.OCR_PAD_SMALL_ENV, 0)
+        if _env > 0:
+            _floor = _env
+        elif self._fill_width > 0:
             _floor = self._fill_width
         else:
             _floor = config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(
                 self._variant, config.OCR_PAD_WIDTH_MIN)
-            _env = config.env_int(config.OCR_PAD_SMALL_ENV, 0)
-            if _env:
-                _floor = _env
         _ratio = (float(force_aspect) if force_aspect and force_aspect > 0
                   else float(src_w) / float(src_h))
         max_wh = max(_floor / config.OCR_TARGET_H, _ratio)

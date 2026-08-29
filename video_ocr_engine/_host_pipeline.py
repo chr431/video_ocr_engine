@@ -232,32 +232,33 @@ class _HostPipelineMixin:
         判据与分段完全一致（`g > self._bin_thresh`，墨迹为亮），
         每列墨迹数 ≥ 2 才算有效列（抗孤立噪点）。
 
-        不裁的四类情况（无收益或有风险，一律原样返回）：
+        不裁的三类情况（无收益或有风险，一律原样返回）：
           · 关闭 / `force_aspect > 0`（宽度被强制，裁切只改缩放不省宽）
           · 动态范围过小（std < 3，纯黑/纯白帧，Otsu 阈值无意义）
           · 内容已占满 ROI（cols 覆盖全宽）
-          · **裁后宽度仍 ≤ 被 OCR_PAD_WIDTH_MIN(224) pad 回去的门槛** ——
-            这时 OCR 输入宽一点没降（纯亏准确率），例如 test5 的窄 ROI
-            （106×33：门槛 = 224×33/48 = 154px > ROI 全宽 106px → 恒跳过）。
-            这条守卫让本优化在窄 ROI 上**自动失效**。
         余量 `OCR_ROI_AUTOCROP_MARGIN`（占 ROI 宽 %，默认 10）——**不能省**：
         裁太紧会改变 CTC 序列长度，实测会插入多余空格（一致率 98% → 100%）。
+
+        ⚠️ **不要再补"裁后宽度会被 pad 回 OCR_PAD_WIDTH_MIN 就跳过"的守卫。**
+        曾有一版守卫，前提是"省不到算力就别冒准确率风险"；用真值复核证明
+        前提错了 —— 裁切让输入更贴近模型训练分布（文字填满图像），
+        **即使省不到算力也能提准确率**：
+
+        | 视频 | 不裁 | 有守卫（窄 ROI 被全跳过 = 不裁） | 无守卫（裁切生效） |
+        |---|---:|---:|---:|
+        | test5（h264 7223帧） | 97.951% | 97.951% | **98.768%（+0.82pp）** |
+        | test6（AV1 23441帧） | 98.187% | 98.187% | **99.125%（+0.94pp）** |
+
+        逐帧看：文本变化 1.2%，其中**由错变对 69 帧、由对变错 10 帧**
+        （`8日→88`、`日1→81` 是纠错；`51→S1`、`115→11S` 是新增错字）。
+        墙钟代价 +2.1% / -0.3%（≈噪声）。**净赚约 0.9pp，守卫必须去掉。**
         """
         if not self._ocr_autocrop or getattr(self, '_force_aspect', 0):
             return crop
         import numpy as _np
         g = crop[..., 0] if crop.ndim == 3 else crop
         w = int(g.shape[1])
-        h = int(g.shape[0])
-        if w <= 8 or h <= 0 or float(g.std()) < 3.0:
-            return crop
-        # 收益门槛：OCR 输入宽 = OCR_TARGET_H × (cw / h)，低于 pad 下限
-        # 会被 pad 回去 → 省不到算力，却改变了内容在输入中的占比。
-        _floor = config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(
-            getattr(self, '_ocr_model', 'v6_small'),
-            config.OCR_PAD_WIDTH_MIN)
-        _min_cw = int(_floor * h / config.OCR_TARGET_H) + 1
-        if w <= _min_cw:
+        if w <= 8 or float(g.std()) < 3.0:
             return crop
         cols = _np.nonzero((g > self._bin_thresh).sum(axis=0) >= 2)[0]
         if len(cols) == 0:
@@ -267,8 +268,6 @@ class _HostPipelineMixin:
         hi = min(w, int(cols[-1]) + 1 + m)
         if lo == 0 and hi == w:
             return crop
-        if (hi - lo) < _min_cw:
-            return crop          # 裁过头 → pad 回去，无收益
         return crop[:, lo:hi]
 
     def _start_ocr_session(self, _ocr_engines: list | None = None) -> dict:
