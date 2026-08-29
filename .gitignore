@@ -30,3 +30,5 @@ index/
 
 # Agent 工作区（会话记忆 / 中间态，非项目源码）
 .workbuddy/
+# 探针输出产物
+tools/_probe_truth_env.json

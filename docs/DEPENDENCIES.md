@@ -36,6 +36,8 @@
   （仅当 `decode_backend="auto"` 时生效；显式 `"cpu"` 参数为现行首选）。
 - `sample_stride>1` 的等差步长快速路径需要 fork ≥v0.7.12；旧版退化为逐索引
   seek，仍正确但更慢。
+- `DECORD_SKIP_LOOP_FILTER` 透传（关去块滤波，可选的速度/准确率取舍旋钮）
+  需要 fork ≥v0.7.13；旧版忽略该 env。
 
 ### onnxruntime
 - TRT/CUDA provider DLL 不通过 ORT provider 使用；TRT 由 `ocr_trt.TrtEngine`

@@ -683,3 +683,87 @@ v3 的短板：**CPU 明显慢于 NVDEC（8 核亲和模拟弱 CPU）时 hybrid 
 > 3000 帧 -14.2%、整集 infer -39%，逐位一致；`execute_device_argmax` 已实现，
 > 只需在 `ocr_native._call_trt_gpu` 复用到 host 路径。
 > ③ `skip_loop_filter` 的端到端 OCR 质量回归（需先动 fork 才能端到端验证）。
+
+### 路线图收口轮（2026-08-29）：P0-4 GPU 直通 + P1-3 解耦 + hybrid 启动重叠
+
+按 `docs/PERFORMANCE-ROADMAP.md` §0.4 完成 2/3/5 号项（实测详见
+`docs/PERFORMANCE.md` §12）：
+
+1. **P0-4' 宽度裁切扩到 GPU 直通路径**：
+   - `GpuFrameAnalyzer.content_range`（新 `col_ink` kernel，单 block 256
+     线程 shared 归约，DtoH 8 字节）：rep 帧「有墨迹列范围」；
+   - `prep_gray_raw` 支持 6 元组 infos `(ptr,h,w,owner,x_off,crop_w)`，
+     未裁项 `(0, src_w)` 与旧全宽内核**逐位一致**；content_w 用宿主
+     `_preprocess_standard` 同式（int 截断）在 host 算好传入；
+   - 余量数学收敛到 `_HostPipelineMixin._content_range_to_crop`
+     （宿主/GPU 共用，同一 rep 帧同一裁切区间）；GPU 侧跳过条件
+     （关/force_aspect/std<3/满宽）与宿主一致，std 用 GPU analyze 的
+     sharp（yuv 已是展开 Y，与宿主同值域）；
+   - `_start_ocr_session.flush()` raw 项按裁后宽度排序、按批拆子批
+     （与宿主裁切路径同策略，不分组收益归零）。
+   - 实测：宽 ROI TRT infer -7.3%、墙钟噪声内（OCR 被解码掩盖，预期）；
+     `decode=auto` vs `decode=cpu` 全片文本 503/503 一致。
+
+2. **P1-3 解耦（decode=cpu 也走 GPU 全驻留管线）**：
+   - 门控 `decode ∈ {auto, nvdec, cpu}`（cpu 显式或 NVDEC 回退都进
+     CPU 分支；hybrid 仍互斥）。CPU 分支：每批 asnumpy → 宿主灰度
+     （与宿主逐位同式）→ H2D → 同一 hist/analyze kernel；
+   - `_DevBatchPool`/`_DevBatch`/`_CpuFrameRef`：批缓冲池化（GC 归零
+     归还）。**复用安全性契约**：raw OCR（call_gpu_raw 返回前同步）与
+     sim_pair（compare_pair 同步）读完才可能归零——与 `_YFramePool` 同一
+     契约，勿在异步路径上破坏它；rep 的 keep_crops/OCR 回退走宿主切片
+     **拷贝**返回（numpy view 会钉住整批解码数组）；
+   - 设备侧恒为灰度（yuv 只上载展开 Y）；`_d2h_rep` 探测 owner 的
+     `host_crop` 属性分流（NVDEC=D2H，CPU=宿主切片）；
+   - 实测（decode=cpu）：test5 全片 -11.2%（解码批 64 vs 宿主 16 的
+     吞吐差 + 分段上 GPU）、三国30000 -1.7%、test6 AV1 +0.1%；
+     **真值 test5/test2/test6 三片 +0.00pp**（逐位一致）。
+
+3. **hybrid 第二 reader 后台打开**：CPU reader 后台线程打开，与 GPU 端
+   测速重叠；CPU 测速等打开完成。**实测本机热缓存持平**
+   （open_and_fps 0.054 vs 0.055s——路线图"打开 ~0.12s"估算未复现），
+   保留为冷缓存兜底。语义变化：CPU reader 打开失败从"构造期静默回退
+   纯 GPU"变为"hybrid_begin 上抛"（GPU 已成功打开的前提下实际不可达）。
+
+4. **不做**：P0-6 翻默认（等用户拍板）；P3'（ROI < 10 万像素判据不满足）；
+   P2-2（2/3 完成后重估，投入产出比仍不成立）。
+
+**踩坑**：`process_gray_raw` 的 D2D 聚批循环原按 4 元组解包，扩到 6 元组后
+`too many values to unpack`——改 infos 结构时所有解包点都要过一遍。
+`_probe_*_ab` 探针的 `uniq` 口径是**排除空文本**，自写探针若不排除会对不上。
+
+### P0-6 翻默认评估（2026-08-29 续）：否决——test4 有确定性准确率退化
+
+按用户判据（"无负面影响才翻默认"）用 6 片真值复核 `skip_loop_filter=all`
+（decode=cpu 走现役 GPU 管线路径）：5 片 +0.00~+0.08pp，**test4 −0.19pp
+全等 / −0.08pp 数值容错**（原 P0-6 表漏测的片）。逐帧分析
+（`tools/_probe_slf_diff.py`）：纠错 9 vs 退化 21 帧；失败模式 = 前导幽灵
+"0"（`20→020`，去块滤波关闭后 ROI 左缘弱噪声越过二值化阈值）+ 偶发丢位
+（`221→21`）。宿主管线复核 Δ 完全一致 → 纯解码像素变化所致。
+
+**决策：默认保持关闭**（env 旋钮保留；fork v0.7.13 发布透传能力）。
+方法教训：**"5 片均值 −0.01pp 噪声"曾被用来支持"无负面影响"，第 6 片
+就翻了案——均值不能替代逐片检查**；"+0.08pp 改善"说明像素变化对准确率
+是双向噪声 + 片源相关退化，本质是掷硬币换速度。
+
+### P0-6 翻案（2026-08-29 续二）：test4 抽帧视觉裁定 → 真值伪影，翻默认开
+
+用户指出 test4 真值可能有问题，要求看图。对 关≠开 65 帧（27 簇）抽帧
+逐格人工裁定（`tools/_probe_slf_adjudicate.py`，拼图在 `tools/_slf_vis/`）：
+
+- **前导零**：显示三位补零（`020`，前导 0 更暗），真值（v2.7.0 生成）剥零。
+  关滤波也漏读暗淡 0 → 账面"对"；开滤波读 `020` 更忠实 → 被记成退化。
+  f133 实拍就是 `020`（看图确凿）。
+- **白闪转场**：显示被吞（f4688 只剩 "2"、f4838 只剩 "9"），真值是语义值，
+  两路都在编造；逐格裁定开优 ≈20 帧 / 关优 ≈15 帧 / 不可裁 ≈27 帧。
+- **真值脱节**：f933 实拍 `208` 真值 `230`、f1097 实拍 `226` 真值 `248`
+  （疑遥测时间基准不同）；末帧真值 `-1` 哨兵。
+
+**最终：六片无负面影响 → 翻默认开**（`video_ocr_engine/__init__.py` 里
+`os.environ.setdefault("DECORD_SKIP_LOOP_FILTER", "all")`，opt-out 预设
+`none`；需 fork ≥v0.7.13）。注意输出格式变化：2 位速显示输出带前导零。
+
+**教训（补充）**：①"逐片看真值"仍不够——**真值本身要抽查**（版本、
+剥零、哨兵、时间基准）；②账面差异能确定复现 ≠ 正确，确定性复现的可能是
+"真值错误 × 像素变化"的交集；③分歧帧必须看图归因，tools/_probe_slf_adjudicate.py
+就是为此写的拼图工具。
