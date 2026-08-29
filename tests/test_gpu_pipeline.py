@@ -87,16 +87,39 @@ def test_gpu_pipeline_hybrid_enabled_p83(gpu_ok):
 
 
 def test_content_range_to_crop_margin_math():
-    # 宿主 _crop_to_content 与 GPU 直通共用的余量数学（margin 10%）：
-    # lo = max(0, first-m)、hi = min(w, last+1+m)、满宽 → None（不裁）。
+    # 宿主 _crop_to_content 与 GPU 直通共用的余量数学：
+    # m = max(1, round(w * margin% / 100))、lo = max(0, first-m)、
+    # hi = min(w, last+1+m)、满宽 → None（不裁）。
+    #
+    # 期望值**按 config 当前余量算出，不硬编码数字** —— 余量默认值是会调的
+    # （2026-08-30 由 10 改为 20），写死会让本测试在调参时假失败。
     ex = _make(rep_crop_format="gray")
-    assert ex._content_range_to_crop(0, 99, 100) is None      # 满宽
-    assert ex._content_range_to_crop(2, 97, 100) is None      # 加余量后满宽
-    assert ex._content_range_to_crop(20, 79, 100) == (10, 80)
-    assert ex._content_range_to_crop(50, 50, 100) == (40, 21)
+    w = 100
+    m = max(1, int(round(w * ex._ocr_autocrop_margin_pct / 100.0)))
+
+    assert ex._content_range_to_crop(0, w - 1, w) is None        # 满宽
+    # 内容离边界不足 m → 加余量后仍满宽 → 不裁
+    assert ex._content_range_to_crop(m - 1, w - m, w) is None
+    # 内容离边界足够远 → 裁到 [first-m, last+1+m)
+    first, last = m + 10, w - m - 11
+    lo, cw = ex._content_range_to_crop(first, last, w)
+    assert (lo, cw) == (first - m, last + 1 + m - (first - m))
+    # 单列内容
+    mid = w // 2
+    lo2, cw2 = ex._content_range_to_crop(mid, mid, w)
+    assert (lo2, cw2) == (mid - m, 1 + 2 * m)
     # 下限钳制：余量不小于 1px
     ex2 = FieldExtractor("dummy.mp4", (0, 0, 4, 2), rep_crop_format="gray")
     assert ex2._content_range_to_crop(2, 2, 4) == (1, 3)
+
+
+def test_autocrop_margin_follows_config(monkeypatch):
+    # 余量来自 config 且可被 env 覆盖（避免"改了默认值但没生效"的静默失败）。
+    monkeypatch.setenv("OCR_ROI_AUTOCROP_MARGIN", "30")
+    ex = _make(rep_crop_format="gray")
+    assert ex._ocr_autocrop_margin_pct == 30
+    # w=100、余量 30 → first=29 时 lo=0、hi=min(100, last+31)
+    assert ex._content_range_to_crop(29, 69, 100) is None
 
 
 def test_gpu_pipeline_unavailable_backends(monkeypatch):
