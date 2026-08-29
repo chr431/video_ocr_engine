@@ -79,10 +79,11 @@ def test_gpu_pipeline_cpu_decode_enabled_p13(gpu_ok, monkeypatch):
     assert _make(gray_output=True, decode_backend="cpu")._gpu_pipeline_enabled() is True
 
 
-def test_gpu_pipeline_hybrid_excluded(gpu_ok):
-    # hybrid 与 GPU 管线互斥（HybridDecoder 交付宿主数组，自有门控）
+def test_gpu_pipeline_hybrid_enabled_p83(gpu_ok):
+    # §8.3 合并：hybrid 走 GPU 管线 CPU 分支（消费 HybridDecoder 宿主数组，
+    # 双解码收益 + 零拷贝 OCR 叠加；原互斥门控已移除）
     ex = _make(gray_output=True, decode_backend="hybrid")
-    assert ex._gpu_pipeline_enabled() is False
+    assert ex._gpu_pipeline_enabled() is True
 
 
 def test_content_range_to_crop_margin_math():

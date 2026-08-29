@@ -331,8 +331,9 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
                 self._codec = ''
         self._remember_color_range(vr)
         # CPU+NVDEC 混合解码（decode_backend="hybrid" 显式选择，与 auto/cpu/nvdec
-        # 并列）：速率比例分界 + 两端连续扫掠（HybridDecoder v3）。
-        # 安全门仅保留架构/接口限制：未开 GPU 全驻留管线（互斥）。
+        # 并列）：速率比例分界 + 两端连续扫掠（HybridDecoder v3/v4）。
+        # NVDEC 可用即包装（GPU 全驻留管线开启时由其 CPU 分支消费宿主数组，
+        # §8.3 合并；关闭时走宿主管线，行为不变）。
         # **stride>1 已解禁**（原门控要求 stride==1，理由是 next_roi 的
         # 顺序交付语义）：next_roi 现在按 _sample_stride 推进（见
         # hybrid_decode），且 stride>1 时宿主校准与主循环都走 get_batch
@@ -342,8 +343,7 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         # NVDEC 的 HEVC/AV1 场景与纯 NVDEC 持平不退化，CPU 快于 NVDEC 的
         # h264 场景显著更快；尊重用户显式选择。NVDEC 不可用时上面已回退
         # CPU 并警告；初始化失败回退纯 GPU 不致命。
-        if (backend == 'hybrid' and label == 'GPU'
-                and not self._gpu_pipeline_enabled()):
+        if backend == 'hybrid' and label == 'GPU':
             try:
                 from hybrid_decode import HybridDecoder
                 _mc = config.env_int(config.HYBRID_MAX_CHUNKS_ENV, 16)

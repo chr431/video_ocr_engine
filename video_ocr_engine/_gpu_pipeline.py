@@ -163,10 +163,12 @@ class _GpuPipelineMixin:
         """GPU 全驻留零拷贝管线：NVDEC 直通或 CPU 解码 + H2D（P1-3）。
 
         默认（GPU_PIPELINE 未设置）启用条件（全部满足）：
-        - decode_backend ∈ {auto, nvdec, cpu}：auto/nvdec 走 NVDEC 设备
-          指针直通（NVDEC 打开失败时回退 CPU 解码分支）；cpu 显式选择
-          CPU 软解 + H2D 进 GPU 分段/OCR（P1-3 解耦——CPU 解码的墙钟
-          收益与零拷贝 OCR 不再互斥）。hybrid 仍与 GPU 管线互斥。
+        - decode_backend ∈ {auto, nvdec, cpu, hybrid}：auto/nvdec 走 NVDEC
+          设备指针直通（NVDEC 打开失败时回退 CPU 解码分支）；cpu 显式
+          选择 CPU 软解 + H2D 进 GPU 分段/OCR（P1-3 解耦——CPU 解码的
+          墙钟收益与零拷贝 OCR 不再互斥）；hybrid 走 CPU 分支消费
+          HybridDecoder 交付的宿主数组（§8.3：双解码收益 + 零拷贝 OCR
+          叠加，原互斥门控已移除）。
         - TensorRT 可用且 ocr_backend ≠ cpu —— 全程 raw 才有净收益
           （GPU 分段+ONNX 实测无优势，默认走宿主管线，配置面更简）
         - cuda-python（cuda.core / cuda.bindings）可导入
@@ -187,7 +189,7 @@ class _GpuPipelineMixin:
         self._gpu_pipeline_async = config.env_bool(
             config.GPU_PIPELINE_ASYNC_ENV, default=False)
         backend = (self._decode_backend or 'auto').lower()
-        if backend not in ('auto', 'nvdec', 'cpu'):
+        if backend not in ('auto', 'nvdec', 'cpu', 'hybrid'):
             return False
         if not _cuda_python_available():
             return False
@@ -230,7 +232,10 @@ class _GpuPipelineMixin:
         from ocr_trt import GpuFrameAnalyzer
         _t_open = time.perf_counter()
         vr = self._open_vr()
-        on_gpu = self._backend.startswith('decord/GPU')
+        # hybrid（§8.3 合并）：HybridDecoder 后端名 decord/GPU+CPU-hybrid
+        # 以 'decord/GPU' 开头，但交付的是宿主数组（无设备指针）——必须精确
+        # 匹配，否则会误入 NVDEC 分支对 _Batch 取 DLPack 崩溃。
+        on_gpu = (self._backend == 'decord/GPU')
         if self._fps is None:
             _fps = _read_fps_from_vr(vr)
             self._fps = _fps if _fps else config.DEFAULT_FPS_FALLBACK
@@ -244,6 +249,11 @@ class _GpuPipelineMixin:
             raise ValueError(
                 f"帧区间为空: frame_start={self._frame_start}, "
                 f"frame_end={end}, total={total}")
+        # hybrid 解码（§8.3）：采样帧序列就绪后生成关键帧分片并启动
+        # 双解码生产者（与宿主管线同一钩子；其后 get_batch 按全局帧序
+        # 交付，CPU 解码分支无需感知）。
+        if hasattr(vr, 'hybrid_begin'):
+            vr.hybrid_begin(frames)
         self._prof_end('producer', 'open_and_fps', _t_open)
         # OCR 会话（引擎初始化/模型加载）提前到校准前启动：worker 线程内
         # 构建引擎，与校准（前 50 帧 hist+Otsu）并行重叠；引擎就绪前
@@ -688,6 +698,10 @@ class _GpuPipelineMixin:
             self.timing['decode'] = _t_consume_end - t0
             ocr_session["finish"]()
             self.timing['ocr_tail'] = time.perf_counter() - _t_consume_end
+            try:
+                vr.close()   # HybridDecoder：显式停生产者线程；decord VR 无此方法
+            except Exception:
+                pass
         if ocr_err:
             raise ocr_err[0]
         self.timing['ocr'] = ocr_wall[0]

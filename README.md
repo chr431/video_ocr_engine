@@ -125,6 +125,28 @@ CPU 且片源为 h264 时，可手动选 `"cpu"` 获得更高软解吞吐（NVDE
 > 提供 `--roi`/`--start-frame`/`--end-frame`/`--sample-stride` 等参数，输出
 > `time_sec,text` 两列 CSV。本引擎仓库保持为通用引擎（不携带具体场景 CLI）。
 
+## 批量处理：多实例并发（多集/多视频）
+
+多个视频的批量处理建议用**多线程并发多个独立 `FieldExtractor` 实例**，
+按后端互补配对（实测 7945HX 16C32T + RTX 4060，两视频各 30000 帧 stride8，
+seg/text 与顺序完全一致）：
+
+| 配对 | 聚合加速 | 说明 |
+|---|---:|---|
+| **1×NVDEC+TRT ∥ 1×CPU+TRT** | **~1.4×** | 资源互补（GPU 硬解 + 空闲 CPU 核），互不拖累，首选 |
+| 2×CPU+TRT | ~1.4× | 靠核富余；少核机收益递减 |
+| 2×NVDEC+TRT | ~1.1× | 单 NVDEC 硬件单元，双会话互相争抢 |
+
+```python
+import threading
+threads = [threading.Thread(target=extract, args=(video, backend)) for ...]
+```
+
+要点：实例完全独立（各自 OCR 会话/TRT 上下文共存正常）；GIL 无碍
+（GPU 管线消费线程极轻）。`decode_backend="cpu"` 与 `"auto"` 混搭即可
+构成互补对。少核（≤8 核）机器收益递减，建议先小规模试测。详见
+`docs/PERFORMANCE-ROADMAP.md` §8.2 的实测表。
+
 ## 识别链
 
 1. 校准：前 `SEG_CALIB_FRAMES` 帧 Otsu 求二值化阈值（仅在变化显著时切段）。
