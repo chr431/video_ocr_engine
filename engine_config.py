@@ -14,7 +14,10 @@ import os
 import sys
 from pathlib import Path
 
-__version__ = "0.9.0"
+# 版本单一事实源：wheel 版本号（`pyproject.toml` 用 `dynamic` + `attr` 从此处
+# 读取）与运行时 `video_ocr_engine.__version__` 同源，且必须与 git tag 一致
+# —— 否则"装的到底是哪个版本"无法判断。改动本值后记得同步打 tag。
+__version__ = "0.9.1"
 
 # ═══════════════════ 环境变量助手与名称常量 ═══════════════════
 # 引擎全部 env 开关/覆写在此收敛（单一事实源）。布尔开关统一走 env_bool：
