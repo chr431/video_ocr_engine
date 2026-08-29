@@ -371,8 +371,8 @@ class HybridDecoder:
             self._starts.append(fis[0])
         n = len(self._chunks)
         # ── 速率校准（并行测速，双线程） ──
-        # 多轮取中位数（HYBRID_CALIB_ROUNDS>1）：单轮测速对 NVDEC 启动抖动
-        # 敏感，速率比漂移会让分界偏向慢端；多轮中位稳定分界。
+        # 单轮测速。多轮取中位（原 HYBRID_CALIB_ROUNDS）实测净负已删除
+        # （3 轮 -21%：~0.68s 成本 > 分界精度收益）。
         #
         # **校准预算按"源帧"计，不按"采样帧"**（stride>1 才正确）：
         # 采样帧数 = 源帧数 / stride，若按采样帧给预算，stride=8 时
@@ -385,19 +385,16 @@ class HybridDecoder:
         calib = max(6, min(len(fr), _src_budget // _step))
         # warmup 同样按采样帧折算，避免 stride 大时预热吃掉全部计时样本
         _warm = max(1, min(8, calib // 3))
-        calib_rounds = max(1, config.env_int(
-            config.HYBRID_CALIB_ROUNDS_ENV,
-            config.HYBRID_CALIB_ROUNDS_DEFAULT))
         rates: dict = {}
 
         def _calib(tag, reader):
             try:
                 reader.seek_accurate(fr[0])
-                vals = [_measure_rate(reader, fr, self._roi, calib,
-                                      warmup=_warm)
-                        for _ in range(calib_rounds)]
-                vals.sort()
-                rates[tag] = vals[len(vals) // 2]
+                # 单轮测速：多轮取中位（HYBRID_CALIB_ROUNDS）实测净负
+                # （3 轮 -21%：~0.68s 测速成本 > 分界精度收益，
+                # 见 docs/PERFORMANCE.md §10.5），0.9.0 删除。
+                rates[tag] = _measure_rate(reader, fr, self._roi, calib,
+                                           warmup=_warm)
             except Exception as e:
                 rates[tag] = 0.0
                 with self._cv:

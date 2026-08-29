@@ -176,8 +176,6 @@ class _GpuPipelineMixin:
 
         env GPU_PIPELINE：'0' 显式关闭；'1' 强制尝试（跳过 TRT 要求，
         允许 GPU 分段+ONNX 等实验组合）；不设置 = 上述默认规则。
-        GPU_PIPELINE_ASYNC：实验开关（默认关）——GPU 分段 kernel 的
-        同步点改异步（见 _gpu_kernels async 路径），默认同步语义不变。
         """
         _env = _os.environ.get(config.GPU_PIPELINE_ENV)
         if _env is not None:
@@ -186,8 +184,6 @@ class _GpuPipelineMixin:
             forced = True
         else:
             forced = False
-        self._gpu_pipeline_async = config.env_bool(
-            config.GPU_PIPELINE_ASYNC_ENV, default=False)
         backend = (self._decode_backend or 'auto').lower()
         if backend not in ('auto', 'nvdec', 'cpu', 'hybrid'):
             return False
@@ -267,7 +263,6 @@ class _GpuPipelineMixin:
 
         calib_n = min(config.SEG_CALIB_FRAMES, len(frames))
         roi_kw = (x1, y1, x2 + 1, y2 + 1)
-        _async = getattr(self, '_gpu_pipeline_async', False)
         analyzer = GpuFrameAnalyzer()
         yuv = self._yuv_output
         if on_gpu:
@@ -324,7 +319,7 @@ class _GpuPipelineMixin:
         # 灰度图像并在内部做直方图——传错曾产生"直方图的直方图"垃圾阈值。
         calib_gray_dev = (calib_gray if on_gpu else calib_owner.ptr)
         _hist_mat = analyzer.histograms_perframe(
-            calib_gray_dev, calib_n, src_h, src_w, async_mode=_async)
+            calib_gray_dev, calib_n, src_h, src_w)
         ths = [_otsu_from_hist(_hist_mat[k]) for k in range(calib_n)]
         th = _otsu_median_threshold(ths)
         self._bin_thresh = th
@@ -353,9 +348,7 @@ class _GpuPipelineMixin:
                         max(B, DECODE_BATCH) * fnb)
                     _fill_prev(prev_buf, gray_base, B, fnb, prev_single)
                     return analyzer.analyze_batch(
-                        gray_base, prev_buf, B, H, W, th,
-                        async_mode=getattr(self, '_gpu_pipeline_async',
-                                           False)), fnb
+                        gray_base, prev_buf, B, H, W, th), fnb
 
                 # ── 校准帧整批分析（yuv 已在外部提取 Y → calib_gray）──
                 B = calib_n
@@ -442,8 +435,7 @@ class _GpuPipelineMixin:
                     cudart.cudaMemcpyAsync(
                         prev_buf + k * _fnb, src, _fnb, _d2d, analyzer._stream)
                 sums = analyzer.analyze_batch(
-                    calib_owner.ptr, prev_buf, calib_n, src_h, src_w, th,
-                    async_mode=getattr(self, '_gpu_pipeline_async', False))
+                    calib_owner.ptr, prev_buf, calib_n, src_h, src_w, th)
                 for k in range(calib_n):
                     yield (frames[k],
                            (_CpuFrameRef(calib_owner, k),
@@ -483,9 +475,7 @@ class _GpuPipelineMixin:
                             prev_buf + k * _fnb, src, _fnb, _d2d,
                             analyzer._stream)
                     sums = analyzer.analyze_batch(
-                        base, prev_buf, B, src_h, src_w, th,
-                        async_mode=getattr(self, '_gpu_pipeline_async',
-                                           False))
+                        base, prev_buf, B, src_h, src_w, th)
                     for k in range(B):
                         yield (frames[bstart + k],
                                (_CpuFrameRef(owner, k),
@@ -593,8 +583,7 @@ class _GpuPipelineMixin:
                 ap, bp = int(a_dev[1]), int(b_dev[1])
             try:
                 mad, chg = analyzer.compare_pair(
-                    ap, bp, src_h, src_w, self._bin_thresh, use_bin,
-                    async_mode=getattr(self, '_gpu_pipeline_async', False))
+                    ap, bp, src_h, src_w, self._bin_thresh, use_bin)
             finally:
                 # 池帧引用释放（GC 归还）
                 ya = yb = None

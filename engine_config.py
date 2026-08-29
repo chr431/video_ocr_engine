@@ -14,7 +14,7 @@ import os
 import sys
 from pathlib import Path
 
-__version__ = "0.8.1"
+__version__ = "0.9.0"
 
 # ═══════════════════ 环境变量助手与名称常量 ═══════════════════
 # 引擎全部 env 开关/覆写在此收敛（单一事实源）。布尔开关统一走 env_bool：
@@ -62,7 +62,6 @@ def env_float(name: str, default: float) -> float:
 
 
 # 解码 / OCR / 分段
-DECORD_FORCE_CPU_ENV: str = "DECORD_FORCE_CPU"                  # 1 强制 CPU 解码（旧钩子）
 OCR_THREADS_ENV: str = "OCR_THREADS"                            # OCR 推理线程数覆盖（值型）
 OCR_BATCH_ENV: str = "OCR_BATCH"                                # OCR 批大小覆盖（值型）
 OCR_GAMMA_ENV: str = "OCR_GAMMA"                                # OCR 预处理 gamma（值型）
@@ -75,8 +74,7 @@ OCR_INSTANCES_ENV: str = "OCR_INSTANCES"                        # 0 关闭并行
 TEXT_SEP_MERGE_ENV: str = "TEXT_SEP_MERGE"                      # 相似段合并分离模式
 DECODE_THREADS_ENV: str = "DECODE_THREADS"                      # CPU 软解 FFmpeg 帧线程数覆盖（值型；0=自动）
 # 实验/诊断开关
-GPU_PIPELINE_ENV: str = "GPU_PIPELINE"                          # 0 关闭 GPU 全驻留管线
-GPU_PIPELINE_ASYNC_ENV: str = "GPU_PIPELINE_ASYNC"              # 1 开启 GPU 分段 kernel 异步实验路径
+GPU_PIPELINE_ENV: str = "GPU_PIPELINE"                          # 0 关闭 GPU 全驻留管线；1 强制（含 GPU 分段+ONNX 实验组合）
 GPU_CTC_ENV: str = "GPU_CTC"                                    # 0 关闭 TRT 输出 GPU 归约
 ENGINE_PROFILE_ENV: str = "ENGINE_PROFILE"                      # 1 开启引擎级性能剖面
 TRT_SUBPROBE_ENV: str = "TRT_SUBPROBE"                          # 1 开启 TRT 子相位探针
@@ -103,13 +101,13 @@ HYBRID_MAX_CHUNK_FRAMES_ENV: str = "HYBRID_MAX_CHUNK_FRAMES"
 HYBRID_SLOW_INFLIGHT_ENV: str = "HYBRID_SLOW_INFLIGHT"
 HYBRID_SLOW_DISCOUNT_ENV: str = "HYBRID_SLOW_DISCOUNT"
 HYBRID_CALIB_FRAMES_ENV: str = "HYBRID_CALIB_FRAMES"
-HYBRID_CALIB_ROUNDS_ENV: str = "HYBRID_CALIB_ROUNDS"
 # v4 默认值（解析收敛：调用点统一走 env_int / env_float，勿再各自解析）
 HYBRID_SLOW_INFLIGHT_DEFAULT: int = 4      # 慢端预取上限（片）
 HYBRID_SLOW_DISCOUNT_DEFAULT_CPU: float = 0.45  # 慢端=CPU 软解稳态折扣
 HYBRID_SLOW_DISCOUNT_DEFAULT_GPU: float = 0.85  # 慢端=NVDEC 稳态折扣
 HYBRID_CALIB_FRAMES_DEFAULT: int = 40      # 速率校准帧数（弱 CPU 下压缩固定开销）
-HYBRID_CALIB_ROUNDS_DEFAULT: int = 1       # 校准轮数（>1 取中位数更稳，成本 ~0.3s/轮）
+# 注：HYBRID_CALIB_ROUNDS（多轮校准取中位）已于 0.9.0 删除——实测净负
+# （3 轮 -21%：~0.68s 测速成本 > 分界精度收益），见 docs/PERFORMANCE.md §10.5。
 # ═══════════════════ CPU 软解线程预算（按 OCR 是否在 GPU 分档）═══════════════
 # 背景：decord fork 在引擎不显式传 num_threads 时，CPU 解码线程数落到
 # DECORD_FFMPEG_THREAD_COUNT = clamp(hw/4, 2, 8)（fork 源码

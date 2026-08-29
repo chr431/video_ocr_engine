@@ -782,3 +782,28 @@ UTF-8 源码，CJK 注释行尾字节被 GBK 配对吞掉换行（行号漂移�
 丢失）——cuda_threaded_decoder.cc 首次重编时暴露；此前各轮只增量重编
 未触及该 obj，所以从未暴露。**教训：给 UTF-8 源码的 C++ 项目配 MSVC
 构建一律加 /utf-8；改 obj 未重编过的文件时要预期"首次编译"级别的坑。**
+
+### 0.9.0 清理轮（2026-08-29）：删除已证实无收益的实验钩子，API 收干净
+
+按"遗留实验性钩子证实无收益即删除，只在文档留痕"的决策执行（版本
+0.8.1 → **0.9.0**，破坏性变更）：
+
+- **`GPU_PIPELINE_ASYNC`**（env + GpuFrameAnalyzer 三个 kernel 方法的
+  `async_mode` 参数 + 门控副作用）：NVDEC 分支与 CPU 解码分支两轮实测
+  均无收益（第二次 3 轮交错 min -0.6% 噪声）→ 删除。
+- **`HYBRID_CALIB_ROUNDS`**（env + hybrid_begin 多轮循环）：实测净负
+  （3 轮 -21%，~0.68s 成本 > 分界收益）→ 删除，单轮测速写死。
+- **merge_similar 的 `contrast` 分离模式**（`TEXT_SEP_MERGE=contrast/1`
+  归一为 binary；`_text_sep_gray` 的 contrast 分支 + `_box_blur` +
+  GPU `_similar_device` 的边界 D2H 路径）：实验入口无净收益 → 删除；
+  `TEXT_SEP_MERGE` 仅剩 binary/off。
+- **`DECORD_FORCE_CPU`**（旧钩子，`decode_backend` 参数化后废弃满两个
+  版本）→ 删除。
+- **构造参数 `gray_output` / `yuv_output`**（0.7.0 标 deprecated，两个
+  版本已过）→ 删除，一律 `rep_crop_format`。
+- **保留**（非"无收益实验"）：`GPU_PIPELINE=1` 强制模式（无 TRT 环境的
+  管线验证入口 + e2e gpu_onnx 配置）、`HYBRID_MAX_CHUNK_FRAMES`（防御性，
+  真实超长 GOP 场景生效，单测覆盖）、全部诊断开关（ENGINE_PROFILE /
+  TRT_SUBPROBE / DEBUG_BOUNDS / HYBRID_PROBE*）、全部调参 env。
+- 删除的钩子在 README「实验/诊断」节尾与 docs/PERFORMANCE.md 留痕；
+  再想实验这些方向时先看文档再重写。

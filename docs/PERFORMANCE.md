@@ -716,3 +716,19 @@ opt-out 预设 `none`）。行为提示：2 位速显示会输出带前导零的
 其他死路新记录（§0.3）：ONNX 动态 INT8（20× 劣化+输出尽毁）、
 GPU_PIPELINE_ASYNC 用于 CPU 分支（噪声）、CPU 解码批 >64（膝点）、
 col-ink 每段同步（零成本）。
+
+### 12.7 0.9.0 清理轮：已证实无收益的钩子删除留痕（2026-08-29）
+
+以下钩子/代码路径已从代码中删除，本节为唯一索引（防止重复实现）：
+
+- `GPU_PIPELINE_ASYNC`（env + kernel `async_mode` 参数）：NVDEC 分支
+  3.281 vs 3.278s（§4 底层重构轮）、CPU 解码分支 -0.6%（3 轮交错）——
+  两分支均无收益。
+- `HYBRID_CALIB_ROUNDS`：3 轮中位 vs 单轮 = 3.879 vs 3.203s（-21%），
+  ~0.68s/轮成本 > 分界精度收益（§10.5 实验⑤）。
+- merge_similar `contrast` 分离模式（`_text_sep_gray` contrast 分支 +
+  `_box_blur` + GPU 边界 D2H 路径）：对比实验无净收益（CLAUDE.md
+  "相似段合并的分离模式"节）。
+- `DECORD_FORCE_CPU` env：`decode_backend` 参数化后的旧钩子，废弃满
+  两个版本（0.7.0 → 0.9.0）。
+- 构造参数 `gray_output` / `yuv_output`：0.7.0 标 deprecated，0.9.0 删除。

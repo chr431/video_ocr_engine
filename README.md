@@ -104,10 +104,8 @@ CPU 且片源为 h264 时，可手动选 `"cpu"` 获得更高软解吞吐（NVDE
 > `rep_crop_format` 决定：默认 `"yuv"` = packed NV12（`video_utils.nv12_to_rgb`
 > 转 RGB 预览，BT.601 limited 矩阵，仅代表帧调用、毫秒级）；`"gray"` = 灰度。
 > `keep_crops=False` 时自动退化为 `gray` 解码输出（省 UV 传输）。
-> 旧参数 `gray_output` / `yuv_output` 保留为 deprecated 别名
-> （`yuv_output=True` ≡ `rep_crop_format="yuv"`；`gray_output=True` ≡
-> `rep_crop_format="gray"`；两者均未设置时的新默认是 `"yuv"`——旧默认 RGB
-> 已移除）。
+> （0.7.0 的 deprecated 别名 `gray_output` / `yuv_output` 已于 0.9.0 删除，
+> 一律使用 `rep_crop_format`。）
 
 ## 分频采样（sample_stride 参数）
 
@@ -203,7 +201,7 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 | `OCR_REORDER_WINDOW` | OCR 重排窗口段数（默认 64；按宽度分组才能让 pad 宽真的降下来） |
 | `DECORD_SKIP_LOOP_FILTER` | **默认 `all`**（引擎 import 时 setdefault，2026-08-29 起）：CPU 软解关去块滤波，HEVC **-13%~-18% 墙钟**、h264 -5%~-13%、AV1 无效；NVDEC 不受影响。六片真值 + test4 逐帧**视觉裁定**确认对 OCR 无负面影响（5 片 +0.00~+0.08pp；test4 账面 −0.19pp 系真值伪影——显示为三位补零 `020`、真值剥零，视觉裁定按显示忠实度关滤波反而略优）。注意：显示为 2 位数字时输出会带前导零（`020`，更忠实于显示），下游字符串匹配需注意；rep_crop 预览有块状伪影。**关闭：预先设置 `DECORD_SKIP_LOOP_FILTER=none`**。需 decord fork ≥v0.7.13 |
 | `DECODE_THREADS` | CPU 软解 FFmpeg 帧线程数覆盖（默认按 OCR 落点 + 采样步长分档：OCR 在 GPU 取满逻辑核钳 8~32；OCR 在 CPU 时 stride>1 取逻辑核 3/4 钳 8~24、stride==1 取 1/3 钳 8~12） |
-| `TEXT_SEP_MERGE` | 相似段合并分离模式（contrast/binary/off） |
+| `TEXT_SEP_MERGE` | 相似段合并分离模式（binary/off；contrast 已于 0.9.0 删除） |
 | `HYBRID_MAX_CHUNKS` | 混合解码分片上限（默认 16） |
 | `HYBRID_CPU_THREADS` | 混合解码中 CPU 软解线程数（默认 0 = fork 默认 8；实测给更多反而略差——CPU 生产者与消费者、NVDEC 抢 host CPU） |
 | `HYBRID_MAX_CHUNK_FRAMES` | 混合解码单片采样帧数上限（默认 0=不拆；>0 时超限片按关键帧/等分拆小，内存上界 = inflight × 上限） |
@@ -219,13 +217,12 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 | `DEBUG_BOUNDS` | `1` 打印分段边界调试信息 |
 | `HYBRID_PROBE` | `1` 打印混合解码逐片时序（速率校准/分界/接管诊断） |
 | `HYBRID_PROBE_CSV` | 设为 CSV 路径时，`HYBRID_PROBE` 逐片时序另落盘一份明细 |
-| `HYBRID_CALIB_ROUNDS` | 混合解码速率校准轮数（默认 1；>1 取中位数更稳，但每轮约 +0.3s 成本） |
 
-### 已废弃/兼容（勿再依赖）
-
-| 变量 | 说明 |
-|------|------|
-| `DECORD_FORCE_CPU` | 旧强制 CPU 解码钩子；仅 `decode_backend="auto"` 时兼容生效，请改用 `decode_backend="cpu"` |
+> 0.9.0 清理删除的钩子（历史结论见 docs/PERFORMANCE.md）：`GPU_PIPELINE_ASYNC`
+>（GPU 分段异步实验，NVDEC/CPU 分支均无收益）、`HYBRID_CALIB_ROUNDS`
+>（多轮校准，实测 -21% 净负）、`DECORD_FORCE_CPU`（旧钩子，用
+> `decode_backend="cpu"`）、merge_similar 的 `contrast` 分离模式。
+> 构造参数 `gray_output` / `yuv_output` 同时删除。
 
 内部实现（`engine_config` 常量、`_gpu_pipeline` 门控等）不在本表；如需深入，
 以 `engine_config.py` 为唯一事实源。

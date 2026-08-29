@@ -195,36 +195,18 @@ def _preprocess_standard(crop: "np.ndarray", force_aspect: float = 0.0,
     return resized
 
 
-def _box_blur(img: "np.ndarray", k: int) -> "np.ndarray":
-    """纯 numpy 盒式模糊（用 sliding_window_view，无需 cv2/scipy）。"""
-    if k <= 1:
-        return img.astype(np.float32).copy()
-    pad = k // 2
-    p = np.pad(img, pad, mode="edge")
-    win = np.lib.stride_tricks.sliding_window_view(p, (k, k))
-    return win.mean(axis=(2, 3)).astype(np.float32)
-
-
-def _text_sep_gray(gray: "np.ndarray", mode: str = "contrast",
+def _text_sep_gray(gray: "np.ndarray", mode: str = "binary",
                    th: "int | None" = None) -> "np.ndarray":
-    """从背景中分离字幕文字的灰度图（实验）。
+    """从背景中分离字幕文字的灰度图（merge_similar 判定用）。
 
-    mode:
-      - "contrast"：局部背景估计 + 绝对差分，突出文字笔画/边缘；
-      - "binary"：用阈值把文字变白、背景变黑。
+    mode 仅支持 "binary"：用阈值把文字变白、背景变黑。
+    （contrast 模式——局部背景估计 + 绝对差分——实验证实无净收益，
+    0.9.0 清理删除，历史见 docs/PERFORMANCE.md。）
     """
     g = gray.astype(np.float32)
-    if mode == "binary":
-        if th is None:
-            th = int(np.mean(g))
-        return np.where(g > th, 255.0, 0.0).astype(np.float32)
-    k = max(9, min(31, int(round(gray.shape[0] * 0.6 / 2) * 2 + 1)))
-    bg = _box_blur(g, k)
-    sep = np.abs(g - bg)
-    p95 = float(np.percentile(sep, 95))
-    if p95 > 1.0:
-        sep = np.clip(sep / p95 * 255.0, 0.0, 255.0)
-    return sep.astype(np.float32)
+    if th is None:
+        th = int(np.mean(g))
+    return np.where(g > th, 255.0, 0.0).astype(np.float32)
 
 
 @lru_cache(maxsize=64)

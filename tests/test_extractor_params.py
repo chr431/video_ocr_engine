@@ -84,20 +84,20 @@ def test_merge_similar_default_on_and_custom():
     assert ex._merge_similar_threshold == 3.0
     assert ex._merge_text_sep == "binary"
     ex2 = _make(merge_similar=False, merge_similar_threshold=5.0,
-                merge_text_sep="contrast")
+                merge_text_sep="off")
     assert ex2._merge_similar is False
     assert ex2._merge_similar_threshold == 5.0
-    assert ex2._merge_text_sep == "contrast"
+    assert ex2._merge_text_sep == "off"
 
 
 def test_rep_crop_format_resolution_and_alias():
     # 新默认 = "yuv"（旧 gray_output=False 曾是 RGB，内部已无 RGB 链路）
     assert _make()._rep_crop_format == "yuv"
     assert _make()._yuv_output is True
-    # yuv_output=True / gray_output=True 为 deprecated 别名
-    assert _make(yuv_output=True)._rep_crop_format == "yuv"
-    assert _make(gray_output=True)._rep_crop_format == "gray"
-    assert _make(gray_output=True)._yuv_output is False
+    # rep_crop_format="yuv" / rep_crop_format="gray" 为 deprecated 别名
+    assert _make(rep_crop_format="yuv")._rep_crop_format == "yuv"
+    assert _make(rep_crop_format="gray")._rep_crop_format == "gray"
+    assert _make(rep_crop_format="gray")._yuv_output is False
     # rep_crop_format 显式优先
     assert _make(rep_crop_format="gray")._rep_crop_format == "gray"
     assert _make(rep_crop_format="yuv")._rep_crop_format == "yuv"

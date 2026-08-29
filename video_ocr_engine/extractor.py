@@ -62,8 +62,6 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
       高级（默认即最优，改动前读 docs/PERFORMANCE.md）—— buffer_size /
       fill_width / C（分段聚类阈值，默认取 engine_config.SEG_C）/
       merge_similar_threshold。
-    已废弃别名（勿再使用）：gray_output / yuv_output —— rep_crop_format
-    的旧名（yuv_output=True≡"yuv"；gray_output=True≡"gray"）。
     内部链恒为单通道灰度（yuv420 时取 Y 平面、否则 decord gray），不再输出
     RGB 帧；代表帧像素格式由 rep_crop_format 决定（"yuv"=packed NV12 默认 /
     "gray"），外部用 nv12_to_rgb 转 RGB。
@@ -78,8 +76,7 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
                  buffer_size: int | None = None, fill_width: int | None = None,
                  C: float | None = None,
                  sample_stride: int = config.DEFAULT_SAMPLE_STRIDE,
-                 progress_cb=None, cancel_check=None, gray_output: bool = False,
-                 yuv_output: bool = False,
+                 progress_cb=None, cancel_check=None,
                  rep_crop_format: str | None = None,
                  keep_crops: bool = True,
                  keep_frames: bool = True,
@@ -109,13 +106,7 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         # 灰度（不产 RGB 帧——RGB→灰度在解码侧/fork 内完成）：
         #   "yuv"  —— packed NV12（默认；内部只取 Y 平面，外部 nv12_to_rgb 转 RGB）
         #   "gray" —— 灰度
-        # 旧参数 gray_output / yuv_output 保留为 deprecated 别名：
-        #   yuv_output=True  → "yuv"；gray_output=True → "gray"；
-        #   两者均 False（旧默认 = RGB）→ 新默认 "yuv"（行为变更，见 README）。
-        fmt = (rep_crop_format or '').strip().lower()
-        if not fmt:
-            fmt = 'yuv' if yuv_output else ('gray' if gray_output else
-                                            config.DEFAULT_REP_CROP_FORMAT)
+        fmt = (rep_crop_format or '').strip().lower() or config.DEFAULT_REP_CROP_FORMAT
         if fmt not in ('yuv', 'gray'):
             raise ValueError(
                 f"rep_crop_format 必须为 'yuv' 或 'gray'，收到 {fmt!r}")
@@ -123,7 +114,6 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         # 实际 decord 输出格式：keep_crops=False 时无 UV 平面需求 → 直接 gray
         #（省 0.5B/px 解码转换/传输）；yuv420 仅在 keep YUV 时启用。
         self._yuv_output = bool(self._keep_crops and fmt == 'yuv')
-        self._gray_output = not self._yuv_output   # deprecated 兼容别名
         self._keep_frames = bool(keep_frames)
         self._merge_similar = bool(merge_similar)
         self._merge_similar_threshold = (
@@ -189,15 +179,16 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
 
     def _merge_effective_mode(self) -> str:
         """merge_similar 使用的分离模式（env 钩子优先级与 _segments_similar
-        一致）：'contrast' | 'binary' | ''（原始灰度比较）。"""
+        一致）：'binary' | ''（原始灰度比较）。contrast 模式已移除
+        （实验证实无净收益，0.9.0 清理；历史见 docs/PERFORMANCE.md）。"""
         _m = _os.environ.get(
             config.TEXT_SEP_MERGE_ENV, self._merge_text_sep or ''
         ).strip().lower()
-        if _m in ('1', 'contrast'):
-            return 'contrast'
         if _m in ('2', 'binary'):
             return 'binary'
-        return ''
+        if _m in ('off', ''):
+            return ''
+        return 'binary'   # contrast/未知值 → 引擎默认 binary
 
     def _segments_similar(self, a, b) -> bool:
         """相似段判定：平均绝对差小 且 显著变化像素占比也小。
@@ -207,10 +198,7 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         分离模式由 _merge_effective_mode 决定（binary 为引擎默认）。
         """
         _text_mode = self._merge_effective_mode()
-        if _text_mode == 'contrast':
-            a = _text_sep_gray(a, 'contrast', th=self._bin_thresh)
-            b = _text_sep_gray(b, 'contrast', th=self._bin_thresh)
-        elif _text_mode == 'binary':
+        if _text_mode == 'binary':
             a = _text_sep_gray(a, 'binary', th=self._bin_thresh)
             b = _text_sep_gray(b, 'binary', th=self._bin_thresh)
         if a is None or b is None or a.shape != b.shape:
@@ -279,8 +267,6 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
 
             auto: 尝试 GPU (NVDEC) 失败回退 CPU。cpu: 强制 CPU。
             nvdec: 强制 GPU（失败回退 CPU 并警告）。
-            旧 DECORD_FORCE_CPU env 在 backend=auto 时仍作为兼容钩子生效
-            （decode_backend 参数是现行首选，下游仍设钩子的场景保底）。
             hybrid: CPU+NVDEC 混合解码（HybridDecoder，kfe 分片双生产者竞争）；
                 NVDEC 不可用时回退 CPU 并警告；激活安全门见下方条件。
 
@@ -297,9 +283,6 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         roi = (self._roi[0], self._roi[1], self._roi[2] + 1, self._roi[3] + 1)
         roi_kw = {'roi': roi} if _has_roi_api else {}
         backend = (self._decode_backend or 'auto').lower()
-        if (backend == 'auto'
-                and config.env_bool(config.DECORD_FORCE_CPU_ENV)):
-            backend = 'cpu'
         vr = None
         label = 'CPU'
         if backend in ('auto', 'nvdec', 'hybrid'):
