@@ -12,7 +12,7 @@
 
 ## 安装
 
-### 直接使用源码（推荐，也被 RaceVideoToLog 以 submodule 方式挂载）
+### 直接使用源码（推荐；生产项目以 pip 依赖 + git tag 锁定，submodule 已于 2026-08-30 废弃）
 
 引擎仓库根目录即 Python 源码根目录，把本目录加入 `PYTHONPATH` / `sys.path` 即可：
 
@@ -85,7 +85,7 @@ for seg in result.segments:
 CPU 且片源为 h264 时，可手动选 `"cpu"` 获得更高软解吞吐（NVDEC h264 解码器约
 2Gp/s 上限，FFmpeg CPU 解码器最多可利用约 13 核）；弱 CPU / HEVC / AV1 场景仍
 建议保持 `auto` 或 `nvdec`。（auto 不自动选 CPU 是刻意决策：按编码/核数的静态
-判据不可靠、判错代价成倍，见 `docs/PERFORMANCE-ROADMAP.md` P0-3。）
+判据不可靠、判错代价成倍，见 `docs/PERFORMANCE.md` §16.2 P0-3。）
 
 `decode_backend="hybrid"` 是**实验性功能**：同一实例内 NVDEC 与 CPU 软解并行
 解码（动态分界：慢端在"不拖尾"约束下尽量多分片，快端从头连续扫掠、扫完
@@ -160,7 +160,7 @@ threads = [threading.Thread(target=extract, args=(video, backend)) for ...]
 要点：实例完全独立（各自 OCR 会话/TRT 上下文共存正常）；GIL 无碍
 （GPU 管线消费线程极轻）。`decode_backend="cpu"` 与 `"auto"` 混搭即可
 构成互补对。少核（≤8 核）机器收益递减，建议先小规模试测。详见
-`docs/PERFORMANCE-ROADMAP.md` §8.2 的实测表。
+`docs/PERFORMANCE.md` §16.8.2 的实测表。
 
 ## 识别链
 
@@ -224,14 +224,14 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 | `OCR_BATCH` | OCR 批大小覆盖（默认 16） |
 | `OCR_PAD_SMALL` | OCR 输入 pad 宽度下限覆盖（未设置时由构造参数 `fill_width` 决定，默认 224；此 env 优先级**高于**构造参数，调这个就能改 pad 下限） |
 | `OCR_GAMMA` | OCR 预处理 gamma（默认 2.0） |
-| `OCR_ROI_AUTOCROP` | `0` 关闭 OCR 输入宽度自适应裁切（默认开；按二值图内容列裁掉两侧空白，**实测提准确率 +0.8pp**） |
-| `OCR_ROI_AUTOCROP_MARGIN` | 裁切时内容两侧保留的余量（占 ROI 宽 %，默认 10；**调小会插入多余空格且准确率下降**，见 `docs/PERFORMANCE-ROADMAP.md` P0-4） |
+| `OCR_ROI_AUTOCROP` | `0` 关闭 OCR 输入宽度自适应裁切（默认开；按二值图内容列裁掉两侧空白，生产门禁 5 视频原始误读 **148 → 124**；真值口径四片均值 +0.82pp，**该 pp 值测于 pad 160 时代，pad 已回退 224，勿直接引用**） |
+| `OCR_ROI_AUTOCROP_MARGIN` | 裁切时内容两侧保留的余量（占 ROI 宽 %，默认 10；**调小会插入多余空格且准确率下降**，见 `docs/PERFORMANCE.md` §16.2 P0-4） |
 | `OCR_REORDER_WINDOW` | OCR 重排窗口段数（默认 64；按宽度分组才能让 pad 宽真的降下来） |
-| `DECORD_SKIP_LOOP_FILTER` | **显式 opt-in**（2026-08-30 起，默认**不设置**——import 不再改写进程级 env）：设为 `all` 开启 CPU 软解关去块滤波，须在打开解码器前设置。收益：HEVC **-13%~-18% 墙钟**、h264 -5%~-13%、AV1 无效；NVDEC 不受影响。六片真值 + test4 逐帧**视觉裁定**确认对 OCR 无负面影响（5 片 +0.00~+0.08pp；test4 账面 −0.19pp 系真值伪影——显示为三位补零 `020`、真值剥零，视觉裁定按显示忠实度关滤波反而略优）。注意：显示为 2 位数字时输出会带前导零（`020`，更忠实于显示），下游字符串匹配需注意；rep_crop 预览有块状伪影。需 decord fork ≥v0.7.13 |
+| `DECORD_SKIP_LOOP_FILTER` | **显式 opt-in**（2026-08-30 起，默认**不设置**——import 不再改写进程级 env）：设为 `all` 开启 CPU 软解关去块滤波，须在打开解码器前设置。收益：HEVC **-8.3%~-14.3% 墙钟**、h264 -0.6%~-4.2%、AV1 无效（-0.2%）；NVDEC 不受影响。六片真值 + test4 逐帧**视觉裁定**确认对 OCR 无负面影响（5 片 +0.00~+0.08pp；test4 账面 −0.19pp 系真值伪影——显示为三位补零 `020`、真值剥零，视觉裁定按显示忠实度关滤波反而略优）。注意：显示为 2 位数字时输出会带前导零（`020`，更忠实于显示），下游字符串匹配需注意；rep_crop 预览有块状伪影。需 decord fork ≥v0.7.13 |
 | `DECODE_THREADS` | CPU 软解 FFmpeg 帧线程数覆盖（默认按 OCR 落点 + 采样步长分档：OCR 在 GPU 取满逻辑核钳 8~32；OCR 在 CPU 时 stride>1 取逻辑核 3/4 钳 8~24、stride==1 取 1/3 钳 8~12） |
 | `TEXT_SEP_MERGE` | 相似段合并分离模式（binary/off；contrast 已于 0.9.0 删除） |
 | `HYBRID_MAX_CHUNKS` | 混合解码分片上限（默认 16） |
-| `HYBRID_CPU_THREADS` | 混合解码中 CPU 软解线程数（默认 0 = fork 默认 8；实测给更多反而略差——CPU 生产者与消费者、NVDEC 抢 host CPU） |
+| `HYBRID_CPU_THREADS` | 混合解码中 CPU 软解线程数（默认 0 = **按核数自动**：逻辑核×3/4 钳 [8, 24]，32 核机取 24）。⚠️ 旧版注释称「给更多反而略差」是**错的**（无归档依据，实测方向相反）：交错 5 轮 A/B 实测 8 → 24 线程墙钟 **−8.6%**、`decode` **−14.4%**，两分布完全分离，段数与唯一文本不变；32 线程略差于 24（过订阅）。见 `docs/PERFORMANCE.md` §17.2 |
 | `HYBRID_MAX_CHUNK_FRAMES` | 混合解码单片采样帧数上限（默认 0=不拆；>0 时超限片按关键帧/等分拆小，内存上界 = inflight × 上限） |
 
 ### 实验/诊断（排查问题时用）
@@ -257,12 +257,14 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 
 ## 文档
 
-- [性能调优记录](docs/PERFORMANCE.md) —— 现役性能基线、后端矩阵、线程预算、已锁定参数、已验证死路（**性能现状以此为准**）。
-- [性能路线图](docs/PERFORMANCE-ROADMAP.md) —— 优化项的实验过程、决策与结论索引（历史+现状混合）。
-- [历史实验档案](docs/ARCHIVE.md) —— 已删除功能/已封板实验的完整记录（**纯历史，勿当现役依据**）。
+- [性能调优记录](docs/PERFORMANCE.md) —— **性能现状以此为准**：现役性能基线、后端矩阵、
+  线程预算、已锁定参数、已验证死路；§16 为 2026-08-29 路线图归档（开头有校正表），
+  §17 为下一步候选，§18 为已删除功能的历史档案（纯历史，勿当现役依据）。
 - [依赖与运行环境](docs/DEPENDENCIES.md) —— decord fork / TensorRT / onnxruntime 版本与注意事项。
-- [设计评审](docs/DESIGN-REVIEW.md) —— 设计/使用逻辑问题清单与修复状态。
-- `CLAUDE.md` —— 开发记录与约定（维护者向，未列入 README 的历史背景在此）。
+- `CLAUDE.md` —— 开发记录与约定（维护者向）：API 演进、设计审查结论、踩坑记录。
+
+> 文档共四份（README / CLAUDE.md / PERFORMANCE.md / DEPENDENCIES.md），
+> 2026-08-30 已把一次性的路线图、设计评审、历史档案三份并入前两者并删除。
 
 ## 测试
 
@@ -305,4 +307,4 @@ python tools/e2e_smoke.py --video X --roi A --perf --runs 3 --frames 3000
 
 > 来源说明：引擎由 RaceVideoToLog（GPL-3.0）拆分而来，代码为原作者原创作品，
 > 拆分时已重新授权为 Apache-2.0。RaceVideoToLog 本身因依赖
-> PySide6-Fluent-Widgets（GPLv3）仍保持 GPL-3.0，但可自由包含本引擎（submodule）。
+> PySide6-Fluent-Widgets（GPLv3）仍保持 GPL-3.0，但可自由包含本引擎（现为 pip 依赖 + git tag 锁定）。

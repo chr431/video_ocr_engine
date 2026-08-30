@@ -99,14 +99,31 @@ def _cluster_win3(diff: np.ndarray) -> float:
 
     原 scipy.ndimage.label 连通分量对 test6 23k 边贡献 ~2.3s；且 scipy 非
     pyproject 依赖，PyInstaller 打包会连带整个 scipy 增肥 exe。本实现用
-    6 次切片错位累加求最大 3×3 窗口和（越界按 0），16µs/边，数值与
+    6 次切片错位累加求最大 3×3 窗口和（越界按 0），数值与
     uniform_filter 逐位一致（含边界，500 随机掩码最大差 0）。
     语义：真实数字变化必然产生 ≥5 像素连成 3×3 的密集簇（实测变帧恒=9）；
     噪声孤立像素的最大窗口和 < 5。C=5 下 test/test5/test6 0 漏检且段数更少。
+
+    **2026-08-30 改用 uint8**（原 int32）：窗口和的数学上界 = 9（3×3 全 1），
+    uint8 足够且不会溢出；又因 `np.bool_` 与 `np.uint8` 同为 1 字节，
+    `diff.view(np.uint8)` 是**零拷贝**（连类型转换都省掉），切片加法的内存
+    带宽降到 1/4。实测（`tools/_probe_cluster_dtype.py`，63 组随机掩码 +
+    结构化图案逐位等价）：
+
+    | ROI | 面积 | int32 | uint8 | 加速 |
+    |---|---:|---:|---:|---:|
+    | 106×33 | 3.5k px | 15.42 µs | 13.69 µs | 1.13× |
+    | 800×52 | 41.6k px | 95.33 µs | **72.48 µs** | **1.32×** |
+    | 800×200 | 160k px | 554.91 µs | **271.85 µs** | **2.04×** |
+    | 1600×600 | 960k px | 3451.00 µs | 1797.27 µs | 1.92× |
+
+    只对**宿主路径**有意义——现役默认（NVDEC+TRT）走 GPU 全驻留管线，
+    分段在 GPU 上做，不调用本函数。
     """
     if not diff.any():
         return 0.0
-    s = diff.astype(np.int32)
+    # bool 与 uint8 同为 1 字节 → view 零拷贝；非连续时退回 astype
+    s = diff.view(np.uint8) if diff.flags.c_contiguous else diff.astype(np.uint8)
     # 行向 3 列和（左右越界 0）
     c3 = s.copy()
     c3[:, 1:] += s[:, :-1]

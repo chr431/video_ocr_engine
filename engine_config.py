@@ -17,7 +17,7 @@ from pathlib import Path
 # 版本单一事实源：wheel 版本号（`pyproject.toml` 用 `dynamic` + `attr` 从此处
 # 读取）与运行时 `video_ocr_engine.__version__` 同源，且必须与 git tag 一致
 # —— 否则"装的到底是哪个版本"无法判断。改动本值后记得同步打 tag。
-__version__ = "0.10.0"
+__version__ = "0.10.1"
 
 # ═══════════════════ 环境变量助手与名称常量 ═══════════════════
 # 引擎全部 env 开关/覆写在此收敛（单一事实源）。布尔开关统一走 env_bool：
@@ -94,7 +94,17 @@ HYBRID_PROBE_CSV_ENV: str = "HYBRID_PROBE_CSV"                  # 逐片时序�
 # h264 CPU 软解吞吐可达 NVDEC 两倍以上，闲置 CPU 的正确用途是帮解码；
 # CPU 明显慢于 NVDEC（HEVC/AV1/弱 CPU）时 decode 仍可提升（8 核亲和
 # 模拟实测 h264 decode -18%、HEVC decode -3%）。
-HYBRID_CPU_THREADS_ENV: str = "HYBRID_CPU_THREADS"              # CPU reader 线程数(0=核数//2)
+HYBRID_CPU_THREADS_ENV: str = "HYBRID_CPU_THREADS"              # CPU reader 线程数；
+                                                                # 0 = 按核数自动分档（见下方 AUTO_MIN/MAX）
+# 2026-08-30：0 的历史语义是"不传 num_threads"→ 落到 fork 的
+# DECORD_FFMPEG_THREAD_COUNT=clamp(hw/4,2,8)，把 CPU 生产者钉在 8 线程。
+# 实测（docs/PERFORMANCE.md §17.2，test5 3000 帧 stride1，3 轮最快）：
+#   cpuT 0→16 = 2.166→2.084s，0→24 = 2.166→2.051s（decode 1.288→1.114s，
+#   -13.5%），0→32 = 2.077s（略差于 24：CPU 生产者与 NVDEC/消费者抢 host CPU）。
+# 故自动值取 逻辑核×3/4 钳 [8, 24]（与 _decode_num_threads 的 stride>1
+# 分档同式）。段数与唯一文本在所有档位下完全一致。
+HYBRID_CPU_THREADS_AUTO_MIN: int = 8
+HYBRID_CPU_THREADS_AUTO_MAX: int = 24
 HYBRID_MAX_CHUNKS_ENV: str = "HYBRID_MAX_CHUNKS"                # 分片上限
 # 分片粒度上限：>0 时 hybrid 分片超过该采样帧数继续拆小（内存上界 =
 # inflight × 该上限，防宽 ROI 字幕整集单大片 2000+ 帧一次性缓存在

@@ -94,19 +94,25 @@ def main():
     print("  -- 真实 ROI 尺寸 --")
     p_narrow = bench(33, 106, 7223, 0.35)      # test5 速度数字（2492/7223≈34%）
     p_wide = bench(25, 407, 9000, 0.13)         # 字幕条（1151/9178≈12%）
+    print("  -- 宽 ROI 真实场景 --")
+    # text_test（video_subtitle_extractor）：1920×1080，ROI 560,996,1360,1048
+    # = 800×52 = 41.6k px，6000 帧 233 段（段率 ≈3.9%，字幕保持型，取 0.05）
+    p_text = bench(52, 800, 6000, 0.05)
     print("  -- 大 ROI（ROI 变大时 numpy 开销随面积增长）--")
     p_big = bench(200, 800, 2000, 0.30)
     p_huge = bench(600, 1600, 500, 0.30)
 
     print("\n=== 瓶颈临界点（Python 逐帧成本 vs 解码逐帧成本）===")
-    print("  解码速率      每帧预算     窄ROI 是否瓶颈   宽ROI 是否瓶颈")
+    print("  解码速率      每帧预算    窄ROI   字幕条   text_test(41.6k px)")
     for rate in (1000, 2000, 4000, 8000, 12000, 20000):
         budget = 1e6 / rate
         f1 = "是" if p_narrow > budget * 0.5 else "否"
         f2 = "是" if p_wide > budget * 0.5 else "否"
+        f3 = "是" if p_text > budget * 0.5 else "否"
         print(f"  {rate:6d} fps  {budget:8.1f} µs   "
               f"占用 {p_narrow/budget*100:5.1f}% ({f1})   "
-              f"占用 {p_wide/budget*100:5.1f}% ({f2})")
+              f"占用 {p_wide/budget*100:5.1f}% ({f2})   "
+              f"占用 {p_text/budget*100:5.1f}% ({f3})")
 
     print("\n=== 单项：_cluster_win3（每帧一次）===")
     for (h, w) in ((33, 106), (25, 407), (200, 800), (600, 1600)):

@@ -1,19 +1,29 @@
 # 性能调优记录（video_ocr_engine）
 
-本文档从 RaceVideoToLog 拆仓时迁移，集中保留与**引擎识别链**（解码 → 像素分段 →
-代表帧 → OCR）相关的性能基线、实验结论、已锁定参数和已验证死路。RaceVideoToLog
+本文档从 RaceVideoToLog 拆仓时迁移，集中保留与**引擎识别链**（解码 → 像素分段 →  
+代表帧 → OCR）相关的性能基线、实验结论、已锁定参数和已验证死路。RaceVideoToLog  
 中的速度纠错/DP 等应用层结论不在此展开，但涉及 `engine_config.py` 的共用参数会保留。
 
-> 所有“实测”数据默认来自 RaceVideoToLog 开发机：
-> **7945HX（16 物理核 / 32 线程）+ RTX 4060 Laptop（8GB）**，Windows。
-> 测试视频为 `D:\Videos\racelog_test`（test/test2/test3/test5/test6）与
+> 所有“实测”数据默认来自 RaceVideoToLog 开发机：>   
+> **7945HX（16 物理核 / 32 线程）+ RTX 4060 Laptop（8GB）**，Windows。>   
+> 测试视频为 `D:\Videos\racelog_test`（test/test2/test3/test5/test6）与>   
 > `D:\Videos\batch_test`（标清字幕剧集）。不同机器/片源数值会变，但相对结论有效。
+
+> **2026-08-30 文档合并**：原 `docs/PERFORMANCE-ROADMAP.md` 与 `docs/ARCHIVE.md`>   
+> 已整体并入本文（分别为 §16、§18），两份文件已删除——**不再分散维护多份文档**。
+>
+> | 章节            | 性质                     | 怎么用                           |
+> | ------------- | ---------------------- | ----------------------------- |
+> | §1–§15        | 现役结论（时间顺序追加）           | 查"现在是什么样"                     |
+> | **§16** 路线图归档 | **2026-08-29 快照**      | 开头有**校正表**，7 处已被后续提交推翻，正文保持原样 |
+> | **§17** 下一步候选 | 现役待办（2026-08-30 审查）    | 动手前先看这里                       |
+> | **§18** 历史档案  | 已删除功能（dual pipeline 等） | 只看"为什么不做"，勿据此调参               |
 
 ---
 
 ## 1. 测量方法论（重要）
 
-- **A/B 必须单跑、串行**。多个 profile/bench 并行会互抢 CPU/GPU，产生 ±2s 级假象
+- **A/B 必须单跑、串行**。多个 profile/bench 并行会互抢 CPU/GPU，产生 ±2s 级假象    
   （例如 auto 曾并行测得 5.4s，单跑实为 2.8s）。
 - 引擎已支持 `ENGINE_PROFILE=1` 细粒度剖面：
   - producer：`open_and_fps / calib / decode_batch / gray / sharp / bin /
@@ -28,88 +38,93 @@
 
 ### 端到端（test5 7223 帧，decord v0.7.8 + onnxruntime 1.29）
 
-| 组合 | 耗时 |
-|---|---:|
-| CPU + CPU | 9.0s |
-| GPU + CPU | 8.6s |
-| CPU + TRT | 6.8s |
+| 组合                 |   耗时 |
+| ------------------ | ---: |
+| CPU + CPU          | 9.0s |
+| GPU + CPU          | 8.6s |
+| CPU + TRT          | 6.8s |
 | GPU + TRT（auto 默认） | 8.1s |
 | CPU+NVDEC 混合 + TRT | 7.0s |
 | CPU+NVDEC 混合 + CPU | 8.1s |
 
 ### 后端矩阵（test5 h264 / test6 AV1，16 核，2026-08-16）
 
-| 组合 | test5 h264 | test6 AV1 |
-|---|---:|---:|
-| GPU + TRT（auto，生产默认） | 7.8s | 18.0s |
-| GPU + ONNX | 8.5s | 27.4s |
-| CPU + TRT | 6.9s | 75.5s（AV1 CPU 灾难） |
-| CPU + ONNX | 9.6s | 87.4s |
+| 组合                   | test5 h264 |         test6 AV1 |
+| -------------------- | ---------: | ----------------: |
+| GPU + TRT（auto，生产默认） |       7.8s |             18.0s |
+| GPU + ONNX           |       8.5s |             27.4s |
+| CPU + TRT            |       6.9s | 75.5s（AV1 CPU 灾难） |
+| CPU + ONNX           |       9.6s |             87.4s |
 
 结论：
+
 - **h264**：CPU 软解在 16 核机器上可能比 NVDEC 更快，但不是所有机器都如此。
 - **HEVC/AV1**：CPU 软解明显更慢，GPU（NVDEC）是必须的。
 - **auto = GPU + TRT 是跨编码最稳的默认策略**；CPU+TRT 只在 h264/标清场景可能更优。
 
 ### 下游场景：video_subtitle_extractor（标清宽 ROI + 跳帧，2026-08）
 
-> **2026-08 四轮更新：gray+NVDEC+TRT 场景的默认主路径已切换为显存全驻留
-> GPU 管线**（`GPU_PIPELINE=0` 可回退宿主）。正确性与宿主逐位一致、
-> 窗口 clean 约 -10%、内存争抢下墙钟更稳定；整集 stride8 双方同受 NVDEC
-> 跳帧解码供给率限制（速度持平）。详见引擎仓 CLAUDE.md"GPU 管线转正"小节。
+> **2026-08 四轮更新：gray+NVDEC+TRT 场景的默认主路径已切换为显存全驻留>   
+> GPU 管线**（`GPU_PIPELINE=0` 可回退宿主）。正确性与宿主逐位一致、>   
+> 窗口 clean 约 -10%、内存争抢下墙钟更稳定；整集 stride8 双方同受 NVDEC>   
+> 跳帧解码供给率限制（速度持平）。详见引擎仓 CLAUDE.md"GPU 管线转正"小节。>   
 > 以下为宿主管线的历史基线数据，仍适用于 YUV 输出 / OCR=cpu 场景。
 
-测试：`D:\Videos\batch_test\新三国01.mkv`，696×424，h264，
+测试：`D:\Videos\batch_test\新三国01.mkv`，696×424，h264，  
 `stride=8`，`ROI=144,398,551,423`（约 407×25 宽 ROI）。
 
-| 方案 | 耗时 |
-|---|---:|
-| 原默认：auto 解码 + auto OCR（GPU+TRT） | ~20.8s |
-| CPU 解码 + CPU OCR（RGB） | ~19.3s |
-| CPU 解码 + TensorRT OCR（RGB） | ~15.6s |
+| 方案                                  |         耗时 |
+| ----------------------------------- | ---------: |
+| 原默认：auto 解码 + auto OCR（GPU+TRT）     |     ~20.8s |
+| CPU 解码 + CPU OCR（RGB）               |     ~19.3s |
+| CPU 解码 + TensorRT OCR（RGB）          |     ~15.6s |
 | **CPU 解码 + TensorRT OCR + gray 输出** | **~15.1s** |
-| CPU 解码 + CPU OCR + gray 输出 | ~17.8s |
+| CPU 解码 + CPU OCR + gray 输出          |     ~17.8s |
+|                                     |            |
 
 结论：
+
 - 标清 h264 + 宽 ROI + 跳帧场景，在本机（16 物理核）上 **CPU 软解比 NVDEC 更快**。
-- **机制**：NVDEC 的 h264 解码器有约 **2Gp/s 上限**；FFmpeg CPU 解码器最多可利用
+- **机制**：NVDEC 的 h264 解码器有约 **2Gp/s 上限**；FFmpeg CPU 解码器最多可利用    
   约 **13 个核心**。因此 16 核 CPU 上 h264 软解能显著超过 NVDEC。
 - **但这个结论不可泛化**：
   - 用户 CPU 较弱时，NVDEC 依然更好；
   - HEVC / AV1 即使在本机上也是 NVDEC 更好（CPU 软解只有 NVDEC 的 1/3~1/5）。
 - `gray_output=True` 能再省约 6-8%：解码直接出单通道，省掉 RGB→灰度转换与数据量。
-- 高段数视频（如新三国03，约 6500 段）TensorRT OCR 优势巨大：
+- 高段数视频（如新三国03，约 6500 段）TensorRT OCR 优势巨大：    
   CPU+CPU gray ~60s，CPU+TRT gray ~28s。
-- 因此 `video_subtitle_extractor` **默认仍保持 `decode_backend="auto"`**：
-  auto 逻辑 = 优先 NVDEC，不可用则回退 CPU。`gray_output=True` 保留为默认优化；
+- 因此 `video_subtitle_extractor` **默认仍保持 `decode_backend="auto"`**：    
+  auto 逻辑 = 优先 NVDEC，不可用则回退 CPU。`gray_output=True` 保留为默认优化；    
   强多核 CPU + h264 用户可手动选择 `cpu` 获得更好性能。
 
 ### 相似段合并（subtitle 场景的大幅加速，2026-08）
 
-高分段/高噪声字幕视频中，同一条字幕常被噪声切成大量短段，导致 OCR 重复执行。
-`FieldExtractor(merge_similar=True, merge_similar_threshold=3.0)` 会在 OCR 前比较
+高分段/高噪声字幕视频中，同一条字幕常被噪声切成大量短段，导致 OCR 重复执行。  
+`FieldExtractor(merge_similar=True, merge_similar_threshold=3.0)` 会在 OCR 前比较  
 相邻段代表帧，满足以下两个条件时合并为同一段，只 OCR 一次：
+
 1. 灰度平均绝对差 ≤ 阈值；
 2. `abs(diff)>10` 的显著变化像素占比 ≤ 1%（下限 32 像素）。
 
-条件 2 是为了防止宽 ROI 中“大部分区域未变、只有单个短字幕变化”被均值稀释后
+条件 2 是为了防止宽 ROI 中“大部分区域未变、只有单个短字幕变化”被均值稀释后  
 误判为噪声（例如“在”“不”这类单字字幕）。
 
 实测（新三国03，stride=8，CPU+TRT gray）：
+
 - 原始段数 6506 → 合并后约 1165 段（OCR 次数 -82%）
 - CPU+TRT gray：约 29.4s → **16.1s**
 - CPU+CPU gray：约 60s → **20.5s**
-- 输出字幕条数与合并前对比：仅新三国03 少 4 条，且经核对全部是同一条字幕在
+- 输出字幕条数与合并前对比：仅新三国03 少 4 条，且经核对全部是同一条字幕在    
   相邻秒的重复/空格变体；新三国04/05 的单字短字幕（“在”“不”）不再丢失。
 
-该功能默认关闭，避免影响速度数字等需要逐段精确 OCR 的场景；
+该功能默认关闭，避免影响速度数字等需要逐段精确 OCR 的场景；  
 `video_subtitle_extractor` 默认开启，并可用 `--no-merge-similar` 关闭。
 
 ---
 
 ## 3. 线程预算与分核规则
 
-- **OCR 线程 = 全部物理核**（16C32T → 16）。实测 OCR 8→16 线程：
+- **OCR 线程 = 全部物理核**（16C32T → 16）。实测 OCR 8→16 线程：    
   GPU 解码 11.3→9.0s、CPU 解码 12.8→9.5s；超物理核不再提升。
 - `OCR_THREADS` env 钩子优先（实验用）。
 - **少核 CPU 软解分核**（`CPU_CORES_SPLIT_THRESHOLD=8`）：
@@ -117,182 +132,185 @@
   - 4 核 CPU+ONNX：28.0s vs 33.1s（-15%）
   - 8 核 CPU+ONNX：17.8s vs 20.7s（-14%）
   - 16 核：分核反而差，保持 OCR 全核、FFmpeg 默认 2 帧线程落 SMT。
-- **AV1 CPU 软解**：dav1d 帧并行上限约 6.6 核；AV1+CPU 解码任何核数用
+- **AV1 CPU 软解**：dav1d 帧并行上限约 6.6 核；AV1+CPU 解码任何核数用    
   `dcd=ocrT=cores//2` 最稳（16 核 45.7s vs 12/4 的 58.5s）。
-- **双 ONNX 实例 OCR**（`OCR_INSTANCES=0` 关闭）：
-  单实例 intra-op 线程池扩展亚线性（16 线程仅 4.2×）；两个独立实例各 `ocrT//2`
-  线程并发取批，纯吞吐 313→355 段/s（+15-18%），RSS +~200MB。显式 OCR=cpu 且
+- **双 ONNX 实例 OCR**（`OCR_INSTANCES=0` 关闭）：    
+  单实例 intra-op 线程池扩展亚线性（16 线程仅 4.2×）；两个独立实例各 `ocrT//2`    
+  线程并发取批，纯吞吐 313→355 段/s（+15-18%），RSS +~200MB。显式 OCR=cpu 且    
   核数≥8 时默认启用。
-- **decode batch / FFmpeg 线程进一步扫描**（2026-08 补充）：
-  `DECODE_BATCH_SIZE` 32/64、FFmpeg 解码线程 4 在标清宽 ROI 跳帧场景无收益，
+- **decode batch / FFmpeg 线程进一步扫描**（2026-08 补充）：    
+  `DECODE_BATCH_SIZE` 32/64、FFmpeg 解码线程 4 在标清宽 ROI 跳帧场景无收益，    
   维持现状。
 
 ---
 
-## 4. 已删除的混合解码 / 混合 OCR（历史结论，档案见 docs/ARCHIVE.md §A）
+## 4. 已删除的混合解码 / 混合 OCR（历史结论，档案见本文 §18.A）
 
-> **状态（2026-08 归档）**：v1 混合解码 / TRT+ONNX 混合 OCR 的实验记录已
-> 整体迁移至 `docs/ARCHIVE.md`（§A），本节只保留状态摘要。
-> 现役：CPU+NVDEC 混合解码为 **v3/v4（速率比例分界 + 两端连续扫掠，
-> `hybrid_decode.py`）**，激活条件 = 显式 `decode_backend="hybrid"` +
-> NVDEC 可用 + stride==1 + 未开 GPU 全驻留管线；编码门控（AV1 回退）已
+> **状态（2026-08 归档）**：v1 混合解码 / TRT+ONNX 混合 OCR 的实验记录已>   
+> 整体迁移至本文 §18.A，本节只保留状态摘要。>   
+> 现役：CPU+NVDEC 混合解码为 **v3/v4（速率比例分界 + 两端连续扫掠，>   
+> `hybrid_decode.py`）**，激活条件 = 显式 `decode_backend="hybrid"` +>   
+> NVDEC 可用 + stride==1 + 未开 GPU 全驻留管线；编码门控（AV1 回退）已>   
 > 移除。TRT+ONNX 混合 OCR 保持删除。
 
 ### 4.4b CPU+NVDEC 混合解码 v2 退化根因与 v3 重写（2026-08，探针实测；v3 现役）
 
-v2（kfe 共享队列竞争）在 CPU 慢于 NVDEC 时退化（用户报告"总体被 CPU 拖累、
-甚至不如单独 NVDEC"）。用 HYBRID_PROBE=1 逐片时序探针定位（HEVC test.mp4，
+v2（kfe 共享队列竞争）在 CPU 慢于 NVDEC 时退化（用户报告"总体被 CPU 拖累、  
+甚至不如单独 NVDEC"）。用 HYBRID_PROBE=1 逐片时序探针定位（HEVC test.mp4，  
 CPU 465fps vs GPU 2132fps）：
 
-1. **交替领取**：FIFO 竞争 + 共享 in-flight 令牌使分片在 GPU/CPU 间严格交替
-   （GPU 拿 #0,2,4,6,8,9；CPU 拿 #1,3,5,7,10）。消费者按全局帧序取帧 →
+1. **交替领取**：FIFO 竞争 + 共享 in-flight 令牌使分片在 GPU/CPU 间严格交替     
+   （GPU 拿 #0,2,4,6,8,9；CPU 拿 #1,3,5,7,10）。消费者按全局帧序取帧 →     
    慢生产者的每一片都是关键路径串行等待，快生产者被令牌限制无法超前；
-2. **seek 爆炸**：交替领取使"连续扫掠免 seek"失效——每个生产者除首片外
+2. **seek 爆炸**：交替领取使"连续扫掠免 seek"失效——每个生产者除首片外     
    几乎每片 seek（GPU ~50-190ms/次、CPU ~35-65ms/次）；
 3. **结果**：HEVC hybrid decode 2.4-2.8s 反比纯 NVDEC 2.0s 慢 20-40%。
 
 v3 重写（速率比例分界 + 两端连续扫掠 + 对称接管）：
-- `hybrid_begin` 并行实测两后端顺序速率（256 帧 + 16 帧 warmup 丢弃），
-  按速率比例把分片切成两段：快端从头连续扫掠（0 次 seek），慢端 seek 一次
-  到分界片首后连续扫掠（1 次 seek）；慢端份额夹 [15%, 45%]，速率比 >1.8x
+
+- `hybrid_begin` 并行实测两后端顺序速率（256 帧 + 16 帧 warmup 丢弃），    
+  按速率比例把分片切成两段：快端从头连续扫掠（0 次 seek），慢端 seek 一次    
+  到分界片首后连续扫掠（1 次 seek）；慢端份额夹 [15%, 45%]，速率比 >1.8x    
   只给 1 片试探；
-- 快端扫完自己区后逐片接管慢端未开始片（一次 seek 连续扫掠）——校准误差自愈；
+- 快端扫完自己区后逐片接管慢端未开始片（一次 seek 连续扫掠）——校准误差自愈；    
   慢端只做自己区、区空即退出（不反向接管，避免破坏快端连续扫掠）；
 - 每生产者"已产出未消费"片数 ≤ inflight（默认 2）防字幕宽 ROI 内存暴涨；
 - **编码门控（AV1 回退）移除**：v3 实测 AV1 不退化，尊重用户显式选择。
 
 本机实测（7945HX + RTX 4060 Laptop，A/B 单跑；decode 阶段耗时，越小越好）：
 
-| 视频 | 编码 | NVDEC | CPU | hybrid v3 | vs NVDEC |
-|---|---|---|---|---|---|
-| test5 6000帧 | h264 | 5.99s | 5.17s | **4.37s** | **-27%** |
-| test3 3000帧 | h264 | 2.91s | 2.84s | **2.44s** | **-16%** |
-| test.mp4 3000帧 | hevc | 1.97-2.28s | 4.47s | 2.05-2.22s | 持平 |
-| test2 3000帧 | hevc | 2.10s | 4.41s | **1.77s** | **-16%** |
-| test6 3000帧 | av1 | 1.86-2.22s | 6.19s | 1.80-1.98s | **-10~19%** |
+| 视频             | 编码   | NVDEC      | CPU   | hybrid v3  | vs NVDEC    |
+| -------------- | ---- | ---------- | ----- | ---------- | ----------- |
+| test5 6000帧    | h264 | 5.99s      | 5.17s | **4.37s**  | **-27%**    |
+| test3 3000帧    | h264 | 2.91s      | 2.84s | **2.44s**  | **-16%**    |
+| test.mp4 3000帧 | hevc | 1.97-2.28s | 4.47s | 2.05-2.22s | 持平          |
+| test2 3000帧    | hevc | 2.10s      | 4.41s | **1.77s**  | **-16%**    |
+| test6 3000帧    | av1  | 1.86-2.22s | 6.19s | 1.80-1.98s | **-10~19%** |
 
-文本一致性：所有场景唯一文本集与单路径 100% 一致（段数/代表帧一致）。
-端到端墙钟：h264 场景混合显著更快；HEVC/AV1 场景与纯 NVDEC 持平
+文本一致性：所有场景唯一文本集与单路径 100% 一致（段数/代表帧一致）。  
+端到端墙钟：h264 场景混合显著更快；HEVC/AV1 场景与纯 NVDEC 持平  
 （ocr_tail 略大——解码更快导致 OCR 积压排空，属正常流水线行为）。
 
 ### 4.4c CPU+NVDEC 混合解码 v4（2026-08，动态分界 + 稳态折扣 + 短校准；v4 现役）
 
-**目标**：CPU 解码明显慢于 NVDEC（弱 CPU，8 核亲和模拟）时 hybrid 仍提供
-decode 提升。背景：v3 在 rf>rs*1.8 时只给慢端 1 片试探，弱 CPU 下 hybrid
+**目标**：CPU 解码明显慢于 NVDEC（弱 CPU，8 核亲和模拟）时 hybrid 仍提供  
+decode 提升。背景：v3 在 rf>rs*1.8 时只给慢端 1 片试探，弱 CPU 下 hybrid  
 decode 反而比纯 NVDEC 慢（h264 8 核 +20%、HEVC 8 核 +7%）。
 
 **探针定位**（并行争抢探针 + 分相 profile，勿再猜）：
-1. NVDEC 与 CPU 软解互不拖慢（并行解码 GPU 仅降 9-16%）；真正瓶颈是
+
+1. NVDEC 与 CPU 软解互不拖慢（并行解码 GPU 仅降 9-16%）；真正瓶颈是     
    **慢端拖尾 + OCR 尾批 + 校准固定开销**；
-2. **短校准高估 CPU 稳态速率**：HEVC 软解有缓冲衰减，48 帧测 495fps、
-   384 帧测 205fps（快测高估 2.2 倍）→ 按速率比例给慢端多片时慢端
+2. **短校准高估 CPU 稳态速率**：HEVC 软解有缓冲衰减，48 帧测 495fps、     
+   384 帧测 205fps（快测高估 2.2 倍）→ 按速率比例给慢端多片时慢端     
    拖尾、decode 反被拖慢；
-3. **OCR 尾批堆积**：hybrid decode 结束更早，OCR 尾批来不及排空 →
+3. **OCR 尾批堆积**：hybrid decode 结束更早，OCR 尾批来不及排空 →     
    ocr_tail 增大（+0.1-0.2s），墙钟被 OCR 吃掉；
 4. **校准固定开销**：256 帧校准在弱 CPU 下 ~0.4s，吃掉 decode 收益。
 
 **v4 设计**（`hybrid_decode.py`）：
+
 - 短校准（默认 40 帧 + 8 warmup，`HYBRID_CALIB_FRAMES` 可调）；
-- 稳态折扣（慢端=CPU ×0.45、=NVDEC ×0.85，`HYBRID_SLOW_DISCOUNT` 可调）：
+- 稳态折扣（慢端=CPU ×0.45、=NVDEC ×0.85，`HYBRID_SLOW_DISCOUNT` 可调）：    
   修正短校准对 CPU 软解稳态速率的高估；
-- 动态分界（`_dynamic_split` 纯函数，单测覆盖）：慢端片数从 1 递增，只要
+- 动态分界（`_dynamic_split` 纯函数，单测覆盖）：慢端片数从 1 递增，只要    
   "慢端生产时间 ≤ 快端生产时间×0.95"就继续——慢端贡献最大化且不拖尾；
 - 慢端预取（`HYBRID_SLOW_INFLIGHT` 默认 4）：尾段提前就绪，减少 OCR 尾批；
 - 其余（连续扫掠/对称接管/inflight/接口/激活条件）同 v3。
 
 **实测**（TRT venv，进程亲和 8 逻辑核 = 弱 CPU 模拟，交错 A/B 3 轮中位）：
 
-| 场景 | 编码 | NVDEC decode | hybrid v4 decode | Δ decode | Δ 墙钟 |
-|---|---|---|---|---|---|
-| test5 3000帧 | h264（CPU 慢 23%） | 2.956s | 2.420s | **-18.1%** | **-2.0%** |
-| test.mp4 3000帧 | hevc（CPU 慢 4.6×） | 1.345s | 1.300s | **-3.3%** | +11.4% |
+| 场景             | 编码               | NVDEC decode | hybrid v4 decode | Δ decode   | Δ 墙钟      |
+| -------------- | ---------------- | ------------ | ---------------- | ---------- | --------- |
+| test5 3000帧    | h264（CPU 慢 23%）  | 2.956s       | 2.420s           | **-18.1%** | **-2.0%** |
+| test.mp4 3000帧 | hevc（CPU 慢 4.6×） | 1.345s       | 1.300s           | **-3.3%**  | +11.4%    |
 
-16 核无亲和回归：test5 h264 decode -24.5%、wall -12.7%（与 v3 持平）。
-文本一致性：全部 100%。结论：CPU 明显慢于 NVDEC 时 hybrid decode 确实
-提升（h264 -18%、HEVC -3%）；h264 墙钟转正（-2%）；HEVC 墙钟仍受 OCR
-尾批/争抢影响（+11%）——CPU 慢 4.6× 时慢端最多 1-2 片，贡献上限 ~5%，
-decode 收益不足以覆盖 OCR 固定开销属物理限制。基准工具 `bench_hybrid.py`
+16 核无亲和回归：test5 h264 decode -24.5%、wall -12.7%（与 v3 持平）。  
+文本一致性：全部 100%。结论：CPU 明显慢于 NVDEC 时 hybrid decode 确实  
+提升（h264 -18%、HEVC -3%）；h264 墙钟转正（-2%）；HEVC 墙钟仍受 OCR  
+尾批/争抢影响（+11%）——CPU 慢 4.6× 时慢端最多 1-2 片，贡献上限 ~5%，  
+decode 收益不足以覆盖 OCR 固定开销属物理限制。基准工具 `bench_hybrid.py`  
 新增 `--affinity N`（进程绑定前 N 个逻辑核）复现弱 CPU 场景。
 
 ---
 
-## 4.5 单实例双完整流水线并行（历史，已归档 — docs/ARCHIVE.md §B）
+### 4.5 单实例双完整流水线并行（历史，已归档 — 本文 §18.B）
 
-> **⚠️ 本节全部内容已迁移至 `docs/ARCHIVE.md`（§B）**，包括：双流水线
-> 设计/实测、跨编码对照、二轮探针归因（内存子系统争抢）、五轮修正
-> （seek/让位）、关键帧分片实验、kfe 死路与复活、AV1 对照、
-> DUAL_PROPORTIONAL / DUAL_PRIORITY / 让位阈值 0.5 等全部历史条目。
-> 代码中不存在 `_dual_pipeline.py` / `tests/test_dual_pipeline.py`，
-> **也没有任何 `DUAL_*` 环境变量或构造参数**（基准提交 e8b2637）。
-> 现役并行维度只有一个：`decode_backend="hybrid"` 的 CPU+NVDEC 双解码
+> **⚠️ 本节全部内容已迁移至本文 §18.B**，包括：双流水线>   
+> 设计/实测、跨编码对照、二轮探针归因（内存子系统争抢）、五轮修正>   
+> （seek/让位）、关键帧分片实验、kfe 死路与复活、AV1 对照、>   
+> DUAL_PROPORTIONAL / DUAL_PRIORITY / 让位阈值 0.5 等全部历史条目。>   
+> 代码中不存在 `_dual_pipeline.py` / `tests/test_dual_pipeline.py`，>   
+> **也没有任何 `DUAL_*` 环境变量或构造参数**（基准提交 e8b2637）。>   
+> 现役并行维度只有一个：`decode_backend="hybrid"` 的 CPU+NVDEC 双解码>   
 > 生产者竞争（`hybrid_decode.py`）。勿按 `DUAL_*` 参数调优。
 
-（完整档案见 docs/ARCHIVE.md §B）
+（完整档案见本文 §18.B）
 
 ---
 
 ## 5. 已锁定参数（勿随意改动）
 
-| 参数 | 值 | 结论 |
-|---|---|---|
-| `OCR_GAMMA` | 2.0 | OCR 预处理灰度 gamma；全量最优，固定 |
-| `OCR_PAD_WIDTH_MIN` | 224 | 速度数字窄图最优；降宽省推理但 +19 误读 |
-| `DEFAULT_BUFFER_SIZE` | 128 | 64/128/256 无显著差异；128 兼顾突发背压 |
-| `OCR_BATCH_SIZE` | 16 | B=16 最优；B=8 退化，B=32/64 更大等待/内存成本抵消 |
-| `DECODE_BATCH_SIZE` | 16 | 固定成本摊薄；32/64 在当前场景无额外收益 |
-| `TRT_PROFILE_BATCH` | 6 | pb8/12/16 单调变差（更大 TRT kernel 与 NVDEC 抢 GPU） |
-| `TRT_WORKSPACE_BYTES` | 1GB | 构建用；FP16/INT8 无收益，保持 FP32 |
-| `CPU_CORES_SPLIT_THRESHOLD` | 8 | 少核 CPU 软解分核阈值 |
-| `OCR_ONNX_CHUNK` | 16 | ONNX 推理单批上限；16 比 64 内存峰值更低且更快 |
-| `OCR_CTC_CHUNK` | 64 | CTC 后处理分块，控制内存峰值 |
+| 参数                          | 值   | 结论                                                                                                                               |
+| --------------------------- | --- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `OCR_GAMMA`                 | 2.0 | OCR 预处理灰度 gamma；全量最优，固定                                                                                                          |
+| `OCR_PAD_WIDTH_MIN`         | 224 | 速度数字窄图最优；降宽省推理但 +19 误读                                                                                                           |
+| `DEFAULT_BUFFER_SIZE`       | 128 | 64/128/256 无显著差异；128 兼顾突发背压                                                                                                      |
+| `OCR_BATCH_SIZE`            | 16  | B=16 最优；B=8 退化，B=32/64 更大等待/内存成本抵消。**2026-08-29 补充**：此结论出自 ONNX 时代；TRT 路径需按 `max_batch` 对齐（16→18）以免每批一次形状 sync，见 §16.8.1（现按后端分叉） |
+| `DECODE_BATCH_SIZE`         | 16  | **宿主流水线**解码批，固定成本摊薄；32/64 无额外收益。**GPU 管线另有 `GPU_PIPELINE_DECODE_BATCH=64`**（与宿主刻意不同，见 `engine_config` 注释）；>64（128/256）已实测无收益     |
+| `TRT_PROFILE_BATCH`         | 6   | pb8/12/16 单调变差（更大 TRT kernel 与 NVDEC 抢 GPU）                                                                                      |
+| `TRT_WORKSPACE_BYTES`       | 1GB | 构建用；FP16/INT8 无收益，保持 FP32                                                                                                        |
+| `CPU_CORES_SPLIT_THRESHOLD` | 8   | 少核 CPU 软解分核阈值                                                                                                                    |
+| `OCR_ONNX_CHUNK`            | 16  | ONNX 推理单批上限；16 比 64 内存峰值更低且更快                                                                                                    |
+| `OCR_CTC_CHUNK`             | 64  | CTC 后处理分块，控制内存峰值                                                                                                                 |
 
 ---
 
 ## 6. 已验证死路（不要重新投入）
 
-- **异步批量解码**：fork `experiment/async-batch-decode` 完整实现后实测生产路径
-  0% 收益（test6 灰 ROI 1734 vs 1741fps）。全部测试视频均为 NVDEC 硬件解码上限，
+- **异步批量解码**：fork `experiment/async-batch-decode` 完整实现后实测生产路径    
+  0% 收益（test6 灰 ROI 1734 vs 1741fps）。全部测试视频均为 NVDEC 硬件解码上限，    
   软件层无法超过硬件解码器。
-- **用编码码流判断 ROI 是否变化**：`pkt_size/pict_type` 在移动背景中分离度仅
-  0.126-0.417，静态背景召回仅 0.269；要拿到可用信号必须熵解码，成本≈解码本身。
+- **用编码码流判断 ROI 是否变化**：`pkt_size/pict_type` 在移动背景中分离度仅    
+  0.126-0.417，静态背景召回仅 0.269；要拿到可用信号必须熵解码，成本≈解码本身。    
   现有 `sample_stride` 分频采样已拿到主体收益。
-- **Tesseract OCR**：对定制数字 ROI 正确率 33-95%，吞吐 ~15 段/s vs ONNX 双实例
+- **Tesseract OCR**：对定制数字 ROI 正确率 33-95%，吞吐 ~15 段/s vs ONNX 双实例    
   ~400 段/s（慢约 25 倍）。
 - **FP16 / INT8 TRT 引擎**：tiny/small 非算力受限，实测无收益；FP16 构建还慢 2.2 倍。
 - **多预处理自动选择 / 窗口重 OCR 自动化 / scipy 连通域**：均已被现有方案覆盖或净负。
-- **onnxruntime 1.29 新增参数**（`ORT_INTRA/INTER_OP_NUM_THREADS`、parallel
+- **onnxruntime 1.29 新增参数**（`ORT_INTRA/INTER_OP_NUM_THREADS`、parallel    
   执行、spin off）：全部无收益，保持现状。
-- **stride>1 跳过 B 帧（AVDISCARD_NONREF）加速解码（2026-08 尝试，已封板）**：
-  在 decord `GetBatch` 等差步长快速路径中，对非采样帧设置
-  `AVDISCARD_NONREF` 跳过 B 帧，并按 packet 计数推进帧号。初步速度提升明显
+- **stride>1 跳过 B 帧（AVDISCARD_NONREF）加速解码（2026-08 尝试，已封板）**：    
+  在 decord `GetBatch` 等差步长快速路径中，对非采样帧设置    
+  `AVDISCARD_NONREF` 跳过 B 帧，并按 packet 计数推进帧号。初步速度提升明显    
   （3000 帧 stride=8 从 ~0.63s 降到 ~0.12s），但正确性失败：
   - 与 `seek_accurate` 真值对比大量采样帧 `maxdiff=255`；
   - FFmpeg h264 报 `missing picture in access unit`；
-  - 即使只在“目标是参考帧”时启用、并对跳过参考帧做显式排空，仍然错帧。
-  结论：当前 decord 的 FFmpeg 多线程解码架构下，动态切换 `AVDISCARD_NONREF`
-  不可靠。
-- **stride>1 跳过 B 帧（packet 级过滤，2026-08 二次尝试，已封板）**：
-  不依赖 `skip_frame`，改为在 `PushNextFiltered()` 中按 `pict_type` 直接把 B 帧
+  - 即使只在“目标是参考帧”时启用、并对跳过参考帧做显式排空，仍然错帧。      
+    结论：当前 decord 的 FFmpeg 多线程解码架构下，动态切换 `AVDISCARD_NONREF`      
+    不可靠。
+- **stride>1 跳过 B 帧（packet 级过滤，2026-08 二次尝试，已封板）**：    
+  不依赖 `skip_frame`，改为在 `PushNextFiltered()` 中按 `pict_type` 直接把 B 帧    
   packet 丢弃、只把参考帧 packet 推给 decoder。结果仍然：
   - 大量 `missing picture in access unit`；
-  - 与 `seek_accurate` 真值对比仍有多帧 `maxdiff=255`。
-  根因：H.264 High profile 中部分 B 帧本身是参考帧，仅按 `pict_type==B` 丢弃会
-  丢掉解码依赖；要正确过滤必须解析 slice header 的 `reference` 标记，复杂度接近
-  重写一个跳帧解码器。
-  结论：在现有 decord/FFmpeg 架构内，安全跳过 B 帧加速 stride>1 解码的成本和风险
-  都过高，暂不继续。
-- **三级流水线（OCR 专职 preprocess 线程 ×2）**：严格单跑 A/B 无净收益，回滚；
+  - 与 `seek_accurate` 真值对比仍有多帧 `maxdiff=255`。      
+    根因：H.264 High profile 中部分 B 帧本身是参考帧，仅按 `pict_type==B` 丢弃会      
+    丢掉解码依赖；要正确过滤必须解析 slice header 的 `reference` 标记，复杂度接近      
+    重写一个跳帧解码器。      
+    结论：在现有 decord/FFmpeg 架构内，安全跳过 B 帧加速 stride>1 解码的成本和风险      
+    都过高，暂不继续。
+- **三级流水线（OCR 专职 preprocess 线程 ×2）**：严格单跑 A/B 无净收益，回滚；    
   当前两段式（主循环 flush 内 preprocess 与 infer 线程并行）已是最优近似。
 
 ---
 
 ## 7. 依赖性能笔记（摘要）
 
-- **onnxruntime 1.29.0**：PyPI 版升级安全、性能持平（test5 h264 -2%，test6 AV1
+- **onnxruntime 1.29.0**：PyPI 版升级安全、性能持平（test5 h264 -2%，test6 AV1    
   +1% 波动内）；逐帧读数与 1.28 完全一致。
-- **decord fork**：必须使用自建 `chr431/decord`，PyPI 版不支持 ROI-first /
+- **decord fork**：必须使用自建 `chr431/decord`，PyPI 版不支持 ROI-first /    
   GPU gray / YUV420 / 等差步长快速路径。`sample_stride>1` 建议 fork ≥v0.7.12。
-- **TensorRT**：只装 thin binding（`tensorrt_*_bindings`），运行 DLL 从 PATH 加载；
+- **TensorRT**：只装 thin binding（`tensorrt_*_bindings`），运行 DLL 从 PATH 加载；    
   首次构建 FP32 引擎约 1 分钟；FP16 不推荐。
 - 详细依赖版本与已知问题见 `docs/DEPENDENCIES.md`。
 
@@ -300,9 +318,9 @@ decode 收益不足以覆盖 OCR 固定开销属物理限制。基准工具 `ben
 
 ## 8. 性能演进摘要（拆仓前 RaceVideoToLog 历史）
 
-- v2.14：CPU 解码 + CPU 推理 +22%（12.3s → 9.6s）；批量流水线替代逐帧 next_roi；
+- v2.14：CPU 解码 + CPU 推理 +22%（12.3s → 9.6s）；批量流水线替代逐帧 next_roi；    
   ONNX 分片 64→16（峰值 920MB→300MB）。
-- v2.15：CPU+NVDEC 混合解码、TRT+ONNX 混合 OCR、GPU gray 输出、YUV420 输出；
+- v2.15：CPU+NVDEC 混合解码、TRT+ONNX 混合 OCR、GPU gray 输出、YUV420 输出；    
   双解码器背压修复内存 11GB→500MB。
 - v2.15.2：AV1 帧并行修复（dcd=12 326→648fps）、双 ONNX 实例、少核分核。
 - v2.16 拆仓：识别链独立为 `video_ocr_engine`，本文档随拆仓迁移。
@@ -315,125 +333,126 @@ decode 收益不足以覆盖 OCR 固定开销属物理限制。基准工具 `ben
 
 ## 9. GPU 分段 + ONNX OCR 无净收益（默认门控调整，2026 实测）
 
-背景：GPU 管线与 OCR 后端解耦后，"GPU 分段 + ONNX 宿主 OCR"（`gpu_onnx`）
+背景：GPU 管线与 OCR 后端解耦后，"GPU 分段 + ONNX 宿主 OCR"（`gpu_onnx`）  
 作为可用配置存在。受控 A/B 验证其是否值得成为默认：
 
-**方法**：同一 NVDEC 解码 + 同一 ONNX CPU OCR + 相同采样（stride=8），唯一
-差异 = 分段/校准/合并/预处理在 GPU（cuda-python kernel）还是宿主（numpy）；
+**方法**：同一 NVDEC 解码 + 同一 ONNX CPU OCR + 相同采样（stride=8），唯一  
+差异 = 分段/校准/合并/预处理在 GPU（cuda-python kernel）还是宿主（numpy）；  
 各 3 次取中位（丢弃首轮 warmup），段数两边完全一致（562 / 77）。
 
-| 场景（stride=8） | 管线 | 墙钟 | 解码相 | OCR 相 | 段数 |
-|---|---:|---:|---:|---:|---:|
-| test5（h264，ROI 33×106，5000 帧） | GPU 分段 + ONNX | 5.56s | 4.65s | 4.79s | 562 |
-| | 宿主 + NVDEC + ONNX | **5.31s** | 4.75s | 4.81s | 562 |
-| 新三国01（h264，字幕 ROI 26×676，6000 帧） | GPU 分段 + ONNX | 2.70s | 1.56s | 1.95s | 77 |
-| | 宿主 + NVDEC + ONNX | **2.52s** | 1.67s | 2.02s | 77 |
+| 场景（stride=8）                     |                管线 |        墙钟 |   解码相 | OCR 相 |  段数 |
+| -------------------------------- | ----------------: | --------: | ----: | ----: | --: |
+| test5（h264，ROI 33×106，5000 帧）    |     GPU 分段 + ONNX |     5.56s | 4.65s | 4.79s | 562 |
+|                                  | 宿主 + NVDEC + ONNX | **5.31s** | 4.75s | 4.81s | 562 |
+| 新三国01（h264，字幕 ROI 26×676，6000 帧） |     GPU 分段 + ONNX |     2.70s | 1.56s | 1.95s |  77 |
+|                                  | 宿主 + NVDEC + ONNX | **2.52s** | 1.67s | 2.02s |  77 |
 
 **结论（勿再重复投入）**：
-- **GPU 管线 + ONNX 相对宿主管线无优势，实测反慢 4~7%**。省的是每帧
-  asnumpy（3.5~26KB D2H）+ 微小 ROI 上的 numpy 分段（微秒级）；加的是每批
-  kernel 启动 + `analyze_batch`/`histograms_perframe`/`compare_pair`/实时
+
+- **GPU 管线 + ONNX 相对宿主管线无优势，实测反慢 4~7%**。省的是每帧    
+  asnumpy（3.5~26KB D2H）+ 微小 ROI 上的 numpy 分段（微秒级）；加的是每批    
+  kernel 启动 + `analyze_batch`/`histograms_perframe`/`compare_pair`/实时    
   D2H 的同步调用（串行化 producer，吃掉解码重叠余量）+ luma/prev/池帧 D2D。
-- 两侧瓶颈相同：NVDEC 解码供给率（h264 ~1000+ 源帧 fps 等效）与 ONNX OCR，
+- 两侧瓶颈相同：NVDEC 解码供给率（h264 ~1000+ 源帧 fps 等效）与 ONNX OCR，    
   GPU 管线只优化分段侧——分段侧在 ≤676px 宽 ROI 上不构成瓶颈。
-- 只有在 **ROI 极大（≥10 万像素）且分段成为墙钟主项** 时 GPU 分段才可能
+- 只有在 **ROI 极大（≥10 万像素）且分段成为墙钟主项** 时 GPU 分段才可能    
   有净收益（且受 NVDEC 供给率上限约束）——无实测先例，未立项。
-- **门控调整**：GPU 零拷贝管线默认仅在 **NVDEC+TRT** 组合启用（全程 raw 才
-  有量级收益）；无 TRT / ocr_backend="cpu" → 宿主管线（配置面更简）。
+- **门控调整**：GPU 零拷贝管线默认仅在 **NVDEC+TRT** 组合启用（全程 raw 才    
+  有量级收益）；无 TRT / ocr_backend="cpu" → 宿主管线（配置面更简）。    
   `GPU_PIPELINE=1` 保留为强制开关（允许 GPU 分段+ONNX 实验组合）。
 
 ---
 
 ## 10. 2026-08 一轮性能试验（引擎现役代码，7945HX + RTX 4060 Laptop）
 
-本轮按清单逐项 A/B（单跑串行，test5 窗口 3000 帧 stride=1 为基准，
+本轮按清单逐项 A/B（单跑串行，test5 窗口 3000 帧 stride=1 为基准，  
 新三国01 窗口 3000 源帧 stride=8 为高段数场景）。**基线**：
 
-| 配置 | 墙钟 | decode | ocr | 段数 |
-|---|---:|---:|---:|---:|
-| GPU 管线默认（gpu_yuv） | 3.238s | 2.975s | 3.10s | 1083 |
-| hybrid（GPU_PIPELINE=0） | 3.127s | 2.31s | 2.72s | 1083 |
-| 新三国01 窗口（GPU 管线） | 8.64~9.5s | — | — | 503 |
+| 配置                     |        墙钟 | decode |   ocr |   段数 |
+| ---------------------- | --------: | -----: | ----: | ---: |
+| GPU 管线默认（gpu_yuv）      |    3.238s | 2.975s | 3.10s | 1083 |
+| hybrid（GPU_PIPELINE=0） |    3.127s |  2.31s | 2.72s | 1083 |
+| 新三国01 窗口（GPU 管线）       | 8.64~9.5s |      — |     — |  503 |
 
 ### 10.1 实验②：OCR 会话提前到校准前（有效，-19%）
 
-改动：`_start_ocr_session`（引擎加载/模型构建，实测 TRT 加载 0.392s）从
-"校准后"提前到"校准前"启动（worker 线程），与校准 + decode 开头并行。
-宿主路径（extractor）与 GPU 路径（_gpu_pipeline）同步接线；引擎就绪前
+改动：`_start_ocr_session`（引擎加载/模型构建，实测 TRT 加载 0.392s）从  
+"校准后"提前到"校准前"启动（worker 线程），与校准 + decode 开头并行。  
+宿主路径（extractor）与 GPU 路径（\_gpu_pipeline）同步接线；引擎就绪前  
 `_emit_ocr` 自动走 host 回退（raw_ready=False），语义不变。
 
-实测（test5 窗口）：模拟原顺序（串行引擎加载 + 管线）4.002s vs 新顺序
-3.239s —— **引擎加载 0.4s 从墙钟消失（decode 2.98s 期间引擎已就绪）**。
+实测（test5 窗口）：模拟原顺序（串行引擎加载 + 管线）4.002s vs 新顺序  
+3.239s —— **引擎加载 0.4s 从墙钟消失（decode 2.98s 期间引擎已就绪）**。  
 段数/唯一文本与基线逐位一致（1083/265）。
 
-结论：**decode 占墙钟 92% 时，任何"启动阶段"成本（引擎加载/校准）都应
+结论：**decode 占墙钟 92% 时，任何"启动阶段"成本（引擎加载/校准）都应  
 与 decode 重叠**；同类机会（如首次 TRT 构建 ~1-2min）同理。
 
 ### 10.2 实验③：探测缓存（微小收益，零风险保留）
 
-`nvdec_available`/`tensorrt_available` 加 `lru_cache`（按参数/无参）。
-实测：冷探测 nvdec 0.033s + trt 0.079s（进程首轮含 CUDA 初始化 0.16s），
-热探测本就 <0.03s；批量 3 次 extract 有缓存 5.538s vs 无缓存 5.589s
+`nvdec_available`/`tensorrt_available` 加 `lru_cache`（按参数/无参）。  
+实测：冷探测 nvdec 0.033s + trt 0.079s（进程首轮含 CUDA 初始化 0.16s），  
+热探测本就 <0.03s；批量 3 次 extract 有缓存 5.538s vs 无缓存 5.589s  
 （**省 0.05s，<1%**）。
 
-结论：探测不是瓶颈（decode 主导），但缓存零成本、避免"每次 extract
-重新打开视频探测"，保留。**勿再投入跨 extract 复用 OCR 引擎**——引擎
+结论：探测不是瓶颈（decode 主导），但缓存零成本、避免"每次 extract  
+重新打开视频探测"，保留。**勿再投入跨 extract 复用 OCR 引擎**——引擎  
 加载已被实验②完全隐藏，复用无额外收益。
 
-### 10.3 实验④：_segments_similar int16 比较（无收益，数值等价保留）
+### 10.3 实验④：\_segments_similar int16 比较（无收益，数值等价保留）
 
-`np.abs(a.astype(float32) - b.astype(float32))`（2 个 float32 全帧临时
-数组）→ `np.abs(a.astype(np.int16) - b.astype(np.int16))`（1 个 int16）。
-实测新三国01 窗口（503 段边界）：int16 9.499s vs float32 9.416s
+`np.abs(a.astype(float32) - b.astype(float32))`（2 个 float32 全帧临时  
+数组）→ `np.abs(a.astype(np.int16) - b.astype(np.int16))`（1 个 int16）。  
+实测新三国01 窗口（503 段边界）：int16 9.499s vs float32 9.416s  
 （**±1% 波动内持平**），段数/文本逐位一致（503/262）。
 
-结论：**段边界判定不是墙钟项**（数千次调用仅 ~µs 级）；int16 版省内存
+结论：**段边界判定不是墙钟项**（数千次调用仅 ~µs 级）；int16 版省内存  
 且与 GPU `sim_pair` 整数精确语义一致，保留为一致性改进。勿再优化此函数。
 
 ### 10.4 实验①：hybrid 分片粒度上限（防御性，测试集不可触发）
 
-`HYBRID_MAX_CHUNK_FRAMES`（默认 0）：>0 时把超过该采样帧数的 hybrid
-分片继续拆小（`_split_oversized`，优先关键帧边界/否则等分吸附采样帧
-网格），内存上界 = inflight × 上限。实测：**所有测试视频关键帧间隔
-~286-300 帧（标准 h264 GOP），kfe 单片 ~300 帧，拆片不触发**；
-test5 全片 hybrid 峰值 RSS 1022MB（大头不在 ch['data']，而在 decord
+`HYBRID_MAX_CHUNK_FRAMES`（默认 0）：>0 时把超过该采样帧数的 hybrid  
+分片继续拆小（`_split_oversized`，优先关键帧边界/否则等分吸附采样帧  
+网格），内存上界 = inflight × 上限。实测：**所有测试视频关键帧间隔  
+~286-300 帧（标准 h264 GOP），kfe 单片 ~300 帧，拆片不触发**；  
+test5 全片 hybrid 峰值 RSS 1022MB（大头不在 ch['data']，而在 decord  
 缓冲池 + OCR 批 + numpy 临时）。
 
-结论：**现有测试集无法 A/B**（无长 GOP 视频）；保留为防御性开关
-（真实世界超长 GOP >256 帧/片时生效），单测覆盖拆片正确性。
+结论：**现有测试集无法 A/B**（无长 GOP 视频）；保留为防御性开关  
+（真实世界超长 GOP >256 帧/片时生效），单测覆盖拆片正确性。  
 `HYBRID_MAX_CHUNK_FRAMES` 默认 0 不改变现行为。
 
 ### 10.5 实验⑤：hybrid 批量交付减锁 + 多轮校准（均无净收益，保留开关）
 
-- `_pop_frames` 批量交付（get_batch 一次锁取同片连续帧）：3.203s vs
-  基线 3.127s（**+2.5% 波动内持平**）——消费者不是瓶颈（decode 2.3s
+- `_pop_frames` 批量交付（get_batch 一次锁取同片连续帧）：3.203s vs    
+  基线 3.127s（**+2.5% 波动内持平**）——消费者不是瓶颈（decode 2.3s    
   主导），锁开销可忽略；
-- `HYBRID_CALIB_ROUNDS=3` 多轮取中位数：3.879s vs 单轮 3.203s
-  （**-21% 净负**）——3 轮额外测速 ~0.68s 成本 > 分界精度收益
-  （test5 GPU 871→973fps 更准，但 CPU 稳定快端，分界 [0,7)→[0,6)
+- `HYBRID_CALIB_ROUNDS=3` 多轮取中位数：3.879s vs 单轮 3.203s    
+  （**-21% 净负**）——3 轮额外测速 ~0.68s 成本 > 分界精度收益    
+  （test5 GPU 871→973fps 更准，但 CPU 稳定快端，分界 [0,7)→[0,6)    
   不改变墙钟）。默认保持 1 轮。
 
-结论：**hybrid 的墙钟瓶颈是解码供给率（NVDEC/CPU 顺序吞吐），不是
-队列/锁/校准**；批量交付已作为 `_pop_frames` 实现落地（无净收益但零
-风险），多轮校准保留为 `HYBRID_CALIB_ROUNDS` 实验开关（对速率比接近 1、
+结论：**hybrid 的墙钟瓶颈是解码供给率（NVDEC/CPU 顺序吞吐），不是  
+队列/锁/校准**；批量交付已作为 `_pop_frames` 实现落地（无净收益但零  
+风险），多轮校准保留为 `HYBRID_CALIB_ROUNDS` 实验开关（对速率比接近 1、  
 分界易翻转的视频可能有用，但需接受 0.68s 成本），默认 1 轮不启用。
 
 ### 10.6 本轮总结
 
 - **有效**：实验②（OCR 会话提前，-19%，引擎加载隐藏到 decode 后）。
-- **防御/一致性**：实验①（长 GOP 内存上限）、③（探测缓存）、
+- **防御/一致性**：实验①（长 GOP 内存上限）、③（探测缓存）、    
   ④（int16 比较）——测试集无净收益但零风险。
-- **死路（勿重复投入）**：实验⑤批量交付减锁（消费者非瓶颈）、
+- **死路（勿重复投入）**：实验⑤批量交付减锁（消费者非瓶颈）、    
   多轮校准（成本>收益）、跨 extract 复用 OCR 引擎（已被实验②覆盖）。
-- **测试集限制**：所有测试视频 GOP ~300 帧 → 无法验证长 GOP 内存
+- **测试集限制**：所有测试视频 GOP ~300 帧 → 无法验证长 GOP 内存    
   场景；如后续有长 GOP 片源应补测实验①。
 
 ---
 
 ## 11. 三条主力生产管线性能实验（2026-08，7945HX + RTX 4060 Laptop）
 
-本机环境：test5.mp4（h264，7761 帧，59.8fps，ROI 843,993,948,1025 ≈
-33×106 窄 ROI），新三国01.mkv（h264 标清，ROI 144,398,551,423 ≈
+本机环境：test5.mp4（h264，7761 帧，59.8fps，ROI 843,993,948,1025 ≈  
+33×106 窄 ROI），新三国01.mkv（h264 标清，ROI 144,398,551,423 ≈  
 407×25 宽 ROI 字幕条）。三条主力管线：
 
 - **CPU+ONNX**（decode=cpu, ocr=cpu）
@@ -442,591 +461,2458 @@ test5 全片 hybrid 峰值 RSS 1022MB（大头不在 ch['data']，而在 decord
 
 ### 11.1 基线（优化前，单跑串行中位）
 
-| 管线 | test5 3000帧 stride1 | 新三国01 6000帧 stride8 |
-|---|---:|---:|
-| CPU+ONNX | 3.65s（decode 3.27 / ocr 3.56） | 2.27s（decode 1.51 / ocr 1.92） |
+| 管线         |                test5 3000帧 stride1 |           新三国01 6000帧 stride8 |
+| ---------- | ---------------------------------: | ----------------------------: |
+| CPU+ONNX   |      3.65s（decode 3.27 / ocr 3.56） | 2.27s（decode 1.51 / ocr 1.92） |
 | NVDEC+ONNX | 3.39~3.65s（decode 2.97 / ocr 3.32） | 2.18s（decode 1.48 / ocr 1.87） |
-| NVDEC+TRT | 3.18s（decode 3.03 / ocr 3.17） | 2.03s（decode 1.54 / ocr 1.71） |
+| NVDEC+TRT  |      3.18s（decode 3.03 / ocr 3.17） | 2.03s（decode 1.54 / ocr 1.71） |
 
-段数/文本三条管线完全一致（test5：1083 段/265 唯一文本；新三国01：
+段数/文本三条管线完全一致（test5：1083 段/265 唯一文本；新三国01：  
 77 段/40 唯一文本），为空文本比例与 OCR 后端无关的分段一致性提供基准。
 
 ### 11.2 探针定位（分相 profile + 微基准，勿再猜）
 
-- **decode 是全部管线的绝对主项**（墙钟 92~98%）：NVDEC ~1000fps、
+- **decode 是全部管线的绝对主项**（墙钟 92~98%）：NVDEC ~1000fps、    
   CPU 软解 ~810fps（test5 h264，3000 帧 stride1）。
-- **ONNX OCR infer = 第二主项**：单实例 16 线程 ~385 段/s、双实例
-  8+8 ~458 段/s（批 16，宽 ROI 预处理输入）；`infer` 相位在
-  CPU+ONNX 5.2s / NVDEC+ONNX 4.4~4.7s（含 OCR worker 排队重叠）。
-- **TRT OCR infer 相位仅 ~1.0~1.3s**：批 16 全路径（pre+3×6 子批+
-  DtoH+同步）微基准 ~10ms/批 → 1600 段/s，接近硬件上限；批 4 小批
-  1255 段/s、批 6 1637 段/s、批 12 1654 段/s——**批 16 拆 6+6+4 子批
+- **ONNX OCR infer = 第二主项**：单实例 16 线程 ~385 段/s、双实例    
+  8+8 ~~458 段/s（批 16，宽 ROI 预处理输入）；`infer` 相位在    
+  CPU+ONNX 5.2s / NVDEC+ONNX 4.4~~4.7s（含 OCR worker 排队重叠）。
+- **TRT OCR infer 相位仅 ~~1.0~~1.3s**：批 16 全路径（pre+3×6 子批+    
+  DtoH+同步）微基准 ~10ms/批 → 1600 段/s，接近硬件上限；批 4 小批    
+  1255 段/s、批 6 1637 段/s、批 12 1654 段/s——**批 16 拆 6+6+4 子批    
   是生产最优近似**。
-- **拆批固定损耗 ~2ms/批**（ORT 单次 run 16 38ms vs 6 16ms 是线性
-  计算量，不是拆批损耗；真正的拆批损耗是『同形状 3×6 50ms vs
+- **拆批固定损耗 ~2ms/批**（ORT 单次 run 16 38ms vs 6 16ms 是线性    
+  计算量，不是拆批损耗；真正的拆批损耗是『同形状 3×6 50ms vs    
   6+6+4 变形状 45ms vs 单次 16 38ms』中的 ~2ms/批固定调度开销）。
-- **GPU 管线 producer 无 gray/sharp/bin/seg 分相**（_producer 线程
-  内 profile 未接线）；decode 3.0s = NVDEC 供给率上限，GPU 分段
+- **GPU 管线 producer 无 gray/sharp/bin/seg 分相**（\_producer 线程    
+  内 profile 未接线）；decode 3.0s = NVDEC 供给率上限，GPU 分段    
   kernel/同步/拷贝均非瓶颈（raw 聚批 16 帧仅 0.044ms，量级可忽略）。
 
 ### 11.3 落地优化（低风险）
 
-1. **host 帧流 batch luma 预分配复用**（extractor._host_frame_stream
-   + segmentation._gray_batch_out / _nv12_batch_luma_full_out）：
-   复用每批灰度缓冲，避免每批临时数组分配。微基准 yuv 批量转换
-   0.159→0.086ms/批（-46%）；端到端在测量波动内（decode 相位
-   2.61→2.61s 持平，wall 3.65→3.66s 持平）。**净收益 <1%**，作为
-   一致性改进保留（消除每批分配，数值逐位一致，76 单测 + e2e 全过）。
-2. **TRT 输出 host 缓冲复用**（ocr_trt.execute_async /
-   execute_device_async）：无 out_host 调用时复用『最大尺寸』
-   np.float32 连续缓冲，避免每批重新分配。微基准 execute_device(6)
-   4.16ms 持平；**生产路径（有 out_host）不受影响**（本就预分配整批
+1. **host 帧流 batch luma 预分配复用**（extractor.\_host_frame_stream
+   - segmentation.\_gray_batch_out / \_nv12_batch_luma_full_out）：       
+     复用每批灰度缓冲，避免每批临时数组分配。微基准 yuv 批量转换       
+     0.159→0.086ms/批（-46%）；端到端在测量波动内（decode 相位       
+     2.61→2.61s 持平，wall 3.65→3.66s 持平）。**净收益 <1%**，作为       
+     一致性改进保留（消除每批分配，数值逐位一致，76 单测 + e2e 全过）。
+2. **TRT 输出 host 缓冲复用**（ocr_trt.execute_async /     
+   execute_device_async）：无 out_host 调用时复用『最大尺寸』     
+   np.float32 连续缓冲，避免每批重新分配。微基准 execute_device(6)     
+   4.16ms 持平；**生产路径（有 out_host）不受影响**（本就预分配整批     
    输出），保持零风险。
 
 ### 11.4 已验证死路（勿再投入）
 
-- **ONNX 分片粒度调整**：16→8/6/4 全部更慢（串行 16 38.3ms vs
-  8 41.2ms vs 6 45.2ms vs 4 47.6ms/批16）；尾批 12+4 拆批损耗 ~4.5ms
+- **ONNX 分片粒度调整**：16→8/6/4 全部更慢（串行 16 38.3ms vs    
+  8 41.2ms vs 6 45.2ms vs 4 47.6ms/批16）；尾批 12+4 拆批损耗 ~4.5ms    
   ——批 16 已是吞吐最优，`OCR_ONNX_CHUNK=16` 保持。
-- **ORT 图内动态 batch 分片**：手动模拟 split（同形状/变形状）
-  全部 ≥ 单批 16；ORT 1.27 下批 16 单次 38ms 是纯计算量线性
+- **ORT 图内动态 batch 分片**：手动模拟 split（同形状/变形状）    
+  全部 ≥ 单批 16；ORT 1.27 下批 16 单次 38ms 是纯计算量线性    
   （n=4 11.5ms → n=16 38.6ms），拆批只会加固定开销。
-- **GpuPreprocessor 小批 D2D 聚批改批量接口**：raw 聚批 16/32/128
+- **GpuPreprocessor 小批 D2D 聚批改批量接口**：raw 聚批 16/32/128    
   帧全部 ~0.04ms，量级可忽略；聚批不是瓶颈，改动无收益。
-- **pinned host 缓冲**：本机 DtoH 12.6MB/批与 enqueue 重叠，pinned
-  只省 host 侧分配；复用普通缓冲已足够（见 11.3-2），不引入 pinned
+- **pinned host 缓冲**：本机 DtoH 12.6MB/批与 enqueue 重叠，pinned    
+  只省 host 侧分配；复用普通缓冲已足够（见 11.3-2），不引入 pinned    
   复杂度。
-- **GPU 管线 producer 线程内补 profile 分相**：decode 是 NVDEC
+- **GPU 管线 producer 线程内补 profile 分相**：decode 是 NVDEC    
   硬件上限，补分相无收益（保留为诊断空窗）。
 
 ### 11.5 优化后终测（交错 3 轮中位，与 11.1 同口径）
 
-| 管线 | test5 3000帧 stride1 | 新三国01 6000帧 stride8 |
-|---|---:|---:|
-| CPU+ONNX | 3.66s（-0%） | 2.27s（-0%） |
-| NVDEC+ONNX | 3.59s（-0%） | 2.37s（-0%） |
-| NVDEC+TRT | 3.18s（-0%） | 2.02s（-0%） |
+| 管线         | test5 3000帧 stride1 | 新三国01 6000帧 stride8 |
+| ---------- | ------------------: | ------------------: |
+| CPU+ONNX   |          3.66s（-0%） |          2.27s（-0%） |
+| NVDEC+ONNX |          3.59s（-0%） |          2.37s（-0%） |
+| NVDEC+TRT  |          3.18s（-0%） |          2.02s（-0%） |
 
-结论：**三条主力管线的墙钟瓶颈均为解码供给率（NVDEC/CPU 顺序吞吐），
-OCR 侧（ONNX/TRT）已接近各自硬件上限；低风险优化只能做到零风险零
-退化（batch luma 复用、TRT 输出缓冲复用），量级收益需来自解码侧
+结论：**三条主力管线的墙钟瓶颈均为解码供给率（NVDEC/CPU 顺序吞吐），  
+OCR 侧（ONNX/TRT）已接近各自硬件上限；低风险优化只能做到零风险零  
+退化（batch luma 复用、TRT 输出缓冲复用），量级收益需来自解码侧  
 （hybrid 双解码 / NVDEC 供给率），非本次改动范围。**
 
 ### 11.6 代码结构拆分（2026-08，extractor.py 969 → 568 行）
 
-`extractor.py` 过长（969 行）且宿主流水线逻辑与引擎骨架混杂，按已有
+`extractor.py` 过长（969 行）且宿主流水线逻辑与引擎骨架混杂，按已有  
 `_gpu_pipeline.py` 的 mixin 模式同构拆分：
 
-- **`video_ocr_engine/_host_pipeline.py`（新，441 行）**：宿主路径
-  模块级函数 `_host_calibrate` / `_host_frame_stream` /
-  `_host_segment_frames`（原样迁移，含 batch luma 复用优化）+ 新
+- **`video_ocr_engine/_host_pipeline.py`（新，441 行）**：宿主路径    
+  模块级函数 `_host_calibrate` / `_host_frame_stream` /    
+  `_host_segment_frames`（原样迁移，含 batch luma 复用优化）+ 新    
   `_HostPipelineMixin`（`_start_ocr_session` OCR 会话原样迁移）；
-- **`extractor.py`（568 行）**：保留 FieldExtractor 骨架（构造/参数
-  校验/`_open_vr` 解码器/`_run_pipelined` 分发/结果组装），类基类
+- **`extractor.py`（568 行）**：保留 FieldExtractor 骨架（构造/参数    
+  校验/`_open_vr` 解码器/`_run_pipelined` 分发/结果组装），类基类    
   改为 `(_GpuPipelineMixin, _HostPipelineMixin)`；
-- **兼容**：extractor 顶部 re-export 全部模块级函数与
-  `_HostPipelineMixin`，旧导入路径
-  `from video_ocr_engine.extractor import _host_calibrate` 等不变；
+- **兼容**：extractor 顶部 re-export 全部模块级函数与    
+  `_HostPipelineMixin`，旧导入路径    
+  `from video_ocr_engine.extractor import _host_calibrate` 等不变；    
   公共 API 与行为零变化（76 单测全过，三管线 e2e 段数/文本逐位一致）。
 
 ## 12. 路线图收口轮（2026-08-29：P0-4 GPU 直通 + P1-3 解耦 + hybrid 启动重叠）
 
-对应 `docs/PERFORMANCE-ROADMAP.md` §0.4 的 2/3/5 号项。全部在本机
+对应本文 §16.0.4 的 2/3/5 号项（路线图已于 2026-08-30 并入 §16）。全部在本机  
 （7945HX + RTX 4060 Laptop，decord fork 0.7.12 / TRT）A/B 单跑实测。
 
 ### 12.1 P0-4 扩展到 GPU 直通路径（✅ 落地）
 
-`decode=auto`（NVDEC+TRT，现役默认）此前拿不到宽度自适应裁切：
+`decode=auto`（NVDEC+TRT，现役默认）此前拿不到宽度自适应裁切：  
 `prep_gray_raw` kernel 假设批内 `src_w` 一致且全宽参与。改动：
 
-- **`GpuFrameAnalyzer.content_range`**（新 `col_ink` kernel）：单 block
-  256 线程跨列分片 + shared 归约，算 rep 帧「有墨迹列范围」(first, last)
-  ——判据与宿主 `_crop_to_content` 一致（`g > th`、每列 ≥2 墨迹像素），
+- **`GpuFrameAnalyzer.content_range`**（新 `col_ink` kernel）：单 block    
+  256 线程跨列分片 + shared 归约，算 rep 帧「有墨迹列范围」(first, last)    
+  ——判据与宿主 `_crop_to_content` 一致（`g > th`、每列 ≥2 墨迹像素），    
   DtoH 仅 8 字节/段；
-- **`prep_gray_raw` 逐项裁切**：infos 支持 6 元组
-  `(dev_ptr, h, w, owner, x_off, crop_w)`，kernel 按项从
-  `[x_off, x_off+crop_w)` 采样缩放；未裁项 `(0, src_w)` 与旧全宽内核
-  **逐位一致**。content_w 按宿主 `_preprocess_standard` 同式
+- **`prep_gray_raw` 逐项裁切**：infos 支持 6 元组    
+  `(dev_ptr, h, w, owner, x_off, crop_w)`，kernel 按项从    
+  `[x_off, x_off+crop_w)` 采样缩放；未裁项 `(0, src_w)` 与旧全宽内核    
+  **逐位一致**。content_w 按宿主 `_preprocess_standard` 同式    
   （int 截断）host 侧算好传入；
-- **余量数学收敛**：`_HostPipelineMixin._content_range_to_crop`
-  （first/last → (x_off, crop_w)，满宽 None）宿主与 GPU 共用，两条
-  路径对同一 rep 帧给出同一裁切区间；GPU 侧跳过条件与宿主一致
+- **余量数学收敛**：`_HostPipelineMixin._content_range_to_crop`    
+  （first/last → (x_off, crop_w)，满宽 None）宿主与 GPU 共用，两条    
+  路径对同一 rep 帧给出同一裁切区间；GPU 侧跳过条件与宿主一致    
   （关/force_aspect/std<3/满宽）；
-- **raw 批按宽分组**：`_start_ocr_session.flush()` 对 raw 项按裁后
-  宽度排序、按批大小拆子批投递（与宿主裁切路径同一策略——顺序分批
+- **raw 批按宽分组**：`_start_ocr_session.flush()` 对 raw 项按裁后    
+  宽度排序、按批大小拆子批投递（与宿主裁切路径同一策略——顺序分批    
   时每批被满宽成员顶回去，实测收益归零）。
 
 实测（新三国01 宽 ROI 407×25，30000 帧 stride8，503 段，NVDEC+TRT）：
 
-| 方案 | OCR infer | 墙钟 | 文本 |
-|---|---:|---:|---|
-| A 不裁（旧行为） | 0.943s | 9.523s | — |
+| 方案            |         OCR infer |               墙钟 | 文本         |
+| ------------- | ----------------: | ---------------: | ---------- |
+| A 不裁（旧行为）     |            0.943s |           9.523s | —          |
 | C 裁+按宽分组（新默认） | **0.874s（-7.3%）** | 9.503s（-0.2%，噪声） | 503/503 一致 |
 
-墙钟不动是**预期的**：该场景 decode 8.2s / OCR q_get_wait 8.2s，
-OCR 完全被解码掩盖（与宿主路径 P0-4 的 TRT 结论一致，infer -7~-9% 同量级）。
-**验收门**：`decode=auto`（GPU 直通裁切）vs `decode=cpu`（宿主裁切）
+墙钟不动是**预期的**：该场景 decode 8.2s / OCR q_get_wait 8.2s，  
+OCR 完全被解码掩盖（与宿主路径 P0-4 的 TRT 结论一致，infer -7~-9% 同量级）。  
+**验收门**：`decode=auto`（GPU 直通裁切）vs `decode=cpu`（宿主裁切）  
 全片 503/503 文本逐位一致；7 配置 e2e 冒烟 PASS。
 
 ### 12.2 P1-3 解耦 GPU OCR 管线与 NVDEC（✅ 落地）
 
-原门控要求 `decode∈{auto,nvdec}`（raw OCR 需要 decord 设备指针），
-"快的解码"（CPU 软解）与"快的 OCR"（零拷贝）互斥。解法：CPU 解码分支
+原门控要求 `decode∈{auto,nvdec}`（raw OCR 需要 decord 设备指针），  
+"快的解码"（CPU 软解）与"快的 OCR"（零拷贝）互斥。解法：CPU 解码分支  
 每批 `asnumpy → 宿主灰度（与宿主逐位同式）→ H2D → 同一 hist/analyze
 kernel`，rep 帧留显存供 raw OCR：
 
-- 门控放宽：`decode_backend ∈ {auto, nvdec, cpu}`（cpu 显式、或 auto/
+- 门控放宽：`decode_backend ∈ {auto, nvdec, cpu}`（cpu 显式、或 auto/    
   nvdec 的 NVDEC 打开失败回退都进 CPU 分支；hybrid 仍互斥走宿主）；
-- `_DevBatchPool`/`_DevBatch`/`_CpuFrameRef`：CPU 解码批的 device 缓冲池
-  （引用归零 GC 归还，复用安全契约与 `_YFramePool` 同——raw OCR 与
-  sim_pair 均同步返回后才可能归零）；rep 的 keep_crops/OCR 回退走
+- `_DevBatchPool`/`_DevBatch`/`_CpuFrameRef`：CPU 解码批的 device 缓冲池    
+  （引用归零 GC 归还，复用安全契约与 `_YFramePool` 同——raw OCR 与    
+  sim_pair 均同步返回后才可能归零）；rep 的 keep_crops/OCR 回退走    
   **宿主切片直取**（拷贝返回，防 numpy view 钉住整批解码数组，无 D2H）；
-- 设备侧恒为灰度（yuv 也只上载展开后的 Y，与宿主 `_nv12_luma_full`
-  逐位同式）；`_similar_device`/`_d2h_rep`/`_emit_ocr` 按
+- 设备侧恒为灰度（yuv 也只上载展开后的 Y，与宿主 `_nv12_luma_full`    
+  逐位同式）；`_similar_device`/`_d2h_rep`/`_emit_ocr` 按    
   NVDEC-yuv / gray / CPU 三态分流。
 
 实测（decode=cpu，A/B 单跑取最优，GPU_PIPELINE=0=宿主 vs 默认=GPU 管线）：
 
-| 场景 | 宿主 | GPU 管线 | Δ | 文本 |
-|---|---:|---:|---:|---|
+| 场景                            |     宿主 |     GPU 管线 |          Δ | 文本         |
+| ----------------------------- | -----: | ---------: | ---------: | ---------- |
 | test5 全片（h264 7223 帧 stride1） | 3.888s | **3.453s** | **-11.2%** | 2701 段逐位一致 |
-| 新三国01 30000帧 stride8 | 5.135s | **5.048s** | -1.7% | 503 段逐位一致 |
+| 新三国01 30000帧 stride8          | 5.135s | **5.048s** |      -1.7% | 503 段逐位一致  |
 
-收益来源：解码批 64（GPU 管线 `GPU_PIPELINE_DECODE_BATCH`）vs 宿主 16
-的 CPU 软解吞吐差 + 分段/二值化/聚类移出宿主线程 + OCR 预处理上 GPU。
+收益来源：解码批 64（GPU 管线 `GPU_PIPELINE_DECODE_BATCH`）vs 宿主 16  
+的 CPU 软解吞吐差 + 分段/二值化/聚类移出宿主线程 + OCR 预处理上 GPU。  
 AV1（test6 全片）+0.1%（dav1d 自带线程池，批大小无关，持平不退化）。
 
 **真值准确率门（升级后的正确性门槛，decode=cpu，reps=1）**：
 
-| 视频 | 编码 | 宿主全等 | GPU 管线全等 | Δ | 墙钟 |
-|---|---|---:|---:|---:|---:|
-| test5 | h264 | 99.031% | 99.031% | **+0.00pp** | -7.8% |
-| test2 | hevc | 96.777% | 96.777% | **+0.00pp** | -7.4% |
-| test6 | av1 | 99.245% | 99.245% | **+0.00pp** | +0.1% |
+| 视频    | 编码   |    宿主全等 | GPU 管线全等 |           Δ |    墙钟 |
+| ----- | ---- | ------: | -------: | ----------: | ----: |
+| test5 | h264 | 99.031% |  99.031% | **+0.00pp** | -7.8% |
+| test2 | hevc | 96.777% |  96.777% | **+0.00pp** | -7.4% |
+| test6 | av1  | 99.245% |  99.245% | **+0.00pp** | +0.1% |
 
 三片真值逐位一致 + 7 配置 e2e 冒烟 PASS + 86 单测全过。
 
 ### 12.3 hybrid 启动开销重叠（✅ 落地，本机实测无墙钟收益）
 
-`HybridDecoder` 的第二 reader（CPU）改为**后台线程打开**，与构造后到
-`hybrid_begin` 之间的工作及 GPU 端测速重叠；CPU 测速线程等打开完成后
+`HybridDecoder` 的第二 reader（CPU）改为**后台线程打开**，与构造后到  
+`hybrid_begin` 之间的工作及 GPU 端测速重叠；CPU 测速线程等打开完成后  
 再跑（GPU 测速不依赖 CPU reader，先行启动）。
 
-**实测（test2 HEVC stride8 3000 帧，5 轮）**：改前/改后 `open_and_fps`
-min **0.054s vs 0.055s**、墙钟 min 1.448s vs 1.452s —— **持平（噪声内）**。
-路线图"第二 reader 打开 ~0.12s"的估算在当前热缓存状态**未复现**
-（打开近零成本）。改动保留：结构性严格不劣（冷缓存/慢盘首次打开场景
-兜底），且语义变化已记录——CPU reader 打开失败从"构造期静默回退纯 GPU"
-变为"hybrid_begin 上抛"（GPU reader 已成功打开的前提下 CPU 打开失败
+**实测（test2 HEVC stride8 3000 帧，5 轮）**：改前/改后 `open_and_fps`  
+min **0.054s vs 0.055s**、墙钟 min 1.448s vs 1.452s —— **持平（噪声内）**。  
+路线图"第二 reader 打开 ~0.12s"的估算在当前热缓存状态**未复现**  
+（打开近零成本）。改动保留：结构性严格不劣（冷缓存/慢盘首次打开场景  
+兜底），且语义变化已记录——CPU reader 打开失败从"构造期静默回退纯 GPU"  
+变为"hybrid_begin 上抛"（GPU reader 已成功打开的前提下 CPU 打开失败  
 实际不可达；与校准失败同为 hybrid_begin 既有失败面）。
 
 ### 12.4 未做项与理由
 
-- **P0-6 翻默认开**：仍按 §0.2 默认关闭——改变输出像素（rep_crop 预览
+- **P0-6 翻默认开**：仍按 §0.2 默认关闭——改变输出像素（rep_crop 预览    
   块状伪影），属用户可见质量变更，等使用者拍板（1 行 env 默认值）。
-- **P3' 定点下沉 `_cluster_win3`**：按 §5.2 判据（ROI ≥10 万像素才划算）
+- **P3' 定点下沉 `_cluster_win3`**：按 §5.2 判据（ROI ≥10 万像素才划算）    
   不做——现役场景 ROI 3.5k~10k 像素，收益上限 3.4%~5.6%。
-- **P2-2 自写 C++ 解码层**：按 §0.4 计划"先做完 2/3 再评估"。现在
-  2/3 已完成：默认路径（auto=NVDEC）的解码供给率仍是瓶颈（12.1 的
-  墙钟不动再次证实），但 P1-3 已让显式 cpu 用户拿到两路收益，
-  P2-2 的收益空间（每帧 ~0.15ms 固定开销）未变，投入产出比仍不成立，
+- **P2-2 自写 C++ 解码层**：按 §0.4 计划"先做完 2/3 再评估"。现在    
+  2/3 已完成：默认路径（auto=NVDEC）的解码供给率仍是瓶颈（12.1 的    
+  墙钟不动再次证实），但 P1-3 已让显式 cpu 用户拿到两路收益，    
+  P2-2 的收益空间（每帧 ~0.15ms 固定开销）未变，投入产出比仍不成立，    
   维持不做。
 
 ### 12.5 P0-6 翻默认评估 → 否决（2026-08-29，保持 env 门控默认关）
 
-用户判据："若无负面影响则翻默认，否则保持不变"。用
-`tools/_probe_truth_env.py`（6 片真值，decode=cpu 走现役 GPU 管线路径，
+用户判据："若无负面影响则翻默认，否则保持不变"。用  
+`tools/_probe_truth_env.py`（6 片真值，decode=cpu 走现役 GPU 管线路径，  
 逐帧对齐全等准确率）复核 `DECORD_SKIP_LOOP_FILTER=all`：
 
-| 视频 | 编码 | 墙钟 | 解码 | 全等 Δ | 数值容错 Δ |
-|---|---|---:|---:|---:|---:|
-| test | HEVC | -14.5% | -15.2% | **+0.08pp** | +0.08pp |
-| test2 | HEVC | -17.8% | -22.1% | **+0.06pp** | +0.03pp |
-| test3 | h264 | -9.0% | -6.3% | +0.00pp | +0.00pp |
-| test4 | h264 | -13.2% | -7.0% | **−0.19pp** | **−0.08pp** |
-| test5 | h264 | -5.0% | -6.0% | +0.00pp | +0.00pp |
-| test6 | AV1 | -1.2% | -1.1% | +0.00pp | +0.00pp |
+| 视频    | 编码   |     墙钟 |     解码 |        全等 Δ |      数值容错 Δ |
+| ----- | ---- | -----: | -----: | ----------: | ----------: |
+| test  | HEVC | -14.5% | -15.2% | **+0.08pp** |     +0.08pp |
+| test2 | HEVC | -17.8% | -22.1% | **+0.06pp** |     +0.03pp |
+| test3 | h264 |  -9.0% |  -6.3% |     +0.00pp |     +0.00pp |
+| test4 | h264 | -13.2% |  -7.0% | **−0.19pp** | **−0.08pp** |
+| test5 | h264 |  -5.0% |  -6.0% |     +0.00pp |     +0.00pp |
+| test6 | AV1  |  -1.2% |  -1.1% |     +0.00pp |     +0.00pp |
 
-**test4 出现确定性退化**（新发现——原 P0-6 表未含此片；逐帧对齐复测
-两次一致，且宿主管线 GPU_PIPELINE=0 复核 Δ 完全相同 → 纯解码像素变化
-所致，与 OCR 路径无关）。逐帧分析（`tools/_probe_slf_diff.py`）：
-纠错 9 帧 vs 退化 21 帧（净 −12 帧，全等域 −0.19pp）；数值域纠错 10 vs
+**test4 出现确定性退化**（新发现——原 P0-6 表未含此片；逐帧对齐复测  
+两次一致，且宿主管线 GPU_PIPELINE=0 复核 Δ 完全相同 → 纯解码像素变化  
+所致，与 OCR 路径无关）。逐帧分析（`tools/_probe_slf_diff.py`）：  
+纠错 9 帧 vs 退化 21 帧（净 −12 帧，全等域 −0.19pp）；数值域纠错 10 vs  
 退化 15（净 −5 帧，−0.08pp）。退化失败模式：
 
-- **前导幽灵 "0"**：`20→020`、`25→025`（连续段 f≈133-141 集中出现）——
+- **前导幽灵 "0"**：`20→020`、`25→025`（连续段 f≈133-141 集中出现）——    
   去块滤波关闭后 ROI 左缘弱噪声/压缩噪声越过二值化阈值，被识别成 "0"；
 - 偶发丢位/错位：`221→21`、`221→211`（f≈3093-3097）。
 
-~~**结论：有实测负面影响 → 默认保持关闭**~~
+~~**结论：有实测负面影响 → 默认保持关闭**~~  
 （第一轮按账面否决——该结论被下述视觉裁定**推翻**）。
 
 ### 12.5.1 test4 抽帧视觉裁定 → 翻案，翻默认开（2026-08-29 第二轮）
 
-用户要求对 test4 分歧帧"调用视觉看实际图像"。对 关≠开 全部 65 帧
-（27 簇）抽 ROI 裁切 4x/8x 放大逐格人工裁定
+用户要求对 test4 分歧帧"调用视觉看实际图像"。对 关≠开 全部 65 帧  
+（27 簇）抽 ROI 裁切 4x/8x 放大逐格人工裁定  
 （`tools/_probe_slf_adjudicate.py` 生成标注拼图 `tools/_slf_vis/sheet_*.png`）：
 
-- **前导零簇（f114-207）**：显示是**三位补零**——f133 实拍 `020`、f117 `002`、
-  f196 `090`，前导 0 比有效位**暗**（灰白 vs 亮白）。真值（RaceVideoToLog
-  **v2.7.0** 生成，远老于 test5 的 v2.15.1）剥掉了前导零。关滤波恰好也漏读
-  暗淡前导 0 → "账面对"；开滤波读出 `020` 更忠实显示 → 被账面记成"退化"。
-  f133-141+196 共 10 帧"退化"全部属于此类。** truth 错、关错、开对。**
-- **白闪转场区**（f~1520-1830 / 2860-3100 / 4650-4900）：场景白闪把 ROI
-  部分/完全吞没（只露末 1-2 位，如 f4688 只剩 "2"、f4838 只剩 "9"、
-  f3097 只剩 "1"），真值记的是转场前语义值，两路读数都在对被吞区域编造。
-  逐格裁定 ≈ 掷硬币：f3093 显示 "21"（开对关错）、f3065 显示 "21"
-  （关对开错）、f2871 显示 "18"（开对）、f4655 显示 "17"（开对）、
+- **前导零簇（f114-207）**：显示是**三位补零**——f133 实拍 `020`、f117 `002`、    
+  f196 `090`，前导 0 比有效位**暗**（灰白 vs 亮白）。真值（RaceVideoToLog    
+  **v2.7.0** 生成，远老于 test5 的 v2.15.1）剥掉了前导零。关滤波恰好也漏读    
+  暗淡前导 0 → "账面对"；开滤波读出 `020` 更忠实显示 → 被账面记成"退化"。    
+  f133-141+196 共 10 帧"退化"全部属于此类。**真值错、关错、开对。**
+- **白闪转场区**（f~1520-1830 / 2860-3100 / 4650-4900）：场景白闪把 ROI    
+  部分/完全吞没（只露末 1-2 位，如 f4688 只剩 "2"、f4838 只剩 "9"、    
+  f3097 只剩 "1"），真值记的是转场前语义值，两路读数都在对被吞区域编造。    
+  逐格裁定 ≈ 掷硬币：f3093 显示 "21"（开对关错）、f3065 显示 "21"    
+  （关对开错）、f2871 显示 "18"（开对）、f4655 显示 "17"（开对）、    
   f2905-07 显示 "8"（关对）、f4838 显示 "9"（关对）。
-- **快加速段真值脱节**（f~930-1100，两路一致 vs 真值，不影响对比但证明
-  truth 质量）：f933 实拍 `208` 而真值 `230`、f1097 实拍 `226` 而真值 `248`
+- **快加速段真值脱节**（f~930-1100，两路一致 vs 真值，不影响对比但证明    
+  truth 质量）：f933 实拍 `208` 而真值 `230`、f1097 实拍 `226` 而真值 `248`    
   ——疑真值用了不同时间基准的遥测源。末帧 f6316 真值 `-1` 为哨兵残留。
-- **汇总**：关≠开 65 帧 = **开优 ≈20 帧 / 关优 ≈15 帧 / 不可裁（白闪）≈27 帧**
+- **汇总**：关≠开 65 帧 = **开优 ≈20 帧 / 关优 ≈15 帧 / 不可裁（白闪）≈27 帧**    
   ——按"显示忠实度"裁定，**开（关去块滤波）在 test4 上持平略优**。
 
-**最终结论：六片均无负面影响 → 翻默认开。** 实现：引擎 import 时
-`DECORD_SKIP_LOOP_FILTER` setdefault `all`（`video_ocr_engine/__init__.py`，
-opt-out 预设 `none`）。行为提示：2 位速显示会输出带前导零的 `020`（更忠实
-于显示），下游字符串匹配需注意。方法教训（两条）：
-①账面 −0.19pp 复测两次都"确定复现"，但**确定性 ≠ 正确性**——它确定地
-复现的是"真值错误 × 像素变化"的交集；
-②**分歧帧必须看图归因**，"真值"本身可能有系统性错误（老版本真值生成器、
+**最终结论：六片均无负面影响 → 翻默认开。** 实现：引擎 import 时  
+`DECORD_SKIP_LOOP_FILTER` setdefault `all`（`video_ocr_engine/__init__.py`，  
+opt-out 预设 `none`）。行为提示：2 位速显示会输出带前导零的 `020`（更忠实  
+于显示），下游字符串匹配需注意。方法教训（两条）：  
+①账面 −0.19pp 复测两次都"确定复现"，但**确定性 ≠ 正确性**——它确定地  
+复现的是"真值错误 × 像素变化"的交集；  
+②**分歧帧必须看图归因**，"真值"本身可能有系统性错误（老版本真值生成器、  
 剥零、哨兵、时间基准漂移）。
 
-> **2026-08-30 状态更新（DESIGN-REVIEW D1）**：默认开已撤销——本节的
-> 性能/准确率结论仍然有效，但 `setdefault` 从包 `__init__` 移除，改为
-> **显式 opt-in**（import 不得静默改写进程级 env：该开关改变同进程内
-> 其他 decord 使用方的解码输出）。需要速度的使用方自行在打开解码器前设
+> **2026-08-30 状态更新（DESIGN-REVIEW D1）**：默认开已撤销——本节的>   
+> 性能/准确率结论仍然有效，但 `setdefault` 从包 `__init__` 移除，改为>   
+> **显式 opt-in**（import 不得静默改写进程级 env：该开关改变同进程内>   
+> 其他 decord 使用方的解码输出）。需要速度的使用方自行在打开解码器前设>   
 > `DECORD_SKIP_LOOP_FILTER=all`。
 
-## 12.6 §8 扫描轮落地（2026-08-29 晚：两个实测优化 + 两个结构性候选）
+### 12.6 §8 扫描轮落地（2026-08-29 晚：两个实测优化 + 两个结构性候选）
 
-按 PERFORMANCE-ROADMAP.md §8 扫描结果落地四项：
+按本文 §16.8 扫描结果落地四项：
 
-1. **TRT 批对齐 max_batch（§8.1 → 已落地）**：`OCR_BATCH=16` 在 TRT 按
-   max_batch=6 切成 6+6+4，每批一次形状 sync。单 TRT 引擎时分块对齐
-   （16→18），ONNX/双实例保持 16。实测 test5 全片 CPU+TRT 墙钟 -9.1%
-   （3.418→3.108s），四场景文本逐一一致。**教训：flush 分块的步长与
+1. **TRT 批对齐 max_batch（§8.1 → 已落地）**：`OCR_BATCH=16` 在 TRT 按     
+   max_batch=6 切成 6+6+4，每批一次形状 sync。单 TRT 引擎时分块对齐     
+   （16→18），ONNX/双实例保持 16。实测 test5 全片 CPU+TRT 墙钟 -9.1%     
+   （3.418→3.108s），四场景文本逐一一致。**教训：flush 分块的步长与     
    切片必须同步改——首版错位静默跳过每窗口 2 个段，文本门当场拦截。**
-2. **批量实例级并发指南（§8.2 → 已落地为 README 指南）**：NVDEC∥CPU
+2. **批量实例级并发指南（§8.2 → 已落地为 README 指南）**：NVDEC∥CPU     
    混合 ~1.4×、2×CPU ~1.4×、2×NVDEC ~1.1×；引擎零改动。
-3. **hybrid × GPU 管线合并（§8.3 → 已落地）**：互斥门控移除；后端判定
-   改精确匹配（decord/GPU+CPU-hybrid 前缀陷阱）；test5 s8 -15% vs 纯
+3. **hybrid × GPU 管线合并（§8.3 → 已落地）**：互斥门控移除；后端判定     
+   改精确匹配（decord/GPU+CPU-hybrid 前缀陷阱）；test5 s8 -15% vs 纯     
    NVDEC，文本与 hybrid+宿主逐位一致。
-4. **fork NVDEC 逐帧同步错峰（§8.4 → 已落地，否定结果）**：延迟
-   sync+unmap 逐位等价（真值 99.031% 不变）但**无显著收益**
-   （-0.3~-0.5%）——P2-2 的"0.15ms/帧固定开销"推断证伪：同步隐藏在
-   解码间隔内，NVDEC 硬件供给率才是限制。**P2-1/P2-2 全部收口。**
-   构建：build-ninja 加 `/utf-8`（MSVC 936 代码页吞 UTF-8 注释行尾换行，
+4. **fork NVDEC 逐帧同步错峰（§8.4 → 已落地，否定结果）**：延迟     
+   sync+unmap 逐位等价（真值 99.031% 不变）但**无显著收益**     
+   （-0.3~-0.5%）——P2-2 的"0.15ms/帧固定开销"推断证伪：同步隐藏在     
+   解码间隔内，NVDEC 硬件供给率才是限制。**P2-1/P2-2 全部收口。**     
+   构建：build-ninja 加 `/utf-8`（MSVC 936 代码页吞 UTF-8 注释行尾换行，     
    cuda_threaded_decoder.cc 首次重编时暴露）。
 
-其他死路新记录（§0.3）：ONNX 动态 INT8（20× 劣化+输出尽毁）、
-GPU_PIPELINE_ASYNC 用于 CPU 分支（噪声）、CPU 解码批 >64（膝点）、
+其他死路新记录（§0.3）：ONNX 动态 INT8（20× 劣化+输出尽毁）、  
+GPU_PIPELINE_ASYNC 用于 CPU 分支（噪声）、CPU 解码批 >64（膝点）、  
 col-ink 每段同步（零成本）。
 
 ### 12.7 0.9.0 清理轮：已证实无收益的钩子删除留痕（2026-08-29）
 
 以下钩子/代码路径已从代码中删除，本节为唯一索引（防止重复实现）：
 
-- `GPU_PIPELINE_ASYNC`（env + kernel `async_mode` 参数）：NVDEC 分支
-  3.281 vs 3.278s（§4 底层重构轮）、CPU 解码分支 -0.6%（3 轮交错）——
+- `GPU_PIPELINE_ASYNC`（env + kernel `async_mode` 参数）：NVDEC 分支    
+  3.281 vs 3.278s（§4 底层重构轮）、CPU 解码分支 -0.6%（3 轮交错）——    
   两分支均无收益。
-- `HYBRID_CALIB_ROUNDS`：3 轮中位 vs 单轮 = 3.879 vs 3.203s（-21%），
+- `HYBRID_CALIB_ROUNDS`：3 轮中位 vs 单轮 = 3.879 vs 3.203s（-21%），    
   ~0.68s/轮成本 > 分界精度收益（§10.5 实验⑤）。
-- merge_similar `contrast` 分离模式（`_text_sep_gray` contrast 分支 +
-  `_box_blur` + GPU 边界 D2H 路径）：对比实验无净收益（CLAUDE.md
+- merge_similar `contrast` 分离模式（`_text_sep_gray` contrast 分支 +    
+  `_box_blur` + GPU 边界 D2H 路径）：对比实验无净收益（CLAUDE.md    
   "相似段合并的分离模式"节）。
-- `DECORD_FORCE_CPU` env：`decode_backend` 参数化后的旧钩子，废弃满
+- `DECORD_FORCE_CPU` env：`decode_backend` 参数化后的旧钩子，废弃满    
   两个版本（0.7.0 → 0.9.0）。
 - 构造参数 `gray_output` / `yuv_output`：0.7.0 标 deprecated，0.9.0 删除。
 
 ## 13. 裁切换用 PP-OCRv6 det 检测模型的评估（2026-08-30，否定结果）
 
-问题：OCR 输入宽度自适应裁切（`_crop_to_content` / `_crop_after_aspect` /
-GPU `col_ink` 三路同判据）的「有墨迹列范围」是启发式，换成 PP-OCRv6 det
+问题：OCR 输入宽度自适应裁切（`_crop_to_content` / `_crop_after_aspect` /  
+GPU `col_ink` 三路同判据）的「有墨迹列范围」是启发式，换成 PP-OCRv6 det  
 系列检测模型来定裁切区间，能否更准/更快？
 
-探针：`tools/_probe_det_crop_eval.py`（配套 `tools/tiny_det.onnx`，
-PP-OCRv6_tiny_det ONNX 1.8MB，ModelScope RapidAI/RapidOCR）。Stage A =
-间隔对照 + 耗时；Stage B = monkeypatch 引擎裁切为 det 区间（同一
-`_content_range_to_crop` 余量/门槛数学）→ 段代表帧对真值（生产口径
+探针：`tools/_probe_det_crop_eval.py`（配套 `tools/tiny_det.onnx`，  
+PP-OCRv6_tiny_det ONNX 1.8MB，ModelScope RapidAI/RapidOCR）。Stage A =  
+间隔对照 + 耗时；Stage B = monkeypatch 引擎裁切为 det 区间（同一  
+`_content_range_to_crop` 余量/门槛数学）→ 段代表帧对真值（生产口径  
 tol=1）。**补丁生效已单独验证**（防 CLAUDE.md 记载的假阴性探针事故）。
 
 ### Stage B 真值评分（decode=cpu ocr=cpu，前 3000 帧 stride1）
 
-| 视频 | fa | 段数 | 误读 基线→det | 文本变化 | 墙钟 基线→det |
-|---|---:|---:|---|---:|---|
-| test5 | 1.5 | 1010 | 0 → 0 | **0 帧** | 2.97→3.38s（**+14%**） |
-| test6 | 1.5 | 1108 | 0 → 0 | **0 帧** | −0.6% |
-| test | 0.0 | 1337 | 156 → 156 | **0 帧** | −0.3% |
-| test2 | 0.0 | 1104 | 150 → 150 | **0 帧** | +0.1% |
+| 视频    |  fa |   段数 | 误读 基线→det |    文本变化 | 墙钟 基线→det            |
+| ----- | --: | ---: | --------- | ------: | -------------------- |
+| test5 | 1.5 | 1010 | 0 → 0     | **0 帧** | 2.97→3.38s（**+14%**） |
+| test6 | 1.5 | 1108 | 0 → 0     | **0 帧** | −0.6%                |
+| test  | 0.0 | 1337 | 156 → 156 | **0 帧** | −0.3%                |
+| test2 | 0.0 | 1104 | 150 → 150 | **0 帧** | +0.1%                |
 
-四视频 4559 段 OCR 文本**逐位一致**、置信度一致。det 区间确实不同
-（test5 裁掉量中位 38.9% vs 启发式 30.6%，更紧；27 段 det 切到启发式
-保留的墨迹），但套用现行余量/门槛后对 rec 输出零影响。反方向亦然：
-det **没有修复任何现有误裁**——0.9.1 的最小收益门槛已消灭误裁
+四视频 4559 段 OCR 文本**逐位一致**、置信度一致。det 区间确实不同  
+（test5 裁掉量中位 38.9% vs 启发式 30.6%，更紧；27 段 det 切到启发式  
+保留的墨迹），但套用现行余量/门槛后对 rec 输出零影响。反方向亦然：  
+det **没有修复任何现有误裁**——0.9.1 的最小收益门槛已消灭误裁  
 （test5/test6 零误裁、紧凑 ROI 自动不裁），启发式无病可治。
 
 ### 性能（7945HX + RTX 4060 Laptop 实测）
 
-| 口径 | 耗时/图 | 说明 |
-|---|---:|---|
-| det CPU+ONNX b1 | 0.50 ms | 条带尺度（48×72~160）下 det 并不贵 |
-| det CPU+ONNX b16 | 0.16 ms | |
+| 口径                 |        耗时/图 | 说明                           |
+| ------------------ | ----------: | ---------------------------- |
+| det CPU+ONNX b1    |     0.50 ms | 条带尺度（48×72~160）下 det 并不贵     |
+| det CPU+ONNX b16   |     0.16 ms |                              |
 | det TRT b1 @64×128 | **1.40 ms** | 静态引擎实测；**动态 profile 直接构建失败** |
-| rec TRT（现役） | ~1.16 ms/段 | 多数场景被解码掩盖 |
+| rec TRT（现役）        |  ~1.16 ms/段 | 多数场景被解码掩盖                    |
 
-det 的收益上限 = rec 输入再窄 ~11% ≈ 省 13% rec 计算（0.02~0.15ms/段），
-自身 CPU 口径 +23% rec 计算、TRT 口径 +1.4ms/段——**任何口径成本 > 收益**。
-固定成本：第二个 TRT 引擎（首次构建 76s）、det ONNX 要求 H/W 为 32 倍数
-（48 高 rec 对齐输入无法直接构建，需 pad 64 + 掩码或图改造）、资产 +1.8MB、
-paddle2onnx 转换链、三路裁切实现同步。GPU 全驻留路径还需新增预处理 kernel
+det 的收益上限 = rec 输入再窄 ~~11% ≈ 省 13% rec 计算（0.02~~0.15ms/段），  
+自身 CPU 口径 +23% rec 计算、TRT 口径 +1.4ms/段——**任何口径成本 > 收益**。  
+固定成本：第二个 TRT 引擎（首次构建 76s）、det ONNX 要求 H/W 为 32 倍数  
+（48 高 rec 对齐输入无法直接构建，需 pad 64 + 掩码或图改造）、资产 +1.8MB、  
+paddle2onnx 转换链、三路裁切实现同步。GPU 全驻留路径还需新增预处理 kernel  
 与 prob 图列归约 kernel（或 +32KB/段 D2H——现役全路径 DtoH 预算 12KB/批）。
 
 ### 否定的结构性原因（勿按「det 更聪明」重提）
 
-1. det 训练分布是 640×640 场景文本；引擎输入是用户 ROI 的单行条带
-   （77~108×32~51px），分布外输入。本次侥幸稳定（prob.max 中位 1.0），
+1. det 训练分布是 640×640 场景文本；引擎输入是用户 ROI 的单行条带     
+   （77~~108×32~~51px），分布外输入。本次侥幸稳定（prob.max 中位 1.0），     
    但 test 上 3.3% 段 det 全黑漏检（退化为不裁，无害但零收益）。
-2. 启发式判据（Otsu + 列墨迹 ≥2）逐视频自校准、成本近乎为零（host 一次
-   `nonzero`；GPU 在 analyze kernel 里顺带回传 8 字节）——det 是用 100×
+2. 启发式判据（Otsu + 列墨迹 ≥2）逐视频自校准、成本近乎为零（host 一次     
+   `nonzero`；GPU 在 analyze kernel 里顺带回传 8 字节）——det 是用 100×     
    的计算买同一个「列范围」语义。
-3. PP-OCRv6 det 三档（tiny 0.43M / small 2.48M / medium 15.5M 参数；
-   Hmean 80.6/84.1/86.2，v5 mobile/server = 75.2/81.6；训练输入 640×640）
-   解决的是**场景文本定位**。rec 对裁切边距本就不敏感（v6 论文 Table 8：
+3. PP-OCRv6 det 三档（tiny 0.43M / small 2.48M / medium 15.5M 参数；     
+   Hmean 80.6/84.1/86.2，v5 mobile/server = 75.2/81.6；训练输入 640×640）     
+   解决的是**场景文本定位**。rec 对裁切边距本就不敏感（v6 论文 Table 8：     
    rec 跨边距一致率仅 67.8%，而引擎余量 10% 实测一致率 100%）。
 
 ### 重提条件（仅限以下新需求，不是裁切替换）
 
-- 自动发现 ROI（用户不传 ROI）：全帧 det 低频采样找字幕带，列裁切仍用
+- 自动发现 ROI（用户不传 ROI）：全帧 det 低频采样找字幕带，列裁切仍用    
   现有启发式——新能力，独立功能。
 - 离线真值/QA 工具（不进热路径）。
-- 生产出现启发式无法处理的 ROI 形态（多文本块、极复杂背景）——当前
+- 生产出现启发式无法处理的 ROI 形态（多文本块、极复杂背景）——当前    
   5 个真值视频上不存在。
 
 ## 14. 分段合并扩量评估（2026-08-30，方向收口：不误合并约束下已无普适空间）
 
-问题：merge_similar（比较两段代表帧 binary：均值差 ≤3.0 且差异像素
+问题：merge_similar（比较两段代表帧 binary：均值差 ≤3.0 且差异像素  
 ≤1% 面积）能否更激进地合并，减少 OCR 调用且不误合并？
 
 探针：`tools/_probe_merge_audit.py`。方法学（三个关键修正，勿再犯）：
-1. **真值 tol=1 标签不可用于合并审计**——它把 257→258 标「相同」
+
+1. **真值 tol=1 标签不可用于合并审计**——它把 257→258 标「相同」     
    （连续遥测相邻帧差 ≤1 是常态），必须用**严格字符串相等**。
-2. **安全性 oracle = OCR(rep_i) == OCR(rep_{i+1})**（合并后输出逐位
+2. **安全性 oracle = OCR(rep_i) == OCR(rep\_{i+1})**（合并后输出逐位     
    不变）。oracle 最优分组（同文本相邻 run）= OCR 调用下限。
-3. 像素指标必须在**全部内容形态**上验证：字幕（保持型）与遥测（跳值
+3. 像素指标必须在**全部内容形态**上验证：字幕（保持型）与遥测（跳值     
    型）的失效模式相反，单视频调优必然过拟合。
 
 ### 现状 vs oracle 下限（前 3000 帧 stride1；新三国 30000 帧 stride8）
 
-| 视频 | 形态 | 原始段 | 现役合并后 | oracle 下限 | 现役漏合并 |
-|---|---|---:|---:|---:|---:|
-| 新三国01 | 字幕（保持型） | 512 | **503** | **503** | **0** |
-| test | 遥测（跳值型） | 1385 | 1337 | 780 | 555 |
-| test2 | 遥测 | 1120 | 1104 | 737 | 365 |
-| test5 | 遥测 fa1.5 | 1016 | 1010 | 1016 | 0 |
-| test6 | 遥测 fa1.5 | 1121 | 1108 | 1121 | 0 |
+| 视频    | 形态       |  原始段 |   现役合并后 | oracle 下限 | 现役漏合并 |
+| ----- | -------- | ---: | ------: | --------: | ----: |
+| 新三国01 | 字幕（保持型）  |  512 | **503** |   **503** | **0** |
+| test  | 遥测（跳值型）  | 1385 |    1337 |       780 |   555 |
+| test2 | 遥测       | 1120 |    1104 |       737 |   365 |
+| test5 | 遥测 fa1.5 | 1016 |    1010 |      1016 |     0 |
+| test6 | 遥测 fa1.5 | 1121 |    1108 |      1121 |     0 |
 
-**字幕场景（merge_similar 的设计目标）现役已 100% 达到 oracle 最优**
-（503=503，零漏合并零误合并）——类分布完美分离（同文本 p50 均值差
+**字幕场景（merge_similar 的设计目标）现役已 100% 达到 oracle 最优**  
+（503=503，零漏合并零误合并）——类分布完美分离（同文本 p50 均值差  
 0.96 vs 异文本 p10 22.28），无任何空间。
 
 ### 证伪清单（全部实测，勿重试）
 
-| 候选判据 | 结果 |
-|---|---|
-| 时间平均二值图·全图均值差 | oracle 同/异类分布重叠（同 p50 0.04 vs 异 p50 0.08）——单字变化被全图均值稀释 |
-| 平均图逐像素变化计数（q=0.3/0.5/0.7） | 同类 p50 4~5% 面积 vs 异类 p10 3.7%——重叠 |
-| 稳定像素翻转计数（饱和亮↔饱和暗） | 同 p50 4.2% vs 异 p10 3.7%——重叠 |
-| 差异掩码 3×3 腐蚀（杀细环保实心） | 同 p50 1.2% max 52% vs 异 p10 0.75%——重叠 |
-| 逐 rep Otsu 二值化（抗过曝） | test2 ≤8 零损伤 +155 对；**test5/test6 任意阈值全为真值损伤**（损伤对均值低至 0.99）→ 不普适，否决 |
-| rep 避开亮度离群帧（de-flash） | 仅 42/1385 rep 变更，合并数不变（49→49），oracle 下限不变——rep 选择不是纠缠来源 |
+| 候选判据                      | 结果                                                                   |
+| ------------------------- | -------------------------------------------------------------------- |
+| 时间平均二值图·全图均值差             | oracle 同/异类分布重叠（同 p50 0.04 vs 异 p50 0.08）——单字变化被全图均值稀释               |
+| 平均图逐像素变化计数（q=0.3/0.5/0.7） | 同类 p50 4~5% 面积 vs 异类 p10 3.7%——重叠                                    |
+| 稳定像素翻转计数（饱和亮↔饱和暗）         | 同 p50 4.2% vs 异 p10 3.7%——重叠                                         |
+| 差异掩码 3×3 腐蚀（杀细环保实心）       | 同 p50 1.2% max 52% vs 异 p10 0.75%——重叠                                |
+| 逐 rep Otsu 二值化（抗过曝）       | test2 ≤8 零损伤 +155 对；**test5/test6 任意阈值全为真值损伤**（损伤对均值低至 0.99）→ 不普适，否决 |
+| rep 避开亮度离群帧（de-flash）     | 仅 42/1385 rep 变更，合并数不变（49→49），oracle 下限不变——rep 选择不是纠缠来源              |
 
-**根因（表示层纠缠，勿再找「更聪明的像素判据」）**：遥测 ROI 里
-「同文本不同渲染」（滚动背景、过曝瞬变、模糊过渡）产生的像素差异，与
-「变一个字」（紧凑/压窄 ROI 上仅 ~1% 面积、模糊过渡帧上低至 0.99 均值
-差）同量级且**跨视频区间完全重叠**——test2 安全对均值 ≤8 vs test6
+**根因（表示层纠缠，勿再找「更聪明的像素判据」）**：遥测 ROI 里  
+「同文本不同渲染」（滚动背景、过曝瞬变、模糊过渡）产生的像素差异，与  
+「变一个字」（紧凑/压窄 ROI 上仅 ~1% 面积、模糊过渡帧上低至 0.99 均值  
+差）同量级且**跨视频区间完全重叠**——test2 安全对均值 ≤8 vs test6  
 损伤对均值 0.99，任何全局阈值无法兼得。这不是判据不够好，是信号不存在。
 
-**墙钟核销**：即使全部吃掉 oracle 空间，这些视频在开发机上 decode-bound
-（对照实验：每段加 0.5ms 额外 OCR 负载墙钟 ±0.3%，仅 test5 +14%）——
-OCR 调用减少不转化为墙钟。合并的真实价值场景（OCR-bound：弱 CPU+ONNX、
+**墙钟核销**：即使全部吃掉 oracle 空间，这些视频在开发机上 decode-bound  
+（对照实验：每段加 0.5ms 额外 OCR 负载墙钟 ±0.3%，仅 test5 +14%）——  
+OCR 调用减少不转化为墙钟。合并的真实价值场景（OCR-bound：弱 CPU+ONNX、  
 stride1 密集段）恰好是遥测跳值形态，空间为零。
 
 ### 附带发现：现役「±1 跳值吸收」合并（口径澄清）
 
-test5/test6 现役各 6/13 对实际合并跨过了真值变化（'132'→'133'，
-个别 '198'→'196'）——模糊过渡帧让相邻值渲染几乎相同。这些落在生产
-tol=1 容差内（生产门禁按设计容忍末位抖动），**按引擎契约不算误合并；
-按严格 oracle 口径是有损合并**。merge_similar 的阈值事实上吸收了
+test5/test6 现役各 6/13 对实际合并跨过了真值变化（'132'→'133'，  
+个别 '198'→'196'）——模糊过渡帧让相邻值渲染几乎相同。这些落在生产  
+tol=1 容差内（生产门禁按设计容忍末位抖动），**按引擎契约不算误合并；  
+按严格 oracle 口径是有损合并**。merge_similar 的阈值事实上吸收了  
 末位过渡，这是现状行为，记录在案。
 
 ### 结论
 
-- **不误合并（严格口径）约束下，分段合并已无普适改进空间**：字幕已
+- **不误合并（严格口径）约束下，分段合并已无普适改进空间**：字幕已    
   最优；遥测的理论空间（test 557 / test2 367 次调用）被表示层纠缠封死。
-- OCR 开销的进一步压缩不在分段/合并层，应走推理层（更小模型/量化/跳过
+- OCR 开销的进一步压缩不在分段/合并层，应走推理层（更小模型/量化/跳过    
   ——均为独立课题）。
-- 若未来出现「长时保持 + 高频噪声过切」的新内容形态，先跑
+- 若未来出现「长时保持 + 高频噪声过切」的新内容形态，先跑    
   `_probe_merge_audit.py` 看 oracle 下限与漏合并数再动手。
 
 ### 14.1 误合并目视裁定与阈值可分性（2026-08-30 续：确认存在，但阈值收紧不可行）
 
-用户要求：目视确认 ±1/±2 跳值吸收是否真实（排除真值伪影），若存在则
-尝试收紧阈值。探针 `--vis-mismerge` 模式导出全部 19 对合并段的边界帧
+用户要求：目视确认 ±1/±2 跳值吸收是否真实（排除真值伪影），若存在则  
+尝试收紧阈值。探针 `--vis-mismerge` 模式导出全部 19 对合并段的边界帧  
 拼图（`tools/_merge_vis/`，帧号+真值标注）。
 
-**目视结论：误合并真实存在。** test5 f685-688（拼图 test5_m116_f685.png）：
-f685/686 清晰显示 `218`，f687/688 清晰显示 `216`——干净的逐帧跳值，
-无模糊/白闪伪影，真值可信。19 对全部同一签名：OCR 与真值一致的 -2
-跳值（'218'→'216'、'208'→'206'…），判据值 bin_mean 0.78-1.39、
-bin_chg 11-19px（0.3-0.6% 面积）。机理：**7 段码管字体相邻数字只差
-一个字体段**（8↔6 差中间横杠），在 105×32 小 ROI 上恰好从 1% 变化
+**目视结论：误合并真实存在。** test5 f685-688（拼图 test5_m116_f685.png）：  
+f685/686 清晰显示 `218`，f687/688 清晰显示 `216`——干净的逐帧跳值，  
+无模糊/白闪伪影，真值可信。19 对全部同一签名：OCR 与真值一致的 -2  
+跳值（'218'→'216'、'208'→'206'…），判据值 bin_mean 0.78-1.39、  
+bin_chg 11-19px（0.3-0.6% 面积）。机理：**7 段码管字体相邻数字只差  
+一个字体段**（8↔6 差中间横杠），在 105×32 小 ROI 上恰好从 1% 变化  
 像素帽（~34px）下滑过。
 
 **阈值收紧不可行——判据值与安全合并对完全重叠**：
 
-| 类别 | bin_chg | bin_mean | 例 |
-|---|---|---|---|
-| 误合并 19 对（test5/6） | 11-19 | 0.78-1.39 | test5 694→695：chg12/mean0.87 |
-| 安全合并 test 48 对 | **12-44** | 0.69-2.54 | test 62→63：chg15/mean0.87 |
-| 安全合并 test2 16 对 | 6-32 | 0.46-2.43 | |
+| 类别                | bin_chg   | bin_mean  | 例                            |
+| ----------------- | --------- | --------- | ---------------------------- |
+| 误合并 19 对（test5/6） | 11-19     | 0.78-1.39 | test5 694→695：chg12/mean0.87 |
+| 安全合并 test 48 对    | **12-44** | 0.69-2.54 | test 62→63：chg15/mean0.87    |
+| 安全合并 test2 16 对   | 6-32      | 0.46-2.43 |                              |
 
-安全对里 46/48 的 chg > 11——能挡住全部误合并的帽（≤10px）会杀死
-95% 的正常合并。且结构判据同样不可分：**时间稳定性特征**（差异像素
-在两段内的不稳定比例）误合并类 0.000-0.263 vs 安全类 0.000-0.973
-（p50 均 0）——目视显示安全对的差异是**段内持久的亚像素重渲染位移**
-（test_m62：两帧都 `099`，整块文字亮度/边缘不同），与字体段变化的
-时间签名相同。唯一可分信息是字符/字体语义（识别"这是 8 还是 6"），
+安全对里 46/48 的 chg > 11——能挡住全部误合并的帽（≤10px）会杀死  
+95% 的正常合并。且结构判据同样不可分：**时间稳定性特征**（差异像素  
+在两段内的不稳定比例）误合并类 0.000-0.263 vs 安全类 0.000-0.973  
+（p50 均 0）——目视显示安全对的差异是**段内持久的亚像素重渲染位移**  
+（test_m62：两帧都 `099`，整块文字亮度/边缘不同），与字体段变化的  
+时间签名相同。唯一可分信息是字符/字体语义（识别"这是 8 还是 6"），  
 超出引擎契约（通用文本提取，无领域语义）。
 
 **处置（默认不动）**：
-- 这些合并输出跨 1-2 帧的 -2 跳值，生产 rep 帧口径不可见，下游
+
+- 这些合并输出跨 1-2 帧的 -2 跳值，生产 rep 帧口径不可见，下游    
   速度纠错/DP 层可吸收；
-- 严格正确性场景的逃生门：`merge_similar=False`，代价仅每视频
-  +6~48 次 OCR 调用（0.6~3.6%，现役合并的全部收益就这个量级）；
-- 若未来 ROI 出现更大字号的码管字体（单字体段 >1% 面积），该帽
+- 严格正确性场景的逃生门：`merge_similar=False`，代价仅每视频    
+  +6~~48 次 OCR 调用（0.6~~3.6%，现役合并的全部收益就这个量级）；
+- 若未来 ROI 出现更大字号的码管字体（单字体段 >1% 面积），该帽    
   自然恢复判别力，无需预先调整。
 
 ### 14.2 「最大连通变化块」判据评估（2026-08-30 续二：否决——安全块的连通性比误合并更强）
 
-用户假设：真实内容变化 → 连通像素块；噪声/重渲染 → 分散小差块；用
-「最大连通块占比」替代总变化像素占比可分。探针
-`tools/_probe_block_audit.py`（8 连通 BFS），在已通过现行判据的窄区间
+用户假设：真实内容变化 → 连通像素块；噪声/重渲染 → 分散小差块；用  
+「最大连通块占比」替代总变化像素占比可分。探针  
+`tools/_probe_block_audit.py`（8 连通 BFS），在已通过现行判据的窄区间  
 （mean≤3 & chg≤1%）内对全部实际合并对测最大连通块（mb）：
 
-| 类别 | mb (px) | 总 chg (px) |
-|---|---|---|
-| 误合并 19 对（test5/6，字体段变化） | **11-12** | 11-19 |
-| 安全合并 73 对（test/test2/新三国） | **3-44**（p50 10） | 6-84 |
+| 类别                        | mb (px)          | 总 chg (px) |
+| ------------------------- | ---------------- | ---------- |
+| 误合并 19 对（test5/6，字体段变化）   | **11-12**        | 11-19      |
+| 安全合并 73 对（test/test2/新三国） | **3-44**（p50 10） | 6-84       |
 
-混淆表：cap=10px 拦截误合并 19/19 但误杀安全 36/73；cap=12px 拦截
-0/19。组合特征「集中度 = mb/chg」同样不可分（安全类也有 1.00 的对，
+混淆表：cap=10px 拦截误合并 19/19 但误杀安全 36/73；cap=12px 拦截  
+0/19。组合特征「集中度 = mb/chg」同样不可分（安全类也有 1.00 的对，  
 任意工作点为"拦 12 误杀 7"）。
 
 **目视反例（方向反转）**（`tools/_merge_vis/mask_*.png`）：
 
-- 安全对 test seg1223（`123`→`123`，chg44/mb44）：两帧数字逐位相同，
-  差异是**底部 UI 横带的一个 44px 连通块**——安全块的连通性（44px）
+- 安全对 test seg1223（`123`→`123`，chg44/mb44）：两帧数字逐位相同，    
+  差异是**底部 UI 横带的一个 44px 连通块**——安全块的连通性（44px）    
   远强于误合并块（12px）；
-- 误合并对 test5 seg911（`208`→`206`，chg19/mb12）：差异是末位数字
+- 误合并对 test5 seg911（`208`→`206`，chg19/mb12）：差异是末位数字    
   上 12px 的字体段竖杠（8↔6 差一段）。
 
-机理：安全侧的「噪声」不是纯散点——**持久的亚像素重渲染沿字形边缘
-形成连通边线**（最长 44px），底部横带重绘更是整段连通；误合并侧的
-字体段只有 11-12px。块尺寸、块数量、集中度、与总量的比值全部重叠。
-「块在字形上 vs 在背景上」的区分需要先知道哪些像素是字形——又回到
+机理：安全侧的「噪声」不是纯散点——**持久的亚像素重渲染沿字形边缘  
+形成连通边线**（最长 44px），底部横带重绘更是整段连通；误合并侧的  
+字体段只有 11-12px。块尺寸、块数量、集中度、与总量的比值全部重叠。  
+「块在字形上 vs 在背景上」的区分需要先知道哪些像素是字形——又回到  
 语义分割，超出引擎契约。
 
-**结论：连通块判据否决**，与前两轮（总占比收紧、时间稳定性）同因：
-两类差异在像素/几何层同构，可分信息只在字符语义层。误合并处置维持
+**结论：连通块判据否决**，与前两轮（总占比收紧、时间稳定性）同因：  
+两类差异在像素/几何层同构，可分信息只在字符语义层。误合并处置维持  
 §14.1（默认不动；`merge_similar=False` 为严格场景逃生门）。
 
 ### 14.3 合并判据的口径审计（2026-08-30 续三：口径差异确实存在，但换域不可分）
 
-**事实**：分段状态机与 merge_similar 都在**原始灰度**（decord luma）+
-全局校准 Otsu 阈值域运行；OCR 消费的是 48 高 resize + gamma 2.0 +
-force_aspect 压窄后的图。口径差异确实存在——裁切路径已为此处理过
-（`_crop_after_aspect`：「`_bin_thresh` 是原始灰度的阈值，而 OCR 输入
-已过缩放+gamma，数值分布完全不同」→ 逐图现算 Otsu），合并路径未跟进。
+**事实**：分段状态机与 merge_similar 都在**原始灰度**（decord luma）+  
+全局校准 Otsu 阈值域运行；OCR 消费的是 48 高 resize + gamma 2.0 +  
+force_aspect 压窄后的图。口径差异确实存在——裁切路径已为此处理过  
+（`_crop_after_aspect`：「`_bin_thresh` 是原始灰度的阈值，而 OCR 输入  
+已过缩放+gamma，数值分布完全不同」→ 逐图现算 Otsu），合并路径未跟进。  
 另一面：二值化判据对墨迹内部灰度级差异全盲，而 rec 消费连续灰度。
 
-**换域实测**（`tools/_probe_domain_audit.py`，92 个实际合并对在 OCR
+**换域实测**（`tools/_probe_domain_audit.py`，92 个实际合并对在 OCR  
 输入域重算判据）：
 
-| 判据域 | 误合并 19 对 | 安全 73 对 | 可分性 |
-|---|---|---|---|
-| 原始域（现行） | mb 11-12 | mb 3-44 | 重叠 |
+| 判据域              | 误合并 19 对                | 安全 73 对             | 可分性                  |
+| ---------------- | ----------------------- | ------------------- | -------------------- |
+| 原始域（现行）          | mb 11-12                | mb 3-44             | 重叠                   |
 | OCR 域·逐图 Otsu 二值 | mb 8-15, mean 0.66-1.77 | mb 0-34, mean ≤4.15 | 重叠（cap=8 拦 17 误杀 34） |
-| OCR 域·连续灰度差 | mean 0.73-1.83 | mean 0.37-8.12 | 重叠 |
+| OCR 域·连续灰度差      | mean 0.73-1.83          | mean 0.37-8.12      | 重叠                   |
 
-换域不可分的原因：gamma/resize/压窄是**空间保持的单调映射**，两类
-差异（字体段变化 vs 持久重渲染/横带重绘）被等比例保留，相对关系
-不变。二值盲区（"二值 diff=0 但 OCR 不同"的合并损伤通道）在本批
+换域不可分的原因：gamma/resize/压窄是**空间保持的单调映射**，两类  
+差异（字体段变化 vs 持久重渲染/横带重绘）被等比例保留，相对关系  
+不变。二值盲区（"二值 diff=0 但 OCR 不同"的合并损伤通道）在本批  
 92 对中实测为零——是理论盲区，不是现实误码来源。
 
-**结论**：口径差异存在但不是误合并的成因，换域（逐图 Otsu / 连续
-灰度）不改变 §14.1/14.2 的可分性结论。合并判据维持原始域现状
-（与分段判据同域，自洽且零成本）；裁切路径的逐图 Otsu 是 fa>0 缩放
+**结论**：口径差异存在但不是误合并的成因，换域（逐图 Otsu / 连续  
+灰度）不改变 §14.1/14.2 的可分性结论。合并判据维持原始域现状  
+（与分段判据同域，自洽且零成本）；裁切路径的逐图 Otsu 是 fa>0 缩放  
 畸变的特需，与本案无关。
 
 ## 15. yuv 输出格式墙钟税调查（2026-08-30，否定结果：税不存在，是冷启动测量假象）
 
-问题：2026-08-30 优化空间分析轮报告 `rep_crop_format="yuv"` 比 `"gray"` 慢
-26~59%（3000 帧窗口：gpu_yuv 5.18/4.07s vs gpu_gray 3.25/3.22s）。但内部链
-恒为灰度（yuv 只多"每批 luma 提取 + 每段一张 crop 的 D2H"），数据量完全不
+问题：2026-08-30 优化空间分析轮报告 `rep_crop_format="yuv"` 比 `"gray"` 慢  
+26~59%（3000 帧窗口：gpu_yuv 5.18/4.07s vs gpu_gray 3.25/3.22s）。但内部链  
+恒为灰度（yuv 只多"每批 luma 提取 + 每段一张 crop 的 D2H"），数据量完全不  
 足以解释该量级——值得归因。
 
-探针：`tools/_probe_yuv_tax.py`（三段式）。**Stage A** = 纯 fork 供给率
-（decord GPU reader 直开，无引擎，不调 asnumpy = 设备驻留，模拟 GPU 管线
-消费）；**Stage B** = 同上 + asnumpy（宿主交付）；**Stage C** = 引擎级
-交错 A/B（gray 首轮顺带暖机，各 3 轮取 min）。三 ROI（106×33 生产 /
+探针：`tools/_probe_yuv_tax.py`（三段式）。**Stage A** = 纯 fork 供给率  
+（decord GPU reader 直开，无引擎，不调 asnumpy = 设备驻留，模拟 GPU 管线  
+消费）；**Stage B** = 同上 + asnumpy（宿主交付）；**Stage C** = 引擎级  
+交错 A/B（gray 首轮顺带暖机，各 3 轮取 min）。三 ROI（106×33 生产 /  
 601×151 / 1601×601）× 两 stride（8/1）。
 
 ### 数据（min-of-2，test5 3000 帧窗口）
 
 **fork 层税（yuv420 − gray，秒）**：
 
-| ROI | stride8 A | stride8 B(+asnumpy) | stride1 A | stride1 B |
-|---|---:|---:|---:|---:|
-| 106×33（生产） | **-0.000** | +0.001 | +0.001 | +0.001 |
-| 601×151 | +0.003 | +0.005 | +0.014 | +0.013 |
-| 1601×601 | +0.017 | +0.113 | +0.079 | +0.292 |
+| ROI        |  stride8 A | stride8 B(+asnumpy) | stride1 A | stride1 B |
+| ---------- | ---------: | ------------------: | --------: | --------: |
+| 106×33（生产） | **-0.000** |              +0.001 |    +0.001 |    +0.001 |
+| 601×151    |     +0.003 |              +0.005 |    +0.014 |    +0.013 |
+| 1601×601   |     +0.017 |              +0.113 |    +0.079 |    +0.292 |
 
-**引擎层暖态交错（Stage C，小 ROI）**：gray `[3.243, 3.258]` vs
+**引擎层暖态交错（Stage C，小 ROI）**：gray `[3.243, 3.258]` vs  
 yuv `[3.250, 3.258, 3.261]` → **税 = +0.007s（噪声）**。
 
-**冷启动一次性成本账单（独立实测）**：CUDA 上下文/Device 初始化 0.420s；
-decord/NVDEC 首次初始化 + 驱动预热 ~1.0s（推算：新进程首轮 5.18s − 暖态
-3.25s − 已列项）；OcrEngine TRT 反序列化+context+缓冲 0.312s（第二实例
-0.222s；池命中后 0ms）；NVRTC 编译 analyzer 0.057s + preprocessor 0.011s。
+**冷启动一次性成本账单（独立实测）**：CUDA 上下文/Device 初始化 0.420s；  
+decord/NVDEC 首次初始化 + 驱动预热 ~1.0s（推算：新进程首轮 5.18s − 暖态  
+3.25s − 已列项）；OcrEngine TRT 反序列化+context+缓冲 0.312s（第二实例  
+0.222s；池命中后 0ms）；NVRTC 编译 analyzer 0.057s + preprocessor 0.011s。  
 合计 ~1.8s ≈ 此前"税"的全部差额。
 
 ### 结论
 
-1. **yuv 输出税不存在**。三处候选全部量化排除：fork 逐帧转换（生产 ROI
-   下 0.000s；仅接近全帧的大 ROI 且宿主交付时有 +3~8% 带宽税）、引擎
-   luma 提取/逐段 luma_into/1.5× crop D2H（合计 7ms/3000 帧）、NVDEC
+1. **yuv 输出税不存在**。三处候选全部量化排除：fork 逐帧转换（生产 ROI     
+   下 0.000s；仅接近全帧的大 ROI 且宿主交付时有 +3~8% 带宽税）、引擎     
+   luma 提取/逐段 luma_into/1.5× crop D2H（合计 7ms/3000 帧）、NVDEC     
    解码本身（两种输出格式同供给率）。
-2. 此前 26~59% 全部是**冷启动顺序假象**：e2e 矩阵与分相 profile 中 yuv
-   配置恰好排第一位，替全进程付了一次性成本并被归因到格式头上。暖态下
+2. 此前 26~59% 全部是**冷启动顺序假象**：e2e 矩阵与分相 profile 中 yuv     
+   配置恰好排第一位，替全进程付了一次性成本并被归因到格式头上。暖态下     
    yuv ≡ gray。
-3. 附带佐证：Stage A 中 stride8 输出 fps 110 ×8 ≈ 解码 885fps ≈ stride1
-   的 969fps 同级——stride>1 仍逐帧解码、只省输出转换，与 §8.0
+3. 附带佐证：Stage A 中 stride8 输出 fps 110 ×8 ≈ 解码 885fps ≈ stride1     
+   的 969fps 同级——stride>1 仍逐帧解码、只省输出转换，与 §8.0     
    "NVDEC 供给率是地板"闭环。
 
 ### 方法学教训（勿再犯，§1 的补充）
 
-**同进程多配置矩阵必须丢首轮或按配置交错重复取 min**。新配置排第一位
-会替进程付 CUDA 上下文 / TRT 反序列化 / NVRTC 编译 / decord 初始化的
-一次性账单（~1.8s），被错误归因到该配置——本次"确定性复现"的 26~59%
-即由此而来（与 §12.5"确定性 ≠ 正确性"同类：可复现的是冷启动差，
+**同进程多配置矩阵必须丢首轮或按配置交错重复取 min**。新配置排第一位  
+会替进程付 CUDA 上下文 / TRT 反序列化 / NVRTC 编译 / decord 初始化的  
+一次性账单（~~1.8s），被错误归因到该配置——本次"确定性复现"的 26~~59%  
+即由此而来（与 §12.5"确定性 ≠ 正确性"同类：可复现的是冷启动差，  
 不是格式差）。
 
 ### 处置
 
 - 默认 `rep_crop_format="yuv"` **保留**（GUI 预览零代价；暖态税 ≈ 0）。
 - 优化候选"gray 默认翻转"**撤回**。
-- `prewarm()` 预热 API 的收益重估：每进程一次性 ~0.8s（引擎可管部分 =
-  TRT 0.31s + NVRTC 0.07s；CUDA 上下文/decord 初始化引擎管不到）。
-  大 ROI（≥1/3 帧）且宿主交付（asnumpy/keep_crops）场景才需要考虑
+- `prewarm()` 预热 API 的收益重估：每进程一次性 ~0.8s（引擎可管部分 =    
+  TRT 0.31s + NVRTC 0.07s；CUDA 上下文/decord 初始化引擎管不到）。    
+  大 ROI（≥1/3 帧）且宿主交付（asnumpy/keep_crops）场景才需要考虑    
   gray/格式选择——生产 ROI 尺寸下无需。
+
+## 16. 性能提升路线图（2026-08-29 归档，原 PERFORMANCE-ROADMAP.md）
+
+> **归档说明**：本节是 2026-08-29 的路线图快照，2026-08-30 合入本文。>   
+> **其中 7 处已被后续提交推翻，读之前先看校正表**；正文保持原样（不篡改历史>   
+> 记录），**以校正表为准**。
+>
+> | 位置                        | 正文旧结论                          | **2026-08-30 现状**                                                                  | 依据                                                         |
+> | ------------------------- | ------------------------------ | ---------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+> | §16.0.1 P0-6 行            | 关去块滤波"翻默认开 ✅ 已落地"              | **默认已撤销**，改为显式 opt-in（`DECORD_SKIP_LOOP_FILTER=all`）。默认路径拿不到该收益                    | 0.10.0 修复轮 c4dbc6c / DESIGN-REVIEW D1；见 §12.5.1 状态注        |
+> | §16.0.1 与 §16.2 P0-6 收益数字 | HEVC −13%~~−18%、h264 −5%~~−13% | **以 §16.2 实测表为准**：HEVC −14.3%/−8.3%、h264 −4.2%/−0.6%（摘要行的上限无出处）                    | §16.2 P0-6 表                                               |
+> | §16.0.1 P0-4 行            | 裁切"余量 **20%**"                 | **余量 10% + 最小收益门槛 10%**（门槛引入后余量回退）                                                 | b415564；`OCR_ROI_AUTOCROP_MARGIN_PCT=10`、`MIN_GAIN_PCT=10` |
+> | §16.0.2 / §16.0.3         | `GPU_PIPELINE_ASYNC` "保持实验态"   | **已删除**（0.9.0 清理轮），不是实验态                                                           | §12.7                                                      |
+> | §16.2 P0-5 末尾             | "生产口径下 pad 320 更优…值得作为下一步候选"   | **已证伪**：生产门禁 pad320 原始误读 124→133、最终 0→3、FAIL；ONNX 上 +31%~+39% 墙钟无收益。**pad 保持 224** | 2026-08-30 实测；同见 §16.0.3                                   |
+> | §16.0.4 / §16.6.2         | "§0.4 六项全部收口，无遗留"              | 六项确实收口，但**新方向见 §17**，且 §16.8.3 已落地                                                 | §12.6                                                      |
+> | §16.8.3                   | hybrid × GPU 管线合并标 🔜          | **已落地**（互斥门控移除；test5 s8 −15% vs 纯 NVDEC，文本逐位一致）                                    | §12.6-3                                                    |
+>
+> **本节的"下一步"已由 §17 接手**（2026-08-30 审查：新候选 + 本节证据强度复核）。
+
+本文回答"还能怎么快"，按**已验证收益 → 中等难度 → 底层依赖变更 → C/C++ 重写**  
+排序。所有数字均为本次在本机（7945HX 16C32T + RTX 4060 Laptop，  
+decord fork 0.7.12 / onnxruntime 1.29 / TRT）**单跑 A/B 实测**，  
+不是估算。测量脚本见 `tools/_probe_*.py`。
+
+> ⚠️ **本文修正了 `docs/PERFORMANCE.md` 的三条"已锁定"结论**。>   
+> 那三条是在 **OCR 跑 CPU（ONNX）占满全部物理核** 的时代得出的；>   
+> TRT 成为默认后 CPU 核是空闲的，前提变了，结论失效。详见 §1.1、§1.3。
+
+---
+
+### 0. TL;DR
+
+**状态图例**：✅ 已落地 ｜ ❌ 已否决/已封板（含实证无收益）｜ ⏸ 已实现但默认关闭（待决策）  
+｜ 🔜 下一步候选 ｜ — 未验证
+
+#### 0.1 已落地 ✅
+
+| 项                                             | 改动量                              | 实测收益                                                                                                 |
+| --------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| **P0-1** 解码线程数随核数缩放（上限 8 → 16~32）             | 1 常量 / 1 env                     | h264 全片 -40%、字幕整集 -50%                                                                               |
+| **P0-1b** OCR 在 CPU 时解码线程按 `sample_stride` 分档 | ~8 行                             | 低段密度 -28.7%、标清整集 -15.4%                                                                              |
+| **P0-2** host 输入的 TRT 批走 GPU argmax 归约        | ~6 行                             | 墙钟 **-17.6%**、ocr.infer -24.1%，逐位一致                                                                  |
+| **P0-4** OCR 输入宽度自适应裁切 + 跨批按宽分组               | ~30 行                            | OCR 侧 -23.9%；**真值准确率 +0.82pp**（余量 **20%**）                                                           |
+| ~~P0-5~~ ~~`OCR_PAD_WIDTH_MIN` 224 → 160~~    | —                                | **已回退**：评估口径错了，生产实测 160 使原始误读 7→26。224 **保持**（详见 §2 P0-5）                                            |
+| **P1-2** hybrid 修 stride 缺陷 + 解禁 stride>1     | ~10 行                            | HEVC/AV1 stride=8：**-20.6% / -17.0%**                                                                |
+| **附** 修好 `OCR_PAD_SMALL` 死开关                  | 2 处分支                            | env 之前被 `fill_width` 挡住，永远不生效                                                                        |
+| **附** 打通 fork 构建（换 Ninja 生成器）                 | 构建脚本                             | MSBuild 被安全策略拦；Ninja 全量 15~21s                                                                       |
+| **P0-4'** 宽度裁切扩到 GPU 直通路径（#2）                 | col_ink kernel + 逐项宽度            | 宽 ROI TRT infer **-7.3%**；墙钟噪声内（解码掩盖，预期）；auto vs cpu 文本 **503/503**                                  |
+| **P1-3** 解耦 GPU OCR 管线与 NVDEC（#3）             | CPU 解码 H2D 分支                    | test5 全片 **-11.2%**、三国30000 -1.7%；真值 **+0.00pp**×3 片                                                 |
+| **P1-2'** hybrid 第二 reader 后台打开（#5）           | ~15 行                            | 结构落地；本机热缓存实测持平（0.12s 估算未复现）                                                                          |
+| **P0-6** 关去块滤波翻默认开（`all`）                     | 引擎 1 行 setdefault + fork v0.7.13 | HEVC 墙钟 **-13%~-18%**、h264 -5%~-13%；6 片真值 + test4 视觉裁定确认无 OCR 负面影响（见 §2 P0-6 与 PERFORMANCE.md §12.5） |
+
+#### 0.2 已实现但默认关闭 ⏸
+
+| 项                      | 实测收益                      | 为什么不默认开                                | 开关                          |
+| ---------------------- | ------------------------- | -------------------------------------- | --------------------------- |
+| **P0-4'** 裁切余量 0（空格语义） | 文本更有可读性，但**真值准确率低 0.6pp** | 数字场景引入 `51→S1`、`115→11S` 错字            | `OCR_ROI_AUTOCROP_MARGIN=0` |
+| 余量 30%（宽 ROI）          | 比 20% 差，甚至不如不裁            | test5/test6：余量 30 时误读 0→10，余量越大留白回来得越多 |                             |
+| GPU_PIPELINE_ASYNC     | **无收益**（3.281 vs 3.278s）  | 纯粹没用                                   | 保持实验态                       |
+
+#### 0.3 已否决 / 实证无收益 ❌（**别重复投入**）
+
+| 项                               | 结论                                                                         | 依据                                                                                    |
+| ------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| ~~P0-3~~ `auto` 后端按「编码+核数」选择    | **不做，`auto` 行为保持不变**                                                       | 解码器快慢取决于硬件/驱动/当时系统负载/负载类型，静态判据不可靠且判错代价成倍。数据留 §1.3 供人工选型                               |
+| P1-1 真跳帧解码                      | 按 `nal_ref_idc==0` 丢包**安全**，但**收益仅 1.03~1.48×**（原估 2~4×），墙钟 -9%            | 采样点与参考帧都不能跳；FFmpeg 帧线程下非参考帧大量落在关键路径之外                                                 |
+| P3 全量 C/C++ 重写                  | **收益上限仅 3%~6%**                                                            | Python 逐帧成本只占墙钟 3~6%                                                                  |
+| `GPU_PIPELINE_ASYNC`            | 无收益                                                                        | 3.281 vs 3.278s                                                                       |
+| ~~pad 下限 224（旧默认）~~             | **结论撤回**：那是用 force_aspect=0 测的，生产口径下 224 是对的                               | 见 §2 P0-5                                                                             |
+| ~~pad 下限 320~~                  | **已证伪**：生产门禁 pad320 **原始误读 124→133、最终错误 0→3、[FAIL]**（test 0→1、test2 0→2）   | 上次"误读 7→2、墙钟 +0.5%"是**余量 10 时代的旧数据**；余量改 20 后 test5/test6 已为 0，320 只剩回归               |
+| pad 下限 320 用于 **ONNX（CPU OCR）** | **更差且无收益**：test5 墙钟 +31.1%、test2 +38.8%；test5 在 224 时误读已为 0，test2 反而 51→52 | CPU 推理耗时随输入宽度线性增长，不像 GPU 那样被解码掩盖。**pad 最优值与后端相关**                                     |
+| 去块滤波用于 AV1                      | **完全无效**（-0.2%）                                                            | 见 P0-6 表                                                                              |
+| pad 下限 160                      | **在生产的 force_aspect>0 口径下更差** 7→26 误读                                      | 见 §2 P0-5。仅在 force_aspect=0 时更优（6 vs 30）                                              |
+| ONNX 动态 INT8 量化（ocr=cpu）        | **20× 劣化 + 输出尽毁**（0.452s→9.151s/256帧，文本一致率 0.4%）                           | onnxruntime.quantization 动态量化在本机 ORT 1.27/Win-x64/Zen4 上 QOp 内核路径病态；静态 QDQ 未测（见 §8.3） |
+| GPU_PIPELINE_ASYNC 用于 CPU 解码分支  | 噪声（-0.6%，3 轮交错 min）                                                        | 与 NVDEC 分支结论一致（§4 底层重构轮）；CPU 分支 producer 的 analyze 同步同样被解码掩盖                          |
+| CPU 解码批 >64（128/256）            | 无收益（3.607/3.581 vs 3.549s）                                                 | 64 已过膝点（GPU_PIPELINE_DECODE_BATCH 保持）                                                 |
+| col-ink 每段同步成本                  | 零（OCR_ROI_AUTOCROP=0 对比 3.554 vs 3.549s）                                   | GPU 直通裁切的逐段 content_range 同步可忽略                                                       |
+| NVDEC 逐帧同步去除（P2-1/P2-2 遗留）      | **无显著收益**（-0.3~-0.5% 噪声边缘）                                                 | "0.15ms/帧固定开销"推断证伪：同步隐藏在解码间隔内，NVDEC 硬件供给率才是限制；改动逐位等价已保留（fork e5bfbbb），见 §8.4          |
+
+#### 0.4 下一步方向 🔜（2026-08-29 收口后更新）
+
+原 1~5 号项的处置（实测数据见 `docs/PERFORMANCE.md` §12）：
+
+| 原# | 项                        | 处置                                                                                                                      |
+| -- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| 1  | P0-6 翻默认开                | ✅ **已翻默认开**（test4 账面 −0.19pp 经视觉裁定证明是**真值伪影**——显示三位补零 `020` 而真值剥零；按显示忠实度关滤波反而略优。opt-out：`DECORD_SKIP_LOOP_FILTER=none`） |
+| 2  | P0-4 扩到 GPU 直通           | ✅ 已落地（col_ink kernel + 逐项宽度，宽 ROI infer -7.3%）                                                                          |
+| 3  | P1-3 解耦 GPU OCR 与 NVDEC  | ✅ 已落地（decode=cpu 走 GPU 管线，test5 全片 -11.2%、真值 +0.00pp）                                                                   |
+| 4  | P3' 定点下沉 `_cluster_win3` | ❌ 按 §5.2 判据不做（现役 ROI 3.5k~10k px < 10 万阈值）                                                                              |
+| 4' | fork NVDEC 逐帧同步（§8.4）    | ✅ 已落地（等价）；**推断的开销被证伪**（-0.3~-0.5% 噪声边缘），P2-1/P2-2 收口                                                                    |
+| 5  | hybrid 启动开销              | ✅ 已落地（本机热缓存实测持平，0.12s 打开估算未复现）                                                                                          |
+| 6  | P2-2 自写 C++ 解码层          | ❌ 维持不做（2/3 完成后重估：固定开销 ~0.15ms/帧的收益空间未变，投入产出比仍不成立）                                                                       |
+
+**全部收口（2026-08-29）**：路线图 §0.4 原六项处置完毕，无遗留待决  
+（P0-6 经 test4 视觉裁定翻案后已翻默认开，见 §2）。  
+**下一轮方向见 §8（全新领域扫描，含本轮探针实测）**。  
+**别碰**：真跳帧、全量 C 重写、`auto` 自动选型、pad 下限往上调、  
+ONNX 动态 INT8。
+
+> **方法纪律**（本轮血的教训）：判断"某改动让 OCR 变好还是变坏"，>   
+> 只测"文本有没有变"会得出错误结论——裁切守卫曾靠"文本一致率 100%"显得>   
+> 很安全，实际白白损失 0.9pp。**必须按帧对齐真值测准确率**；>   
+> 也别拿置信度当代理（`羸弱→赢弱` 是退化，但置信度反而 0.9433 → 0.9700）。>   
+> 真值在 `D:\Videos\racelog_test\ground_truth_csv\*_ref.csv`，>   
+> 工具 `tools/_probe_truth_env.py`（任意 env 组合 × 准确率）。
+
+---
+
+### 1. 重新测量：墙钟到底去哪了
+
+#### 1.1 「decode 已到 NVDEC 硬件上限」——只在 NVDEC 路径下成立
+
+现有文档的核心判断是"decode 占墙钟 92~98%，且 NVDEC 已到硬件上限，  
+所以只能在 OCR 侧抠"。前半句对，**后半句把"NVDEC 的上限"当成了"解码的上限"**。
+
+同一台机器、同一视频（test5，1080p h264，ROI 33×106）：
+
+| 路径                                | 吞吐           | ms/帧      |
+| --------------------------------- | ------------ | --------- |
+| decord **NVDEC**（ROI gray）        | 966 fps      | 1.035     |
+| ffmpeg **NVDEC** 裸解码              | 845~872 fps  | 1.15~1.18 |
+| decord **CPU 软解**（现役默认线程）         | 1311 fps     | 0.763     |
+| **ffmpeg CPU 软解 `-threads auto`** | **1938 fps** | 0.516     |
+| **decord CPU 软解 @16 线程**          | **2247 fps** | 0.445     |
+| **decord CPU 软解 @24 线程**          | **2632 fps** | 0.380     |
+
+两个结论：
+
+1. **NVDEC 确实到顶了**（decord 甚至比裸 ffmpeg 还快 10%，ROI-first 已经把     
+   转换开销吃干净了）——在 NVDEC 路径上再优化确实没空间，这条旧结论保留。
+2. **但 CPU 软解远没有到顶**：现役默认线程下只有 1311 fps，而 ffmpeg 同机     
+   可以跑 1938 fps，decord 开到 24 线程能到 **2632 fps（+101%）**。
+
+#### 1.2 根因：decord 的 CPU 解码线程数被钉在 8
+
+`decord/src/video/video_reader.cc:237`：
+
+```cpp
+if (kDLCPU == ctx_.device_type) {
+    dec_ctx->thread_count = nb_thread_decoding_ > 0
+        ? nb_thread_decoding_
+        : DECORD_FFMPEG_THREAD_COUNT;      // ← 引擎不传时走这里
+}
+```
+
+`DECORD_FFMPEG_THREAD_COUNT = clamp(hardware_concurrency()/4, 2, 8)`  
+→ 32 线程机上 = **8**，且可用 env `DECORD_FFMPEG_THREAD_COUNT` 覆盖。
+
+而引擎 `_decode_num_threads()` 在物理核 > 8 时**返回 `None`**（codimension 注释：  
+"16 核分核反而差"）。于是 CPU 解码长期跑在 8 线程。
+
+**那条"16 核分核反而差"的实验是 `ocr_threads` 与 `decode_threads` 联合调整的**  
+（8 核实测 `ocrT=4/dcd=4`），它证明的是"把 OCR 线程砍半不划算"，  
+**不是"解码线程不该多加"**。TRT 默认后 OCR 不吃 CPU 核，这个约束消失了。
+
+实测（端到端，`uniq` = 唯一文本数，用于校验一致性）：
+
+**test5 全片（7223 帧，stride=1）**
+
+| 配置                         |         墙钟 |        相对 |   段数 | uniq |
+| -------------------------- | ---------: | --------: | ---: | ---: |
+| NVDEC+TRT（现役默认）            |     8.112s |      100% | 2492 |  315 |
+| CPU+TRT 默认 8 线程            |     6.452s |     79.5% | 2492 |  315 |
+| **CPU+TRT dcdT=16**        | **4.875s** | **60.1%** | 2492 |  315 |
+| CPU+TRT dcdT=24            |     4.995s |     61.6% | 2492 |  315 |
+| CPU+TRT dcdT=32            |     5.085s |     62.7% | 2492 |  315 |
+| **CPU+TRT dcdT=16 + P0-2** | **4.466s** | **55.0%** | 2492 |  315 |
+
+**新三国01 整集（73430 源帧，stride=8，标清 696×424）**
+
+| 配置                  |          墙钟 |        相对 |   段数 | uniq |
+| ------------------- | ----------: | --------: | ---: | ---: |
+| NVDEC+TRT（现役默认）     |     21.785s |      100% | 1151 |  573 |
+| CPU+TRT 默认 8 线程     |     15.897s |     73.0% | 1151 |  573 |
+| CPU+TRT dcdT=16     |     11.500s |     52.8% | 1151 |  573 |
+| CPU+TRT dcdT=24     |     11.149s |     51.2% | 1151 |  573 |
+| **CPU+TRT dcdT=32** | **10.812s** | **49.6%** | 1151 |  573 |
+
+段数 / 唯一文本 / 代表帧在所有配置下**完全一致**，是纯性能差异。
+
+#### 1.3 编码与核数的交叉点（决定 P0-3 怎么判）
+
+| 片源       | 编码         |  NVDEC+TRT |  CPU+TRT 最优 | 结论                  |
+| -------- | ---------- | ---------: | ----------: | ------------------- |
+| test5 全片 | h264 1080p |     8.112s |  **4.466s** | CPU 大胜              |
+| 新三国01 整集 | h264 标清    |    21.785s | **10.812s** | CPU 大胜              |
+| test.mp4 | HEVC       | **2.101s** |      2.720s | NVDEC 仍优            |
+| test6    | AV1        | **2.449s** |      5.865s | NVDEC 大优（CPU 加线程无效） |
+
+**AV1 的 CPU 软解完全不随 FFmpeg 线程数扩展**（8/16/24/32 线程全是 5.8~5.9s），  
+dav1d 有自己的线程池。这与 fork 里 AV1 特判 `max_frame_delay` 的注释一致。
+
+**弱 CPU 敏感性**（`psutil.cpu_affinity` 绑到前 8 个逻辑核模拟 8 核机）：
+
+| 片源       | NVDEC+TRT | CPU+TRT dcdT=8 |   CPU+TRT dcdT=24 |
+| -------- | --------: | -------------: | ----------------: |
+| test5 全片 |    8.064s |         7.974s |   **7.581s（-6%）** |
+| 新三国01 整集 |   21.630s |        17.157s | **14.106s（-35%）** |
+
+**关键：提高解码线程数在任何核数下都不劣化**（最差也是并列最优）。  
+风险不在"线程给多了"，而在"h264 上该选 CPU 还是 NVDEC"——8 核时 1080p 两者基本打平，  
+标清仍是 CPU 明显更好。
+
+#### 1.4 `sample_stride>1` 对解码是零收益（被低估的结构性问题）
+
+同一视频、同样解码到 `frames` 列表：
+
+| 采样           |    采样帧数 |         耗时 |  有效 fps |
+| ------------ | ------: | ---------: | ------: |
+| stride=1     |    3000 |     3.152s |     952 |
+| **stride=8** | **375** | **3.098s** | **121** |
+
+`GetBatch` 等差步长快速路径只是**少交付帧**，中间的帧照样全部解码  
+（必须顺序解码到采样点）。所以 stride 省下的是**分段与 OCR**，不是解码。  
+在整集字幕场景（decode 8.9s / 墙钟 10.8s）里，解码仍占 82%——  
+**这条才是真正卡住 stride 场景上限的地方**，见 P1-1。
+
+#### 1.5 Python 分段层的真实成本（C 重写的决策输入）
+
+合成帧跑与 `_host_segment_frames` 完全相同的逐帧逻辑，剥离解码与 OCR  
+（已按真实切段率生成，非最坏情况）：
+
+| ROI          |      面积 |        逐帧成本 | `_cluster_win3` 占比 | 理论 fps 上限 |
+| ------------ | ------: | ----------: | -----------------: | --------: |
+| 106×33（速度数字） | 3.5k px | **34.5 µs** |       16.1 µs（47%） |       29k |
+| 407×25（字幕条）  |  10k px | **40.6 µs** |       33.3 µs（82%） |       25k |
+| 800×200      | 160k px | **1208 µs** |        614 µs（51%） |   **828** |
+| 1600×600     | 960k px | **6838 µs** |       3575 µs（52%） |   **146** |
+
+固定开销约 **25 µs/帧**（循环 + yield + std + 二值化 + 相邻比较），  
+其余与 ROI **面积线性相关**，`_cluster_win3` 占一半左右。
+
+换算成"占当前优化后墙钟的比例"：
+
+- test5 全片：0.250s / 4.466s = **5.6%**
+- 新三国01 整集：0.365s / 10.812s = **3.4%**
+
+→ 现有 ROI 下，把整条链翻译成 C++ **最多拿回 3~6%**。  
+→ 但 ROI ≥ 10 万像素时，Python 分段本身就是 828 fps 的硬天花板，**此时 C/CUDA 下沉是 10× 级收益**（这也正好印证了 `PERFORMANCE.md` §9 里"GPU 分段只在 ROI ≥10 万像素时可能有净收益"的推测——现在有数据了）。
+
+---
+
+### 2. P0：已验证收益，建议立即落地
+
+#### P0-1 解码线程数随核数缩放 —— ✅ 已落地
+
+**改动**：`FieldExtractor._decode_num_threads()` 不再在核数多时返回 `None`；  
+改为按后端分档（OCR 在 GPU 时给解码更多核）：
+
+```python
+# 建议（示意，阈值需用 §1.3 数据在你的目标机型上复核）
+# 逻辑核 hw，物理核 pc：
+#   OCR 在 GPU（TRT）→ dcdT = min(32, max(16, hw))          # 16/32 均可，16 更保守
+#   OCR 在 CPU（ONNX）→ dcdT = max(4, pc // 2)              # 保留现役分核逻辑
+#   AV1 + CPU          → dcdT = max(2, pc // 2)              # 加线程无效，别浪费
+```
+
+**收益**：h264 全片 -40%、字幕整集 -50%（§1.2）。  
+**风险**：低。§1.3 已验证 8 核机上高线程不劣化。  
+**不需要改 decord**：`num_threads` 显式传入即覆盖 fork 默认。
+
+#### P0-1b OCR 在 CPU（ONNX）时，解码线程数也要按段密度分档 —— ✅ 已落地
+
+**上面 P0-1 示意代码里 "OCR 在 CPU → 保留现役分核逻辑" 这一条是错的**——  
+实测（16C32T，`decode=cpu ocr=cpu`，`tools/_probe_cpu_onnx.py`）：
+
+现役多核分支返回 `None` → 解码落到 fork 默认 **8 线程**。而"多核不该给解码  
+加线程"这条结论其实来自 **OCR 受限的高段密度场景**，被错误当成了普适结论。
+
+判据应当是**解码与 OCR 谁占墙钟**，`sample_stride` 是最省事的代理量：  
+stride>1 时采样帧数 ÷ stride 而解码帧数不变 → 解码占比必然上升。
+
+| 场景                           |   段数 | dcd=8（现役） |              最优 |         收益 |
+| ---------------------------- | ---: | --------: | --------------: | ---------: |
+| test5 3000帧 stride=8（解码受限）   |  339 |    2.841s | **24 → 2.026s** | **-28.7%** |
+| test5 3000帧 stride=1（OCR 受限） | 1083 |    3.746s | **10 → 3.617s** |      -3.4% |
+| 新三国01 30000帧 stride=8（标清）    |  503 |    8.146s |     24 → 6.892s |     -15.4% |
+| 弱 CPU（绑 8 逻辑核）stride=8       |  339 |    5.375s |      8 → 5.375s |         0% |
+| 弱 CPU（绑 8 逻辑核）stride=1       | 1083 |   15.939s |    12 → 15.496s |      -2.8% |
+
+高段密度侧 **dcd ≥ 14 确实劣化**（14 → 3.824s、16 → 3.811s、24 → 4.038s），  
+所以必须分档而不是一味加线程。落地公式（已实现）：
+
+```
+物理核 ≤ 8            → max(2, pc // 2)
+多核 + stride > 1     → clamp(逻辑核 * 3/4, 8, 24)
+多核 + stride == 1    → clamp(逻辑核 * 1/3, 8, 12)
+```
+
+**A/B 复核**：`ocr=cpu` 路径 HEAD vs 落地前 **-0.6%（持平，无回归）**；  
+`ocr=auto` 且 TRT 不可用（回退 ONNX，判据 `_ocr_on_gpu()` 只看配置不看  
+TRT 是否真可用）**-25.3%**——那条路径之前一直是"意外正确"。
+
+#### P0-2 host 输入的 TRT 批也走 GPU argmax 归约 —— ✅ 已落地
+
+**现状**：`OcrEngine._call_trt_gpu` 走 `GpuPreprocessor.process()` 后输入已在显存，  
+但仍调 `_infer_trt_device` → **DtoH 整批 `(B,S,18710)` float32**  
+（B=16 / S≈80 时 ≈ **95 MB/批**）。只有 `call_gpu_raw`（NVDEC 直通路径）  
+走 `execute_device_argmax`（DtoH 仅 ~12 KB，约 1300×）。
+
+**改动**：`ocr_native._call_trt_gpu` 增加与 `call_gpu_raw` 相同的分支：
+
+```python
+if getattr(self, "_gpu_ctc_mode", False):
+    idx2d, prob2d = self._trt.execute_device_argmax(dev_ptr, shape)
+    return self._ctc_from_idxprob(idx2d, prob2d)
+```
+
+`execute_device_argmax` 已实现且已在生产路径使用，这里只是复用。
+
+**收益**（原型实测）：
+
+| 场景           |     现役 |         原型 |          Δ | 一致性                                 |
+| ------------ | -----: | ---------: | ---------: | ----------------------------------- |
+| test5 3000 帧 | 2.619s | **2.248s** | **-14.2%** | 前 40 段文本+置信度逐位一致                    |
+| test5 全片     | 4.874s | **4.466s** |  **-8.4%** | 逐位一致                                |
+| 新三国01 整集     | 7.057s |     7.041s |      -0.2% | 逐位一致（`infer` 3.179→1.954s，**-39%**） |
+
+#### ~~P0-3~~ `auto` 后端按「编码 + 核数」选择 —— **决定不做**
+
+> **2026-08-29 决策**：`auto` 行为**保持不变**，本文不再建议此项。
+>
+> 理由：不同解码器的相对快慢取决于**用户硬件、驱动版本、当时的系统负载与>   
+> 负载类型**（同机同时跑别的 GPU 任务时 NVDEC 会被挤占），>   
+> 静态的「编码 + 核数」判据在这些维度上不可靠，且一旦判错代价是成倍的>   
+> （本机 h264 上判错即慢约 2×）。交给用户显式指定 `decode_backend` 更稳。
+>
+> 实测数据仍然保留在 §1.3，供使用者自己选型时参考——它不是"引擎该自动做的事"。
+
+<details>
+
+<summary>现役 `auto` = 优先 NVDEC。按 §1.3 曾是：</summary>
+
+```
+codec == h264 且 逻辑核 >= 16            → cpu（配 P0-1 的高线程）
+codec == h264 且 8 <= 逻辑核 < 16        → 分辨率判定：<=720p 用 cpu，1080p+ 用 nvdec
+codec in (hevc, av1) 或 核数 < 8         → nvdec
+显式指定 cpu/nvdec/hybrid                → 尊重用户
+```
+
+</details>
+
+#### P0-4 OCR 输入宽度自适应裁切（宽 ROI 字幕）—— ✅ 已落地
+
+**动机**：字幕 ROI 常很宽（整集 407×25 → OCR 输入 753px），但字幕不占满宽度，  
+空白列照样参与卷积。用分段已经算好的二值图求"有墨迹的列范围"，裁掉两侧空白。
+
+**实测（新三国01 30000帧 stride=8，503 段，离线对照 `tools/_probe_roi_crop_ocr.py`）**
+
+内容宽 / ROI 宽：min 0.05、p10 0.23、**中位 0.69**、p90 1.00 —— 空白确实存在。
+
+**关键：必须跨批按宽度分组，否则收益为 0。**  
+`OcrEngine.__call__` 的 pad 宽 = `max(224/48, 批内最大宽高比)`；  
+它虽已在**批内**按宽度排序，但那只优化 host resize 顺序、**不改 pad 宽**。  
+顺序分批时每批（B=16）几乎必有满宽成员 → pad 宽被顶回全宽：
+
+| 批处理方式           | OCR 耗时 |            相对全宽 |
+| --------------- | -----: | --------------: |
+| A 全宽 + 顺序分批（现役） | 0.799s |               — |
+| B 裁切 + 顺序分批     | 0.715s | **-1.7%**（几乎没用） |
+| C 裁切 + 按宽度排序分批  | 0.554s |      **-23.8%** |
+
+**余量是硬要求**（`OCR_ROI_AUTOCROP_MARGIN`，占 ROI 宽 %，**默认 10**）；  
+另有**最小收益门槛**（`OCR_ROI_AUTOCROP_MIN_GAIN`，占 ROI 宽 %，**默认 10**）：  
+裁掉比例低于门槛则整段不裁。两者配合，而不是靠单一的大余量兜底。
+
+字幕场景（新三国01，503 段）下余量越小越快，但一致率在 10% 才到顶：
+
+|  余量 | OCR 耗时 |           文本一致率 | pad 像素比 |
+| --: | -----: | --------------: | ------: |
+|  0% | -27.1% |  493/503（98.0%） |    0.71 |
+|  5% | -25.7% |  502/503（99.8%） |    0.75 |
+| 10% | -23.9% | 503/503（100.0%） |    0.80 |
+| 20% | -17.6% | 503/503（100.0%） |    0.90 |
+
+余量 0% 的那 10 段差异样例（加余量后全部消失）：  
+`好酒好酒好酒 → 好酒 好酒 好酒`、`江山沦丧日月无光 → 江山沦丧 日月无光`。  
+未裁切的 237 段（内容满宽）在**任何**余量下都零差异，可作对照。  
+均值置信度 0.52715 → 0.52683（实质不变）。
+
+**数字场景（仅余量、无门槛）**（生产路径，`_probe_truth_env.py --dbe auto`，  
+段代表帧 + 数值 tol=1 误读数）——两侧都错得起：
+
+| 视频    |   左留白 |  不裁 | 余量10 | 余量20 | 余量30 |
+| ----- | ----: | --: | ---: | ---: | ---: |
+| test5 | 23.6% |   7 |    0 |    0 |   10 |
+| test6 | 23.9% |  17 |    0 |    0 |   10 |
+| test  | 10.6% |  78 |   80 |   78 |   78 |
+| test2 |  6.4% |  51 |   51 |   51 |   51 |
+| 合计    |       | 153 |  131 |  129 |  149 |
+
+余量 10 时 test 退化为 80（余量恰好等于左留白，边界上切到笔画）；  
+余量 30 时 test5/test6 反而 0→10（宽 ROI 上余量太大把留白放回来）。
+
+#### ⚠️ 别用"加大余量"解决误裁 —— 用最小收益门槛
+
+曾据此把余量提到 20%，但那是**全局折中**：余量越大，宽 ROI 的收益被削得  
+越狠 —— test5 裁掉量中位数 余量10 时 13.2% → 余量20 时只剩 3.8%（**收益  
+少 71%**），而 test5 在余量 10 下**零误裁**。
+
+误裁**只发生在"微裁"段**（`tools/_probe_crop_miscut.py`，前 3000 帧；  
+误裁 = 被裁区间在宽松判据「列墨迹 ≥1」下仍有内容，即引擎判据漏了笔画）：
+
+| 视频    |  余量 |     裁切率 |     裁掉量中位 |    误裁左 | 裁掉<10%的段 |
+| ----- | --: | ------: | --------: | -----: | -------: |
+| test  | 10% | **72%** |  **1.2%** | **61** | 855/1337 |
+| test  | 20% |      8% |      0.0% |     12 |       22 |
+| test2 | 10% |      8% |      0.0% |      3 |       13 |
+| test5 | 10% |     78% | **13.2%** |  **0** |        0 |
+| test6 | 10% |     81% | **13.8%** |  **0** |        0 |
+
+test 上 72% 的段被裁、**裁掉量中位数却只有 1.2%**（64% 的段裁掉不到 5%）——  
+几乎没收益却承担切笔画风险，61 段误裁全在这些段里。
+
+**解法：`OCR_ROI_AUTOCROP_MIN_GAIN`（默认 10%）—— 裁掉比例低于门槛就整段  
+不裁。** 余量因此回到 10%，收益与风险在**逐段粒度**上自动分开：
+
+| 视频             | 余量10+门槛0 | **余量10+门槛10（现役）** | 余量20+门槛0（上一版） |
+| -------------- | -------: | ----------------: | ------------: |
+| test 裁切率       |      72% |            **8%** |            8% |
+| test 误裁左       |       61 |            **25** |            12 |
+| test5 裁掉量中位    |    13.2% |     **13.2%（全留）** | 3.8%（收益削 71%） |
+| test6 裁掉量中位    |    13.8% |     **13.8%（全留）** |          3.7% |
+| test5/test6 误裁 |        0 |             **0** |             0 |
+
+门槛取 10% 的依据：test5/test6 的裁掉量分布里 **[5%,10%) 区间为空（0 段）**，  
+即门槛不会误伤宽 ROI 的任何一段；而 test 的 855 个微裁段全部被拦下。
+
+生产门禁（5 视频全量帧）原始误读：不裁 148 → **余量20+门槛0 124 →  
+余量10+门槛10 也是 124**，即准确率持平，但后者余量更小、裁切更充分  
+（OCR 输入更窄），且判据本身更合理。
+
+#### P0-4'' 裁切收益的真实判据 = ROI 宽裕程度，**不是 force_aspect**
+
+一度按 `force_aspect` 分流，并认为"fa=0 时裁切大幅退化（test2 52→80、  
+test 78→127）"。那份数据来自 `_probe_pad_variants.py` 的**顺序⑦实验变体**，  
+不是生产路径；用生产路径重测，fa=0 的代价只有 test 上 2 个误读。
+
+真正的相关量是 **ROI 相对内容的宽裕程度**（`tools/_probe_roi_whitespace.py`）：
+
+| 视频    |  fa | ROI宽高比 |  内容占比 |       左留白 |  右留白 | 左/右 | 裁切效果      |
+| ----- | --: | -----: | ----: | --------: | ---: | --: | --------- |
+| test5 | 1.5 |   3.28 | 0.708 | **23.6%** | 5.7% | 4.1 | 大幅改善 7→0  |
+| test6 | 1.5 |   3.38 | 0.697 | **23.9%** | 6.4% | 3.7 | 大幅改善 17→0 |
+| test  |   0 |   1.65 | 0.835 |     10.6% | 5.9% | 1.8 | 中性（余量足够时） |
+| test2 |   0 |   1.83 | 0.897 |      6.4% | 2.6% | 2.5 | 中性        |
+| test3 |   0 |   1.64 | 0.896 |      7.3% | 2.1% | 3.5 | 中性        |
+
+test5/test6 的**左留白是右留白的约 4 倍**：数字右对齐、ROI 按最长状态取，  
+短数字时空白全堆在左侧 → 裁掉即得。fa 只是恰好与这个特征重合  
+（fa=1.5 的两个恰好宽高比 3.3，fa=0 的三个是 1.65~1.83）——**是混淆变量**。
+
+⚠️ 余量是相对 **ROI 宽** 的百分比，不是相对内容宽。ROI 越紧凑（内容占比  
+越高）越容易切到笔画，此类场景可继续调大（如 30）。
+
+**不裁的三类情况**（无收益或有风险，原样返回）：内容满宽、  
+`force_aspect > 0`（宽度被强制，裁切只改缩放）、动态范围过小（std<3）。
+
+**实现**：`_host_pipeline._crop_to_content` + `flush()` 里按预处理后宽度排序分  
+B 大小的子批；重排窗口 `OCR_REORDER_WINDOW`（默认 64 = 4 批）。  
+**2026-08-29 起宿主与 GPU 直通双路径生效**：`prep_gray_raw` 支持逐项  
+`(x_off, crop_w)`（未裁项逐位等价旧全宽内核），GPU 侧 `col_ink` kernel +  
+宿主同一余量数学（`_content_range_to_crop`）给出同一裁切区间；  
+raw 批同样按宽分组拆子批。宽 ROI TRT infer -7.3%、墙钟噪声内（解码掩盖），  
+`decode=auto` vs `decode=cpu` 全片文本 503/503 一致（见 PERFORMANCE.md §12.1）。
+
+**端到端（新三国01 30000帧 stride=8，503 段，`tools/_probe_autocrop_ab.py`）**
+
+| 场景           |                      墙钟 |               OCR infer | 文本         |
+| ------------ | ----------------------: | ----------------------: | ---------- |
+| 宽 ROI + ONNX | **-2.6%**（6.908→6.729s） | **-19.3%**（11.04→8.91s） | 503/503 一致 |
+| 宽 ROI + TRT  |            **噪声内**（±5%） |                 -7%~-9% | 503/503 一致 |
+
+TRT 那条墙钟不动是**预期的**：该场景 decode 3.7s、OCR 线程空闲等 2.6s，  
+OCR 完全被解码掩盖，省下的 GPU 算力换不来墙钟（autocrop=0 单独跑都在  
+4.33~4.65s 之间跳，差异小于噪声）。**这优化只在 OCR 真的吃紧时才变现。**
+
+#### 裁切对**准确率**的影响（真值）—— 本项的真正价值
+
+按帧对齐真值（`tools/_probe_truth_env.py`，decode=cpu ocr=auto）：
+
+| 视频           | 编码   | 旧默认(224+不裁) |  新默认(160+裁) |           Δ |     墙钟 |
+| ------------ | ---- | ----------: | ----------: | ----------: | -----: |
+| test5        | h264 |     97.951% | **99.031%** | **+1.08pp** |  +3.8% |
+| test2        | hevc |     95.722% | **96.777%** | **+1.06pp** |  +1.0% |
+| test6        | av1  |     98.187% | **99.245%** | **+1.06pp** | +8.8%※ |
+| test         | hevc |     94.903% |     94.987% |     +0.08pp |  +2.7% |
+| 新三国01（宽 ROI） | h264 |           — |           — |  **文本逐位一致** |  +2.3% |
+
+（※ test6 的 +8.8% 疑为噪声：同轮测余量 0 是 −0.4%，基线 46.4s，  
+中间那次 50.5s 是离群值。四片**均值 +0.82pp 准确率**。）
+
+裁切让输入更贴近模型训练分布（文字填满图像）→ **识别更准**。  
+逐帧看（test5）：文本变化 1.2%，其中**由错变对 69 帧、由对变错 10 帧**  
+（`8日→88`、`日1→81` 是纠错；`51→S1`、`115→11S` 是新增错字）。  
+墙钟代价 0~+3.8%（OCR 被解码掩盖时更小）。
+
+**⚠️ 曾有一版"裁后宽度会被 pad 回下限就跳过"的守卫，已删除。**  
+它的前提是"省不到算力就别冒准确率风险"，但真值证明前提错了——  
+**即使省不到算力，裁切也能提准确率**（见 `_crop_to_content` 的注释，  
+守卫在窄 ROI 上会 100% 触发，恰好把收益全挡掉）。  
+教训：只测"文本有没有变"会得出"守卫很安全"的错误结论，  
+**必须测真值准确率**才能发现守卫在白白损失 0.9pp。
+
+**余量 10% 优于 0%**（与"空格"直觉相反，有数据）：
+
+|      余量 |       test5 |       test2 |        test |
+| ------: | ----------: | ----------: | ----------: |
+|      0% |     98.436% |     96.720% |     94.959% |
+| **10%** | **99.031%** | **96.777%** | **94.987%** |
+
+余量 0 时模型会在重复句读处插入空格（`好酒好酒好酒 → 好酒 好酒 好酒`），  
+语义上"看着更对"，但按真值算准确率反而低 0.6pp（数字场景还会引入  
+`51→S1` 这类错字）。**默认保持 10%。**
+
+#### P0-5 `OCR_PAD_WIDTH_MIN` —— ❌ 下调到 160 的改动**已回退**，224 保持
+
+> **2026-08-29 晚间：本节结论已推翻，改动已回退（160 → 224）。**>   
+> 生产（RaceVideoToLog 2.17.1）报告 pad 160 使原始 OCR 误读退化>   
+> （test5 7→26、test6 17→32），恢复 224 后正常。**根因是我的评估口径错了**，>   
+> 下面先讲错在哪，再给正确结论。
+
+**错因：两个口径都没对齐生产**
+
+1. `force_aspect` 用错了。生产传 `force_aspect=mw`（真值头里 test5 = **1.5**），     
+   我全程用引擎默认 **0.0**。两者下 pad 下限的作用方向**完全相反**：
+   | pad | fa=0（内容 154px） | fa=1.5（内容被压到 72px） |
+   | --- | -------------: | -----------------: |
+   | 160 |          **6** |                 26 |
+   | 192 |             12 |                 17 |
+   | 224 |             30 |       **7** ← 生产基线 |
+   | 256 |             31 |                  6 |
+   | 320 |             29 |              **2** |
+   （test5，代表帧 + tol=1 误读数，越低越好）
+2. 逐帧比而不是段代表帧比。一段跨约 2.9 帧，逐帧比把每个段错误放大约 3 倍     
+   并混入"段内真值跳变"噪声（同一配置：逐帧 150 vs 代表帧 31 vs 生产口径 7）。
+
+**正确结论**：pad 下限的优劣取决于**内容宽度**，不能一刀切。  
+`force_aspect>0` 时内容被压到固定窄宽 → **pad 越大留白越多、越准**；  
+`force_aspect=0` 时内容按原宽高比（较宽）→ 偏小 pad 更佳。  
+这与 `engine_config` 里那条旧注释的经验（"窄图在宽 pad 下更准"）一致  
+——**旧注释是对的，是我的口径错了，不该推翻它**。
+
+**已回退 224**（`OCR_PAD_WIDTH_MIN` / `_BY_MODEL` / `DEFAULT_FILL_WIDTH`）。
+
+**顺带的发现：生产口径下 pad 320 更优且几乎免费**。  
+用修好的探针复验（`--metric rep`，跟随真值头 fa=1.5）：
+
+| pad          |    误读 |        墙钟 |
+| ------------ | ----: | --------: |
+| 160          |    26 |     -0.1% |
+| **224（现默认）** | **7** |        基准 |
+| **320**      | **2** | **+0.5%** |
+
+→ 误读 7→2，**只多 0.5% 墙钟**。值得作为下一步候选（需 5 视频全量复核）。
+
+> ⚠️ **2026-08-30 已证伪——不要按上面这条行动**。5 视频全量复核的结果是否定的：>   
+> 生产门禁 pad320 **原始误读 124→133、最终错误 0→3、[FAIL]**（test 0→1、>   
+> test2 0→2）；ONNX（CPU OCR）上 test5 墙钟 **+31.1%**、test2 **+38.8%**>   
+> 且无准确率收益（test5 在 224 时误读已为 0，test2 反而 51→52）。>   
+> 上面这张表是**余量 10 时代**的旧数据；余量改 20 后 test5/test6 的误读已为 0，>   
+> 320 只剩回归。**pad 最优值与 OCR 后端相关**（CPU 推理耗时随输入宽度线性增长，>   
+> 不像 GPU 那样被解码掩盖），**结论：pad 保持 224。**
+
+**顺带修好一个死开关**：`OcrEngine.__call__` 里 `if self._fill_width > 0`  
+优先，而 extractor 默认就传 `fill_width=DEFAULT_FILL_WIDTH`  
+→ **`OCR_PAD_SMALL` env 永远轮不到**，README 却把它列成了可调旋钮。  
+已改为 env 优先级最高。
+
+#### P0-6 关去块滤波 `skip_loop_filter`（fork 侧，env 门控默认关）
+
+在 fork 的 `video_reader.cc` 里把 `DECORD_SKIP_LOOP_FILTER` 透传给  
+`avcodec_open2` 的 AVDictionary（与 AV1 的 `max_frame_delay` 同一处），  
+仅对 CPU 软解生效。`tools/_probe_truth_env.py` 实测：
+
+| 视频    | 编码   |         墙钟 |     解码 | 全等准确率 Δ |
+| ----- | ---- | ---------: | -----: | ------: |
+| test2 | HEVC | **-14.3%** | -16.0% | -0.06pp |
+| test  | HEVC |  **-8.3%** |  -9.2% | +0.03pp |
+| test5 | h264 |      -4.2% |  -4.1% | -0.03pp |
+| test3 | h264 |      -0.6% |  -2.7% | +0.03pp |
+| test6 | AV1  |      -0.2% |  -0.3% |  0.00pp |
+
+→ **HEVC 上白赚 8~14%，准确率在噪声内（5 片均值 −0.01pp）**；AV1 无效。  
+**默认关闭**，因为它会改变输出像素（无去块平滑）——`rep_crop`  
+预览会看到块状伪影，属用户可见的质量变更，交给使用者按场景决定。  
+启用：`DECORD_SKIP_LOOP_FILTER=all`。
+
+> **2026-08-29 两轮评估 → 最终翻默认开**（用户判据"无负面影响才翻默认"）。
+>
+> 第一轮（账面）：6 片真值全等 Δ——test **+0.08** / test2 **+0.06** />   
+> test3、test5、test6 **+0.00** / test4 **−0.19pp** → 曾按"有负面影响"否决。
+>
+> 第二轮（**视觉裁定，test4 抽帧看图**）：−0.19pp 是**真值伪影**，不是开的退化：
+>
+> - **前导零**（f114-207 多簇）：显示是**三位补零**（`020`/`002`/`090`，前导 0>     
+>   比有效位暗），真值（v2.7.0 生成）剥掉了前导零。关滤波恰好也漏读暗淡的>     
+>   前导 0 → "账面对"；开滤波读出 `020` 更忠实 → 被记成"退化"。f133-141+196>     
+>   共 10 帧全部如此（逐帧看图确认）。
+> - **白闪转场区**（f~1520-1830 / 2860-3100 / 4650-4900）：显示被闪光部分吞没>     
+>   （只露末 1-2 位），真值记的是语义值；两路读数都在对被吞区域编造，>     
+>   逐格裁定 ≈ 掷硬币（示例：f3093 显示 "21" 开对关错、f3065 显示 "21">     
+>   关对开错、f4688 显示只剩 "2" 开对）。
+> - **快加速段真值脱节**（f~930-1100）：显示 `208`/`226` 而真值 `230`/`248`>     
+>   ——真值疑用不同时间基准的遥测源生成，两路 OCR 一致对，进一步证明真值不可靠；>     
+>   末帧 f6316 真值 `-1` 为哨兵残留。
+> - 汇总：关≠开 共 65 帧，视觉裁定 **开优 ≈20 帧 / 关优 ≈15 帧 / 不可裁 ≈27 帧**>     
+>   ——按显示忠实度**开反而略优**；工具 `tools/_probe_slf_adjudicate.py`>     
+>   （关≠开 簇拼图）与 `tools/_probe_slf_diff.py`（三方逐帧差异）。
+>
+> **结论：六片均无负面影响 → 翻默认开**（引擎 import 时>   
+> `DECORD_SKIP_LOOP_FILTER` setdefault 为 `all`；opt-out 预设 `none`）。>   
+> 行为提示：2 位速显示会输出带前导零的 `020`（更忠实于显示），下游字符串>   
+> 匹配需注意。需要 fork ≥v0.7.13。
+>
+> ⚠️ **2026-08-30：默认开已撤销，改回显式 opt-in。** 上面的性能/准确率结论>   
+> 全部仍然有效，但 `setdefault` 已从包 `__init__` 移除——**库 import 不得静默>   
+> 改写进程级 env**（该开关会改变同进程内其他 decord 使用方的解码输出）。>   
+> 要拿这份收益就自己设 `DECORD_SKIP_LOOP_FILTER=all`，且须在打开解码器之前。>   
+> 见 §12.5.1 末尾的状态注与 `CLAUDE.md` 的设计审查结论节（D1）。
+
+> 关于 fork 构建：本机 MSBuild 被安全策略拦（`WINDOWS_LOLBINS` 黑名单），>   
+> 已改用 Ninja 生成器 + VS DevShell，全量约 15~21s。方法见>   
+> `CLAUDE.md` 与 `.workbuddy/memory/MEMORY.md`。
+
+---
+
+### 3. P1：中等难度（需要改 decord fork 或引擎结构）
+
+> **2026-08-29：fork 侧优化的构建阻塞已解除。** 之前 MSBuild 起不来>   
+> （它在安全层的 `WINDOWS_LOLBINS` 黑名单里，我在任何工具里都调不动；>   
+> `cmake --build` 能跑但拉起的子进程被拦，报 `Access violation` + 退出码 1，>   
+> 真崩应是 0xC0000005）。**MSBuild 本身没坏，不用修**——改用 Ninja 生成器>   
+> 即可，全量编译 15~21s，产物经体积/导出符号/测试/e2e 四重比对等价。>   
+> 方法见 `CLAUDE.md` 第四轮与 `.workbuddy/memory/MEMORY.md`。>   
+> → 本节所有"需要改 fork"的项现在都**可做**。
+
+#### P1-1 真跳帧解码 —— ❌ **已实测封板：收益远低于预估，不建议投入**
+
+> **2026-08 结论更新（附录 `tools/_probe_drop_nonref.py` 可复现）**：>   
+> 本节原本估"解码 2~~4×、整集 10.8s → 4~~6s"，**实测被证伪**。>   
+> 先给实测，再说明原估算错在哪。
+
+**旧失败记录已推翻**（`PERFORMANCE.md` §6）：按 `pict_type` 丢 B 帧 packet  
+会破坏 DPB（High profile 下 B 帧可能是参考帧）——但**按 `nal_ref_idc == 0`  
+整包丢弃是安全的**。H.264 规范保证 `nal_ref_idc==0` 的图永不被后续图用作  
+帧间预测参考，因此连包都不送进解码器也不破坏参考完整性。
+
+实测方法：码流转 Annex-B → 按 `first_mb_in_slice==0` 切 access unit →  
+按 `nal_ref_idc` 生成"丢全部非参考帧 / 丢非参考且非采样点"两份流 →  
+与全量流各自解码成 gray rawvideo 后逐帧比对（子序列匹配）。
+
+| 片源    | 编码              |    非参考帧占比 | GOP | 对齐校验            |
+| ----- | --------------- | --------: | --: | --------------- |
+| test5 | h264 1080p      | **49.8%** | 286 | 2007/2007 逐字节一致 |
+| 新三国01 | h264 标清 696×424 | **43.3%** | 111 | 2268/2268 逐字节一致 |
+
+**安全性确认为 OK**——丢帧后剩余帧全部是原解码序列的子序列且逐字节相同，  
+推翻了 §6 的"丢 packet 必然破坏参考关系"封板结论。
+
+**但收益远低于预估**（纯解码 `-f null`，3 轮中位，4000 AU）：
+
+| 线程 | test5 1080p `drop_stride8` | 新三国01 标清 `drop_stride8` | 标清 `drop_stride8 + noloop_all` |
+| -: | -------------------------: | ----------------------: | -----------------------------: |
+|  4 |                      1.48× |                   1.42× |                          1.59× |
+|  8 |                          — |                   1.23× |                          1.50× |
+| 16 |                  **1.48×** |                   1.03× |                          1.48× |
+| 32 |                          — |                   1.13× |                          1.55× |
+
+**原估算错在两点**：
+
+1. **能跳的帧远少于 7/8**。采样点不能跳、参考帧（约 50%）也不能跳——     
+   即便 stride=8，仍要保留 ~57%~62% 的帧。
+2. **丢包省不下"整帧成本"**。FFmpeg 帧线程下非参考 B 帧大量落在关键路径     
+   之外，线程越多越"免费"：标清 16 线程时丢掉 43% 的帧只快 3%。     
+   对照：`ffmpeg -skip_frame noref`（交给解码器自己丢）只有 **1.12×**——     
+   它省的是重建，熵解码照做。
+
+**折算到墙钟**（整集场景 decode 8.9s / 墙钟 10.8s，引擎实际跑 32 线程）：  
+1.13× → decode 7.9s → 墙钟 ≈ 9.8s，**仅 -9%**。而 test5 的最优配置是  
+stride=1（P0-1 后 4.5s），stride=1 **根本无法跳帧**。  
+→ **投入产出比不成立，封板。**
+
+**唯一还值得试的分支**：`skip_loop_filter=all`（关去块滤波）稳定给  
+**1.11~1.36×**，且线程越多收益越大（与丢包互补），叠加后 **1.48~1.59×**。  
+代价是**输出像素变化**（少一道去块平滑）。实现只需在 fork 的  
+`avcodec_open2` 的 AVDictionary 里透传一个选项（~10 行、无正确性逻辑），  
+但**必须先做端到端 OCR 质量回归**才能决定是否可用。  
+（提醒：§9 已证明"同步点串行化 producer"对 NVDEC+TRT 不成立——同理，  
+丢包/关滤波的收益必须按现役主路径复测，不能拿 `-f null` 全帧数字直接折算。）
+
+#### P1-2 hybrid —— ✅ 已落地（两个 stride 缺陷已修，stride>1 上首次跑赢单端）
+
+> 更新：原结论"hybrid 墙钟与纯 CPU 持平、优先级低"建立在 stride==1 的测量上。>   
+> 解禁 stride>1 后暴露两个**潜伏的 stride 缺陷**，修复后收益反转。
+
+**Bug A（致命）**：`_producer` 的 `prev_end = fis[-1] + 1` 漏 stride。  
+"片间连续扫掠免 seek"（v3 核心设计：每生产者 0~~1 次 seek）靠的是  
+`下一片首帧 == prev_end`；stride>1 时下一片首帧是 `fis[-1] + stride`，  
+判定**永远失败** → 每片一次 `seek_accurate`（GPU 50~~190ms/次、CPU 35~65ms/次，  
+16 片 ≈ 1.6s 纯开销）。与 `next_roi` 的 `+1` 漏 stride 是同一类缺陷  
+（stride==1 时两者恒等，长期潜伏）。
+
+**Bug B**：速率校准的 `calib` 按**采样帧**给 → stride=8 时 `HYBRID_CALIB_FRAMES=40`  
+要解 40×8=320 源帧，比 stride=1 贵 8 倍。改为按**源帧**预算  
+（校准只取两后端速率的比值，解同样多源帧信息量等价；stride==1 行为不变）。
+
+**实测（3000 帧，3 轮最快）**：
+
+| codec | stride |    纯 NVDEC |      纯 CPU | hybrid 修复前 |           hybrid 修复后 |
+| ----: | -----: | ---------: | ---------: | ---------: | -------------------: |
+|  h264 |      8 |     3.869s | **2.070s** |     2.587s |          2.111s（+2%） |
+|  HEVC |      8 |     2.124s |     2.353s |     3.145s |   **1.687s（-20.6%）** |
+|   AV1 |      8 |     2.512s |     6.644s |     3.615s |   **2.086s（-17.0%）** |
+|  h264 |      1 |     3.867s |     2.739s |     2.677s |         2.735s（并列最优） |
+|  HEVC |      1 | **2.203s** |     2.995s |     2.393s |          2.361s（+7%） |
+|   AV1 |      1 | **2.609s** |     6.962s |     2.641s | 2.806s（+7.6%，噪声 ±6%） |
+
+→ **HEVC/AV1 + stride>1 上 hybrid 首次跑赢最佳单端**；h264 上纯 CPU 仍最优  
+（h264 的 CPU 比 NVDEC 快约 2×，两路合起来也追不上单路 CPU——这是物理上限，  
+不是实现问题）。stride==1 时解码占比低，~0.25s 固定开销吃掉了收益。
+
+**剩余可挖**：启动固定开销 ~0.25s（第二个 CPU reader 开 ~0.12s + 校准 ~0.13s）。  
+生产者本身已接近理论最优（HEVC stride=8：decode 0.988s，扣除开销后 ≈ 理论 0.734s）。  
+把第二 reader 的打开与 GPU 端测速重叠，理论上还能再拿 ~0.06s。
+
+**不再建议**泛化 K 路：两路已接近理论最优，且 §1.1 显示单路 CPU@24 线程已  
+2632 fps，多实例边际收益有限。
+
+#### P1-3 解耦 GPU OCR 管线与 NVDEC —— ✅ 已落地（2026-08-29）
+
+现役零拷贝管线（`_gpu_pipeline.py`）的门控原要求 `decode ∈ {auto, nvdec}`，  
+因为 raw OCR 需要 decord 的 GPU NDArray 设备指针；  
+**CPU 解码拿不到设备指针 → 只能走宿主 OCR**，"快的解码"与"快的 OCR"互斥。
+
+**落地解法**：门控放宽到 `decode ∈ {auto, nvdec, cpu}`；CPU 解码分支每批  
+`asnumpy → 宿主灰度 → H2D → 同一 hist/analyze kernel`，rep 帧留显存供  
+raw OCR（device 缓冲池化、引用归零 GC 归还；keep_crops/OCR 回退走宿主  
+切片直取）。实现与实测详见 `docs/PERFORMANCE.md` §12.2：  
+test5 全片 -11.2%、三国30000 -1.7%、AV1 持平；真值 test5/test2/test6  
+三片 **+0.00pp**（逐位一致）。
+
+---
+
+### 4. P2：底层依赖变更（🔜 候选 #6，未验证）
+
+#### P2-1 decord fork 改动（性价比高于换依赖）
+
+fork 本身是对的（ROI-first 是全局最大的单点优化：test5 上 526→966 fps，+84%）。  
+建议的改动按性价比排序：
+
+1. **✅ 已做（2026-08-29）**：透传 `DECORD_SKIP_LOOP_FILTER`（关去块滤波）     
+   → 见 P0-6。HEVC 墙钟 -8%~-14%，env 门控默认关。
+2. **✅ 已做（2026-08-29）**：`process_gray_raw` 支持逐项不同宽度     
+   （col_ink kernel + 逐项 `(x_off, crop_w)`），P0-4 的宽度裁切已在     
+   `decode=auto`（默认路径）上生效 → 见 PERFORMANCE.md §12.1。
+
+以下为原始建议，状态已更新：
+
+1. ✅ **已完成**——`DECORD_FFMPEG_THREAD_COUNT` 上限从 8 放宽（P0-1）：     
+   引擎侧显式传 `num_threads` 即可，**不必改 fork**。
+2. **去掉 ROI 输出路径上的每帧同步**（P2-2 详述）——未做。
+3. **`get_batch` 支持"仅解码不取回"**：现役已天然支持（§1.1 测过 `asnumpy`     
+   与否无差异），说明输出侧已无浪费。
+
+#### P2-2 自写 C++ 解码层（替换/绕过 decord）
+
+**动机**：§1.1 的两点拟合显示存在约 **0.15 ms/帧的固定开销**，  
+与分辨率、输出尺寸、批大小、是否取像素**全部无关**：
+
+| 扫描项                       | test5 (1080p, NVDEC) | 结论            |
+| ------------------------- | -------------------- | ------------- |
+| 批大小 B=1 → 1024            | 969 → 965 fps        | 无影响（非调用开销）    |
+| ROI 33×106 → 1077×87      | 965 → 965 fps        | 无影响（非输出开销）    |
+| 是否 `asnumpy()`            | 957 → 966 fps        | 无影响（非 D2H 开销） |
+| `next_roi` vs `get_batch` | 990 vs 966 fps       | 无影响           |
+
+即：**每帧 ~1.03 ms 全是解码器内的成本**，其中约 0.15 ms 是与像素无关的固定部分  
+（最可能是 cuvid `MapVideoFrame`/`UnmapVideoFrame` 的逐帧同步 + NVDEC  
+逐图提交延迟）。这部分在标清视频上占到 53%（新三国01：0.148/0.277 ms）。
+
+**若自写 C++ 解码层**（FFmpeg C API + CUVID，或直接用 `cuvid` + NvDecoder 样例）：
+
+- 可做的：多帧在 flight（批量 decode、延迟 map）、用 CUDA event 取代逐帧同步、    
+  输出直接写入引擎自己的池、ROI crop 在 kernel 里做（fork 已做）、    
+  `sample_stride` 的跳过逻辑直接内建（= P1-1）。
+- 代价：需要维护 FFmpeg 版本适配（现役 fork 有 `build-ff7`/`build-ff9` 多套构建，    
+  说明这块本来就脆）、Windows DLL 分发、PyInstaller 打包。
+- **收益上限估算**：0.15 ms/帧的固定开销在 1080p 上占 14%、标清上占 53%。    
+  若全部消除，标清场景约 -35%（≈ P0-1 已拿到的量级），1080p 约 -10%。
+
+**评估**：**优先级低于 P1-1**。理由：P1-1 拿到的是 2~~4×，  
+而 P2-2 费尽力气只有 10~~35%，且维护成本高一个数量级。  
+建议**先做 P1-1**（它必须动 fork 的 C++，正好顺带验证自写层的必要性）。
+
+#### P2-3 解码后端替换评估
+
+| 方案                                    | 优点                   | 致命问题                                                                                                      |
+| ------------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------- |
+| **PyAV**（cffi 绑定 FFmpeg）              | 官方 FFmpeg、API 完整、好维护 | **无 ROI-first**：全帧解码 + 全帧转换，test5 实测 966→526 fps（-46%）。除非自己接 `hwdownload` 前的 crop/scale filter，但那又回到写 C++ |
+| **torchaudio / nvdecode 绑定**          | 有 GPU 解码             | 依赖 PyTorch（+2GB），且同样无 ROI-first                                                                           |
+| **OpenCV cv::cudacodec::VideoReader** | 简单                   | 无 ROI-first，且 seek/格式控制弱                                                                                  |
+| **自写 pybind11 解码扩展**                  | 完全可控                 | 见 P2-2，成本大                                                                                                |
+
+**结论：不换。** ROI-first 是本项目最大的单点收益，目前只有自建 fork 提供。  
+所有"更标准"的替代方案都会先亏掉 46%。
+
+#### P2-4 OCR 侧依赖
+
+- **onnxruntime 保留**：无 TRT 环境的兜底路径，已是 CPU 上的最优配置    
+  （双实例 + 批 16，`PERFORMANCE.md` §3/§5 已锁定）。
+- **不要引入 OpenVINO / DirectML**：OCR 在 TRT 可用时不是瓶颈    
+  （GPU 路径 ~1041 段/s），瓶颈在解码。
+- **值得做的**：P0-2（消 DtoH）+ P1-3（preprocess 上 GPU）。
+
+---
+
+### 5. P3：C/C++ 重写评估（用户明确问到的部分）
+
+#### 5.1 结论：全量重写不划算，收益上限 3~6%
+
+由 §1.5 的实测直接得出：
+
+| 场景       | Python 分段层总成本 |   优化后墙钟 | **上限占比** |
+| -------- | ------------: | ------: | -------: |
+| test5 全片 |        0.250s |  4.466s | **5.6%** |
+| 新三国01 整集 |        0.365s | 10.812s | **3.4%** |
+
+把 `_host_frame_stream` + `_host_segment_frames` + `segmentation.py` +  
+`video_utils` 的灰度/预处理全部改成 C++/pybind11，**理论上最多拿回这 3~6%**，  
+而且要付出：GIL/线程模型重做、与 numpy 的零拷贝边界、Windows 构建与打包、  
+四个平台的 wheel、以及"逐位一致"的回归风险（本仓所有优化都以逐位一致为准入门槛）。
+
+**投入产出比不成立。** 旧文档"decode 占 92~98%"如果按字面理解，  
+会得出"Python 只剩几个百分点"——这个数字反而说明**别重写**。
+
+#### 5.2 值得做的是"定点下沉"，只有一个函数
+
+`_cluster_win3` 占 Python 分段成本的 **47%~82%**（§1.5），  
+且它是纯粹的热点：每帧一次、6 次全帧切片加法、`O(面积)`、无分支。
+
+| ROI          |         现成本 | 下沉后（估） | 场景收益                          |
+| ------------ | ----------: | -----: | ----------------------------- |
+| 106×33       |     16.1 µs |  ~2 µs | 全片 **-2.7%**                  |
+| 407×25       |     33.3 µs |  ~3 µs | 整集 **-2.8%**                  |
+| **800×200**  |  **614 µs** | ~10 µs | **-60%（828 fps → ~1万 fps）**   |
+| **1600×600** | **3575 µs** | ~50 µs | **-70%（146 fps → ~2000 fps）** |
+
+**判断标准**：ROI 面积 < 5 万像素 → **不值得**（收益 < 3%）；  
+ROI ≥ 10 万像素（如整屏字幕、大区域 OCR）→ **值得，且是 10× 级**。
+
+若要做，优先用 **CUDA kernel 而非 C++**：`_gpu_kernels.py` 里的  
+`GpuFrameAnalyzer` 已经有 analyze kernel 的雏形，接上去比新写一个  
+C++ 扩展的维护成本低，且大 ROI 场景本来就有 GPU。  
+`PERFORMANCE.md` §9 的推测（"GPU 分段只在 ROI ≥10 万像素时可能有净收益，  
+无实测先例，未立项"）现在有了量化支撑——**10 万像素这个分界线是对的**。
+
+#### 5.3 如果一定要重写，重写哪里
+
+按 ROI 排序，只重写这一段（约 150 行 C++/CUDA）：
+
+```
+for each frame:  gray/std → binarize(th) → prev_xor → cluster_win3 → 边界判定
+                 └─────────── 全部合并为一个 kernel / 一个 C++ 循环 ──────────┘
+```
+
+保留在 Python 的：解码调度、段管理、OCR 批处理、结果组装  
+（这些是每**段**一次，不是每**帧**一次，频率低 3~30 倍）。
+
+---
+
+### 6. 执行记录与下一步
+
+#### 6.1 已完成（按实际顺序）
+
+| 序  | 项                                      | 状态                                                            |
+| -- | -------------------------------------- | ------------------------------------------------------------- |
+| 1  | **P0-1** 解码线程数                         | ✅ 21.8s → 10.8s                                               |
+| 2  | **P0-1b** 解码线程按 stride 分档              | ✅ 低段密度 -28.7%                                                 |
+| 3  | **P1-2** hybrid 两个 stride 缺陷           | ✅ HEVC/AV1 stride=8 -20.6%/-17.0%                             |
+| 4  | **P0-2** host 输入 TRT 批 GPU argmax      | ✅ 墙钟 -17.6%                                                   |
+| 5  | **P0-4** OCR 输入宽度自适应裁切                 | ✅ OCR 侧 -23.9%、真值 +0.82pp                                     |
+| 6  | ~~**P0-5** pad 下限 224 → 160~~          | ❌ **已回退**（口径错误，见 §2 P0-5）                                     |
+| 7  | **P0-6** 关去块滤波（fork）                   | ✅ **默认开**（第一轮按账面否决 → test4 视觉裁定翻案：−0.19pp 是真值伪影；fork v0.7.13） |
+| 8  | 打通 fork 构建（Ninja 生成器）                  | ✅ 解除所有 fork 侧优化的阻塞                                            |
+| 9  | **P0-4'** 宽度裁切扩到 GPU 直通（原 §0.4 #2）     | ✅ 宽 ROI infer -7.3%、auto vs cpu 文本 503/503                    |
+| 10 | **P1-3** 解耦 GPU OCR 与 NVDEC（原 §0.4 #3） | ✅ test5 全片 -11.2%、真值 +0.00pp×3                                |
+| 11 | hybrid 第二 reader 后台打开（原 §0.4 #5）       | ✅ 落地；本机热缓存实测持平                                                |
+| —  | ~~P3'~~ `_cluster_win3` 下沉（原 §0.4 #4）  | ❌ ROI < 10 万像素判据不满足                                           |
+| —  | ~~P2-2~~ 自写 C++ 解码层（原 §0.4 #6）         | ❌ 维持不做（2/3 完成后重估）                                             |
+| —  | ~~P0-3~~ auto 自动选型                     | ❌ 用户决定不做                                                      |
+| —  | ~~P1-1~~ 真跳帧                           | ❌ 实测证伪（1.03~~1.48×，远低于 2~~4× 预估）                              |
+| —  | ~~P3~~ 全量 C 重写                         | ❌ 收益上限 3~6%                                                   |
+
+#### 6.2 下一步（2026-08-29 全部收口，无遗留）
+
+原六项全部处置完毕（P0-4' / P1-3 / hybrid 启动重叠 ✅ 落地，P0-6 翻默认 /  
+P3' / P2-2 ❌ 按实测判据不做），实测与验收记录见 `docs/PERFORMANCE.md` §12。
+
+> P0-6 曾按账面（test4 −0.19pp）否决，后经用户要求抽帧视觉裁定翻案>   
+> （真值伪影，见 §2），已翻默认开。**若未来要在新片源上复核**：>   
+> `tools/_probe_truth_env.py --cases "none:DECORD_SKIP_LOOP_FILTER=none|默认:"`
+>
+> - 对 关≠开 帧用 `tools/_probe_slf_adjudicate.py` 出拼图人工裁定——>     
+>   **账面差异必须视觉归因，不能直接采信**（test4 的教训）。
+
+**每完成一项**，按仓库约定把结论追加到 `docs/PERFORMANCE.md`  
+（含失败项，避免重复投入），并同步修正本文 §0 的表格。
+
+**改动前先看这份清单**（避免重复踩坑）：
+
+- 真值在 `D:\Videos\racelog_test\ground_truth_csv\*_ref.csv`（6 个视频，    
+  test/test2~test6，覆盖 h264/hevc/av1）。**判"值不值"必须用它**，    
+  `tools/_probe_truth_env.py` 可以一行跑任意 env 组合 × 准确率。
+- 宽 ROI 用 `新三国01.mkv`（`144,398,551,423`），窄 ROI 用 `test5.mp4`    
+  （`843,993,948,1025`）。两者行为常常相反，**别只测一个**。
+- 探针跑后台时**不要改被测代码**（会污染结论）。
+- 需要重编 fork 时用 Ninja 生成器，方法见 `CLAUDE.md` 第四轮与    
+  `.workbuddy/memory/MEMORY.md`。
+
+---
+
+### 7. 附录：测量方法
+
+| 脚本                               | 用途                                                        |
+| -------------------------------- | --------------------------------------------------------- |
+| `tools/_probe_ceiling.py`        | 纯解码吞吐矩阵（后端 × ROI × stride）                                |
+| `tools/_probe_perframe.py`       | 每帧固定开销拆解（批大小/ROI/取像素扫描）                                   |
+| `tools/_probe_ffmpeg.py`         | 系统 ffmpeg 对照（NVDEC / CPU 线程扫描）                            |
+| `tools/_probe_threads.py`        | decord CPU 解码线程数扫描                                        |
+| `tools/_probe_e2e_ab.py`         | 端到端后端 × 线程 A/B（含分相剖面）                                     |
+| `tools/_probe_hybrid_ab.py`      | hybrid × 线程 A/B（现支持 `--stride`）                           |
+| `tools/_probe_gpu_ctc.py`        | P0-2 原型验证（monkeypatch，不改生产代码）                             |
+| `tools/_probe_final.py`          | 全片/整集收口 + `--affinity N` 弱 CPU 模拟                         |
+| `tools/_probe_python_cost.py`    | Python 逐帧成本（C 重写决策输入）                                     |
+| `tools/_probe_drop_nonref.py`    | P1-1：Annex-B 切 AU + 按 `nal_ref_idc` 丢帧（收益 + 逐帧对齐校验）       |
+| `tools/_probe_skip_frame.py`     | P1-1：ffmpeg CLI 版 `skip_frame` / `skip_loop_filter` 扫描    |
+| `tools/_probe_cpu_onnx.py`       | P0-1b：CPU+ONNX 线程网格 + `--affinity` 弱 CPU + HEAD vs 旧版 A/B |
+| `tools/_probe_roi_width.py`      | P0-4：宽 ROI 的内容宽/ROI宽 分布（有没有得裁）                            |
+| `tools/_probe_roi_crop_ocr.py`   | P0-4：OCR 侧离线对照（全宽 / 裁+顺序 / 裁+按宽排序）                        |
+| `tools/_probe_autocrop_ab.py`    | P0-4：端到端 A/B（宽 ROI × TRT/ONNX，文本一致率）                      |
+| `tools/_probe_autocrop_truth.py` | P0-4：裁切开/关 × 真值准确率                                        |
+| `tools/_probe_pad_width.py`      | P0-5：pad 下限扫描 × 真值准确率                                     |
+| `tools/_probe_truth_env.py`      | **通用：任意 env 组合 × 真值准确率（判"值不值"首选）**                        |
+| `tools/_probe_guard_clean.py`    | 裁切守卫开/关 × 真值（含 label/mode 分离的坑）                           |
+
+> 以上均为本次分析用的临时探针（`_` 前缀），可按需保留或删除。
+>
+> 三个共通的**测量陷阱**（都踩过）：>   
+> ① `ffmpeg -frames:v N` 计的是**输出**帧，做跳帧实验时 ffmpeg 会为凑够>   
+> N 个输出而多读输入 → 系统性低估收益；>   
+> ② 用 `-f rawvideo` 计时会被落盘 I/O 污染（1080p×4000 帧 = 8.3GB），>   
+> 计时必须走 `-f null`，像素对齐才用 rawvideo；>   
+> ③ A/B 两个版本时 worker 必须 `sys.path.insert(0, os.getcwd())`——>   
+> 插固定的仓库根会静默比较两次新代码；>   
+> ④ **探针跑后台时不要改被测代码**（首版 +0.86pp 就是这么被污染的）；>   
+> ⑤ 真值头 `# roi=a,b,c,d, format=..., frame_start=N` 不能按逗号切再找>   
+> `roi=` 前缀（只拿到 "a"），要用正则取四个整数；>   
+> ⑥ 子进程的 label 与 mode 要**分开传**（曾把中文 label 当 mode 传，>   
+> monkeypatch 从未生效 → 三种模式跑出同一个数，假阴性）。>   
+> 若要长期保留，建议合并为一个 `tools/bench_decode_threads.py` 回归工具。
+
+**方法学要求**（与 `PERFORMANCE.md` §1 一致，本次全部遵守）：  
+A/B 单跑串行、短窗口快迭代 + 全片复核、`ENGINE_PROFILE=1` 取分相、  
+每段数/唯一文本/代表帧一致性作为正确性门槛。
+
+> **⚠️ 正确性门槛的升级（2026-08-29）**：「段数 + 唯一文本 + 代表帧一致」>   
+> 只能证明"结果没变"，**证明不了"变好还是变坏"**。凡是会改变 OCR 输入的>   
+> 改动（裁切、pad 宽度、缩放、gamma、解码滤波……），门槛必须升级为>   
+> **按帧对齐真值的准确率**：>   
+> `python tools/_probe_truth_env.py --video test5 --cases "基线:|改动:ENV=1"`>   
+> 理由：裁切守卫曾靠"文本一致率 100%"显得很安全，实际白白损失 0.9pp；>   
+> 而置信度也不能当代理（`羸弱→赢弱` 是退化，置信度反而 0.9433 → 0.9700）。
+
+---
+
+### 8. 新方向路线图（2026-08-29 第二轮扫描：此前未涉足领域）
+
+> 与 §0.4 的关系：§0.4 六项全部收口。本节是对**此前路线图完全未涉及、>   
+> 文档无试验记录**的领域的全面扫描，全部候选先探针实测再立项>   
+> （本机 7945HX + RTX 4060 Laptop，探针单跑/交错 A/B）。
+
+#### 8.0 现役代码分相结构（本轮剖面，ENGINE_PROFILE）
+
+| 场景                     |    墙钟 | 结构                                           | 剩余瓶颈              |
+| ---------------------- | ----: | -------------------------------------------- | ----------------- |
+| A test5 全片 NVDEC+TRT   | 8.07s | decode 占 **97%**（OCR 完全掩盖，q_get_wait 7.5s）   | NVDEC 供给率 ~923fps |
+| B test5 全片 CPU+TRT     | 3.69s | decode 90%，**q_put_block 2.36s**（OCR 慢反压生产者） | 解码+OCR 相互耦合       |
+| C 三国30000s8 NVDEC+TRT  | 8.66s | decode 93%                                   | NVDEC 供给率         |
+| D test5_3000s1 ocr=cpu | 3.00s | **OCR infer 线程时间 4.96s** 主导（双实例摊薄后仍 OCR 受限）  | ONNX CPU 算力       |
+
+#### 8.1 🔜 #1 TRT 批对齐 max_batch（消除子批形状 sync）—— 已实测 -8~-10%，立即可做
+
+`OCR_BATCH=16` 在 TRT 路径按 `max_batch=6` 切成 6+6+**4**，末批 batch 维  
+变化前必须 `cudaStreamSynchronize`（TRT 不允许 in-flight 改 context 形状）  
+——**每个 OCR 批一次全流水同步**。实测（B 场景，3 轮取最优）：
+
+|             批 |                 墙钟 | ocr_infer | decode |
+| ------------: | -----------------: | --------: | -----: |
+|  16（6+6+4，现役） |             3.549s |    2.984s | 3.214s |
+|   **12（6+6）** |  **3.253s（-8.3%）** |    2.633s | 2.923s |
+| **18（6+6+6）** | **3.185s（-10.3%）** |    2.592s | 2.842s |
+
+side-effect 已验：NVDEC 路径（A/C）批 18 无影响（OCR 掩盖，文本逐位一致）；  
+**ONNX 路径批 18 略差 +3.7%**（18=16+2 尾批切伤 ONNX_CHUNK=16）→ 修复必须  
+**按后端分叉**：单 TRT 引擎时 raw/host 分块取 `ceil(B/max_batch)*max_batch`。  
+改动 ~2 行（`_host_pipeline.flush()`），验收 = A/B/C/D 四场景文本逐位 +  
+真值抽查。**注意 OCR_BATCH=16 的"历史最优"是 ONNX 时代结论，TRT 路径  
+从未单独扫描过——这属于"既有默认值跨后端迁移未经复核"的一类盲区。**
+
+#### 8.2 🔜 #2 批量实例级并发（从未探索）—— 已实测聚合 -28%~-30%
+
+批量（多集/多视频）目前**顺序**逐个处理。双实例并发（threading，独立  
+FieldExtractor）实测（新三国01+02 各 30000 帧 s8）：
+
+| 方案                  |       总耗时 |                                                        聚合加速 |
+| ------------------- | --------: | ----------------------------------------------------------: |
+| 顺序 2×NVDEC+TRT      |    18.89s |                                                       1.00× |
+| 并发 2×NVDEC+TRT      |    16.88s |                **1.12×**（单 NVDEC 硬件单元，会话争抢，与历史"双会话 -15%"一致） |
+| 顺序 2×CPU+TRT        |     7.88s |                                                       1.00× |
+| **并发 2×CPU+TRT**    | **5.68s** |                                                   **1.39×** |
+| **并发 NVDEC∥CPU 混合** | **9.45s** | **1.42×**（vs 顺序混合 13.4s，**-30%**；NVDEC 侧 9.45≈独跑 9.5 完全不受损） |
+
+要点：NVDEC∥CPU 混合并发**资源互补**（GPU 硬解 + 空闲 CPU 核），聚合收益  
+最大且不伤单实例；2×CPU 并发靠 16C32T 的核富余（少核机收益递减）；GIL 无碍  
+（GPU 管线 consumer 轻）。**引擎侧零改动即可用**（实例独立、TRT 双上下文  
+共存正常）——先落地为 README/PERFORMANCE.md 的批量并发指南；可选后续：  
+引擎级 `extract_many()`（后端互补调度），需决策 API 形态再立项。
+
+#### 8.3 ✅ #3 hybrid × GPU 管线合并（CLAUDE.md 标记的"未做 Phase 4"——**2026-08-29 已落地**）
+
+> **已落地**（§12.6-3）：互斥门控移除；后端判定改精确匹配（`decord/GPU+CPU-hybrid`>   
+> 前缀陷阱）；test5 s8 **−15%** vs 纯 NVDEC，文本与 hybrid+宿主逐位一致。>   
+> 下方原文为立项时的论证，保留备查。
+
+CLAUDE.md 内部恒为单通道灰度节标记"未做：hybrid + GPU 管线合并"——  
+**P1-3 之后可行性已经具备**：GPU 管线 CPU 分支消费的就是  
+`vr.get_batch(...).asnumpy()`，而 `HybridDecoder.get_batch` 交付的  
+`_Batch` 恰好同接口（asnumpy/shape/len 齐全，seek 由生产者内部处理）。  
+当前互斥门控（`_gpu_pipeline_enabled` 排除 hybrid、`_open_vr` 要求  
+`not _gpu_pipeline_enabled()`）放宽后，hybrid 可拿到"双解码收益 + GPU  
+分段/零拷贝 OCR"叠加。工作量小-中（门控 + CPU 分支对 HybridDecoder  
+的 seek/交付语义适配 + 验收）；验收：HEVC/AV1 stride8（hybrid 赢面场景）  
+段数/文本 vs 纯单端 + 真值抽查。**风险**：hybrid 生产者线程与 H2D/analyze  
+的流竞争需 HYBRID_PROBE 复核。
+
+#### 8.4 ✅ #4 fork：NVDEC 逐帧同步错峰 —— 已落地；**"0.15ms/帧固定开销"推断被证伪**
+
+已实现（fork e5bfbbb，2026-08-29）：`HandlePictureDisplay_` 原本每帧  
+map → 转换 kernel → `cudaStreamSynchronize` → unmap，解析线程被 GPU 往返  
+阻塞。改为**延迟 sync+unmap**：回调 k 开头释放帧 k-1 的映射（kernel 已在  
+解码间隔完成，近似零等待），帧 k 的尾同步移交消费侧首次 Pop；映射钉住  
+≤2 帧，CUDA 调用全部留在解析线程。构建加 `/utf-8`（MSVC 按 936 代码页  
+解码 UTF-8 源码，CJK 注释行尾字节被 GBK 配对吞换行导致行号漂移——该  
+obj 此前从未增量重编所以首次暴露）。
+
+**实测（引擎端到端，3 轮 min）：test5 全片 8.041→8.013s（-0.3%）、  
+三国30000s8 8.684→8.645s（-0.5%）——噪声边缘，无显著收益。**
+
+**结论：P2-2 的"~0.15ms/帧固定开销（标清占 53%）"推断被证伪**——  
+逐帧同步不在关键路径上（隐藏在解码间隔内），NVDEC 硬件供给率才是  
+真限制（与 §1.1 "NVDEC 已到顶"闭环）。改动逐位等价（2701/503 段文本  
+一致、真值 99.031% 不变），保留：解析线程不再被转换阻塞，对更重的  
+转换 kernel（全帧 RGB/yuv 转换）有利。**P2-1 的"去掉 ROI 输出路径  
+每帧同步"与 P2-2 的"自写解码层"至此全部收口：NVDEC 侧再无可省的  
+软件开销，除非换硬件。**
+
+#### 8.5 ⏸ 低优先 / 条件性
+
+- **ONNX 静态量化（QDQ）**：动态 INT8 已证死路（§0.3，20× 劣化）；静态    
+  QDQ 走不同内核路径未测，但目标场景仅限 ocr=cpu 的 OCR 受限型（D 剖面），    
+  且精度门槛严 → 低优先。
+- **pinned H2D（P1-3 CPU 分支）**：DtoH 侧 pinned 曾实测更慢（§11.3），    
+  同因大概率无益；ROI 仅 ~4-10KB/帧，挂起。
+- **CUDA Graph（TRT enqueue）**：每 OCR 批 3 个子批 + 预处理 kernel，    
+  launch 开销 µs 级，形状动态（宽随批变）与 graph 捕获冲突 → 不立项。
+- **FFmpeg thread_type（frame|slice）**：fork 未暴露；h264 帧线程已按 P0-1    
+  调优，切片线程预期微弱 → 不立项（除非 fork 侧顺手）。
+- **E/P-core 亲和**（Intel 12-14th 混合架构机型）：本机无 E-core 无法验证；    
+  建议 README 增补一句"解码线程可亲和 P-core"（纯指南，无代码）。
+
+#### 8.6 分析过但不推荐（避免重复投入）
+
+- **多 ROI 单次解码**：两 ROI 复用一次解码的收益被 ROI-first 抵消——    
+  全帧 NVDEC 转换 ~1ms/帧 vs ROI ~0.15ms/帧，两个小 ROI 各自独解    
+  （0.3ms）反而快于全帧解码+双裁切（>1ms）；仅"两个大 ROI"才可能划算，    
+  且需 fork 支持全帧输出 + 引擎 API 扩展 → 不立项。
+- **auto 动态探测选型**（试解 256 帧选后端）：用户已封板 `auto` 行为    
+  （MEMORY.md 用户决策），不再触碰。
+- **OCR 模型替换/蒸馏**：v6_small 为唯一模型是精度决策（v2.13 起），    
+  非性能工程范畴。
+- **进程级批量池化/DLL 预热**：单进程批量已被 #2 覆盖；每进程一次的    
+  CUDA/TRT DLL 加载属一次性成本。
+
+## 17. 下一步候选与证据强度复核（2026-08-30 审查 + 实测收口，现役 v0.10.1）
+
+> 本节取代 §16.0.4 / §16.6.2 的"下一步"。产生方式：文档 ↔ 代码 ↔ git 提交>   
+> 三方比对的**静态审查，未运行任何基准**——所有候选都标注了置信度与现成工具。
+
+### 17.1 先划清：已封板、勿碰
+
+§16.0.3 + §6（已验证死路）已封：真跳帧、`auto` 自动选型、pad 下限上调  
+（320 已证伪）、ONNX 动态 INT8、`GPU_PIPELINE_ASYNC`、CPU 解码批 >64、  
+col-ink 每段同步、NVDEC 逐帧同步去除、PP-OCRv6 det 替换裁切（§13）、  
+合并判据收紧（§14）。  
+**全量 C/C++ 重写（§16.5）见 17.3——判据可能过严，未真正封死。**
+
+### 17.2 候选 ①：hybrid CPU 端线程数 —— ✅ **已实测并落地**（README 旧注释是错的）
+
+> **2026-08-30 收口。** 结论：README 那句"实测给更多反而略差"**是错的**，>   
+> 既没归档数据、方向也与实测相反。默认值已改为按核数分档。
+
+**疑点**：`HYBRID_CPU_THREADS=0` → CPU 生产者跑 fork 默认 **8 线程**  
+（`hybrid_decode.py:290-291`：0 时不传 `num_threads` → decord 落到  
+`DECORD_FFMPEG_THREAD_COUNT = clamp(hw/4, 2, 8)`）。而 P0-1（§16.1.2）已证  
+同机型 CPU 软解 16~32 线程比 8 线程快 **24~32%**。hybrid 里的 CPU 端正是  
+`_dynamic_split` 判定的"慢端"——**它越快，分界能给它的片越多，hybrid 总收益越大**。
+
+**现役默认值挡在一条无归档数据的注释上**：README 说"实测给更多反而略差  
+（CPU 生产者与消费者、NVDEC 抢 host CPU）"，但**全仓检索不到任何实测记录**，  
+且方向与 §16.1.3"提高解码线程数在任何核数下都不劣化（最差也是并列最优）"相反。
+
+**支持侧证据**（§16.4 / §16.1）："NVDEC 与 CPU 软解本身互不拖慢（并行解码  
+GPU 仅降 9-16%）"——给 CPU 端加线程不太可能伤到 NVDEC 端。
+
+**怎么做**：`tools/_probe_hybrid_ab.py` 里 cpuT = 0/16/24/32 的网格**已写好**，  
+只差按 §15 方法学（交错取 min、丢首轮）跑一遍并归档。  
+**风险**：必须看分相 profile 里**两端各自**的耗时，不能只看总墙钟。
+
+#### 实测结果（2026-08-30）
+
+**首轮扫描**（`tools/_probe_hybrid_ab.py`，test5 3000 帧 stride=1，3 轮最快）：
+
+| 配置                       |         墙钟 |  相对 NVDEC |     decode | 段数/uniq    |
+| ------------------------ | ---------: | --------: | ---------: | ---------- |
+| NVDEC+TRT（现役默认）          |     3.616s |      100% |     2.997s | 1083 / 265 |
+| hybrid cpuT=0（旧：8 线程）    |     2.166s |     59.9% |     1.288s | 1083 / 265 |
+| hybrid cpuT=16           |     2.084s |     57.6% |     1.148s | 1083 / 265 |
+| **hybrid cpuT=24**       | **2.051s** | **56.7%** | **1.114s** | 1083 / 265 |
+| hybrid cpuT=32           |     2.077s |     57.4% |     1.133s | 1083 / 265 |
+| hybrid cpuT=32 chunks=64 |     1.993s |     55.1% |     1.046s | 1083 / 265 |
+
+首轮里 cpuT=0 与显式 cpuT=24 曾出现反向差异（1.978 vs 2.114），  
+说明**单次扫描的噪声量级接近效应量** → 补做交错 A/B 定论。
+
+**交错 A/B**（8 vs 24 线程，各 5 轮 + 丢首轮，交错执行）：
+
+| 配置               |        min |         中位 | 全部样本                                |     decode |
+| ---------------- | ---------: | ---------: | ----------------------------------- | ---------: |
+| cpuT=8（旧默认）      |     2.346s |     2.360s | [2.346, 2.352, 2.360, 2.384, 2.400] |     1.406s |
+| **cpuT=24（新默认）** | **2.144s** | **2.193s** | [2.144, 2.145, 2.193, 2.193, 2.209] | **1.204s** |
+
+- **min −8.6%｜中位 −7.1%｜decode −14.4%**
+- **两个分布完全分离**（8 线程最慢 2.400 > 24 线程最快 2.144），差异远超噪声
+- 段数 1083、唯一文本 265 在所有档位**完全一致**（纯性能差异，无正确性风险）
+- cpuT=32 略差于 24（过订阅：CPU 生产者与 NVDEC/消费者抢 host CPU）→ 上限取 24
+
+**落地**：`HYBRID_CPU_THREADS=0` 的语义从"不传 → fork 的 clamp(hw/4,2,8)"  
+改为"**逻辑核 × 3/4 钳 [8, 24]**"（`HYBRID_CPU_THREADS_AUTO_MIN/MAX`，  
+与 `_decode_num_threads` 的 stride>1 分档同式）。32 核机 → 24 线程。
+
+**顺带发现**：同轮 `decode=cpu` 单独跑 3 次均为 **1.087s**（段数一致），  
+比 hybrid 最优（1.993s）还快——再次印证 §16.1.3：h264 上纯 CPU 最优，  
+hybrid 的价值在 HEVC/AV1。首轮扫描中 `CPU+TRT` 曾抛  
+`CUDA_ERROR_ILLEGAL_INSTRUCTION`，单独复跑 3 次全部正常 → **偶发瞬态，  
+非稳定 bug**（记录备查，未复现）。
+
+### 17.3 候选 ②：cluster_win3 的「10 万像素」判据 —— ✅ 已实测，判据过严但方向要改
+
+> **2026-08-30 实测收口。** 结论推翻了本节初稿的两个假设（"占 50% 墙钟">   
+> 的插值外推、"下沉到 CUDA" 的方向），实测数据如下。
+
+**Step 1 — 合成帧测逐帧成本**（`tools/_probe_python_cost.py`，已加 41.6k px 档）：
+
+| ROI                   |           面积 |             逐帧成本 |
+| --------------------- | -----------: | ---------------: |
+| 106×33（生产窄 ROI）       |      3.5k px | **29.60 µs**（实测） |
+| 407×25（字幕条）           |     10.2k px |     35.88 µs（实测） |
+| **800×52（text_test）** | **41.6k px** | **84.92 µs**（实测） |
+| 800×200               |      160k px |      1062 µs（实测） |
+| 1600×600              |      960k px |      6224 µs（实测） |
+
+**初稿的 320 µs 插值错了 3.8 倍**——成本是"固定开销 + 面积项"，不是线性。  
+教训：两点线性外推在本例严重高估，**必须实测**。
+
+**Step 2 — 真实运行中的占比**（`tools/_probe_seg_share.py`，给  
+`_host_segment_frames` / `_cluster_win3` 打计时桩，宿主路径，  
+test5 3000 帧 stride=1，`GPU_PIPELINE=0` 强制宿主路径）：
+
+| ROI                  |         墙钟 | `_cluster_win3` 累计 |       占墙钟 |
+| -------------------- | ---------: | -----------------: | --------: |
+| 106×33（3.5k px）      |     3.296s |             0.059s |  **1.8%** |
+| **800×52（41.6k px）** | **3.777s** |         **0.439s** | **11.6%** |
+
+→ §16.5.2 的"ROI < 5 万像素 → 收益 < 3%，不值得"**判据过严**：  
+41.6k px 上 cluster_win3 已占 11.6%，是 3% 门槛的近 4 倍。
+
+**Step 3 — 但方向要改：默认路径根本没有 Python 分段。**  
+打桩时发现 `decode_backend=auto` + TRT 走 **GPU 全驻留管线**，  
+`_host_segment_frames` 调用次数 = **0** ——分段在 GPU 上做  
+（`GpuFrameAnalyzer`）。所以"cluster_win3 下沉"对**默认用户无效**，  
+只对宿主路径（`GPU_PIPELINE=0` / 无 TRT / `ocr=cpu`）有意义。  
+这解释了为什么 §16.5.2 十年没人推进：没人遇到需要它的场景。
+
+**Step 4 — 已落地：int32 → uint8（就地优化，非下沉）。**  
+窗口和的数学上界 = 9，`np.bool_` 与 `np.uint8` 同为 1 字节 →  
+`diff.view(np.uint8)` **零拷贝**，切片加法带宽降到 1/4。
+
+| ROI        |   int32（原） |      uint8（现） |        加速 |
+| ---------- | ---------: | ------------: | --------: |
+| 106×33     |   15.42 µs |      13.69 µs |     1.13× |
+| **800×52** |   95.33 µs |  **72.48 µs** | **1.32×** |
+| 800×200    |  554.91 µs | **271.85 µs** | **2.04×** |
+| 1600×600   | 3451.00 µs |    1797.27 µs |     1.92× |
+
+等价性：63 组（随机掩码 8 种密度 × 6 种尺寸 + 5 种结构化图案）逐位一致，  
+93 项单测通过。**端到端墙钟收益 = 噪声**（宿主路径宽 ROI：3.777 → 3.746s，  
+-0.8%；`decode` 相两次都是 3.392s 纹丝不动）。  
+**原因**：分段总耗时 == `decode` 相耗时，即分段与解码串在同一阶段且被  
+解码供给率掩盖（与 §14 的"每段加 0.5ms 负载墙钟 ±0.3%"同一机理）。  
+→ 该优化只在**非 decode-bound** 场景（慢 CPU / 大 ROI / 高段密度）变现。
+
+**修正后的判据**（取代 §16.5.2 的面积阈值）：
+
+1. **先问走哪条路径**——GPU 全驻留管线（现役默认）不需要此项；
+2. 宿主路径下，ROI ≥ **4 万像素** cluster_win3 即占墙钟 >10%；
+3. 但**只有当分段不是被解码掩盖时**才转化为墙钟，须先跑     
+   `tools/_probe_seg_share.py` 确认。
+
+### 17.4 候选 ③：冷启动预热 —— ❌ **否决**（批量实测：不改变总量）
+
+一次性账单（§15）：CUDA 上下文 0.42s + decord/NVDEC 首次 ~1.0s +  
+TRT 反序列化 0.31s + NVRTC 0.068s ≈ **1.8s**。
+
+**批量实测**（`tools/_probe_batch_coldstart.py`，batch_test 5 集，  
+frame_end=30000 stride=8，NVDEC+TRT，单进程顺序）：
+
+| 集           |          墙钟 |   段数 |
+| ----------- | ----------: | ---: |
+| 新三国01（含冷启动） | **10.190s** |  503 |
+| 新三国02       |      9.094s |  432 |
+| 新三国03       |      9.406s | 1093 |
+| 新三国04       |      9.769s | 1376 |
+| 新三国05       |      9.895s | 1477 |
+
+- 后续集中位数 9.587s → **一次性成本 Δ = 0.603s = 单视频墙钟的 6.2%**    
+  （远低于初稿假设的"整集 10~~20s 时占 9~~18%"）。
+- 引擎可管部分（TRT 反序列化 0.31s + NVRTC 0.068s）**≈ 0.38s = 批量总    
+  墙钟的 0.8%**；且 B5 的进程级 OCR 引擎池已让第 2 集起 TRT 归零。
+
+**否决理由不止是"收益小"**：`prewarm()` **只把成本提前，不改变总量**——  
+顺序批量的吞吐不受影响。它只在两种场景有净收益：① 冷启动可与别的工作  
+重叠（GUI 启动时预热，避免首次提取卡顿）；② 多实例并发时避免重复构建  
+（但 B5 引擎池已覆盖）。二者都是 UX 而非吞吐。
+
+**结论：不立项。** 若未来要改善 GUI 首帧体验，再做，且预期收益是  
+"取消 0.6s 卡顿"而不是"提速"。
+
+### 17.5 候选 ④：ONNX 静态 QDQ 量化 —— §16.8.5 唯一未测的推理层项
+
+§14 收口时明确"OCR 开销的进一步压缩不在分段/合并层，应走推理层"。三条出口里：  
+更小模型 = 精度决策（§16.8.6 排除）、动态 INT8 = 已证死路（20× 劣化）、  
+**静态 QDQ = 唯一未测**（走与动态量化不同的内核路径）。  
+目标场景窄（仅 `ocr=cpu` 的 OCR-bound 剖面，§16.8.0 的 D 场景），精度门槛严。
+
+**置信度：低。建议：仅当出现明确的 ONNX-bound 生产场景才立项。**
+
+### 17.6 候选 ⑤：引擎级 `extract_many()` —— 方向确定，幅度待复核
+
+§16.8.2 实测批量并发：NVDEC∥CPU 混合 **1.42×**、2×CPU 1.39×、2×NVDEC 1.12×，  
+目前**只落地为 README 指南**（引擎零改动即可用）。引擎级 API 的增量 = 自动  
+后端互补调度。**但 1.42× 要按 §15 方法学复核**（同进程多配置矩阵）；  
+B5 引擎池落地后还应在同一批改测（池化会改变并发下的冷启动与显存行为）。
+
+**置信度：中｜需先决策 API 形态。**
+
+### 17.7 方法学复核：§16.1.2 / §16.1.3 / §16.8.2 可能含 §15 才发现的冷启动偏差
+
+§15 确立："同进程多配置矩阵必须丢首轮或按配置交错重复取 min"，新配置排第一位  
+会替进程付 ~1.8s 的一次性账单。
+
+而 §16.1.2 的线程网格（NVDEC 8.112s → dcdT16 4.875s，**−45%**）与  
+§16.1.3 的后端交叉点只声明了"A/B 单跑串行"，**未声明是否独立进程**。  
+若在同一进程内按表序跑：
+
+|                        |       账面 |     扣除冷启动后 |
+| ---------------------- | -------: | ---------: |
+| NVDEC+TRT（排第一）         |   8.112s |      ~6.3s |
+| CPU+TRT dcdT16（第二位起已暖） |   4.875s |      ~4.4s |
+| 账面收益                   | **−45%** | **≈ −30%** |
+
+**结论方向不变，但幅度被系统性放大。** P0-1 是路线图里收益最大的一项，  
+值得花一次实测确认：按 §15 的交错取 min 重跑 §16.1.2 即可。  
+同理待复核：§16.8.2 的批量并发矩阵（1.39×/1.42×）。
+
+### 17.8 执行状态与剩余待办
+
+#### 已收口（2026-08-30 实测）
+
+| 项                    | 结果                                                | 落地                                          |
+| -------------------- | ------------------------------------------------- | ------------------------------------------- |
+| 17.2 hybrid CPU 线程   | 8 → 24 线程墙钟 **−8.6%** / decode **−14.4%**（分布完全分离） | ✅ 默认改为按核数分档 [8, 24]                         |
+| 17.3 cluster_win3 判据 | 判据过严（41.6k px 即占 11.6%），但**默认路径无 Python 分段**      | ✅ 就地改 uint8（快 1.32×~2.04×，逐位等价）；下沉方向对默认用户无效 |
+| 17.4 冷启动预热           | 批量 5 集：一次性成本 0.603s（占 6.2%），引擎可管 0.38s（占 0.8%）    | ❌ **否决**：prewarm 不改变总量                      |
+
+#### 剩余待办（按性价比）
+
+| 序 | 动作                                             | 成本      |
+| - | ---------------------------------------------- | ------- |
+| 1 | **17.7 的冷启动偏差复核**（§16.1.2 线程网格 + §16.8.2 并发矩阵） | 两次实测    |
+| 2 | 17.5 ONNX 静态 QDQ——**仅当出现明确的 ONNX-bound 生产场景**  | 按需      |
+| 3 | 17.6 引擎级 `extract_many()`——需先决策 API 形态         | 设计 + 实测 |
+
+> 17.3 留下的判据修正已写入该节；**GPU 全驻留管线（现役默认）不需要>   
+> cluster_win3 下沉**，只在宿主路径（`GPU_PIPELINE=0` / 无 TRT / `ocr=cpu`）>   
+> 且 ROI ≥4 万像素、且分段未被解码掩盖时才值得继续。
+
+---
+
+## 18. 历史实验档案（原 ARCHIVE.md）
+
+> 本文件收纳**已删除功能/已封板实验**的完整记录，避免新维护者把历史结论>   
+> 当作现役调参依据。全部条目均为**删除前的当时表述**：代码中不存在>   
+> `_dual_pipeline.py`、`DUAL_*` 环境变量、`HYBRID_CPU_SPLIT` 等。>   
+> 现役事实以 `docs/PERFORMANCE.md` 与 `CLAUDE.md` 为准；本档案仅解释>   
+> "为什么这样做/为什么不做"，保留探针数据供后人避免重复投入。
+
+---
+
+### A. 已删除的混合解码 / 混合 OCR（PERFORMANCE.md 旧 §4 前半）
+
+> **状态更新（2026-08-30 复核）**：本条为 v1 历史结论。CPU+NVDEC 混合解码>   
+> 现役为 **v4（动态分界 + 稳态折扣 + 短校准，hybrid_decode.py）**，v2 已因>   
+> 实测退化被取代。现行激活条件：显式 `decode_backend="hybrid"`、NVDEC>   
+> 可用；**stride>1 已解禁**（分片/扫掠/校准按采样步长推进）；**已并入 GPU>   
+> 全驻留管线**（§8.3：由其 CPU 分支消费宿主数组，原互斥门控移除）；>   
+> **编码门控（AV1 回退）已移除**。TRT+ONNX 混合 OCR 仍保持删除。>   
+> 本节以下内容为 v1/v2 时代数据，仅作历史参考。
+
+> **2026-08 队列实测结论**：在 `D:\Videos\batch_test` 5 个视频、stride=8、>   
+> 默认 auto+auto+gray+merge 条件下：
+>
+> | 方案              |               总耗时 |
+> | --------------- | ----------------: |
+> | 默认（不启用混合）       |            109.6s |
+> | CPU+NVDEC 混合解码  | 108.8s（-0.7%，波动内） |
+> | TRT+ONNX 混合 OCR |     111.6s（+1.8%） |
+> | 两者同时启用          |     111.9s（+2.1%） |
+>
+> 结论：混合方案在 5 视频队列上**没有实际性能提升**（解码混合基本持平，OCR 混合>   
+> 甚至略慢）。这两项实验均已删除，不再保留代码和 env 钩子。
+
+#### CPU+NVDEC 混合解码（已删除）
+
+- 曾准备 CPU 解前 10%（`HYBRID_CPU_SPLIT=0.10`，calib 后）、GPU 解后 90%，双 worker    
+  并行填有界队列，消费者按序合并。
+- 实测（decode 阶段，venv+TRT）：HEVC 2.5 vs 2.6s、h264 3.1 vs 3.3s / 7.2 vs    
+  7.7s、AV1 14.4 vs 14.1s —— 三种编码均不弱于纯 GPU。
+- 收益不确定且增加复杂度，已删除。
+
+#### TRT+ONNX 混合 OCR（已删除）
+
+- 曾实现 TRT（GPU）+ onnxruntime（CPU）双引擎并发处理段批。
+- test6 实测：纯 ONNX 22.9s → 混合 15.3s（≈ 纯 TRT 14.7s）。
+- 结论：TRT 可用时 auto 已最优；该实验已删除。
+
+---
+
+### B. 单实例双完整流水线并行（PERFORMANCE.md 旧 §4.5，e8b2637 删除）
+
+> **⚠️ 本节全部为已删除功能的历史记录**：代码中不存在 `_dual_pipeline.py` />   
+> `tests/test_dual_pipeline.py`，**也没有任何 `DUAL_*` 环境变量或构造参数**>   
+> （`DUAL_PIPELINE` / `DUAL_PIPELINE_INFLIGHT` / `DUAL_SLOW_RATIO` />   
+> `DUAL_KEYFRAME_EVERY` / `DUAL_KEYFRAME_SLICING` / `DUAL_NO_CODEC_FALLBACK` />   
+> `DUAL_PIPELINE_MIXED_SLOW_RATIO` / `DUAL_PIPELINE_SEEK` / `DUAL_PRIORITY` />   
+> `DUAL_PROPORTIONAL` / `DUAL_PIPELINE_MIN_FRAMES` />   
+> `DUAL_PIPELINE_ONNX_PEER_THREADS` 等均已移除，基准提交 e8b2637）。本节所有>   
+> "默认配置保持 / 建议显式开启 / 保留为实验开关"均为**删除前的当时表述**，>   
+> **勿按 `DUAL_*` 参数调优**。保留价值：解释当时实验的损耗来源与已验证死路，>   
+> 避免后人重复探测。现役并行维度只有一个：`decode_backend="hybrid"` 的>   
+> CPU+NVDEC 双解码生产者竞争（`hybrid_decode.py`，与本节无关）。
+
+与 4 节的"混合解码/混合 OCR"不同：双完整流水线把同一视频切成多个连续小片，  
+两条完整"解码→分段→OCR"流水线（各自独立解码器 + OCR 引擎）作为消费者从队列  
+动态取片，最后按帧序合并。
+
+测试：`D:\Videos\batch_test\新三国01.mkv`，h264 标清，  
+`frame_end=24000`、`stride=4`（6000 个采样帧），auto/gray/merge_similar：
+
+| 方案                              |    耗时 |        相对单 auto |
+| ------------------------------- | ----: | --------------: |
+| 单流水线 auto+auto（GPU+TRT）         | 7.32s |           1.00× |
+| 双流水线默认（auto+auto ∥ cpu+cpu，2 片） | 4.97s | **0.68×（-32%）** |
+| 双流水线默认（4 片）                     | 5.27s | **0.72×（-28%）** |
+| 双流水线默认（8 片）                     | 5.70s | **0.78×（-22%）** |
+
+补充观察：
+
+- 默认双流水线（主+互补）在本场景有实际收益；显式两条 `("cpu","auto")`    
+  仍可能略快，但这依赖"CPU 软解 + TensorRT"是当前机器最优单流水线组合。
+- Plan B（持久 OCR 会话跨片流式）已消除"每片 join OCR"屏障；8 片仍比    
+  2~4 片略慢，剩余成本主要是跨片 seek 与边界处理。
+- 双流水线输出的唯一非空字幕集合与单流水线一致（抽查无缺失），但重复/    
+  噪声分段更少（如 516 段 → 447 段）。
+
+#### Race 跨编码补充（2026-08，1500 帧窗口）
+
+| 视频    | 编码   |    单 auto |   默认双 2 片 | 默认双 8 片 |
+| ----- | ---- | --------: | --------: | ------: |
+| test  | HEVC |     2.09s |     2.19s |   1.99s |
+| test2 | h264 |     1.54s |     1.81s |   2.01s |
+| test3 | h264 |     1.75s | **1.45s** |   1.93s |
+| test5 | h264 |     1.84s | **1.71s** |   1.93s |
+| test6 | AV1  | **1.61s** |     2.29s |   2.70s |
+
+结论：引擎级双流水线在 Race 速度数字/多编码场景**不适合作为通用默认**。  
+动态切片能让 GPU+TRT 快路径拿到更多片，但 CPU 软解+ONNX 慢路径（尤其 AV1）  
+仍可能成为最终瓶颈；删除前曾建议仅在用户显式开启且已知 h264/CPU 较强时  
+使用——**双流水线已整体删除，此建议不再适用**。
+
+#### 双流水线重构（2026-08 二轮：探针定位 + 机制修正，历史）
+
+> 状态（历史）：双流水线时代的探针记录，已随双流水线整体删除（e8b2637）；>   
+> `_run_pipelined_parallel` / `dual_backends` / `DUAL_PIPELINE_ONNX_PEER_THREADS`>   
+> / `DUAL_PIPELINE_MIN_FRAMES` 均不存在于现役代码。本节的"内存子系统争抢">   
+> 归因链与"限对端线程数"结论保留有效（见 CLAUDE.md 对应小节），但>   
+> `DUAL_*` 配置项勿再使用。
+
+初版双流水线收益不稳定的根因，通过新增剖面探针（`ENGINE_PROFILE=1` 下  
+`producer:pipeN` / `ocr:pipeN` 分相聚合 + `parallel_pipeN_timeline`  
+分片时间线）逐项定位：
+
+1. **混配退化机制（⚠️ 归因已被 2026-08-24 管线级微观探针推翻，见文末     
+   0824 节；本条保留原始测量、作废旧解释）**。当年用剥离解码/生产者的     
+   引擎级速率探针（真实宽 ROI 输入、独跑/同进程/跨进程/绑核/优先级/     
+   各类燃烧器对照）：
+   - 干净速率：TRT **2.57** ms/段；ONNX(14T) **8.28** ms/段。早先       
+     "ONNX 单跑 16.5ms"是被其所在流水线自身解码+生产者争抢污染的读数；
+   - 决定性对照（读数有效、解释作废）：单线程重 SIMD 计算（L2 驻留）       
+     对 TRT 零影响（2.64 vs 独跑 2.58）；8 进程纯内存流拷贝让 TRT 恶化       
+     到 10.26 ms/段，enqueue 子相位 2.2→14.8 ms/批。当时归因为"对端聚合       
+     访存流量占满 DRAM/Infinity Fabric"；
+   - **0824/0825 两轮探针后的最终机制（Race tools/archive/       
+     \_dual_phase_probe.py + \_ocr_micro_scope.py）**：TRT OCR 批调用是       
+     访存重路径（批 16 约 1.5MB H2D + 数 MB preds D2H + CTC 读出），       
+     任何有实质内存流量的对端（dav1d / onnx8 / 纯 memcpy 32~~192MB）都       
+     使其单批延迟 p50 ×1.4~~1.67、尾部 ×2.5+——与负载类型无关、与超出       
+     LLC 后的工作集大小无关；**物理核分区（经实测 SMT 拓扑校准构造）       
+     与 BELOW_NORMAL 均无法保护**——受害资源在 uncore（LLC/内存控制       
+     器），不在核调度；**唯一有效旋钮是限对端线程数**（8T→2T：       
+     ×1.54→×1.30）；L2 驻留计算负载零影响（金丝雀判别），NVDEC decode       
+     免疫（其 D2H 仅 KB 级）。当年 memburn 读数方向正确，但归因应精确       
+     为"LLC/内存控制器级访存争抢拖慢宿主传输路径"；管线级 dav1d 仅       
+     ×1.19 是重叠稀释后的读数，micro 密集态为 ×1.43；
+   - 存续有效的量化：ONNX 削到 6T/4T 把 TRT 恢复到 3.39/3.22 ms/段；       
+     已固化 `DUAL_PIPELINE_ONNX_PEER_THREADS=6`（显式 `dual_backends`       
+     混配时自动给 ONNX 侧限流）；
+   - **已作废的外推："任何混配合计吞吐 ≤ 纯 TRT 单跑的 96% —— 混合架构       
+     没有赢面，双流水线都用 TRT"**。仅对无隔离措施的引擎级 OCR 混配       
+     成立；五轮端到端实测（混配 h264 -27~-42%）与 0824 探针均已证明该       
+     外推不成立。trt∥trt 单引擎互退（各 +40%）为 GPU 双上下文时间片       
+     切换——保留有效。
+2. **NVDEC 是固定功能资源**：两个 NVDEC 解码会话合计吞吐反而比单个低     
+   ~15%（TRT+TRT 对照实测）；FFmpeg 软解才是解码侧的真实增量。
+3. **旧方案 -25~-35% 的相当部分来自阈值漂移的"意外减负"**：每片各自校准     
+   Otsu → 各片二值化不一致 → merge_similar 在部分片上更激进（832 段 vs     
+   单流水线 1889 段，OCR 次数近乎减半）。唯一文本集一致（211=211）属侥幸     
+   （字幕重复性强），对逐段精确 OCR 场景是正确性风险。
+4. **让位判定曾被背压噪声污染**：片墙钟含 OCR 队列 q.put 阻塞，GPU 路径     
+   因对方 OCR 拥塞被误判为慢路径而让位（timeline 显示 GPU 只干了头部片）。     
+   改用生产者净耗时（decode+gray+sharp+bin+segment 分相和）作吞吐口径。
+
+对应机制修正（`_run_pipelined_parallel` 重写）：
+
+- 默认互补对改为 `(auto,auto) ∥ (cpu,auto)`：两条都用 TRT，仅解码互补；
+- 头部"试点+确认"小片组（各约 1/24 视频长，4 片预留）实测两侧生产者净速率，    
+  分级让位（稳态比 <0.8 确认 / <0.35 单片即可），慢路径最多浪费自己那组小片；
+- 全局 Otsu 校准一次（前 50 采样帧），各片阈值与单流水线一致（消除 #3 漂移，    
+  段数与单流水线完全一致）；探测 reader 移交复用省一次打开；
+- 跨片边界 merge_similar 缝合：相邻片尾/首段代表帧相似则并入前段；
+- 采样帧数 < `DUAL_PIPELINE_MIN_FRAMES`(3000) 或 AV1 编码时回退单流水线。
+
+最终实测（7945HX + RTX 4060 Laptop，A/B 单跑串行）：
+
+| 场景                                  |   单流水线 |  双流水线 |        Δ |
+| ----------------------------------- | -----: | ----: | -------: |
+| 新三国01 窗口（24000 帧 stride=4，6000 采样帧） |  9.46s | 6.71s | **-29%** |
+| 字幕批量 5 集全片（stride=8，含后处理）           | 115.0s | 84.0s | **-27%** |
+| test5 全片（h264，7223 帧）               |  7.83s | 4.51s | **-42%** |
+| test3 全片（h264）                      |  3.27s | 2.40s | **-27%** |
+
+输出一致性：字幕批量 CSV 与单流水线仅差 1 行（跨片缝合吸收的重复行）；  
+Race 段数 ±1；唯一文本集逐一核对一致。短窗口（<3000 采样帧）回退单流水线，  
+无回归。
+
+#### 五轮修正：混配双线程真正并行（2026-08 后续，历史）
+
+> 状态（历史）：双流水线时代的修正记录，已随双流水线整体删除（e8b2637）；>   
+> `DUAL_SLOW_RATIO` 与"默认互补对 (auto,auto) ∥ (cpu,cpu)"均不存在于现役>   
+> 代码。保留价值："漏 seek_accurate 使 CPU 解码慢一倍 / 让位方向错误">   
+> 两条教训。
+
+之前的"任何混配合计吞吐 ≤ 纯 TRT 单跑 96%"是引擎级剥离探针的结论，但用它  
+指导生产双流水线时被端到端实测推翻。用"同一视频切两半、两个独立  
+FieldExtractor 实例并发"作对照（4.26s），发现引擎内混配双流水线（6.6s+）  
+落后并不是推理后端互扰，而是两个实现缺口：
+
+1. **全局阈值路径漏了 `seek_accurate(start)`**。`_run_parallel_chunk` 在     
+   `th is not None` 时直接 `get_batch`，但 CPU 解码器仍停在文件头/上次位置，     
+   等价于每次随机跳到片首，CPU 解码吞吐约慢一倍（独立 CPU 半片 decode_batch     
+   2.52s，引擎内同片 5.07s）。补一次精确 seek 后无试点混配从 6.57s 降到 4.71s。
+2. **混配下让位方向错误**。让位逻辑在试点吞吐噪声下把 GPU+TRT 对端停掉，     
+   全部交给 CPU+ONNX 路径，从 ~4.8s 退化到 ~6.8s。混配两条流水线分属     
+   GPU/CPU 硬件，当时默认让位阈值取 0.5（`DUAL_SLOW_RATIO` 可显式覆盖），     
+   并把默认互补对改回下游 `--dual` 的 `(auto,auto) ∥ (cpu,cpu)`     
+   （均已随双流水线删除）。
+
+修正后本机实测（新三国01，3000 采样帧，stride=8，host 双流水线，单跑）：
+
+| 方案                |    墙钟 |         相对单 TRT |
+| ----------------- | ----: | --------------: |
+| 单 GPU+TRT         | 7.28s |           1.00× |
+| 双流水线（修正后，默认混配）    | 4.84s | **0.66×（-34%）** |
+| 双流水线（修正后，显式双 TRT） | 4.85s |           0.67× |
+| 两个独立实例同视频两半（对照）   | 4.26s |           0.59× |
+| 修正前混配（让位）         | 6.78s |           0.93× |
+
+结论：引擎内混配不再需要"让位止损"，两条硬件路径可真正并行；引擎内  
+双流水线与下游双实例的差距从 ~2.4s 缩小到 ~0.6s。
+
+#### 关键帧分片实验（2026-08，双流水线时代，历史记录）
+
+> 状态（已转正/移除）：双流水线已整体删除（e8b2637）；其 kfe（每关键帧>   
+> 一片）分片思路现役为 `hybrid_decode.py` 的唯一分片方法，但双流水线的>   
+> `DUAL_KEYFRAME_SLICING`（2 片关键帧吸附）与等分法已一并移除；本节为>   
+> 历史实验记录。
+
+利用 `decord.VideoReader.get_key_indices()`，把大竞争片的内部边界吸附到  
+最近关键帧，降低每片 `seek_accurate` 时从关键帧解码到目标帧的成本。试点片  
+仍保留原尺寸，只吸附大竞争片内部边界，保证全帧覆盖。
+
+Race 测试视频 3000 帧，A/B 开关：
+
+| 视频         | 分片 |  关键帧关 |      关键帧开 |
+| ---------- | -: | ----: | --------: |
+| test3 h264 |  2 | 2.85s | **2.82s** |
+| test3 h264 |  4 | 2.96s | **2.56s** |
+| test3 h264 |  8 | 3.23s | **2.66s** |
+| test5 h264 |  2 | 2.59s | **2.48s** |
+| test5 h264 |  4 | 3.36s | **3.32s** |
+| test5 h264 |  8 | 3.37s | **2.74s** |
+
+结论：
+
+- 关键帧吸附在多分片时有明显收益，特别是 test3 的 4/8 片：4 片从 2.96s    
+  降到 2.56s，成为 test3 最优；
+- test5 仍然是 2 片最优（2.48s），4 片即使关键帧开启也较差；
+- 因此关键帧分片让"更多分片"在部分视频上真正变得更可行，但不是所有    
+  视频都适用；测试集上 2~4 片仍是推荐范围。
+
+#### 每关键帧切一片实验（DUAL_KEYFRAME_EVERY=1，2026-08，探针定位开销环节）
+
+> 状态（历史）：双流水线已整体删除（e8b2637），`DUAL_KEYFRAME_EVERY`>   
+> 开关已移除。本节为当初"判死路"的历史探针记录；其中"每关键帧一片 +>   
+> 连续扫掠 + 竞争闸门 + 端到端让位"的思路后以 `hybrid_decode.py` 的 kfe>   
+> 分片形式转正，但**与本节无关**（hybrid 不设任何 `DUAL_*` 变量）。
+
+按"若能大幅降低分片开销，大量关键帧片自由竞争"的思路，把大竞争区按每个  
+关键帧边界切一片（试点/确认片保留），让两条流水线自由抢片。Race 3000 帧、  
+关键帧吸附开启、AV1 临时关闭回退、混配默认让位 0.5：
+
+| 视频         |         普通关键帧 2/4/8（基线） |     每关键帧一片 |
+| ---------- | ----------------------: | ---------: |
+| test3 h264 | 2.84 / **2.54** / 2.57s | 2.91~3.18s |
+| test5 h264 | **2.44** / 3.23 / 3.00s | 3.19~3.23s |
+| test6 AV1  | 2.56 / 2.65 / **2.63**s | 2.65~2.72s |
+
+结论（ENGINE_PROFILE 分片时间线 + producer 分相探针，勿再重复投入）：
+
+- **片间死区 gap ≈ 0**：队列/唤醒/跨片缝合机制没有额外开销，分片本身不是    
+  瓶颈来源。
+- **唯一随片数增长的开销是 `seek_accurate`**：h264 GPU ~50ms/次、CPU    
+  ~15-20ms/次，AV1 GPU ~20ms/次。每关键帧一片时片序在两条流水线间交错，    
+  "升序连续扫掠免 seek"的假设失效，seek 总耗时随片数线性增长    
+  （test5：0.20s→0.45s）。
+- **自由竞争会向"生产者快、OCR 慢"的路径倾斜**：h264 下 CPU 软解吞吐    
+  （~1370fps）高于 NVDEC（~1005fps），小片竞争让 CPU+ONNX 抢到 8/14 片    
+  （1780/3000 帧），GPU+TRT 只拿 6 片；但 ONNX infer 是真正的墙钟瓶颈，    
+  CPU 路径 OCR 总耗时 +0.83s，直接抬高整体墙钟（test5 3.11s vs 基线    
+  2.44s）。现有让位阈值按"生产者净耗时"判定，对 h264 这种"解码快、OCR    
+  慢"的路径不会触发（该路径在 2 片中与 GPU 基本均分，正好是墙钟最优）。
+- AV1 下 CPU 生产者过慢，0.5 让位把剩余片交给 GPU，每关键帧一片与普通    
+  2/4 片基线基本持平（探针同轮 every 2.69s vs base2 2.71s，基准表 4 片    
+  2.65s）——AV1 关键帧 seek 便宜、片多不亏，但也不赚。
+
+**当时结论：每关键帧一片自由竞争不是正确方向。** 删除前默认曾保持"2 大  
+竞争片 + 关键帧吸附 + 混配 0.5 让位"；`DUAL_KEYFRAME_EVERY` 曾保留为实验  
+开关但不默认启用——**均已随双流水线删除**。
+
+#### 关键帧切片复活（2026-08 六轮：连续扫掠免 seek + 竞争闸门 + 端到端让位）
+
+> 状态（历史）：本节全部为双流水线时代的探针记录，功能已随双流水线>   
+> 整体删除（e8b2637）；`DUAL_PIPELINE_INFLIGHT` / `DUAL_NO_CODEC_FALLBACK`>   
+> / `DUAL_KEYFRAME_EVERY_MIN_GAP` / `DUAL_KEYFRAME_EVERY_MAX_CHUNKS` 均不>   
+> 再存在。保留价值：解释"连续扫掠免 seek / 竞争闸门 / 端到端让位"的>   
+> 探针结论——这些机制以不同形式在现役 `hybrid_decode.py` 中体现>   
+> （kfe 分片 + 连续扫掠 + inflight 上界），但 **hybrid 不设任何 `DUAL_*`>   
+> 变量**。
+
+上小节把"每关键帧一片自由竞争"判为死路；本轮用探针把两个障碍分别拆开  
+并修复，方案复活（失衡情境取代 2 片；均衡情境与 2 片持平、仍显著优于  
+单流水线）。
+
+##### 障碍 1：seek 总耗时随片数线性增长（修复 = 连续扫掠免 seek）
+
+本机微探针（decord fork，test3/test5 h264）：
+
+| 场景         | GPU seek | CPU seek |  连续下一帧 |    远跳 |
+| ---------- | -------: | -------: | -----: | ----: |
+| test5 h264 |  ~69ms/次 |  ~37ms/次 | ~1.4ms | ~46ms |
+| test3 h264 |  ~67ms/次 |  ~40ms/次 | ~1.3ms | ~90ms |
+
+- 关键事实：**"连续扫掠"（下一片起点 = 上一片终点）接近零成本**，而任何    
+  非相邻跳转 ~40-70ms（即使目标就在相邻关键帧）。
+- 修复：`_run_parallel_chunk` 新增 `seek_required` 参数；`_do_chunk` 用    
+  `prev_end_abs` 判定"下一片起点 == 上一片终点"时跳过 `seek_accurate`。    
+  每关键帧一片时间线里同一流水线连续扫掠的片 seek 归零。
+- 效果（ENGINE_PROFILE `producer:pipeN.seek_accurate` 聚合）：test5 kfe    
+  片序交错时 seek 总耗时从 0.5s+ 降到可控（连续扫掠路径 0）；
+
+##### 障碍 2："解码快、OCR 慢"路径在自由竞争中抢片（修复 = 竞争闸门 + 端到端让位）
+
+- 症状：CPU+ONNX（宽 ROI 字幕）解码 ~1200fps 远超 NVDEC ~700fps，自由竞争    
+  下抢走多数小片；但 ONNX infer 是真正墙钟瓶颈（宽 ROI 下 13-17ms/段），    
+  该路径 E2E 速率反而最低（字幕 300ms+/帧 vs GPU 1.7ms/帧）。
+- 两处误判都源于"按生产者净耗时（decode+segment，免疫 OCR）"的口径：
+  - 竞争抢片：谁解码快谁先可拉下一片 → OCR 慢路径抢占过多切片；
+  - 让位：按生产者净速率会把"解码快、OCR 慢"判为快路径（test3 GPU 试点      
+    被 warm-up 拖低、max_chunks=16 时 GPU 被误让、CPU 独跑 12 片 16s）。
+- 修复：    
+  a. **竞争取片闸门（`DUAL_PIPELINE_INFLIGHT`，默认 1 最优）**：本流水线    
+  "已取但 OCR 未排空"的 in-flight 片数达上限即暂停取片、等自己 OCR    
+  追上来，让对方取。片数口径与内容无关 → 免疫"分段稀疏时段做不了多少    
+  OCR 工作"的测量偏差。实测字幕窗口 INFLIGHT=1 vs 2：kfe 8.5s vs    
+  10.6s、8 片 8.9s vs 9.9s。    
+  b. **端到端速率让位**：让位判定改为"片起点 → 该片 OCR 排空"的墙钟    
+  （`e2e_speed`，竞争闸门排空后记录），替代生产者净速率；双方都至少    
+  取过一片竞争片后才可能触发（规避试点头片 warm-up 噪声）。
+- 附带修复：**OCR 尾批半批死锁**——OCR worker 把不足 16 的尾批段攒在    
+  b_idx 等下一片补齐才 flush；闸门若精确等 `len(results) ≥ pu` 而队列已    
+  空 → producer 等排空、OCR worker 等下一片，互等死锁（INFLIGHT=1 必现）。    
+  排空判定带半批容忍（≤OCR_BATCH-1 段）后恢复前进。
+
+##### 切片粒度控制（关键帧过密防爆炸）
+
+- `DUAL_KEYFRAME_EVERY_MIN_GAP`（默认 16 采样帧）+ `DUAL_KEYFRAME_EVERY_MAX_CHUNKS`    
+  （默认 8）：mkv 重编码关键帧过密（每 30-140 源帧一个）时逐步放大间距    
+  合并，片数受控且边界仍落关键帧（seek 便宜）。字幕窗口不设限时 175 个    
+  关键帧 → 上百小片，seek 总耗时灾难级。
+
+##### 本机实测（A/B 单跑串行取最优，7945HX + RTX 4060 Laptop，INFLIGHT=1）
+
+| 场景                                    |   单流水线 |       双流水线最优 |                Δ |
+| ------------------------------------- | -----: | -----------: | ---------------: |
+| 新三国01 窗口（24000 帧 stride=4，6000 采样帧）   |  8.75s |    kfe 8.52s |              -3% |
+| 同上 双 2 片（默认）                          |  8.75s |       13.36s | +53%（失衡下 2 片必回退） |
+| 新三国01 整集（stride=8 全片）                 | 21.38s | 双 2 片 11.68s |         **-45%** |
+| test5 窗口（3000 帧）                      |  3.37s |  双 2 片 2.54s |             -25% |
+| test5 窗口 kfe                          |  3.37s |        2.87s |             -15% |
+| test3 窗口（3000 帧）                      |  3.22s |    kfe 2.76s |             -14% |
+| test5 全片（7223 帧）                      |  7.66s |  双 2 片 5.71s |             -25% |
+| test3 全片（3190 帧）                      |  3.39s |  双 2 片 3.00s |             -12% |
+| test6 AV1（默认回退单）                      |   单流水线 |     回退单（不回归） |                0 |
+| test6 AV1（`DUAL_NO_CODEC_FALLBACK=1`） |  2.14s |  双 8 片 2.71s |      +27%（仍不应启用） |
+
+结论（均为删除前结论，勿据此配置）：
+
+- **全片长场景双流水线获得显著提升（-12~-45%）**；Race h264 窗口/全片    
+  -14~-25%；字幕整集 -45%（CPU 软解分担 NVDEC 解码+ONNX OCR 与 GPU 并行）；
+- **失衡情境（字幕宽 ROI 6000 采样帧窗口）只有 kfe(≤8 片)+INFLIGHT=1 才    
+  能打平/略优单流水线（-3%）**；默认 2 片在该情境为 +53% 回归；
+- **AV1 仍应默认回退单流水线**（不回归；强制开启双流水线 +27%）。
+
+> 删除前的最终配置曾为"2 大竞争片 + 关键帧吸附 + 混配 0.5 让位 +>   
+> `DUAL_PIPELINE_INFLIGHT=1` + 端到端让位口径 + `DUAL_KEYFRAME_EVERY`>   
+> 实验开关"——**以上全部随双流水线删除**，现役 `hybrid_decode.py` 的>   
+> kfe 分片/连续扫掠/inflight 上界与此同源但无 `DUAL_*` 变量。
+
+#### 每关键帧切片的 seek 上限探针与配平方案负结果（2026-08 七轮）
+
+> 状态（历史）：双流水线时代的探针记录，功能已随双流水线整体删除>   
+> （e8b2637）；`DUAL_PIPELINE_SEEK` 等变量均不存在。保留价值：seek 开销>   
+> 量化与"pair-run / 细片自适应合并 / 全跳过 seek"三条已验证死路。
+
+目标：让每关键帧切片（kfe）"至少不弱于双 2 片"，即多切片在均衡情境不亏、  
+在强失衡情境赚。探针与多方案实测后定位的硬上限与已验证死路（勿再重复投入）：
+
+##### seek 开销是 kfe 相对大竞争片的唯一实质缺口
+
+本机 decord fork（h264 GPU/CPU）微探针：
+
+| 操作                         |    GPU |    CPU |
+| -------------------------- | -----: | -----: |
+| 显式 seek_accurate+get_batch |  ~69ms |  ~37ms |
+| 连续下一帧（相邻扫掠）                | ~1.4ms | ~0.8ms |
+| get_batch 直接随机定位（远跳）       |  ~46ms |  ~32ms |
+
+- kfe 竞争片在两条流水线间交错时每次非连续跳跃 ~40-70ms；片数越多、seek    
+  总耗时线性增长（test5 窗口：6 片 0.19s → 14 片 0.51s）。这是"kfe 略差于双 2 片"    
+  （test5 ~~+0.2~~0.3s、字幕整集 ~~+0.5~~0.9s）的全部来源（墙钟差≈seek 差）。
+
+##### 已验证死路（勿再投入）
+
+1. **pair-run（连续两片一组取片）**：一轮取两片连续小片，交错跳跃减半。     
+   实测反而更差（test5 kfe 3.14 vs 单片 2.87）——按"对"取片让竞争闸门的     
+   in-flight 粒度翻倍，把 E2E 更快的 CPU+ONNX 路径过度节流（分配从 ~54% 掉到     
+   ~31%），均衡破坏。
+2. **细片自适应合并**（细片起步、首轮后按端到端速率比合并回大竞争片）：
+   - 头部闸门测量（每条流水线头部片后全排空再取样）开销 ~0.2-1.2s，且       
+     test5/test3 首轮端到端比值受每片全排空口径干扰（CPU 显得更慢），       
+     合并不触发，整体反而 +0.2-0.9s；
+   - 首轮后合并（round2）：字幕整集合并回大竞争片（12.5→12.4，小收益），       
+     test5 仍需消耗~前 6 个细片的交错 seek，合并收益被早期细片吃掉。
+3. **全跳过显式 seek（DUAL_PIPELINE_SEEK=0）**：h264 均衡略快（test3 -0.27s、     
+   test5 -0.09s），但字幕窗口 +3.5s——CPU 软解对宽 ROI/长 GOP 的随机访问     
+   没有显式 seek 时吞吐约慢一倍（印证"五轮修正"的结论）。不能作默认。
+
+##### 落地修复（本提交）
+
+- **extreme 误让修复**：让位的"极端悬殊"单样本快速判定（0.35 阈值）与    
+  min_samples 解耦，首轮端到端单样本噪声会把 GPU 误让（实测 GPU 3 片即让、    
+  CPU 独跑 10 片 5.04s）。改为 extreme 也需 min_samples（≥4，细片模式）取样。
+- **GPU/NVDEC 跳过显式 seek**（默认）：NVDEC 硬解 get_batch 内部随机定位实测    
+  比显式 seek+get_batch 更便宜（~46 vs ~69ms）且硬解随机访问不衰减；CPU 软解    
+  保留显式 seek。DUAL_PIPELINE_SEEK=1 强制全显式、=0 全跳过（实验）。
+
+##### 实测（本提交后，A/B 取最优）
+
+| 场景               |      双 2 片 |           kfe | 说明                            |
+| ---------------- | ---------: | ------------: | ----------------------------- |
+| test5 窗口（3000 帧） |      2.66s |         2.86s | kfe 仍略差（交错 seek 0.2s，见死路 1/3） |
+| test3 窗口（3000 帧） |      3.05s |     **2.65s** | kfe 赢                         |
+| 字幕窗口（6000 采样帧）   | 15.2~15.4s | **8.5~10.5s** | kfe 强失衡大赢（CPU seek 保留不破坏）     |
+| 字幕整集 stride=8    |     ~12.4s |        ~12.5s | 基本持平                          |
+
+结论（删除前结论）：kfe 的"多切片在强失衡时加速"成立（字幕窗口），test3  
+也赢；均衡 h264（test5）仍差 ~0.2s（交错 seek 的本机硬上限）。删除前的  
+"默认双 2 片 + 强失衡建议 `DUAL_KEYFRAME_EVERY=1`"策略已随双流水线删除；  
+seek 上限已量化，勿再重复投入。
+
+#### AV1 关闭编码回退后的多分片对照（2026-08，历史）
+
+> 状态（历史）：双流水线时代实验，`DUAL_NO_CODEC_FALLBACK` 已随双流水线>   
+> 删除；本节结论仅作历史参考（现役 hybrid 无编码门控，AV1 不再回退）。
+
+用 `DUAL_NO_CODEC_FALLBACK=1` 临时关闭 AV1 自动回退，观察两路径速度差  
+极大时多分片是否改善负载均衡（test6，3000 帧，关键帧分片开启）：
+
+|        分片 |        墙钟 | GPU 拿片 | CPU/ONNX 拿片 |
+| --------: | --------: | -----: | ----------: |
+|       双 2 |     4.19s |      3 |           3 |
+|       双 4 |     3.02s |      5 |           3 |
+|       双 8 | **2.89s** |      8 |           4 |
+| 单 GPU+TRT | **2.66s** |      - |           - |
+
+结论：
+
+- 多分片确实让快路径吸收更多片，4/8 片比 2 片明显改善（4.19→2.89s）；
+- 但 CPU+ONNX 在 AV1 上仍然太慢，即使只拿 3~4 片也会拖住整体；
+- 绝对墙钟仍不如单 GPU+TRT，因此默认 AV1 回退单流水线仍是正确选择。
+
+#### 按试点测速比例分配实验（DUAL_PROPORTIONAL=1，2026-08，历史）
+
+> 状态（已移除）：随 kfe 转正为唯一分片方法一并删除（2026-08 七轮修正）；>   
+> 本节为历史实验记录。
+
+实现：两条流水线先照常处理试点/确认小片，随后按稳态吞吐把剩余大区间  
+按 `v1/(v1+v2)`、`v2/(v1+v2)` 切成两个连续大区间，各归一条流水线，替代  
+共享队列竞争。
+
+Race 3000 帧、关键帧分片开启、AV1 临时关闭编码回退：
+
+| 视频             |   普通双 2 片 |     按比例分配 |
+| -------------- | --------: | --------: |
+| test3 h264     | **2.82s** |     3.09s |
+| test5 h264     | **2.48s** |     3.28s |
+| test6 AV1（关回退） |     4.19s | **3.12s** |
+
+AV1 下实际速度与分配比例（关键数据）：
+
+- 单 GPU+TRT：约 `2.79s`
+- 单 CPU+ONNX：约 `6.19s`
+- 实际整片速度比约 `2.2 : 1`
+- 但按试点测速后比例分配为：
+  - GPU+TRT 大竞争片：**2162 帧**
+  - CPU+ONNX 大竞争片：**338 帧**
+  - 比例约 `6.4 : 1`
+
+h264 下示例（test5）：
+
+- 比例分配反而把 1069 帧给 GPU、1431 帧给 CPU，说明试点测速噪声可能导致    
+  比例方向错误，最终墙钟 3.28s，劣于普通竞争的 2.58s。
+
+结论：
+
+- AV1 这种"路径速度差距真实存在"时，按比例分配确实能明显改善双流水线    
+  （4.36s → 3.12s）；
+- 但试点测速比例并不等于真实整片速度比：AV1 实测真实比约 2.2:1，试点    
+  测速却给到 6.4:1；说明小片吞吐信号有较大偏差；
+- h264 下比例分配可能反向加重负载不均，因此当时未转为默认机制。    
+  （该实验与 `DUAL_PROPORTIONAL` 开关已随双流水线删除，勿再按此配置。）
+
+#### 在线优先取片实验（DUAL_PRIORITY=1，2026-08，历史）
+
+> 状态（已移除）：随 kfe 转正为唯一分片方法一并删除（2026-08 七轮修正）；>   
+> 本节为历史实验记录。
+
+实现：不依赖前期静态测速，两条流水线完成每个片后更新真实吞吐；若双方  
+同时等待取下一片，速度更快的一方优先拿，慢的一方等待。保留关键帧分片。
+
+Race 3000 帧、关键帧开启、AV1 临时关闭回退：
+
+| 视频         | 普通关键帧 2/4/8         | 优先取片 2/4/8          |
+| ---------- | ------------------- | ------------------- |
+| test3 h264 | 2.82 / 2.56 / 2.66s | 3.64 / 2.98 / 3.18s |
+| test5 h264 | 2.48 / 3.32 / 2.74s | 2.93 / 3.24 / 3.61s |
+| test6 AV1  | 4.19 / 3.02 / 2.89s | 5.06 / 3.52 / 2.81s |
+
+结论：
+
+- 在线优先取片没有带来普遍改善；h264 上普遍比普通关键帧竞争更差；
+- AV1 8 片略好（2.89→2.81s），但优势很小；
+- 原因：优先级等待引入了额外同步/调度开销，而且只解决"双方同时等待"    
+  的瞬间，没有解决慢路径在快路径忙碌时仍然连续抢片的问题；
+- 因此该方案当时未转为默认。（实验与 `DUAL_PRIORITY` 开关已随双流水线    
+  删除，勿再按此配置。）
+
+#### 混合默认让位阈值 0.5 的发现（DUAL_PIPELINE_MIXED_SLOW_RATIO=0.5，历史）
+
+> 状态（历史）：双流水线时代结论，`DUAL_PIPELINE_MIXED_SLOW_RATIO` />   
+> `DUAL_SLOW_RATIO` 已随双流水线删除；仅作历史参考。
+
+前面的在线优先实验没有带来收益，但暴露出一个更简单的改进点：把"混配默认  
+完全禁让位"改为"使用适中的让位阈值 0.5"。
+
+- 0.5 的意义：快慢差距很大（如 AV1 下 CPU/ONNX 极端慢）时，慢路径会在试点    
+  后让位，快路径接管剩余片；快慢差距适中的 h264 下则基本不触发。
+
+实测（Race 3000 帧，关键帧分片开启，AV1 临时关闭回退）：
+
+| 视频         | 普通关键帧 2/4/8         | DUAL_SLOW_RATIO=0.5 2/4/8 |
+| ---------- | ------------------- | ------------------------- |
+| test3 h264 | 2.82 / 2.56 / 2.66s | 2.84 / **2.54** / 2.57s   |
+| test5 h264 | 2.48 / 3.32 / 2.74s | **2.44** / 3.23 / 3.00s   |
+| test6 AV1  | 4.19 / 3.02 / 2.89s | 2.56 / 2.65 / **2.63**s   |
+
+结论：
+
+- h264 的 test3/test5 不再被 0.5 误触让位，仍然在 2~4 片附近取得最优；
+- AV1 下从普通竞争的 4.19s（2 片）显著降到 ~2.6s，接近单 GPU 的 ~~2.1~~2.7s；
+- 说明"混配默认完全禁让位"是过度矫正；正确做法是给混配一个独立的、比    
+  0.8 更保守的默认阈值 0.5。
+
+删除前曾把这个值固化为 `DUAL_PIPELINE_MIXED_SLOW_RATIO=0.5`  
+（`DUAL_SLOW_RATIO` 可显式覆盖）——**两者均已随双流水线删除**。

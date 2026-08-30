@@ -393,6 +393,16 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
                 from hybrid_decode import HybridDecoder
                 _mc = config.env_int(config.HYBRID_MAX_CHUNKS_ENV, 16)
                 _ct = config.env_int(config.HYBRID_CPU_THREADS_ENV, 0)
+                if _ct <= 0:
+                    # 0 的历史语义是"不传 num_threads"→ 落到 fork 的
+                    # clamp(hw/4, 2, 8)，把 CPU 生产者钉在 8 线程。实测该
+                    # 默认值偏小（见 docs/PERFORMANCE.md §17.2）：本机
+                    # 32 逻辑核上 cpuT 0→24 使 hybrid decode -13.5%、
+                    # 墙钟 -5.3%。改为按核数分档，上限 24（32 时反而略差，
+                    # CPU 生产者与 NVDEC/消费者抢 host CPU）。
+                    _ct = max(config.HYBRID_CPU_THREADS_AUTO_MIN,
+                              min((_os.cpu_count() or 8) * 3 // 4,
+                                  config.HYBRID_CPU_THREADS_AUTO_MAX))
                 _mcf = config.env_int(config.HYBRID_MAX_CHUNK_FRAMES_ENV, 0)
                 vr = HybridDecoder(self, vr, max_chunks=_mc,
                                    cpu_threads=_ct, max_chunk_frames=_mcf)
