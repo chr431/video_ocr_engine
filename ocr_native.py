@@ -129,7 +129,7 @@ class OcrEngine:
         # 显存全驻留 CTC：TRT 输出在 GPU 完成 vocab 维 argmax/max，输出
         # 不落 RAM。host 输入（`_call_trt_gpu`）与 NVDEC 直通
         # （`call_gpu_raw`）两条路径都生效，语义等价、结果逐位一致
-        # （见 docs/PERFORMANCE-ROADMAP.md P0-2）；GPU_CTC=0 显式关闭。
+        # （见 docs/PERFORMANCE.md §16.2 P0-2）；GPU_CTC=0 显式关闭。
         self._gpu_ctc_mode = (engine_type == "tensorrt" and
                               config.env_bool(config.GPU_CTC_ENV, default=True))
         if engine_type == "tensorrt":

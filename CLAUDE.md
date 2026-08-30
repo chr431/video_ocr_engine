@@ -4,15 +4,30 @@
 **README 只写用户向 API/使用说明**；开发过程结论（尤其“为什么这样做/为什么不做”）
 写在这里和 `docs/PERFORMANCE.md`，避免污染用户文档。
 
-> ⚠️ **当前状态（重要，先读这里）**：本文大量章节是 2026-08 双流水线实验的
-> **历史记录**，其中"单实例双完整流水线并行"已完成两轮删除（最终提交
-> e8b2637 "彻底移除 dual_pipeline"）。**现役代码没有 dual pipeline、没有
-> `DUAL_*` 环境变量、没有 `_dual_pipeline.py` / `tests/test_dual_pipeline.py`**
-> （历史提及均为旧档案）。现役并行维度只有一个：
-> `decode_backend="hybrid"` 的 CPU+NVDEC 双解码生产者竞争（`hybrid_decode.py`，
-> kfe 分片纯函数 `_keyframe_every_chunks` 也在此），OCR/分段仍是单路径。
-> 下方其余章节（GPU 管线、TRT 拷贝、hybrid、分核、性能结论）为现行事实。
-> 历史数值仅用于理解"为什么这样设计"，勿按旧 `DUAL_*` 参数调优。
+> ⚠️ **当前状态（重要，先读这里）**
+>
+> **1. 文档只有四份，别再新增**（2026-08-30 合并后）：
+> `README.md`（用户向 API）｜`CLAUDE.md`（本文：维护者向，开发决策与约定）｜
+> `docs/PERFORMANCE.md`（性能实测记录，含 §16 路线图归档 / §17 下一步候选 /
+> §18 历史档案）｜`docs/DEPENDENCIES.md`（依赖版本与已知问题）。
+> 原 `PERFORMANCE-ROADMAP.md` / `DESIGN-REVIEW.md` / `ARCHIVE.md` **已删除**
+> ——它们本质是一次性报告，内容已并入本文档与 `PERFORMANCE.md`。
+> **新结论一律追加到现役章节，不要新建文档。**
+>
+> **2. 大量章节是历史记录**：本文主体是 2026-08 双流水线实验的存档，其中
+> "单实例双完整流水线并行"已完成两轮删除（最终提交 e8b2637 "彻底移除
+> dual_pipeline"）。**现役代码没有 dual pipeline、没有 `DUAL_*` 环境变量、
+> 没有 `_dual_pipeline.py` / `tests/test_dual_pipeline.py`**（历史提及均为旧档案）。
+> 现役并行维度只有一个：`decode_backend="hybrid"` 的 CPU+NVDEC 双解码生产者
+> 竞争（`hybrid_decode.py`，kfe 分片纯函数 `_keyframe_every_chunks` 也在此），
+> OCR/分段仍是单路径。下方其余章节（GPU 管线、TRT 拷贝、hybrid、分核、
+> 性能结论）为现行事实。历史数值仅用于理解"为什么这样设计"，
+> **勿按旧 `DUAL_*` 参数调优**。
+>
+> **3. 代码注释里的 `DESIGN-REVIEW Xn` 标记**（如 C5 / B5 / D1）指向本文
+> 「设计审查结论（2026-08-30）」一节的对应条目，原报告文件已删除。
+>
+> **4. 下一步候选见 `docs/PERFORMANCE.md` §17**（不在本文）。
 
 ## 通用约定
 
@@ -354,6 +369,13 @@ RAM 大触点补掉，形成显存全驻留闭环：
   备份 `build/Release/decord.dll.20260829.bak`。方法已写进 MEMORY.md。
 
 **P0-5 `OCR_PAD_WIDTH_MIN` 224 → 160（旧结论已作废）**
+> ⚠️ **本项已于 2026-08-29 晚回退（160 → 224），下方为当时的论证，勿照做。**
+> 回退原因：生产（RaceVideoToLog）报告 pad 160 使原始 OCR 误读退化
+> （test5 7→26、test6 17→32），根因是评估口径错了（用了引擎默认
+> `force_aspect=0`，而生产传 1.5；且逐帧比而非段代表帧比）。
+> **pad 224 保持**；320 也已证伪（误读 124→133、最终 0→3、FAIL）。
+> 详见 `docs/PERFORMANCE.md` §16.2 P0-5。
+
 旧注释"窄图在宽 pad 下更准（test6：224→err 0.09%，48~96→0.69~1.19%）"
 用真值重测**完全反转**：224 在 test5/test6 上反而最差（−0.7~−1.1pp），
 均值最优是 160，且低档位墙钟全面更快；宽 ROI 上 160 vs 224 文本一致且快 8.8%。
@@ -370,7 +392,7 @@ RAM 大触点补掉，形成显存全驻留闭环：
 
 | 视频 | 不裁 | 有守卫（=不裁） | 无守卫 |
 |---|---:|---:|---:|
-| test5（h264 7223帧） | 97.951% | 97.951% | **98.768%（+0.82pp）** |
+| test5（h264 7223帧） | 97.951% | 97.951% | **99.031%（+1.08pp）** |
 | test6（av1 23441帧） | 98.187% | 98.187% | **99.125%（+0.94pp）** |
 
 **新默认（160 + 裁切 + 余量 10）vs 旧默认（224 + 不裁）：四片均值 +0.82pp**
@@ -603,9 +625,9 @@ v3 的短板：**CPU 明显慢于 NVDEC（8 核亲和模拟弱 CPU）时 hybrid 
    推断重复投入；该推断对 GPU+ONNX 路径成立，对 NVDEC+TRT 主路径不成立——
    分段 kernel 时间被 decode 完全掩盖）。
 4. **文档归档**：`docs/PERFORMANCE.md` 中 dual_pipeline 全部历史档案迁移到
-   `docs/ARCHIVE.md`（§A 混合 OCR/解码旧档案、§B 双流水线全史），正文只留
-   指针与现役结论；新增 `tools/trim_perf_doc.py` 维护工具（后续归档章节可
-   一键剪切）。
+   本文 §18（§18.A 混合 OCR/解码旧档案、§18.B 双流水线全史），正文只留
+   指针与现役结论。当时的维护工具 `tools/trim_perf_doc.py`（把章节剪切到
+   `docs/ARCHIVE.md`）**已于 2026-08-30 删除**——多文档架构取消后无用途。
 5. **新增单测**：`tests/test_hybrid_next_roi.py`（stride 1/2/3 推进、起始帧
    取 starts[0]）。
 
@@ -686,7 +708,7 @@ v3 的短板：**CPU 明显慢于 NVDEC（8 核亲和模拟弱 CPU）时 hybrid 
 
 ### 路线图收口轮（2026-08-29）：P0-4 GPU 直通 + P1-3 解耦 + hybrid 启动重叠
 
-按 `docs/PERFORMANCE-ROADMAP.md` §0.4 完成 2/3/5 号项（实测详见
+按 `docs/PERFORMANCE.md` §16.0.4 完成 2/3/5 号项（实测详见
 `docs/PERFORMANCE.md` §12）：
 
 1. **P0-4' 宽度裁切扩到 GPU 直通路径**：
@@ -807,3 +829,75 @@ UTF-8 源码，CJK 注释行尾字节被 GBK 配对吞掉换行（行号漂移�
   TRT_SUBPROBE / DEBUG_BOUNDS / HYBRID_PROBE*）、全部调参 env。
 - 删除的钩子在 README「实验/诊断」节尾与 docs/PERFORMANCE.md 留痕；
   再想实验这些方向时先看文档再重写。
+
+### 设计审查结论（2026-08-30，原 docs/DESIGN-REVIEW.md 已并入本节）
+
+> **来源**：静态代码阅读 + 全部文档对照的一轮/二轮审查（v0.9.2 基准），
+> 共 25 条，覆盖 API/默认值、架构边界、正确性与并发风险、使用体验四类。
+> 2026-08-30 修复轮落地 23 条，原报告文件已删除。
+> **验证**：单测 93 项全过（含新增 6 项）；真机 e2e 冒烟 7 配置矩阵全 PASS
+> （test5 3000 帧 stride8，真值匹配率 100%、跨配置唯一文本重合率 100%）；
+> 引擎池对象复用 + 5 轮提取显存稳定已实测；取消响应 3.3s（3s 截止）。
+
+**代码注释里的 `DESIGN-REVIEW Xn` 标记指向下表对应条目。**
+
+| 条目 | 问题 | 处置 | 状态 |
+|---|---|---|---|
+| **A1** 同一旋钮多入口、优先级未文档化 | `OCR_PAD_SMALL` 等 env 压过构造参数；autocrop 全家只有 env 入口 | README 新增优先级（env > 构造 > 常量）与仅-env 清单 | ✅ 文档 |
+| **A2** `auto` 在 h264 多核不是最优 | CPU+TRT 比 NVDEC+TRT 快约 2×，但 `auto` 默认 NVDEC | 保持现状（P0-3 决策：静态判据不可靠、判错代价成倍）；README 补决策理由 | ✅ 文档（不修） |
+| **A3** `frame_end=0` 兼容语义只在注释里 | 0 与 None 都是"到末尾" | README 声明双入口 | ✅ 文档 |
+| **A4** 超界 `frame_end` 静默截断 | 与 `frame_start` 超界报错不对称 | 两条流水线加 warning，**保留截断语义不破坏兼容** | ✅ 代码+文档 |
+| **A5** `force_aspect` 与 `fill_width` 强耦合 | 只调一个可能拿到反向次优值 | README 加参数组合提示 | ✅ 文档 |
+| **A6** env 读取时机不一致 | autocrop 四旋钮构造期烘焙，其余调用期读 | 四旋钮改 property 调用期读 env，全表统一 | ✅ 代码+文档 |
+| **B1** `extractor.py` 同时是骨架/解码器工厂/线程预算中心 | 接入新后端改动集中在核心文件 | 拆 `DecoderFactory` / `ThreadBudget` | ⏸ **未动**（需破坏版本） |
+| **B2** 顶层模块与包双向依赖 | `ocr_trt` re-export 包内模块，依赖图成环 | 全部模块收进包内，顶层只留 shim | ⏸ **未动**（需破坏版本） |
+| **B3** 两条流水线重复实现 | 残留 `contrast` 死分支（0.9.0 已删该模式） | `_similar_device` 分支删除 + 三处注释清理 | ✅ 代码 |
+| **B4** `HybridDecoder.seek_accurate` 是空操作 | 接口存在但语义被掏空，未来调用方会静默拿错帧序 | 抛 `NotImplementedError`；两条流水线对 hybrid 跳过 seek | ✅ 代码 |
+| **B5** OCR 引擎/内核/分析器跨视频零复用 | 每个视频重复付 TRT 反序列化 + NVRTC 编译；GPU 管线丢掉 `_ocr_engines` 参数 | GPU 管线接上透传 + **进程级 OCR 引擎池**（`ocr_native.acquire/checkin`，key=(model,type,fill_width,threads)，每 key 上限 4）+ NVRTC 模块进程级缓存 | ✅ 代码 |
+| **C1** `nvdec_available` 的 `lru_cache` 缓存瞬态失败 | 首次探测遇瞬态失败 → 该视频 GPU 管线判定被永久钉死 | 成功才缓存（`_nvdec_probe_success`），失败抛出不进缓存 | ✅ 代码+单测 |
+| **C2** GPU 缓冲池回收是"注释即契约" | 引用归零即归还，无类型约束 | 由 C5 的显式 release 路径取代 | ✅ 由 C5 取代 |
+| **C3** 宿主 yuv 批量灰度缓冲复用是失效代码 | `shape[:2]` 少一维 → 复用从未生效 | **复核发现 gray 分支同样失效**，两分支均修复 + "复用确实发生"单测 | ✅ 代码+单测 |
+| **C4** OCR 初始化/推理错误延迟到 `extract()` 末尾才抛 | 丢失线程上下文 | worker / GPU producer 异常统一 `raise RuntimeError(...) from e` | ✅ 代码 |
+| **C5** 设备内存只增不减，无显式释放 | 长进程批量显存单调增长 | `TrtEngine` / `GpuPreprocessor` / `GpuOutputReducer` / `GpuFrameAnalyzer` 各加 `release`，两池 `release_all`；GPU 管线 finally 统一释放（OCR 引擎归池常驻） | ✅ 代码 |
+| **C6** GPU 管线错误路径上 producer 无取消机制 | 线程与解码器泄漏 | `producer_stop` Event + `put(timeout)` 轮询，finally 置位 | ✅ 代码 |
+| **C7** `cancel_check` 在阻塞点失效 | 取消延迟无上界 | 宿主 `_put` Full 分支 + GPU 消费端 `get(timeout)` 轮询均查 `cancel_check`（契约：回调抛异常） | ✅ 代码 |
+| **C8** 非 ROI decord 的兼容路径是半成品 | 只有校准做 ROI 回退切片，主流程静默用整帧 | 构造期 `_ensure_roi_capable_decoder`：无 `_CAPI_VideoReaderSetRoi` 直接 `ValueError`（**用户决策：直接报错**；decord 未安装不拦截） | ✅ 代码 |
+| **C9** `nv12_to_rgb` 不接收 color_range | full-range 流的 RGB 预览偏色，docstring 自相矛盾 | 新增 `color_range` 参数（full/pc 矩阵） | ✅ 代码+单测 |
+| **C10** GPU→宿主回退路径重复打开视频 | 最坏同一视频开 3 次 | `_fallback_to_host` 复用普通 reader；**hybrid 必须 close 后重开**（分片消费指针已前进，复用会序错位） | ✅ 代码 |
+| **D1** `import` 即改全局环境 | `__init__.py` 顶层 `setdefault` 改进程级 env，影响同进程其他 decord 使用方 | **行为变更**：移除 setdefault，`DECORD_SKIP_LOOP_FILTER` 改**显式 opt-in**；e2e 复验真值匹配不受影响 | ✅ 代码+文档（见 §12.5.1 状态注） |
+| **D2** 进度回调永远不会到 100% | 上限 ~86% | README 结果节注明口径 | ✅ 文档 |
+| **D3** `ExtractionResult.meta` 不含实际参数 | 降级原因不可见 | meta 新增 `params` / `engine_version` / `degraded_reason`（五类）/`color_range` / `rep_crop_format` | ✅ 代码 |
+| **D4** `rep_crop` 默认 NV12 二维数组 | 对非 CV 用户是隐性摩擦 | 新增 `ExtractionResult.rep_crop_rgb(seg)`（按 meta 自动选格式/色域） | ✅ 代码+文档 |
+| **D5** `keep_frames=False` 同时清空段级帧号 | 文档未声明 | README 声明 | ✅ 文档 |
+| **D6** 文档分裂成五份且互相引用 | 使用者/维护者看到两套真相 | **2026-08-30 合并为四份**（见本文开头）；README 新增文档地图 | ✅ 文档 |
+| **D7** README env 表两处失实 | `OCR_PAD_SMALL` 默认值错、残留已删除的 `GPU_PIPELINE_ASYNC` 行 | 默认值订正 + 幽灵行删除 + DEPENDENCIES 清理 | ✅ 文档 |
+| **D8** hybrid 语义三处停在旧门控 | stride==1 / 走宿主管线，与代码和测试矛盾 | README（stride 解禁 + GPU 管线合并）、engine_config 注释同步 | ✅ 文档 |
+| **D9** `FieldExtractor` 是单发对象但结果有双入口 | 语义未声明 | README 声明单发语义与"以返回值为准"；`frames` setter 保留（上层应用兼容） | ✅ 文档 |
+
+**唯一的用户可见行为变更**：D1。默认不再关去块滤波（CPU 软解 HEVC/h264
+回到完整去块滤波）。要速度的使用方自行在打开解码器前设
+`DECORD_SKIP_LOOP_FILTER=all`，收益见 `docs/PERFORMANCE.md` §16.2 P0-6。
+
+#### 未验证项（如实声明，尚未跑）
+
+- C1 的"瞬态失败"概率、C3 的实测性能损失幅度、D3 的降级场景覆盖，
+  均需真机/单元验证。
+- C5 的显存增长速率、C6 的泄漏累积速度取决于批量规模与输入宽度，
+  需长进程实测确认量级（机制本身由代码路径可证）。
+- C8 只影响非 fork decord 用户，实际是否存在这类用户未知。
+- C9 需要一个 full/pc range 的真实片源复验预览偏色。
+- 所有性能结论引用仓库自带实测，未在审查中复现。
+
+#### 0.9.1 / 0.9.2 / 0.10.0 三轮（本节补齐 CLAUDE.md 缺失的记录）
+
+本文件此前停在 0.9.0 清理轮，以下三轮只在 `docs/PERFORMANCE.md` 有记录：
+
+- **0.9.1**：裁切判据澄清（真判据是 **ROI 宽裕度**，`force_aspect` 是混淆变量）；
+  `force_aspect>0` 改为"先定比例、后裁"；生产原始误读 149→126。
+- **0.9.2**：裁切改用**最小收益门槛 10%**（余量由 20 回到 10）；
+  §13 det 模型替换裁切评估（否定）；§14 分段合并收口（字幕已 100% 达 oracle 最优，
+  遥测的理论空间被表示层纠缠封死）；§15 yuv 输出税归因（**否定结果**，
+  是冷启动测量假象，不是格式差）。
+- **0.10.0**：上述设计审查修复轮（25 条）+ 版本号提升。
+  ⚠️ 按版本纪律，`engine_config.__version__` 改动必须同步打同名 git tag
+  （v0.10.0 已打）。
