@@ -50,8 +50,9 @@ from video_ocr_engine import FieldExtractor
 ex = FieldExtractor(
     video_path="subtitle_episode.mkv",
     roi=(10, 850, 1910, 940),        # 字幕条区域 (x1, y1, x2, y2)
-    frame_start=0,                    # 可选
-    frame_end=None,                   # 可选
+    frame_start=0,                    # 可选；0 或 None = 到片尾（负数报错）
+    frame_end=None,                   # 可选；0 或 None = 到片尾（超界按片尾
+                                      # 截断并 warning）
     decode_backend="auto",            # auto/cpu/nvdec/hybrid
     ocr_backend="cpu",                # auto/cpu/tensorrt
     rep_crop_format="yuv",            # 代表帧格式："yuv"=packed NV12（默认；
@@ -71,15 +72,25 @@ for seg in result.segments:
         print(f"frames {seg.start}-{seg.end}  text={seg.text!r}  conf={seg.confidence:.4f}")
 ```
 
+> `FieldExtractor` 是**单次提取**对象：`extract()` 每次全量重跑（重新打开
+> 解码器/校准/取 OCR 引擎）并覆盖实例状态。结果请以返回值为准；
+> `ex.frames / ex.crops / ex.timing` 等实例属性是兼容性副产物，勿与返回值混用。
+> 批量多视频请各建实例（见下文"批量处理"）。
+
+> 参数选择提示：`fill_width`（OCR 输入 pad 宽下限）的最优值依赖 `force_aspect`
+> ——`force_aspect>0`（内容被压窄）时越大越准，`=0` 时偏小更佳，两者应一起调
+> （2026-08-29 曾因单调 fill_width 踩坑回退默认值，见 `engine_config.py` 注释）。
+
 `decode_backend="auto"` 的默认逻辑：**优先 NVDEC，不可用时回退 CPU**。在强多核
 CPU 且片源为 h264 时，可手动选 `"cpu"` 获得更高软解吞吐（NVDEC h264 解码器约
 2Gp/s 上限，FFmpeg CPU 解码器最多可利用约 13 核）；弱 CPU / HEVC / AV1 场景仍
-建议保持 `auto` 或 `nvdec`。
+建议保持 `auto` 或 `nvdec`。（auto 不自动选 CPU 是刻意决策：按编码/核数的静态
+判据不可靠、判错代价成倍，见 `docs/PERFORMANCE-ROADMAP.md` P0-3。）
 
 `decode_backend="hybrid"` 是**实验性功能**：同一实例内 NVDEC 与 CPU 软解并行
 解码（动态分界：慢端在"不拖尾"约束下尽量多分片，快端从头连续扫掠、扫完
-自动接管慢端剩余片，校准误差自愈）。要求 NVDEC 可用、`sample_stride==1`；
-不可用时自动回退纯 NVDEC/CPU。
+自动接管慢端剩余片，校准误差自愈）。要求 NVDEC 可用；`sample_stride>1` 已支持
+（分片与扫掠按采样步长推进）；NVDEC 不可用时自动回退纯 NVDEC/CPU。
 
 > ⚠️ **适用限制（务必先读）**：hybrid 仅在 **h264 + 较强 CPU** 上有明显
 > 优势（本机 8 核亲和模拟实测 h264 decode -18%、墙钟 -2%）；**其他情况
@@ -96,13 +107,17 @@ CPU 且片源为 h264 时，可手动选 `"cpu"` 获得更高软解吞吐（NVDE
 | `segments` | `list[ExtractedSegment]`：`start/end/frames/rep_frame/text/confidence/rep_crop` |
 | `frames` | 全部采样帧号 |
 | `fps` | 自测帧率（从解码器读取，忽略外部传入） |
-| `timing` | 各阶段耗时 |
-| `meta` | `backend / ocr_backend / codec / n_segments` |
+| `timing` | 各阶段耗时（`decode` / `ocr` / `ocr_tail`） |
+| `meta` | `backend / ocr_backend / codec / n_segments / engine_version / params（本次生效参数）/ degraded_reason（降级原因）/ color_range / rep_crop_format` |
+
+> 进度回调口径：引擎初始化 ~2.5%、解码/分段 3→58、OCR 58→86——**上限 86%**
+> （OCR 收尾与结果组装无进度事件）。
 
 > 引擎内部链恒为单通道灰度（解码输出 `yuv420` 或 `gray`，不再输出 RGB 帧——
 > RGB→灰度转换由解码侧/fork 完成）。`rep_crop` 的像素格式由
 > `rep_crop_format` 决定：默认 `"yuv"` = packed NV12（`video_utils.nv12_to_rgb`
 > 转 RGB 预览，BT.601 limited 矩阵，仅代表帧调用、毫秒级）；`"gray"` = 灰度。
+> 预览可直接用 `result.rep_crop_rgb(seg)`（按 `meta` 自动选格式/色域）。
 > `keep_crops=False` 时自动退化为 `gray` 解码输出（省 UV 传输）。
 > （0.7.0 的 deprecated 别名 `gray_output` / `yuv_output` 已于 0.9.0 删除，
 > 一律使用 `rep_crop_format`。）
@@ -116,7 +131,9 @@ CPU 且片源为 h264 时，可手动选 `"cpu"` 获得更高软解吞吐（NVDE
 完全兼容（零改动）。
 
 > 长视频/大 ROI 场景若不需要预览图，可设 `keep_crops=False`、`keep_frames=False`
-> 显著降低内存占用（默认 `True` 保持兼容）。
+> 显著降低内存占用（默认 `True` 保持兼容）。注意 `keep_frames=False` 同时清空
+> **段级** `frames` 序列（仅保留 `start/end/rep_frame`），依赖"段→帧区间"的
+> 下游会拿到空序列。
 
 > 面向字幕提取的完整 CLI 应用已拆到独立仓库
 > [chr431/video_subtitle_extractor](https://github.com/chr431/video_subtitle_extractor)：
@@ -157,7 +174,8 @@ threads = [threading.Thread(target=extract, args=(video, backend)) for ...]
 
 ### 显存全驻留零拷贝管线（NVDEC+TRT 时默认启用）
 
-NVDEC+TensorRT 可用（`decode_backend∈{auto,nvdec}`、`ocr_backend≠cpu`）时，
+NVDEC+TensorRT 可用（`decode_backend∈{auto,nvdec,cpu,hybrid}`、`ocr_backend≠cpu`；
+`cpu` 分支不依赖 NVDEC）时，
 识别链默认切换为**显存全驻留零拷贝**路径：NVDEC 解码、灰度（`yuv420` 时由
 `luma_nv12` kernel 在 GPU 提取 Y 平面，与宿主逐位一致）、sharp/聚类分段、
 Otsu 校准、merge_similar 判定（GPU `sim_pair`；contrast 模式在边界时 D2H 两
@@ -173,7 +191,8 @@ Otsu 校准、merge_similar 判定（GPU `sim_pair`；contrast 模式在边界�
 - 默认只放行"全程 raw"（NVDEC+TRT）；GPU 分段 + ONNX OCR 实测无净收益
   （见 `docs/PERFORMANCE.md` §9）→ 无 TRT / `ocr_backend="cpu"` 走宿主
 - env `GPU_PIPELINE=0` 显式关闭；`=1` 强制启用（含 GPU 分段+ONNX 实验组合）；
-  `decode_backend="hybrid"` 走宿主
+  `decode_backend="hybrid"` 走 GPU 管线的 CPU 解码分支（消费宿主数组，仍享受
+  零拷贝 OCR）
 
 **CPU 解码也走 GPU 管线（P1-3 解耦）**：`decode_backend="cpu"`（或 auto 的
 NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一套 GPU
@@ -186,20 +205,29 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 > 构造参数已覆盖绝大多数用法；环境变量仅在**批量调优/诊断**时使用。
 > 未设置 = 引擎默认值（已按实测调优，见 `docs/PERFORMANCE.md`"已锁定参数"）。
 
+**优先级**：同一旋钮多入口时按 **env > 构造参数 > `engine_config` 常量** 生效
+（例：构造 `fill_width=320` 会被残留的 `OCR_PAD_SMALL` 静默盖过——排查调参时
+先确认 env 是否残留）。**仅 env 入口**（无构造参数承接）的旋钮：
+`OCR_GAMMA`、`OCR_ROI_AUTOCROP / _MARGIN / _MIN_GAIN`、`OCR_REORDER_WINDOW`、
+`OCR_INSTANCES`、`GPU_PIPELINE`、`DECODE_THREADS`、全部 `HYBRID_*`。
+
+**生效时机**：下列 env 全部为**调用期读取**——构造 `FieldExtractor(...)` 之后
+再改 env 同样生效，无需重建实例（`DECORD_SKIP_LOOP_FILTER` 例外，由 decord
+在打开解码器时读取）。
+
 ### 用户调参（了解影响后再动）
 
 | 变量 | 作用 |
 |------|------|
 | `GPU_PIPELINE` | 零拷贝管线：未设置 = NVDEC+TRT 时默认启用；`0` 显式关闭；`1` 强制启用（含 GPU 分段+ONNX 等实验组合） |
-| `GPU_PIPELINE_ASYNC` | `1` 开启 GPU 分段 kernel 的异步实验路径（默认关；同步语义不变，性能待真机 A/B） |
 | `OCR_THREADS` | OCR 推理线程数覆盖（默认全物理核） |
 | `OCR_BATCH` | OCR 批大小覆盖（默认 16） |
-| `OCR_PAD_SMALL` | OCR 输入 pad 宽度下限覆盖（默认 160；优先级**高于**构造参数 `fill_width`，调这个就能改 pad 下限） |
+| `OCR_PAD_SMALL` | OCR 输入 pad 宽度下限覆盖（未设置时由构造参数 `fill_width` 决定，默认 224；此 env 优先级**高于**构造参数，调这个就能改 pad 下限） |
 | `OCR_GAMMA` | OCR 预处理 gamma（默认 2.0） |
 | `OCR_ROI_AUTOCROP` | `0` 关闭 OCR 输入宽度自适应裁切（默认开；按二值图内容列裁掉两侧空白，**实测提准确率 +0.8pp**） |
 | `OCR_ROI_AUTOCROP_MARGIN` | 裁切时内容两侧保留的余量（占 ROI 宽 %，默认 10；**调小会插入多余空格且准确率下降**，见 `docs/PERFORMANCE-ROADMAP.md` P0-4） |
 | `OCR_REORDER_WINDOW` | OCR 重排窗口段数（默认 64；按宽度分组才能让 pad 宽真的降下来） |
-| `DECORD_SKIP_LOOP_FILTER` | **默认 `all`**（引擎 import 时 setdefault，2026-08-29 起）：CPU 软解关去块滤波，HEVC **-13%~-18% 墙钟**、h264 -5%~-13%、AV1 无效；NVDEC 不受影响。六片真值 + test4 逐帧**视觉裁定**确认对 OCR 无负面影响（5 片 +0.00~+0.08pp；test4 账面 −0.19pp 系真值伪影——显示为三位补零 `020`、真值剥零，视觉裁定按显示忠实度关滤波反而略优）。注意：显示为 2 位数字时输出会带前导零（`020`，更忠实于显示），下游字符串匹配需注意；rep_crop 预览有块状伪影。**关闭：预先设置 `DECORD_SKIP_LOOP_FILTER=none`**。需 decord fork ≥v0.7.13 |
+| `DECORD_SKIP_LOOP_FILTER` | **显式 opt-in**（2026-08-30 起，默认**不设置**——import 不再改写进程级 env）：设为 `all` 开启 CPU 软解关去块滤波，须在打开解码器前设置。收益：HEVC **-13%~-18% 墙钟**、h264 -5%~-13%、AV1 无效；NVDEC 不受影响。六片真值 + test4 逐帧**视觉裁定**确认对 OCR 无负面影响（5 片 +0.00~+0.08pp；test4 账面 −0.19pp 系真值伪影——显示为三位补零 `020`、真值剥零，视觉裁定按显示忠实度关滤波反而略优）。注意：显示为 2 位数字时输出会带前导零（`020`，更忠实于显示），下游字符串匹配需注意；rep_crop 预览有块状伪影。需 decord fork ≥v0.7.13 |
 | `DECODE_THREADS` | CPU 软解 FFmpeg 帧线程数覆盖（默认按 OCR 落点 + 采样步长分档：OCR 在 GPU 取满逻辑核钳 8~32；OCR 在 CPU 时 stride>1 取逻辑核 3/4 钳 8~24、stride==1 取 1/3 钳 8~12） |
 | `TEXT_SEP_MERGE` | 相似段合并分离模式（binary/off；contrast 已于 0.9.0 删除） |
 | `HYBRID_MAX_CHUNKS` | 混合解码分片上限（默认 16） |
@@ -229,8 +257,12 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 
 ## 文档
 
-- [性能调优记录](docs/PERFORMANCE.md) —— 性能基线、后端矩阵、线程预算、已锁定参数、已验证死路。
+- [性能调优记录](docs/PERFORMANCE.md) —— 现役性能基线、后端矩阵、线程预算、已锁定参数、已验证死路（**性能现状以此为准**）。
+- [性能路线图](docs/PERFORMANCE-ROADMAP.md) —— 优化项的实验过程、决策与结论索引（历史+现状混合）。
+- [历史实验档案](docs/ARCHIVE.md) —— 已删除功能/已封板实验的完整记录（**纯历史，勿当现役依据**）。
 - [依赖与运行环境](docs/DEPENDENCIES.md) —— decord fork / TensorRT / onnxruntime 版本与注意事项。
+- [设计评审](docs/DESIGN-REVIEW.md) —— 设计/使用逻辑问题清单与修复状态。
+- `CLAUDE.md` —— 开发记录与约定（维护者向，未列入 README 的历史背景在此）。
 
 ## 测试
 

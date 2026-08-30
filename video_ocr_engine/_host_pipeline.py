@@ -103,11 +103,17 @@ def _host_frame_stream(ex, frames, vr, calib, th, *, with_dev=False):
         ex._prof_end('producer', 'decode_batch', _t_d)
         _t_g = time.perf_counter()
         if g_buf is None:
-            g_buf = np.empty(crops.shape[:2] + (crops.shape[2] * 2 // 3,)
-                             if ex._yuv_output else crops.shape[:2],
-                             dtype=np.uint8)
-        if (g_buf.shape[1:] == (crops.shape[1] * 2 // 3 if ex._yuv_output
-                                else crops.shape[1:])
+            # 灰度 Y 缓冲（每批形状恒定才可跨批复用）：
+            #   yuv(NV12)：crops=(B, rows, W) → Y=(B, rows*2//3, W)
+            #   gray：crops=(B, H, W[, 1]) → Y=(B, H, W)
+            # （旧实现 yuv 把 2//3 乘在宽度上、gray 只取 shape[:2] 少一维，
+            #   复用条件因此两种格式下都永假 → 复用从未生效，DESIGN-REVIEW C3。）
+            g_buf = np.empty(
+                (crops.shape[0], crops.shape[1] * 2 // 3, crops.shape[2])
+                if ex._yuv_output else crops.shape[:3],
+                dtype=np.uint8)
+        if (g_buf.shape[1:] == ((crops.shape[1] * 2 // 3, crops.shape[2])
+                                if ex._yuv_output else crops.shape[1:3])
                 and len(crops) <= g_buf.shape[0]):
             # 该批可能不是满批（末批 B 更小）：只复用前 B 行，避免形状不匹配
             g = ex._batch_luma_out(crops, g_buf[:len(crops)])
@@ -356,7 +362,7 @@ class _HostPipelineMixin:
         OCR worker / infer 线程造成屏障。
         """
         from queue import Full, Queue
-        from ocr_native import OcrEngine
+        from ocr_native import acquire_ocr_engine, checkin_ocr_engine
         from video_utils import _preprocess_standard
 
         q: Queue = Queue(maxsize=max(1, self._buffer_size))
@@ -373,12 +379,19 @@ class _HostPipelineMixin:
                     q.put(item, timeout=0.2)
                     return
                 except Full:
+                    # C7：OCR 队列满（OCR 跟不上）时保持取消响应——取消由
+                    # cancel_check 抛异常表达；否则取消请求要等队列排空才被看到
+                    self._cancel()
                     continue
+
+        owns_engines = _ocr_engines is None
 
         def ocr_worker() -> None:
             t0 = time.perf_counter()
+            engines: list = []
+            failed = False
             try:
-                if _ocr_engines is not None:
+                if not owns_engines:
                     engines = list(_ocr_engines)
                     self._ocr_backend_used = (
                         'tensorrt+onnxruntime'
@@ -386,18 +399,40 @@ class _HostPipelineMixin:
                         else engines[0].backend_name)
                 else:
                     _t_eng = time.perf_counter()
-                    _engine_progress = lambda msg: self._progress(msg, 2.5)
                     ot = self._ocr_num_threads()
-                    ocr_instances = (self._ocr_engine_type() == 'onnxruntime'
+                    engine_type = self._ocr_engine_type()
+                    ocr_instances = (engine_type == 'onnxruntime'
                                      and ot >= config.OCR_INSTANCES_MIN_THREADS
                                      and config.env_bool(config.OCR_INSTANCES_ENV,
                                                          default=True))
-                    if ocr_instances:
-                        half = max(2, ot // 2)
-                        engines = [OcrEngine(self._ocr_model, 'onnxruntime', fill_width=self._fill_width, num_threads=half, progress_cb=_engine_progress) for _ in range(2)]
-                    else:
-                        engines = [OcrEngine(self._ocr_model, self._ocr_engine_type(), fill_width=self._fill_width, num_threads=ot, progress_cb=_engine_progress)]
+                    try:
+                        # 进程级引擎池（B5/C5）：跨视频复用 TRT 上下文/设备
+                        # 缓冲，免去每个 extract 重付反序列化+分配。
+                        if ocr_instances:
+                            half = max(2, ot // 2)
+                            engines = [
+                                acquire_ocr_engine(
+                                    self._ocr_model, 'onnxruntime',
+                                    fill_width=self._fill_width,
+                                    num_threads=half)
+                                for _ in range(2)]
+                        else:
+                            engines = [acquire_ocr_engine(
+                                self._ocr_model, engine_type,
+                                fill_width=self._fill_width, num_threads=ot)]
+                    except BaseException:
+                        # 半建状态（如第二实例构建失败）：已取到的引擎归池
+                        while engines:
+                            try:
+                                checkin_ocr_engine(engines.pop())
+                            except Exception:
+                                pass
+                        raise
                     self._ocr_backend_used = engines[0].backend_name
+                    if (engine_type == 'tensorrt'
+                            and engines[0].backend_name != 'tensorrt'):
+                        # D3：请求 TRT 但引擎回退 ONNX → 降级原因透出 meta
+                        self._degraded.append('TRT 引擎不可用，回退 ONNX')
                     self._prof_end('ocr', 'engine_init', _t_eng)
                 # 引擎就绪 → 供 GPU 管线 emit 决策（raw 直通需单 TRT 引擎；
                 # 置位后该会话内代表帧可全程留显存，仅输出/回退时 D2H）。
@@ -596,9 +631,21 @@ class _HostPipelineMixin:
                 for t in infer_threads:
                     t.join()
             except Exception as e:
+                failed = True
                 ocr_err.append(e)
             finally:
                 ocr_wall[0] = time.perf_counter() - t0
+                if owns_engines and engines:
+                    # C5/B5：池来源的引擎归还复用；失败退出 → release
+                    # （引擎状态可能被污染，不回池）。
+                    for eng in engines:
+                        try:
+                            if failed:
+                                eng.release()
+                            else:
+                                checkin_ocr_engine(eng)
+                        except Exception:
+                            pass
 
         ocr_thread = threading.Thread(target=ocr_worker, daemon=True)
         ocr_thread.start()

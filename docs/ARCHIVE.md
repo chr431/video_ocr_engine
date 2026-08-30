@@ -10,13 +10,13 @@
 
 ## A. 已删除的混合解码 / 混合 OCR（PERFORMANCE.md 旧 §4 前半）
 
-> **状态更新（2026-08）**：本条为 v1 历史结论。CPU+NVDEC 混合解码现役为
-> **v3（速率比例分界 + 两端连续扫掠，hybrid_decode.py）**，v2 已因实测
-> 退化被 v3 取代（见 CLAUDE.md「混合解码 v3」）。v3 激活条件：显式
-> `decode_backend="hybrid"`、NVDEC 可用、stride==1、未开 GPU 全驻留管线；
-> **编码门控（AV1 回退）已移除**——v3 实测 AV1/HEVC（CPU 慢于 NVDEC）
-> 与纯 NVDEC 持平不退化、h264（CPU 快）显著更快。TRT+ONNX 混合 OCR
-> 仍保持删除。
+> **状态更新（2026-08-30 复核）**：本条为 v1 历史结论。CPU+NVDEC 混合解码
+> 现役为 **v4（动态分界 + 稳态折扣 + 短校准，hybrid_decode.py）**，v2 已因
+> 实测退化被取代。现行激活条件：显式 `decode_backend="hybrid"`、NVDEC
+> 可用；**stride>1 已解禁**（分片/扫掠/校准按采样步长推进）；**已并入 GPU
+> 全驻留管线**（§8.3：由其 CPU 分支消费宿主数组，原互斥门控移除）；
+> **编码门控（AV1 回退）已移除**。TRT+ONNX 混合 OCR 仍保持删除。
+> 本节以下内容为 v1/v2 时代数据，仅作历史参考。
 
 > **2026-08 队列实测结论**：在 `D:\Videos\batch_test` 5 个视频、stride=8、
 > 默认 auto+auto+gray+merge 条件下：

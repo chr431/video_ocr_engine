@@ -14,6 +14,29 @@ import numpy as np
 
 import engine_config as config
 
+# NVRTC 编译缓存（DESIGN-REVIEW B5）：编译产物（Program/Module）进程级共享
+# ——无状态、线程安全（kernel launch 只读）；Buffer/stream 等可变状态仍归
+# 各实例。没有这层缓存时，每次 extract 新建 GpuFrameAnalyzer/GpuPreprocessor
+# 都会重付一次 NVRTC 编译（长进程批量的固定开销）。
+_KERNEL_MODULE_CACHE: dict = {}
+
+
+def _compile_module(src: str, name_expressions: tuple):
+    """按 (arch, src) 缓存编译 cubin 模块；返回共享 Module。"""
+    from cuda.core import Device, Program, ProgramOptions
+    dev = Device()
+    dev.set_current()
+    key = (getattr(dev, "arch", "?"), src)
+    mod = _KERNEL_MODULE_CACHE.get(key)
+    if mod is None:
+        prog = Program(src, code_type="c++",
+                       options=ProgramOptions(std="c++11",
+                                              arch=f"sm_{dev.arch}"))
+        mod = prog.compile("cubin",
+                           name_expressions=list(name_expressions))
+        _KERNEL_MODULE_CACHE[key] = mod
+    return mod
+
 class GpuPreprocessor:
     """TRT 路径的 GPU 预处理：把已 48 高的 float32 HWC 图直接变成模型输入。
 
@@ -94,16 +117,10 @@ extern "C" __global__ void prep_gray_raw(
 '''
 
     def __init__(self) -> None:
-        from cuda.core import (Buffer, Device, LaunchConfig, Program,
-                               ProgramOptions, launch)
+        from cuda.core import Buffer, Device, LaunchConfig, launch
         self._dev = Device()
         self._dev.set_current()
-        self._prog = Program(
-            self._KERNEL, code_type="c++",
-            options=ProgramOptions(std="c++11",
-                                   arch=f"sm_{self._dev.arch}"))
-        self._mod = self._prog.compile(
-            "cubin", name_expressions=("prep", "prep_gray_raw"))
+        self._mod = _compile_module(self._KERNEL, ("prep", "prep_gray_raw"))
         self._kernel = self._mod.get_kernel("prep")
         self._kernel_raw = self._mod.get_kernel("prep_gray_raw")
         self._launch_cls = LaunchConfig
@@ -177,6 +194,22 @@ extern "C" __global__ void prep_gray_raw(
             self._i32_size = nbytes
         return self._i32_dev, self._buffer_cls.from_handle(self._i32_dev,
                                                            nbytes)
+
+    def release(self) -> None:
+        """释放全部设备缓冲（DESIGN-REVIEW C5）。重复调用安全；再次使用
+        时各 _ensure_* 按需重建。"""
+        from cuda.bindings import runtime as cudart
+        for attr in ("_raw_dev", "_out_dev", "_width_dev", "_bases_dev",
+                     "_i32_dev"):
+            ptr = getattr(self, attr, None)
+            if ptr:
+                try:
+                    cudart.cudaFree(ptr)
+                except Exception:
+                    pass
+            setattr(self, attr, None)
+        self._raw_size = self._out_size = self._width_size = 0
+        self._bases_size = self._i32_size = 0
 
     def process_gray_raw(self, infos: list, out_width: int,
                          force_aspect: float = 0.0):
@@ -346,15 +379,10 @@ extern "C" __global__ void argmax_last(
 '''
 
     def __init__(self, stream: int | None = None) -> None:
-        from cuda.core import (Buffer, Device, LaunchConfig, Program,
-                               ProgramOptions, launch)
+        from cuda.core import Buffer, Device, LaunchConfig, launch
         self._dev = Device()
         self._dev.set_current()
-        self._prog = Program(
-            self._KERNEL, code_type="c++",
-            options=ProgramOptions(std="c++11",
-                                   arch=f"sm_{self._dev.arch}"))
-        self._mod = self._prog.compile("cubin", name_expressions=("argmax_last",))
+        self._mod = _compile_module(self._KERNEL, ("argmax_last",))
         self._kernel = self._mod.get_kernel("argmax_last")
         self._launch_cls = LaunchConfig
         self._launch = launch
@@ -366,6 +394,19 @@ extern "C" __global__ void argmax_last(
         self._idx_dev = None
         self._idx_size = 0
         self._prob_dev = None
+
+    def release(self) -> None:
+        """释放设备缓冲（DESIGN-REVIEW C5）。重复调用安全。"""
+        from cuda.bindings import runtime as cudart
+        for attr in ("_idx_dev", "_prob_dev"):
+            ptr = getattr(self, attr, None)
+            if ptr:
+                try:
+                    cudart.cudaFree(ptr)
+                except Exception:
+                    pass
+            setattr(self, attr, None)
+        self._idx_size = 0
 
     def reduce(self, preds_dev: int, out_shape: tuple):
         """对显存中的 (B,S,C) 输出做归约，回传 (idx int32[B*S], prob f32[B*S])。"""
@@ -589,18 +630,13 @@ extern "C" __global__ void luma_nv12(
 '''
 
     def __init__(self) -> None:
-        from cuda.core import Device, Program, ProgramOptions
+        from cuda.core import Device
         self._dev = Device()
         self._dev.set_current()
-        self._prog = Program(
-            self._KERNEL, code_type="c++",
-            options=ProgramOptions(std="c++11",
-                                   arch=f"sm_{self._dev.arch}"))
-        self._mod = self._prog.compile(
-            "cubin",
-            name_expressions=("analyze_gray",
-                              "hist_gray_perframe", "luma_nv12",
-                              "sim_pair", "col_ink"))
+        self._mod = _compile_module(
+            self._KERNEL,
+            ("analyze_gray", "hist_gray_perframe", "luma_nv12",
+             "sim_pair", "col_ink"))
         self._kernel = self._mod.get_kernel("analyze_gray")
         self._kernel_hist_pf = self._mod.get_kernel("hist_gray_perframe")
         self._kernel_luma = self._mod.get_kernel("luma_nv12")
@@ -617,6 +653,22 @@ extern "C" __global__ void luma_nv12(
         self._luma_size = 0
         self._luma_dev = None
         self._range_dev = None
+
+    def release(self) -> None:
+        """释放全部设备缓冲（DESIGN-REVIEW C5）。重复调用安全；再次使用
+        时各 _ensure_* / content_range / compare_pair 按需重建。"""
+        from cuda.bindings import runtime as cudart
+        for attr in ("_prev_dev", "_histpf_dev", "_summary_dev",
+                     "_luma_dev", "_range_dev", "_sim_dev"):
+            ptr = getattr(self, attr, None)
+            if ptr:
+                try:
+                    cudart.cudaFree(ptr)
+                except Exception:
+                    pass
+            setattr(self, attr, None)
+        self._prev_size = self._histpf_size = self._summary_size = 0
+        self._luma_size = 0
 
     def _ensure_prev(self, nbytes: int) -> int:
         from cuda.bindings import runtime as cudart

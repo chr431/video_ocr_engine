@@ -59,20 +59,27 @@ def _nv12_batch_luma_full(crops: "np.ndarray", color_range: int = 0) -> "np.ndar
     return np.clip(np.floor(v + 0.5), 0, 255).astype(np.uint8)
 
 
-def nv12_to_rgb(crop: "np.ndarray") -> "np.ndarray":
-    """packed NV12 → RGB（uint8，BT.601 limited 色度矩阵）。
+def nv12_to_rgb(crop: "np.ndarray", color_range: int = 0) -> "np.ndarray":
+    """packed NV12 → RGB（uint8，BT.601 矩阵）。
 
-    Y 已由 decoder 按流 range 展开（与 gray 输出一致），UV 为原始
-    4:2:0：chroma 按 2x2 块 nearest 上采样（decord RGB 路径的 MPEG-2
-    siting 语义），再做与 decord improc 相同的 BT.601 矩阵转换。
+    Y/U/V 均为原始 8-bit，range 展开在本函数完成（DESIGN-REVIEW C9：旧
+    docstring 一度称"Y 已由 decoder 展开"，与同模块 `_nv12_luma_full` 的
+    原始 Y 语义矛盾）：
+    - color_range=0（limited/tv，默认）：(y-16)/219 展开 + 1.164/1.596/
+      2.017 矩阵——与 decord improc 系数一致（历史行为，默认不变）；
+    - color_range=1（full/pc）：Y 原样 + 1.402/0.344/0.714/1.772 矩阵
+      （旧版缺失该分支，full-range 流预览会偏色）。
+    UV 为原始 4:2:0：chroma 按 2x2 块 nearest 上采样（decord RGB 路径的
+    MPEG-2 siting 语义）。
     """
     if crop.ndim != 2:
         return crop[..., :3] if crop.ndim == 3 else crop
     rows, w = crop.shape
     h = rows * 2 // 3
-    # decord yuv420 的 Y/U/V 均为原始 8-bit。RGB 转换复刻 decord improc
-    # 的 BT.601 矩阵语义（系数 1.164/1.596/2.017，0..1 输入、偏移 16/128）
-    y = (crop[:h].astype(np.float32) - 16.0) / 255.0
+    if color_range == 1:
+        y = crop[:h].astype(np.float32) / 255.0
+    else:
+        y = (crop[:h].astype(np.float32) - 16.0) / 255.0
     uv_rows = (h + 1) // 2
     uv = crop[h:h + uv_rows, :w // 2 * 2]
     u = uv[:, 0::2].astype(np.float32)
@@ -97,9 +104,14 @@ def nv12_to_rgb(crop: "np.ndarray") -> "np.ndarray":
     v = np.repeat(v, 2, axis=1)[:, :w]
     un = (u - 128.0) / 255.0
     vn = (v - 128.0) / 255.0
-    r = 1.164383 * y + 1.596027 * vn
-    g = 1.164383 * y - 0.391762 * un - 0.812968 * vn
-    b = 1.164383 * y + 2.017232 * un
+    if color_range == 1:
+        r = y + 1.402 * vn
+        g = y - 0.344136 * un - 0.714136 * vn
+        b = y + 1.772 * un
+    else:
+        r = 1.164383 * y + 1.596027 * vn
+        g = 1.164383 * y - 0.391762 * un - 0.812968 * vn
+        b = 1.164383 * y + 2.017232 * un
     rgb = np.stack([r, g, b], axis=-1)
     np.clip(rgb, 0.0, 1.0, out=rgb)
     return (rgb * 255.0).astype(np.uint8)
@@ -209,25 +221,31 @@ def _text_sep_gray(gray: "np.ndarray", mode: str = "binary",
     return np.where(g > th, 255.0, 0.0).astype(np.float32)
 
 
-@lru_cache(maxsize=64)
 def nvdec_available(video_path=None) -> bool:
     """轻量探测 NVDEC 解码是否可用（尝试用 GPU reader 打开视频）。
 
     video_path 为 None 时只探测 decord GPU 模块/上下文是否可用，不打开文件。
-    结果按参数缓存（批量多集调用时避免每次重新打开视频探测；
-    GPU 上下文在进程生命周期内稳定，缓存安全）。
+    **只缓存成功结果**：失败（含瞬态失败——驱动忙/显存压力/并发探测）不缓存，
+    下次调用重新探测；成功按参数缓存（批量多集调用时避免每次重新打开视频；
+    GPU 上下文在进程生命周期内稳定，成功结果缓存安全）。
     """
     try:
-        from decord import VideoReader, gpu
-        if video_path is None:
-            from decord import gpu as _g
-            _g(0)
-            return True
-        vr = VideoReader(str(video_path), ctx=gpu(0))
-        del vr
-        return True
+        return _nvdec_probe_success(video_path)
     except Exception:
         return False
+
+
+@lru_cache(maxsize=64)
+def _nvdec_probe_success(video_path=None) -> bool:
+    """nvdec_available 的成功路径（失败抛异常 → 不进缓存）。"""
+    from decord import VideoReader, gpu
+    if video_path is None:
+        from decord import gpu as _g
+        _g(0)
+        return True
+    vr = VideoReader(str(video_path), ctx=gpu(0))
+    del vr
+    return True
 
 
 @lru_cache(maxsize=1)

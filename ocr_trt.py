@@ -106,6 +106,33 @@ class TrtEngine:
         # 稳定开销；缓冲按需增长，不主动释放）。
         self._out_host: "np.ndarray | None" = None
 
+    def release(self) -> None:
+        """释放设备缓冲（DESIGN-REVIEW C5：cudaMalloc 块原本只在进程退出
+        随 context 销毁归还，长进程批量显存单调增长）。重复调用安全；
+        再次使用时各缓冲按需重建（_ensure_*/execute 路径自愈）。"""
+        from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
+        try:
+            self.synchronize()
+        except Exception:
+            pass
+        for attr in ("_dev_in", "_dev_out"):
+            ptr = getattr(self, attr, None)
+            if ptr:
+                try:
+                    cudart.cudaFree(ptr)
+                except Exception:
+                    pass
+            setattr(self, attr, None)
+        self._out_nbytes = 0
+        self._out_host = None
+        reducer = getattr(self, "_reducer", None)
+        if reducer is not None:
+            try:
+                reducer.release()
+            except Exception:
+                pass
+            self._reducer = None
+
     @staticmethod
     def _engine_candidates(size: str) -> list[Path]:
         """engine 查找顺序：模型目录（本机构建）→ 本目录缓存。

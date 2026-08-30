@@ -661,8 +661,15 @@ class HybridDecoder:
         return _Batch(crop)
 
     def seek_accurate(self, fi: int):
-        # 吞掉：分片定位由生产者在片首完成，外部 seek 会与预取竞态。
-        return
+        """不支持外部 seek（接口显式化，DESIGN-REVIEW B4）。
+
+        分片定位由生产者在片首完成，外部 seek 会与预取竞态；旧实现静默
+        吞掉调用（接口冒充），现显式报错。引擎两条流水线已改为对 hybrid
+        跳过 seek。
+        """
+        raise NotImplementedError(
+            "HybridDecoder 不支持外部 seek：分片定位由生产者在片首完成；"
+            "调用方应在 hybrid 模式下跳过 seek_accurate")
 
     def get_avg_fps(self):
         return self._gpu.get_avg_fps()

@@ -127,22 +127,11 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         self._codec = ""                 # run 时从 decoder get_codec 探测
         self._backend = ""
         self._bin_thresh = 0
+        self._degraded: list = []        # 本次提取的降级/回退原因（D3，meta 透出）
         # OCR 输入宽度自适应裁切（宽 ROI 字幕省卷积）+ 跨批按宽度分组。
         # 详见 _host_pipeline._crop_to_content 与 config 中的实测注释。
-        self._ocr_autocrop = config.env_bool(
-            config.OCR_ROI_AUTOCROP_ENV,
-            default=config.OCR_ROI_AUTOCROP_DEFAULT)
-        self._ocr_autocrop_margin_pct = config.env_int(
-            config.OCR_ROI_AUTOCROP_MARGIN_ENV,
-            config.OCR_ROI_AUTOCROP_MARGIN_PCT)
-        # 最小收益门槛：裁掉比例低于此值就整段不裁 —— 紧凑 ROI 自动不裁，
-        # 避免在几乎没留白的段上承担切笔画的风险。见 config 中的实测表。
-        self._ocr_autocrop_min_gain = max(0, config.env_int(
-            config.OCR_ROI_AUTOCROP_MIN_GAIN_ENV,
-            config.OCR_ROI_AUTOCROP_MIN_GAIN_PCT)) / 100.0
-        self._ocr_reorder_window = max(1, config.env_int(
-            config.OCR_REORDER_WINDOW_ENV,
-            config.OCR_REORDER_WINDOW_DEFAULT))
+        # 四个 autocrop/重排旋钮为 property 调用期读 env（A6：与
+        # OCR_PAD_SMALL/OCR_GAMMA 等同时机，构造后改 env 即生效）。
         self._progress = progress_cb or (lambda m, p: None)
         self._cancel = cancel_check or (lambda: None)
         self.timing: dict = {}
@@ -157,6 +146,7 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         if self._profile_enabled:
             self._prof_lock = threading.Lock()
         self._validate_params()
+        self._ensure_roi_capable_decoder()
         roi_w = max(1, self._roi[2] - self._roi[0] + 1)
         roi_h = max(1, self._roi[3] - self._roi[1] + 1)
         self._merge_max_changed_pixels = max(
@@ -181,6 +171,49 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
             raise ValueError(
                 f"frame_end 必须大于 frame_start（或为 0/None 表示到末尾）: "
                 f"start={self._frame_start}, end={self._frame_end}")
+
+    # ── env 旋钮统一调用期读取（A6：与 OCR_PAD_SMALL/OCR_GAMMA 等同时机，
+    #    构造后改 env 即生效；此前 autocrop 四项在构造期烘焙，语义不一致）──
+    @property
+    def _ocr_autocrop(self) -> bool:
+        return config.env_bool(config.OCR_ROI_AUTOCROP_ENV,
+                               default=config.OCR_ROI_AUTOCROP_DEFAULT)
+
+    @property
+    def _ocr_autocrop_margin_pct(self) -> int:
+        return config.env_int(config.OCR_ROI_AUTOCROP_MARGIN_ENV,
+                              config.OCR_ROI_AUTOCROP_MARGIN_PCT)
+
+    @property
+    def _ocr_autocrop_min_gain(self) -> float:
+        # 最小收益门槛：裁掉比例低于此值就整段不裁（紧凑 ROI 自动不裁，
+        # 避免在几乎没留白的段上承担切笔画的风险）。见 config 中的实测表。
+        return max(0, config.env_int(config.OCR_ROI_AUTOCROP_MIN_GAIN_ENV,
+                                     config.OCR_ROI_AUTOCROP_MIN_GAIN_PCT)) / 100.0
+
+    @property
+    def _ocr_reorder_window(self) -> int:
+        return max(1, config.env_int(config.OCR_REORDER_WINDOW_ENV,
+                                     config.OCR_REORDER_WINDOW_DEFAULT))
+
+    def _ensure_roi_capable_decoder(self) -> None:
+        """构造期校验解码器支持 ROI-first 输出（DESIGN-REVIEW C8）。
+
+        无 `_CAPI_VideoReaderSetRoi` 的 decord（如 PyPI 版）会让引擎静默按
+        **整帧**处理（roi 参数被忽略、校准阈值与分段数据尺寸错位、merge 因
+        形状不齐恒 False）——静默错误比报错更危险，故直接拒绝。
+        decord 未安装时不在此拦截（保持"构造不依赖 decord"的测试约定），
+        由 extract() 打开解码器时自然报错。
+        """
+        try:
+            import decord.video_reader as _vr_mod
+        except ImportError:
+            return
+        if not hasattr(_vr_mod, '_CAPI_VideoReaderSetRoi'):
+            raise ValueError(
+                "当前 decord 不支持 ROI-first 解码（缺 _CAPI_VideoReaderSetRoi）。"
+                "引擎需要 chr431/decord fork（见 README「解码后端」）；"
+                "拒绝在整帧模式下静默忽略 roi 参数。")
 
     def _merge_effective_mode(self) -> str:
         """merge_similar 使用的分离模式（env 钩子优先级与 _segments_similar
@@ -247,7 +280,30 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
             meta={"backend": self._backend,
                   "ocr_backend": self._ocr_backend_used,
                   "codec": self._codec,
-                  "n_segments": len(segments)})
+                  "n_segments": len(segments),
+                  "engine_version": config.__version__,
+                  # D4：rep_crop_rgb helper 依赖这两个字段还原预览
+                  "color_range": self._color_range,
+                  "rep_crop_format": ("yuv" if self._yuv_output
+                                      else "gray"),
+                  "degraded_reason": (self._degraded or None),   # D3
+                  "params": {                                     # D3
+                      "roi": tuple(self._roi),
+                      "frame_start": self._frame_start,
+                      "frame_end": self._frame_end,
+                      "decode_backend": self._decode_backend,
+                      "ocr_backend": self._ocr_backend,
+                      "sample_stride": self._sample_stride,
+                      "fill_width": self._fill_width,
+                      "force_aspect": self._force_aspect,
+                      "rep_crop_format": self._rep_crop_format,
+                      "keep_crops": self._keep_crops,
+                      "keep_frames": self._keep_frames,
+                      "merge_similar": self._merge_similar,
+                      "merge_similar_threshold": self._merge_similar_threshold,
+                      "merge_text_sep": self._merge_effective_mode(),
+                      "buffer_size": self._buffer_size,
+                      "C": self._C}})
 
     @property
     def frames(self) -> list:
@@ -297,6 +353,7 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
                 label = 'GPU'
             except Exception:
                 vr = None
+                self._degraded.append('NVDEC 打开失败，回退 CPU')
                 if backend in ('nvdec', 'hybrid'):
                     logger.warning('NVDEC 解码不可用，回退 CPU')
         if vr is None:
@@ -343,6 +400,7 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
                 logger.info('混合解码开启(速率分界): codec=%s chunks<=%d cpuT=%d mcf=%d',
                             self._codec, _mc, _ct, _mcf)
             except Exception as e:  # noqa: BLE001
+                self._degraded.append(f'hybrid 初始化失败，回退纯 GPU: {e}')
                 logger.warning('混合解码初始化失败，回退纯 GPU: %s', e)
         return vr
 
@@ -441,6 +499,7 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
             if not self._yuv_output:
                 raise
             logger.warning('当前 decord 不支持 yuv420 输出，回退 gray （代表帧预览将为灰度）')
+            self._degraded.append('decord 不支持 yuv420 输出，代表帧退化灰度')
             self._yuv_output = False
             self._color_range = 0
             return VideoReader(str(self._video_path), ctx=ctx, output_format='gray', **nt_kw, **roi_kw)
@@ -506,14 +565,20 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         return cores
 
     def _run_pipelined(self, _ocr_engines: list | None = None):
-        """入口分发：GPU 全驻留管线（_run_pipelined_gpu）或宿主管线。"""
+        """入口分发：GPU 全驻留管线（_run_pipelined_gpu）或宿主管线。
+
+        _ocr_engines 两条路径都透传（B5：GPU 路径此前丢弃该参数）；
+        None = 从进程级 OCR 引擎池取（ocr_native.acquire_ocr_engine）。"""
         if self._gpu_pipeline_enabled():
-            return self._run_pipelined_gpu()
+            return self._run_pipelined_gpu(_ocr_engines)
         return self._run_pipelined_host(_ocr_engines)
 
-    def _run_pipelined_host(self, _ocr_engines: list | None = None):
-        """宿主流水线：解码线程增量分段，OCR 线程批处理已闭合段的代表帧。
-        _ocr_engines：内部复用 OCR 引擎时传入；None 走常规创建。
+    def _run_pipelined_host(self, _ocr_engines: list | None = None,
+                            _preopened_vr=None):
+        """宿主管线：解码线程增量分段，OCR 线程批处理已闭合段的代表帧。
+        _ocr_engines：内部复用 OCR 引擎时传入；None 走进程级引擎池。
+        _preopened_vr：GPU 管线形状不符回退时传入已打开的 reader（C10，
+        仅普通 reader——hybrid 的分片消费状态不可复用，由调用方保证）。
 
             解码是 I/O 瓶颈（CPU 占用低），段边界（win3）在解码循环内增量计算，
             段一闭合就把代表帧（最清晰）交给 OCR 工作线程 —— 解码∥OCR 重叠摊薄
@@ -526,14 +591,18 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
             """
         self._gpu_pipeline_mode = False
         _t_open = time.perf_counter()
-        vr = self._open_vr()
+        vr = _preopened_vr
+        if vr is None:
+            vr = self._open_vr()
         if self._fps is None:
             _fps = _read_fps_from_vr(vr)
             self._fps = _fps if _fps else config.DEFAULT_FPS_FALLBACK
         total = len(vr)
+        if (self._frame_end or 0) > total:
+            # 超界 end 静默截断曾是默认语义（A4）：至少让用户能发现参数错误
+            logger.warning('frame_end=%s 超出视频总帧数 %d，按片尾截断',
+                           self._frame_end, total)
         end = min(self._frame_end or total, total)
-        if self._frame_start > 0:
-            vr.seek_accurate(self._frame_start)
         frames = list(range(self._frame_start, end, self._sample_stride))
         if not frames:
             raise ValueError(
@@ -542,6 +611,10 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         # 混合解码（hybrid_begin）：采样帧序列就绪后才生成关键帧分片并
         # 启动双解码生产者竞争。
         hybrid = hasattr(vr, 'hybrid_begin')
+        if self._frame_start > 0 and not hybrid:
+            # hybrid 的分片定位由生产者在片首完成（其 seek_accurate 已显式
+            # 报错，DESIGN-REVIEW B4）——跳过外部 seek。
+            vr.seek_accurate(self._frame_start)
         if hybrid:
             vr.hybrid_begin(frames)
         self._prof_end('producer', 'open_and_fps', _t_open)
@@ -599,7 +672,8 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
             except Exception:
                 pass
         if ocr_err:
-            raise ocr_err[0]
+            # C4：补"OCR worker 失败"上下文并保留原始异常链
+            raise RuntimeError(f"OCR worker 失败: {ocr_err[0]!r}") from ocr_err[0]
         self.timing['ocr'] = ocr_wall[0]
         self._n_segments = len(segs)
         self.crops = rep_crops

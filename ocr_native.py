@@ -146,6 +146,25 @@ class OcrEngine:
         """实际推理后端：'tensorrt' 或 'onnxruntime'（CSV 头/日志使用）。"""
         return "tensorrt" if self._trt is not None else "onnxruntime"
 
+    def release(self) -> None:
+        """释放设备资源（TRT 缓冲 / GPU 预处理器，DESIGN-REVIEW C5）。
+
+        池淘汰或进程收尾时调用；重复调用安全。host 侧 ONNX session 由
+        GC 管理（无设备显存），不在此处理。
+        """
+        if self._trt is not None:
+            try:
+                self._trt.release()
+            except Exception:
+                pass
+            self._trt = None
+        if self._gpu_pre is not None:
+            try:
+                self._gpu_pre.release()
+            except Exception:
+                pass
+            self._gpu_pre = None
+
     # ═══════════════ ONNX 后端 ═══════════════
 
     def _init_onnx(self, models: Path, size: str) -> None:
@@ -473,3 +492,58 @@ class OcrEngine:
                 out_host=preds[i:i + n])
         self._trt.synchronize()
         return preds
+
+
+# ═══════════════ 进程级 OCR 引擎池（跨视频复用，DESIGN-REVIEW B5/C5）═══════════════
+# 每个 extract() 新建 OcrEngine 意味着长进程批量每个视频都重付 TRT 反序列化
+# + 设备缓冲分配。本池按构造键缓存**空闲**引擎：checkout/checkin 互斥，同一
+# 引擎同一时刻只被一个流水线使用（TRT context 串行语义与旧的"每会话独立
+# 引擎"一致）；README 的多线程批量场景 = 多个并发 checkout，互不共享在途
+# 引擎。池内引擎常驻（显存换复用），淘汰/进程退出才释放。
+_POOL_LOCK = threading.Lock()
+_ENGINE_POOL: dict = {}          # key -> list[OcrEngine]（空闲栈）
+_POOL_MAX_PER_KEY = 4            # 防异常并发下池无限膨胀；超出即 release
+
+
+def acquire_ocr_engine(variant: str = "v6_small",
+                       engine_type: str = "onnxruntime", *,
+                       fill_width: int = 0,
+                       num_threads: int | None = None) -> OcrEngine:
+    """从池取空闲引擎；无空闲则新建。构造 key 记录在引擎上供 checkin 归位。"""
+    key = (variant, engine_type, int(fill_width or 0), int(num_threads or 0))
+    with _POOL_LOCK:
+        idle = _ENGINE_POOL.get(key)
+        if idle:
+            return idle.pop()
+    eng = OcrEngine(variant, engine_type, fill_width=fill_width,
+                    num_threads=num_threads)
+    eng._pool_key = key
+    return eng
+
+
+def checkin_ocr_engine(engine: OcrEngine) -> None:
+    """归还引擎入池；池满或非池来源（无 _pool_key）→ release 释放。"""
+    key = getattr(engine, "_pool_key", None)
+    if key is None:
+        engine.release()
+        return
+    with _POOL_LOCK:
+        idle = _ENGINE_POOL.setdefault(key, [])
+        if len(idle) < _POOL_MAX_PER_KEY:
+            idle.append(engine)
+            return
+    engine.release()
+
+
+def release_ocr_pool() -> None:
+    """清空并释放整池（诊断/测试用；正常长驻进程靠池复用，不清空）。"""
+    with _POOL_LOCK:
+        idle_all = [idle for idle in _ENGINE_POOL.values() if idle]
+        _ENGINE_POOL.clear()
+    for idle in idle_all:
+        while idle:
+            eng = idle.pop()
+            try:
+                eng.release()
+            except Exception:
+                pass

@@ -11,19 +11,18 @@
     for seg in result.segments:
         print(seg.text, seg.confidence)
 """
-import os as _os
 
-# P0-6（2026-08-29 视觉裁定后翻默认开）：CPU 软解关去块滤波。
-# HEVC 墙钟 -13%~-18%、h264 -5%~-13%（仅 CPU 软解；NVDEC 由硬件管不受影响）。
-# 六片真值 + test4 逐帧视觉裁定（tools/_probe_slf_adjudicate.py）确认对 OCR
-# 结果无负面影响：5 片全等准确率 +0.00~+0.08pp；test4 账面 -0.19pp 经证明是
-# 真值伪影（显示为三位补零 "020"、前导 0 更暗，真值剥掉了前导零 —— 关滤波
-# 恰好漏读暗淡前导零而"账面对"，视觉裁定按显示忠实度开反而略优）。
+# DECORD_SKIP_LOOP_FILTER 为**显式 opt-in**（DESIGN-REVIEW D1：库 import 不得
+# 静默改写同进程其他 decord 使用方的解码输出）。需要 CPU 软解加速时在使用方
+# 自行设置（必须在打开解码器前）：
+#     os.environ["DECORD_SKIP_LOOP_FILTER"] = "all"
+# 收益（2026-08-29 实测，六片真值 + test4 逐帧视觉裁定确认对 OCR 无负面
+# 影响：5 片 +0.00~+0.08pp；test4 账面 -0.19pp 系真值伪影——显示为三位补零
+# "020"、真值剥零，关滤波反而略优）：HEVC 墙钟 -13%~-18%、h264 -5%~-13%
+# （仅 CPU 软解；NVDEC 由硬件管不受影响）；AV1 无效。
 # 行为提示：显示为 2 位数字时（如 "020"）OCR 输出会带前导零（更忠实于显示），
-# 下游做字符串匹配需注意。opt-out：预先设置 DECORD_SKIP_LOOP_FILTER=none
-# （AVDiscard 语义，恢复完整去块滤波）；rep_crop 预览在关滤波下有块状伪影。
+# 下游做字符串匹配需注意；rep_crop 预览在关滤波下有块状伪影。
 # 需要 decord fork ≥v0.7.13 的透传支持（旧版忽略该 env，行为不变）。
-_os.environ.setdefault("DECORD_SKIP_LOOP_FILTER", "all")
 
 from video_ocr_engine.extractor import (  # noqa: F401
     FieldExtractor, ExtractedSegment, ExtractionResult,

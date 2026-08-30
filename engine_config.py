@@ -86,10 +86,11 @@ DEBUG_BOUNDS_ENV: str = "DEBUG_BOUNDS"                          # 1 打印分段
 HYBRID_PROBE_ENV: str = "HYBRID_PROBE"                          # 1 打印混合解码逐片时序
 HYBRID_PROBE_CSV_ENV: str = "HYBRID_PROBE_CSV"                  # 逐片时序另落盘 CSV 路径
 # CPU+NVDEC 混合解码（hybrid_decode.HybridDecoder v4，decode_backend="hybrid"）：
-# 仅 GPU(NVDEC) 可用、stride==1、未开 GPU 全驻留管线时生效（编码不限，
-# 含 AV1）；v4 = 动态分界（慢端不拖尾约束下给慢端尽量多片）+ 稳态速率
-# 折扣（短校准高估 CPU 软解稳态速率）+ 缩短校准帧数（弱 CPU 下 256 帧
-# 校准 ~0.4s 会吃掉混合收益）。
+# 显式选择且 NVDEC 可用时生效（编码不限，含 AV1）；stride>1 已支持
+# （分片/扫掠/校准均按采样步长推进）；GPU 全驻留管线开启时由其 CPU
+# 分支消费（§8.3 合并，原互斥门控已移除）。v4 = 动态分界（慢端不拖尾
+# 约束下给慢端尽量多片）+ 稳态速率折扣（短校准高估 CPU 软解稳态速率）
+# + 缩短校准帧数（弱 CPU 下 256 帧校准 ~0.4s 会吃掉混合收益）。
 # h264 CPU 软解吞吐可达 NVDEC 两倍以上，闲置 CPU 的正确用途是帮解码；
 # CPU 明显慢于 NVDEC（HEVC/AV1/弱 CPU）时 decode 仍可提升（8 核亲和
 # 模拟实测 h264 decode -18%、HEVC decode -3%）。
