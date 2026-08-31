@@ -30,11 +30,15 @@ index/
 
 # Agent 工作区（会话记忆 / 中间态，非项目源码）
 .workbuddy/
+# Agent worktree：会话产出的完整仓库副本。实测 .claude/ 达 154 MB，
+# 且让每次搜索多返回约 6 倍重复命中。搜索侧另由 .rgignore 单独控制。
+.claude/
 # 探针输出产物
 tools/_probe_truth_env.json
 tools/_int8_probe/
 # 探针生成的拼图/裁图产物
 tools/_slf_vis/
+tools/_merge_vis/
 
 # 外部只读审查报告（本地生成的一次性分析输入，非项目文档；
 # 其结论已沉淀进 docs/PERFORMANCE.md 与 docs/DECISIONS.md）

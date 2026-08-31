@@ -1,0 +1,49 @@
+# ripgrep 忽略规则 —— 减少搜索噪声 / agent 的 token 消耗。
+#
+# 为什么单独有这个文件：`.gitignore` 管的是"要不要入库"，`.rgignore` 管的
+# 是"搜不搜"。两者目的不同 —— 比如 `.claude/worktrees/` 不该入库，但下面
+# 某些东西可能仍想搜到。这里只按"搜索噪声"来取舍。
+#
+# 实测收益（2026-09-01）：
+#   Glob **/*.py   473 → 83 个（去掉 5.7 倍重复）
+#   Grep "NVDEC"   167 → 29 个（去掉 5.8 倍重复）
+# 每次搜索都少返回约 6 倍的重复命中，这是持续的 token 税。
+
+# ── agent 会话 worktree：6 份完整仓库副本，154 MB，纯重复 ──
+# 这是最大的噪声源：每个 worktree 都有一份完整源码，一次搜索会命中 6~13 份
+# 同样的结果。
+.claude/
+
+# ── Python 缓存与测试产物 ──
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── 探针产物（图片/拼图，二进制，1085 个文件）──
+tools/_slf_vis/
+tools/_merge_vis/
+tools/_probe_*.json
+tools/_round4_*.json
+
+# ── 模型与二进制资产 ──
+*.onnx
+*.pth
+*.bin
+*.so
+*.pyd
+*.dll
+
+# ── 运行时缓存 ──
+ocr_engines/
+logs/
+index/
+
+# ── 环境 ──
+.venv/
+venv/
+.eggs/
+*.egg-info/
+build/
+dist/

@@ -17,6 +17,22 @@
 ⚠️ **现役规则以本文件为准**。`docs/DECISIONS.md` 是迁出的原文存档，
 两者冲突时以本文件为真相（避免"两套真相"，见设计审查 D6）。
 
+### ⛔ 查文档前先定位，不要整文件读
+
+实测（tiktoken）：读整个 PERFORMANCE.md = **42,470 tokens**，ARCHIVE.md =
+**46,253** —— 而本文件每会话注入才 **3,636 tokens**。**误读一次大文档 ≈
+12.7 倍的注入成本**，这是本项目最大的 token 浪费点。
+
+```bash
+python tools/_doc_section.py --find <关键词>        # 跨文档按标题定位，≈357 tokens
+python tools/_doc_section.py --toc docs/PERFORMANCE.md   # 目录+token数，≈838 tokens
+python tools/_doc_section.py docs/PERFORMANCE.md 21      # 只读 §21
+python tools/_doc_section.py docs/ARCHIVE.md 4.4b        # 支持 16 / 16.8 / 4.4b
+```
+
+典型路径：`--toc`(838) + 读单章(≈2,000) ≈ **2,800 tokens**，比整文件读
+**省 84~96%**。`--find` 只搜标题；要搜正文再用 grep。
+
 ## 铁律（先量后做）
 
 1. **先量后做**：任何结论必须带实测数字，禁止凭直觉推断下结论。
