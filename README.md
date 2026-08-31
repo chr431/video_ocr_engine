@@ -152,6 +152,21 @@ seg/text 与顺序完全一致）：
 | 2×CPU+TRT | ~1.4× | 靠核富余；少核机收益递减 |
 | 2×NVDEC+TRT | ~1.1× | 单 NVDEC 硬件单元，双会话互相争抢 |
 
+> **2026-08-31 修订（实测，详见 `docs/PERFORMANCE.md` §19）**
+>
+> 1. **"IO 竞争导致并行更慢"已证伪**。同视频同负载下并发跑，系统落盘量为
+>    **0.0MB**（页缓存全命中），NVDEC∥NVDEC 仍退化 1.88×（加速比 1.04×）。
+>    磁盘 IO 在单次提取中只占墙钟 **<1%**（冷/热 A/B 实测 0.03–0.05s /
+>    5–7s），PCIe 传输占 0.01%。**不要再去 IO 方向找原因。**
+> 2. `2×NVDEC+TRT ~1.1×` → 确认为**单一 NVDEC 固定功能单元串行化**。消元证据：
+>    CPU∥CPU 同样并发两个 TRT OCR，退化仅 1.16×；把解码器从 NVDEC 换成 CPU，
+>    退化从 1.88× 掉到 1.16×。
+> 3. `1×NVDEC+TRT ∥ 1×CPU+TRT` 与 `2×CPU+TRT` 的 ~1.4× **受负载失衡影响**：
+>    NVDEC 侧 ~5s 而 CPU 侧 ~14s，makespan 被慢侧锁死。同负载实测 CPU∥CPU 为
+>    **1.70×**（AV1 样本）；加速比只在两实例耗时相近时才有意义。
+>
+> 结论不变：**NVDEC∥CPU 互补配对仍是首选**，但理由是资源互补，不是"避开 IO"。
+
 ```python
 import threading
 threads = [threading.Thread(target=extract, args=(video, backend)) for ...]
