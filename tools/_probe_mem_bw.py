@@ -187,7 +187,8 @@ def _spawn_workloads(args, kind: str) -> tuple[list[subprocess.Popen],
             [PY, __file__, "--mode", "work", "--video", v, "--roi", args.roi,
              "--frame-start", str(args.frame_start), "--frames",
              str(args.frames), "--ocr-backend", b,
-             "--decode-backend", db, "--stop-file", stop],
+             "--decode-backend", db, "--stride", str(args.stride),
+             "--stop-file", stop],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             encoding="utf-8", errors="replace"))
     return ps, stops
@@ -439,6 +440,7 @@ def _mode_work(args) -> int:
                                 frame_end=args.frame_start + args.frames,
                                 decode_backend=args.decode_backend,
                                 ocr_backend=args.ocr_backend,
+                                sample_stride=args.stride,
                                 keep_crops=False)
             t0 = time.perf_counter()
             res = ex.extract()
@@ -612,6 +614,8 @@ def main() -> int:
     ap.add_argument("--roi", default="841,994,949,1026")
     ap.add_argument("--frame-start", type=int, default=139)
     ap.add_argument("--frames", type=int, default=4000)
+    ap.add_argument("--stride", type=int, default=1,
+                    help="sample_stride；README 口径为 30000 帧 + stride 8")
     ap.add_argument("--decode-backend", default="auto")
     ap.add_argument("--ocr-backend", default="tensorrt")
     ap.add_argument("--stop-file", default="",

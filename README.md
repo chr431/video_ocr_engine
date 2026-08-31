@@ -148,9 +148,10 @@ seg/text 与顺序完全一致）：
 
 | 配对 | 聚合加速 | 说明 |
 |---|---:|---|
-| **1×NVDEC+TRT ∥ 1×CPU+TRT** | **~1.4×** | 资源互补（GPU 硬解 + 空闲 CPU 核），互不拖累，首选 |
+| **1×NVDEC+TRT ∥ 1×CPU+ONNX** | **~1.8×** | 解码器 + 加速器双重互补，对端完全不占 GPU，**首选** |
+| **1×NVDEC+TRT ∥ 1×CPU+TRT** | **~1.5–1.85×** | 仅解码器互补；对端软解快（h264）时会抢 GPU，掉到 1.5× |
 | 2×CPU+TRT | ~1.4× | 靠核富余；少核机收益递减 |
-| 2×NVDEC+TRT | ~1.1× | 单 NVDEC 硬件单元，双会话互相争抢 |
+| 2×NVDEC+TRT | **~1.0–1.2×** | 单 NVDEC 硬件单元，双会话互相争抢，基本等于串行 |
 
 > **2026-08-31 修订（实测，详见 `docs/PERFORMANCE.md` §19）**
 >
@@ -166,6 +167,27 @@ seg/text 与顺序完全一致）：
 >    **1.70×**（AV1 样本）；加速比只在两实例耗时相近时才有意义。
 >
 > 结论不变：**NVDEC∥CPU 互补配对仍是首选**，但理由是资源互补，不是"避开 IO"。
+>
+> **2026-08-31 二次修订（实测，详见 `docs/PERFORMANCE.md` §21）**
+>
+> 4. **互补设计的加速比被严重低估**。按聚合吞吐口径（Σ 单跑/并发，理想 2.00）
+>    重测（两条流水线跑同一条 test6，同视频同编码）：互补配对 **1.83–1.87×**，
+>    双 NVDEC 只有 **1.01–1.20×**，差 **1.8 倍**。对端干扰仅 **1.02–1.05×**
+>    （独立复现 1.870× / 1.833×）。上表的 ~1.4× 是 makespan 口径被慢侧锁死的
+>    结果，批量多视频场景应看聚合吞吐。
+> 5. ⚠️ **互补设计此前从未真正落地**：`decode_backend=auto` **不区分 OCR 后端**
+>    （`extractor.py:349` 只看 `backend in ('auto','nvdec','hybrid')`，不读
+>    `ocr_backend`），所以 `--ocr-backend cpu --decode-backend auto` 的流水线
+>    实测上报 `used_decode = decord/GPU` —— **ONNX 那条也开了 NVDEC**，直接掉进
+>    2.0× 档。必须**显式**传 `decode_backend='cpu'`，并核验
+>    `FieldExtractor._backend` 确实为 `decord/CPU`。
+> 6. 支配变量是**对端往 GPU 提交工作的速率**，不是 CPU 也不是内存：
+>    ONNX 纯 CPU 对端 → 1.02×；TRT 对端但陷在 AV1 慢软解 → 1.06×；
+>    TRT 对端且 h264 快软解 → 1.33×；对端走 NVDEC → 2.01–2.06×。
+>    反向证据：`mixed_cpu` 的对端是全场最重的 CPU/访存负载（AV1 软解 8.757s，
+>    比主侧慢 3.4 倍），主侧却只退化 1.02× —— **CPU 负载与退化负相关**。
+> 7. 编码决定一切：h264 上 CPU 软解比 NVDEC **快 2.6×**，AV1 上**慢 2.9×**。
+>    选配对前先看对端视频的编码。
 
 ```python
 import threading
@@ -174,7 +196,10 @@ threads = [threading.Thread(target=extract, args=(video, backend)) for ...]
 
 要点：实例完全独立（各自 OCR 会话/TRT 上下文共存正常）；GIL 无碍
 （GPU 管线消费线程极轻）。`decode_backend="cpu"` 与 `"auto"` 混搭即可
-构成互补对。少核（≤8 核）机器收益递减，建议先小规模试测。详见
+构成互补对 —— 但**必须显式**给要走 CPU 的那条传 `"cpu"`：`"auto"` 不区分
+OCR 后端、一律尝试 NVDEC（见上方修订第 5 条），指望 `--ocr-backend cpu`
+自动配成 CPU 解码是无效的。跑完后用 `FieldExtractor._backend` 核验实际后端。
+少核（≤8 核）机器收益递减，建议先小规模试测。详见
 `docs/PERFORMANCE.md` §16.8.2 的实测表。
 
 ## 识别链
