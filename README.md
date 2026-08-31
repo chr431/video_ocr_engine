@@ -85,7 +85,7 @@ for seg in result.segments:
 CPU 且片源为 h264 时，可手动选 `"cpu"` 获得更高软解吞吐（NVDEC h264 解码器约
 2Gp/s 上限，FFmpeg CPU 解码器最多可利用约 13 核）；弱 CPU / HEVC / AV1 场景仍
 建议保持 `auto` 或 `nvdec`。（auto 不自动选 CPU 是刻意决策：按编码/核数的静态
-判据不可靠、判错代价成倍，见 `docs/PERFORMANCE.md` §16.2 P0-3。）
+判据不可靠、判错代价成倍，见 `docs/ARCHIVE.md` §16.2 P0-3。）
 
 `decode_backend="hybrid"` 是**实验性功能**：同一实例内 NVDEC 与 CPU 软解并行
 解码（动态分界：慢端在"不拖尾"约束下尽量多分片，快端从头连续扫掠、扫完
@@ -200,7 +200,7 @@ threads = [threading.Thread(target=extract, args=(video, backend)) for ...]
 OCR 后端、一律尝试 NVDEC（见上方修订第 5 条），指望 `--ocr-backend cpu`
 自动配成 CPU 解码是无效的。跑完后用 `FieldExtractor._backend` 核验实际后端。
 少核（≤8 核）机器收益递减，建议先小规模试测。详见
-`docs/PERFORMANCE.md` §16.8.2 的实测表。
+`docs/ARCHIVE.md` §16.8.2 的实测表。
 
 ## 识别链
 
@@ -265,7 +265,7 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 | `OCR_PAD_SMALL` | OCR 输入 pad 宽度下限覆盖（未设置时由构造参数 `fill_width` 决定，默认 224；此 env 优先级**高于**构造参数，调这个就能改 pad 下限） |
 | `OCR_GAMMA` | OCR 预处理 gamma（默认 2.0） |
 | `OCR_ROI_AUTOCROP` | `0` 关闭 OCR 输入宽度自适应裁切（默认开；按二值图内容列裁掉两侧空白，生产门禁 5 视频原始误读 **148 → 124**；真值口径四片均值 +0.82pp，**该 pp 值测于 pad 160 时代，pad 已回退 224，勿直接引用**） |
-| `OCR_ROI_AUTOCROP_MARGIN` | 裁切时内容两侧保留的余量（占 ROI 宽 %，默认 10；**调小会插入多余空格且准确率下降**，见 `docs/PERFORMANCE.md` §16.2 P0-4） |
+| `OCR_ROI_AUTOCROP_MARGIN` | 裁切时内容两侧保留的余量（占 ROI 宽 %，默认 10；**调小会插入多余空格且准确率下降**，见 `docs/ARCHIVE.md` §16.2 P0-4） |
 | `OCR_REORDER_WINDOW` | OCR 重排窗口段数（默认 64；按宽度分组才能让 pad 宽真的降下来） |
 | `DECORD_SKIP_LOOP_FILTER` | **显式 opt-in**（2026-08-30 起，默认**不设置**——import 不再改写进程级 env）：设为 `all` 开启 CPU 软解关去块滤波，须在打开解码器前设置。收益：HEVC **-8.3%~-14.3% 墙钟**、h264 -0.6%~-4.2%、AV1 无效（-0.2%）；NVDEC 不受影响。六片真值 + test4 逐帧**视觉裁定**确认对 OCR 无负面影响（5 片 +0.00~+0.08pp；test4 账面 −0.19pp 系真值伪影——显示为三位补零 `020`、真值剥零，视觉裁定按显示忠实度关滤波反而略优）。注意：显示为 2 位数字时输出会带前导零（`020`，更忠实于显示），下游字符串匹配需注意；rep_crop 预览有块状伪影。需 decord fork ≥v0.7.13 |
 | `DECODE_THREADS` | CPU 软解 FFmpeg 帧线程数覆盖（默认按 OCR 落点 + 采样步长分档：OCR 在 GPU 取满逻辑核钳 8~32；OCR 在 CPU 时 stride>1 取逻辑核 3/4 钳 8~24、stride==1 取 1/3 钳 8~12） |
@@ -298,13 +298,20 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 ## 文档
 
 - [性能调优记录](docs/PERFORMANCE.md) —— **性能现状以此为准**：现役性能基线、后端矩阵、
-  线程预算、已锁定参数、已验证死路；§16 为 2026-08-29 路线图归档（开头有校正表），
-  §17 为下一步候选，§18 为已删除功能的历史档案（纯历史，勿当现役依据）。
+  线程预算、已锁定参数、已验证死路（§1–§15, §17, §19–§21）。
+- [历史归档](docs/ARCHIVE.md) —— §4 / §8 / §16 / §18（**编号保留**）：2026-08-29 路线图
+  快照（开头有校正表）、已删除功能档案。**纯历史，勿当现役依据**。
+- [开发决策档案](docs/DECISIONS.md) —— 每轮决策过程与设计审查结论（维护者向）。
 - [依赖与运行环境](docs/DEPENDENCIES.md) —— decord fork / TensorRT / onnxruntime 版本与注意事项。
-- `CLAUDE.md` —— 开发记录与约定（维护者向）：API 演进、设计审查结论、踩坑记录。
+- `CLAUDE.md` —— 维护者向**注入核**：铁律 + 现役架构 + 结论指针。
+  ⚠️ 该文件在每个会话开头被全量注入，**硬上限 12 KB**（由单测守护）。
 
-> 文档共四份（README / CLAUDE.md / PERFORMANCE.md / DEPENDENCIES.md），
-> 2026-08-30 已把一次性的路线图、设计评审、历史档案三份并入前两者并删除。
+> 文档共六份。2026-08-30 把一次性的路线图 / 设计评审 / 历史档案三份并入
+> PERFORMANCE.md 与 CLAUDE.md；2026-08-31 再按「活 / 归档」切分，把归档章节
+> 与历史决策分别迁出为 `docs/ARCHIVE.md`、`docs/DECISIONS.md`。
+>
+> `docs/PERFORMANCE.md` 中凡提及 §4 / §8 / §16 / §18 的，均指 `docs/ARCHIVE.md`
+> 的对应章节。工具脚本索引见 [`tools/INDEX.md`](tools/INDEX.md)。
 
 ## 测试
 

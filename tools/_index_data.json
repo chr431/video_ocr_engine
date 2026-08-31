@@ -1,0 +1,588 @@
+[
+ {
+  "f": "_probe_autocrop_ab.py",
+  "n": 133,
+  "mt": "2026-08-29",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "16"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_autocrop_truth.py",
+  "n": 145,
+  "mt": "2026-08-29",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "16"
+  ],
+  "imp": [],
+  "spawn": [
+   "_probe_guard_clean.py"
+  ]
+ },
+ {
+  "f": "_probe_batch_coldstart.py",
+  "n": 101,
+  "mt": "2026-08-31",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "17"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_block_audit.py",
+  "n": 210,
+  "mt": "2026-08-30",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "14"
+  ],
+  "imp": [
+   "_probe_domain_audit.py"
+  ],
+  "spawn": []
+ },
+ {
+  "f": "_probe_ceiling.py",
+  "n": 131,
+  "mt": "2026-08-28",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "16"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_cluster_dtype.py",
+  "n": 105,
+  "mt": "2026-08-30",
+  "docfiles": [],
+  "secs": [],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_cpu_onnx.py",
+  "n": 269,
+  "mt": "2026-08-29",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "16"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_cr_roundtrip.py",
+  "n": 182,
+  "mt": "2026-08-31",
+  "docfiles": [
+   "CLAUDE.md"
+  ],
+  "secs": [],
+  "imp": [],
+  "spawn": [
+   "_split_claude_md.py"
+  ]
+ },
+ {
+  "f": "_probe_crop_miscut.py",
+  "n": 225,
+  "mt": "2026-08-30",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "16"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_det_crop_eval.py",
+  "n": 407,
+  "mt": "2026-08-30",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "13"
+  ],
+  "imp": [
+   "_probe_block_audit.py",
+   "_probe_domain_audit.py",
+   "_probe_merge_audit.py"
+  ],
+  "spawn": []
+ },
+ {
+  "f": "_probe_domain_audit.py",
+  "n": 140,
+  "mt": "2026-08-30",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "14"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_drop_nonref.py",
+  "n": 417,
+  "mt": "2026-08-29",
+  "docfiles": [
+   "docs/DECISIONS.md",
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "16"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_e2e_ab.py",
+  "n": 116,
+  "mt": "2026-08-28",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "16"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_ffmpeg.py",
+  "n": 54,
+  "mt": "2026-08-28",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "16"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_final.py",
+  "n": 104,
+  "mt": "2026-08-28",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "16"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_gpu_ctc.py",
+  "n": 126,
+  "mt": "2026-08-29",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "16"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_guard_clean.py",
+  "n": 177,
+  "mt": "2026-08-29",
+  "docfiles": [
+   "docs/DECISIONS.md",
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "16"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_hybrid_ab.py",
+  "n": 111,
+  "mt": "2026-08-29",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "16",
+   "17"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_io_budget.py",
+  "n": 577,
+  "mt": "2026-08-31",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "19",
+   "21"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_lifecycle_repeat.py",
+  "n": 210,
+  "mt": "2026-08-31",
+  "docfiles": [],
+  "secs": [],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_mem_bw.py",
+  "n": 644,
+  "mt": "2026-08-31",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "20",
+   "21"
+  ],
+  "imp": [],
+  "spawn": [
+   "_probe_round4_bw.py",
+   "_probe_round4_wall.py"
+  ]
+ },
+ {
+  "f": "_probe_merge_audit.py",
+  "n": 409,
+  "mt": "2026-08-30",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "14"
+  ],
+  "imp": [
+   "_probe_block_audit.py",
+   "_probe_domain_audit.py"
+  ],
+  "spawn": []
+ },
+ {
+  "f": "_probe_mp_scale.py",
+  "n": 173,
+  "mt": "2026-08-31",
+  "docfiles": [],
+  "secs": [],
+  "imp": [],
+  "spawn": [
+   "_probe_mem_bw.py"
+  ]
+ },
+ {
+  "f": "_probe_pad_variants.py",
+  "n": 336,
+  "mt": "2026-08-29",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "16"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_pad_width.py",
+  "n": 187,
+  "mt": "2026-08-29",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "16"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_perframe.py",
+  "n": 120,
+  "mt": "2026-08-28",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "16"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_python_cost.py",
+  "n": 130,
+  "mt": "2026-08-30",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "16",
+   "17"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_roi_crop_ocr.py",
+  "n": 182,
+  "mt": "2026-08-29",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "16"
+  ],
+  "imp": [],
+  "spawn": [
+   "_probe_autocrop_truth.py"
+  ]
+ },
+ {
+  "f": "_probe_roi_segcost.py",
+  "n": 124,
+  "mt": "2026-08-30",
+  "docfiles": [],
+  "secs": [],
+  "imp": [],
+  "spawn": [
+   "_probe_seg_share.py"
+  ]
+ },
+ {
+  "f": "_probe_roi_whitespace.py",
+  "n": 152,
+  "mt": "2026-08-30",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "16"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_roi_width.py",
+  "n": 171,
+  "mt": "2026-08-29",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "16"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_round4_bw.py",
+  "n": 98,
+  "mt": "2026-08-31",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "21"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_round4_wall.py",
+  "n": 115,
+  "mt": "2026-08-31",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "21"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_seg_share.py",
+  "n": 146,
+  "mt": "2026-08-30",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "17"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_skip_frame.py",
+  "n": 168,
+  "mt": "2026-08-29",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "16"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_slf_adjudicate.py",
+  "n": 135,
+  "mt": "2026-08-29",
+  "docfiles": [
+   "docs/DECISIONS.md",
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "12",
+   "16"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_slf_diff.py",
+  "n": 109,
+  "mt": "2026-08-29",
+  "docfiles": [
+   "docs/DECISIONS.md",
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "12",
+   "16"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_slf_vis.py",
+  "n": 102,
+  "mt": "2026-08-29",
+  "docfiles": [],
+  "secs": [],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_threads.py",
+  "n": 64,
+  "mt": "2026-08-28",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "16"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_truth_env.py",
+  "n": 253,
+  "mt": "2026-08-29",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "12",
+   "16"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_probe_yuv_tax.py",
+  "n": 129,
+  "mt": "2026-08-30",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "15"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "_split_claude_md.py",
+  "n": 263,
+  "mt": "2026-08-31",
+  "docfiles": [],
+  "secs": [],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "bench_hybrid.py",
+  "n": 123,
+  "mt": "2026-08-28",
+  "docfiles": [
+   "docs/PERFORMANCE.md"
+  ],
+  "secs": [
+   "4"
+  ],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "e2e_smoke.py",
+  "n": 351,
+  "mt": "2026-08-29",
+  "docfiles": [
+   "README.md"
+  ],
+  "secs": [],
+  "imp": [],
+  "spawn": []
+ },
+ {
+  "f": "probe_decode_rates.py",
+  "n": 125,
+  "mt": "2026-08-28",
+  "docfiles": [],
+  "secs": [],
+  "imp": [],
+  "spawn": []
+ }
+]
