@@ -1,0 +1,228 @@
+{
+ "solo/T5/trt-nvdec": [
+  {
+   "ocr_backend": "tensorrt",
+   "iters": 14,
+   "decode_backend": "auto",
+   "used_decode": "decord/GPU",
+   "wall_median": 4.529642100002093,
+   "wall_min": 4.474804000001313,
+   "wall_max": 5.15051499999754,
+   "segs": 1326,
+   "uniq": 265,
+   "_label": "solo/T5/trt-nvdec"
+  }
+ ],
+ "solo/T5/trt-cpudec": [
+  {
+   "ocr_backend": "tensorrt",
+   "iters": 35,
+   "decode_backend": "cpu",
+   "used_decode": "decord/CPU",
+   "wall_median": 1.7259008000000904,
+   "wall_min": 1.5577297000018007,
+   "wall_max": 2.1485061000021233,
+   "segs": 1326,
+   "uniq": 265,
+   "_label": "solo/T5/trt-cpudec"
+  }
+ ],
+ "solo/T5/onnx-nvdec": [
+  {
+   "ocr_backend": "cpu",
+   "iters": 14,
+   "decode_backend": "auto",
+   "used_decode": "decord/GPU",
+   "wall_median": 4.446957100000873,
+   "wall_min": 4.432583900001191,
+   "wall_max": 4.67929390000063,
+   "segs": 1264,
+   "uniq": 262,
+   "_label": "solo/T5/onnx-nvdec"
+  }
+ ],
+ "solo/T5/onnx-cpudec": [
+  {
+   "ocr_backend": "cpu",
+   "iters": 17,
+   "decode_backend": "cpu",
+   "used_decode": "decord/CPU",
+   "wall_median": 4.307624300003226,
+   "wall_min": 4.211302299998351,
+   "wall_max": 4.586713200002123,
+   "segs": 1264,
+   "uniq": 262,
+   "_label": "solo/T5/onnx-cpudec"
+  }
+ ],
+ "solo/T6/trt-cpudec": [
+  {
+   "ocr_backend": "tensorrt",
+   "iters": 10,
+   "decode_backend": "cpu",
+   "used_decode": "decord/CPU",
+   "wall_median": 7.663162800003192,
+   "wall_min": 7.318134400000417,
+   "wall_max": 8.230217899999843,
+   "segs": 1370,
+   "uniq": 282,
+   "_label": "solo/T6/trt-cpudec"
+  }
+ ],
+ "conc/mixed": [
+  {
+   "ocr_backend": "tensorrt",
+   "iters": 14,
+   "decode_backend": "auto",
+   "used_decode": "decord/GPU",
+   "wall_median": 5.236903200002416,
+   "wall_min": 5.1198786000022665,
+   "wall_max": 5.940739800000301,
+   "segs": 1370,
+   "uniq": 282,
+   "_label": "conc/mixed"
+  },
+  {
+   "ocr_backend": "cpu",
+   "iters": 9,
+   "decode_backend": "auto",
+   "used_decode": "decord/GPU",
+   "wall_median": 8.226211199998943,
+   "wall_min": 8.108567100000073,
+   "wall_max": 8.276582300000882,
+   "segs": 1264,
+   "uniq": 262,
+   "_label": "conc/mixed"
+  }
+ ],
+ "conc/trt2": [
+  {
+   "ocr_backend": "tensorrt",
+   "iters": 13,
+   "decode_backend": "auto",
+   "used_decode": "decord/GPU",
+   "wall_median": 5.3767293999990216,
+   "wall_min": 5.249300400002539,
+   "wall_max": 5.836287600002834,
+   "segs": 1370,
+   "uniq": 282,
+   "_label": "conc/trt2"
+  },
+  {
+   "ocr_backend": "tensorrt",
+   "iters": 9,
+   "decode_backend": "auto",
+   "used_decode": "decord/GPU",
+   "wall_median": 8.374018499998783,
+   "wall_min": 5.676924399998825,
+   "wall_max": 8.87668809999741,
+   "segs": 1326,
+   "uniq": 265,
+   "_label": "conc/trt2"
+  }
+ ],
+ "conc/mixed_cpu": [
+  {
+   "ocr_backend": "tensorrt",
+   "iters": 25,
+   "decode_backend": "nvdec",
+   "used_decode": "decord/GPU",
+   "wall_median": 2.7666601000019,
+   "wall_min": 2.696794300001784,
+   "wall_max": 3.622904899999412,
+   "segs": 1370,
+   "uniq": 282,
+   "_label": "conc/mixed_cpu"
+  },
+  {
+   "ocr_backend": "cpu",
+   "iters": 14,
+   "decode_backend": "cpu",
+   "used_decode": "decord/CPU",
+   "wall_median": 5.232645899999625,
+   "wall_min": 4.736405299998296,
+   "wall_max": 5.486816600001475,
+   "segs": 1264,
+   "uniq": 262,
+   "_label": "conc/mixed_cpu"
+  }
+ ],
+ "conc/trt2_cpu": [
+  {
+   "ocr_backend": "tensorrt",
+   "iters": 20,
+   "decode_backend": "nvdec",
+   "used_decode": "decord/GPU",
+   "wall_median": 3.4684655999990355,
+   "wall_min": 3.3470651999996335,
+   "wall_max": 4.379485600002226,
+   "segs": 1370,
+   "uniq": 282,
+   "_label": "conc/trt2_cpu"
+  },
+  {
+   "ocr_backend": "tensorrt",
+   "iters": 31,
+   "decode_backend": "cpu",
+   "used_decode": "decord/CPU",
+   "wall_median": 2.277503900000738,
+   "wall_min": 2.064865699998336,
+   "wall_max": 2.85123190000013,
+   "segs": 1326,
+   "uniq": 265,
+   "_label": "conc/trt2_cpu"
+  }
+ ],
+ "conc6/mixed_cpu": [
+  {
+   "ocr_backend": "tensorrt",
+   "iters": 30,
+   "decode_backend": "nvdec",
+   "used_decode": "decord/GPU",
+   "wall_median": 2.6507906000006187,
+   "wall_min": 2.6206595999974525,
+   "wall_max": 3.323826200001349,
+   "segs": 1370,
+   "uniq": 282,
+   "_label": "conc6/mixed_cpu"
+  },
+  {
+   "ocr_backend": "cpu",
+   "iters": 9,
+   "decode_backend": "cpu",
+   "used_decode": "decord/CPU",
+   "wall_median": 9.884014999999636,
+   "wall_min": 9.113506199999392,
+   "wall_max": 10.135936500002572,
+   "segs": 1306,
+   "uniq": 277,
+   "_label": "conc6/mixed_cpu"
+  }
+ ],
+ "conc6/trt2_cpu": [
+  {
+   "ocr_backend": "tensorrt",
+   "iters": 26,
+   "decode_backend": "nvdec",
+   "used_decode": "decord/GPU",
+   "wall_median": 2.757822399998986,
+   "wall_min": 2.6895210000002407,
+   "wall_max": 3.547583299998223,
+   "segs": 1370,
+   "uniq": 282,
+   "_label": "conc6/trt2_cpu"
+  },
+  {
+   "ocr_backend": "tensorrt",
+   "iters": 9,
+   "decode_backend": "cpu",
+   "used_decode": "decord/CPU",
+   "wall_median": 8.51989390000017,
+   "wall_min": 8.140637300002709,
+   "wall_max": 9.172725200001878,
+   "segs": 1370,
+   "uniq": 282,
+   "_label": "conc6/trt2_cpu"
+  }
+ ]
+}

@@ -151,18 +151,34 @@ def _spawn_workloads(args, kind: str) -> tuple[list[subprocess.Popen],
     正确做法是让子进程**优雅退出**：传一个停止文件路径，父进程建文件通知
     它收尾，`terminate()` 只作为超时兜底。
     """
+    # job = (ocr_backend, video, decode_backend)
+    # 注意 `decode_backend=auto` **不区分 OCR _backend，一律尝试 NVDEC**，
+    # 所以 `mixed` 其实是两条流水线各开一个 NVDEC 会话。最早期的「完全互补」
+    # 双流水线是 CPU 解码+ONNX ∥ NVDEC+TRT，对应下面的 `mixed_cpu`。
     if kind == "mixed":
-        jobs = [("tensorrt", args.video), ("cpu", args.video2)]
+        jobs = [("tensorrt", args.video, args.decode_backend),
+                ("cpu", args.video2, args.decode_backend)]
     elif kind == "trt":
-        jobs = [("tensorrt", args.video)]
+        jobs = [("tensorrt", args.video, args.decode_backend)]
     elif kind == "onnx":
-        jobs = [("cpu", args.video)]
+        jobs = [("cpu", args.video, args.decode_backend)]
     elif kind == "trt2":                       # 双 TRT（对照：非混配）
-        jobs = [("tensorrt", args.video), ("tensorrt", args.video2)]
+        jobs = [("tensorrt", args.video, args.decode_backend),
+                ("tensorrt", args.video2, args.decode_backend)]
+    elif kind == "mixed_cpu":                  # ★ 早期互补设计：CPU解+ONNX ∥ NVDEC+TRT
+        jobs = [("tensorrt", args.video, "nvdec"),
+                ("cpu", args.video2, "cpu")]
+    elif kind == "trt2_cpu":                   # 对照：把 NVDEC 降到 1 个，GPU 上下文仍 2 个
+        jobs = [("tensorrt", args.video, "nvdec"),
+                ("tensorrt", args.video2, "cpu")]
+    elif kind == "onnx_cpu":                   # CPU 解码 + ONNX 单跑
+        jobs = [("cpu", args.video, "cpu")]
+    elif kind == "trt_cpu":                    # CPU 解码 + TRT 单跑
+        jobs = [("tensorrt", args.video, "cpu")]
     else:
         return [], []
     ps, stops = [], []
-    for i, (b, v) in enumerate(jobs):
+    for i, (b, v, db) in enumerate(jobs):
         stop = os.path.join(HERE, f"_probe_stop_{os.getpid()}_{i}.flag")
         if os.path.exists(stop):
             os.remove(stop)
@@ -171,7 +187,7 @@ def _spawn_workloads(args, kind: str) -> tuple[list[subprocess.Popen],
             [PY, __file__, "--mode", "work", "--video", v, "--roi", args.roi,
              "--frame-start", str(args.frame_start), "--frames",
              str(args.frames), "--ocr-backend", b,
-             "--decode-backend", args.decode_backend, "--stop-file", stop],
+             "--decode-backend", db, "--stop-file", stop],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             encoding="utf-8", errors="replace"))
     return ps, stops
@@ -238,7 +254,8 @@ def _mode_bw(args) -> int:
         ws = _harvest(procs, stops)
 
     for w in ws:
-        print(f"  [负载 {w['ocr_backend']}] 迭代 {w['iters']} 次，"
+        print(f"  [负载 {w['ocr_backend']}/解={w.get('used_decode', '?')}] "
+              f"迭代 {w['iters']} 次，"
               f"中位墙钟 {w['wall_median']:.3f}s（最快 {w['wall_min']:.3f}s），"
               f"段数 {w['segs']}，唯一 {w.get('uniq', '?')}")
     print("@@JSON@@" + json.dumps(
@@ -251,11 +268,12 @@ def _mode_wall(args) -> int:
     print(f"===== 负载 [{args.work}] 单独跑（无探针干扰）=====")
     procs, stops = _spawn_workloads(args, args.work)
     if not procs:
-        print("  --work 必须是 trt/onnx/mixed/trt2")
+        print("  --work 必须是 trt/onnx/mixed/trt2/mixed_cpu/trt2_cpu/onnx_cpu")
         return 2
     time.sleep(args.secs)
     for w in _harvest(procs, stops):
-        print(f"  [{w['ocr_backend']}] 迭代 {w['iters']} 次，"
+        print(f"  [{w['ocr_backend']}/解={w.get('used_decode', '?')}] "
+              f"迭代 {w['iters']} 次，"
               f"中位墙钟 {w['wall_median']:.3f}s（最快 {w['wall_min']:.3f}s），"
               f"段数 {w['segs']}，唯一 {w.get('uniq', '?')}")
         print("@@JSON@@" + json.dumps(w))
@@ -393,7 +411,8 @@ def _mode_ts(args) -> int:
         lo = sum(1 for v in series if v < args.bmax - 25) / n
         print(f"  瞬时带宽掉到 B_max−25 以下的时长占比：{100 * lo:.0f}%")
     for w in ws:
-        print(f"  [负载 {w['ocr_backend']}] 迭代 {w['iters']} 次，"
+        print(f"  [负载 {w['ocr_backend']}/解={w.get('used_decode', '?')}] "
+              f"迭代 {w['iters']} 次，"
               f"中位墙钟 {w['wall_median']:.3f}s，段数 {w['segs']}")
     print("@@JSON@@" + json.dumps(
         {"mode": "ts", "work": kind, "n": n,
@@ -412,6 +431,7 @@ def _mode_work(args) -> int:
     roi = tuple(int(x) for x in args.roi.split(","))
     walls: list[float] = []
     segs = uniq = 0
+    used_dec = "?"                             # 见下方 finally：异常路径也要有值
     try:
         while not (args.stop_file and os.path.exists(args.stop_file)):
             ex = FieldExtractor(args.video, roi,
@@ -425,6 +445,9 @@ def _mode_work(args) -> int:
             walls.append(time.perf_counter() - t0)
             segs = len(res.segments)
             uniq = len({s.text for s in res.segments if s.text})
+            # 必须上报**实际**解码后端：nvdec 在打不开时会静默回退 CPU，
+            # 若不看这一项，`mixed_cpu` 会退化成 `mixed` 而无人察觉。
+            used_dec = str(getattr(ex, "_backend", "?"))
     except BaseException:
         pass
     finally:
@@ -432,6 +455,8 @@ def _mode_work(args) -> int:
             walls.sort()
             print("@@JSON@@" + json.dumps(
                 {"ocr_backend": args.ocr_backend, "iters": len(walls),
+                 "decode_backend": args.decode_backend,
+                 "used_decode": used_dec,
                  "wall_median": walls[len(walls) // 2], "wall_min": walls[0],
                  "wall_max": walls[-1], "segs": segs, "uniq": uniq}))
     return 0
@@ -553,7 +578,8 @@ def main() -> int:
                     choices=["calib", "bw", "wall", "selfcheck", "work",
                              "bwith", "dose", "ts"])
     ap.add_argument("--work", default="none",
-                    help="负载：none|trt|onnx|mixed|trt2")
+                    help="负载：none|trt|onnx|mixed|trt2|mixed_cpu|trt2_cpu|"
+                         "onnx_cpu（*_cpu = 该条流水线强制 CPU 解码）")
     ap.add_argument("--procs", type=int, default=2,
                     help="探针进程数（必须 ≥2，单进程有 ~55GB/s 天花板）")
     ap.add_argument("--threads", type=int, default=16)

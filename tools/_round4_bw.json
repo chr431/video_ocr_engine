@@ -1,0 +1,196 @@
+{
+ "bw/onnx_cpu_T6": [
+  {
+   "mode": "bw",
+   "work": "onnx_cpu",
+   "procs": 2,
+   "threads": 4,
+   "bw": {
+    "copy": 45.71367988385151
+   },
+   "workers": [
+    {
+     "ocr_backend": "cpu",
+     "iters": 4,
+     "decode_backend": "cpu",
+     "used_decode": "decord/CPU",
+     "wall_median": 8.582259800001339,
+     "wall_min": 8.449045299999852,
+     "wall_max": 12.830824299999222,
+     "segs": 1306,
+     "uniq": 277
+    }
+   ]
+  }
+ ],
+ "bw/mixed_cpu_T6": [
+  {
+   "mode": "bw",
+   "work": "mixed_cpu",
+   "procs": 2,
+   "threads": 4,
+   "bw": {
+    "copy": 48.01369605722048
+   },
+   "workers": [
+    {
+     "ocr_backend": "tensorrt",
+     "iters": 11,
+     "decode_backend": "nvdec",
+     "used_decode": "decord/GPU",
+     "wall_median": 2.745376799997757,
+     "wall_min": 2.690677099999448,
+     "wall_max": 5.255259400000796,
+     "segs": 1370,
+     "uniq": 282
+    },
+    {
+     "ocr_backend": "cpu",
+     "iters": 4,
+     "decode_backend": "cpu",
+     "used_decode": "decord/CPU",
+     "wall_median": 9.45424180000191,
+     "wall_min": 9.352018399997178,
+     "wall_max": 13.614560599999095,
+     "segs": 1306,
+     "uniq": 277
+    }
+   ]
+  }
+ ],
+ "bw/mixed_cpu_T5": [
+  {
+   "mode": "bw",
+   "work": "mixed_cpu",
+   "procs": 2,
+   "threads": 4,
+   "bw": {
+    "copy": 44.10006293656307
+   },
+   "workers": [
+    {
+     "ocr_backend": "tensorrt",
+     "iters": 10,
+     "decode_backend": "nvdec",
+     "used_decode": "decord/GPU",
+     "wall_median": 3.0009274000003643,
+     "wall_min": 2.859353400002874,
+     "wall_max": 6.299508100000821,
+     "segs": 1370,
+     "uniq": 282
+    },
+    {
+     "ocr_backend": "cpu",
+     "iters": 7,
+     "decode_backend": "cpu",
+     "used_decode": "decord/CPU",
+     "wall_median": 4.783155299999635,
+     "wall_min": 4.648385899999994,
+     "wall_max": 8.850991999999678,
+     "segs": 1264,
+     "uniq": 262
+    }
+   ]
+  }
+ ],
+ "bw/trt2_cpu_T6": [
+  {
+   "mode": "bw",
+   "work": "trt2_cpu",
+   "procs": 2,
+   "threads": 4,
+   "bw": {
+    "copy": 50.530256846416286
+   },
+   "workers": [
+    {
+     "ocr_backend": "tensorrt",
+     "iters": 11,
+     "decode_backend": "nvdec",
+     "used_decode": "decord/GPU",
+     "wall_median": 2.851450999998633,
+     "wall_min": 2.7989130999994813,
+     "wall_max": 5.286123400001088,
+     "segs": 1370,
+     "uniq": 282
+    },
+    {
+     "ocr_backend": "tensorrt",
+     "iters": 4,
+     "decode_backend": "cpu",
+     "used_decode": "decord/CPU",
+     "wall_median": 9.123556000002282,
+     "wall_min": 8.424209000000701,
+     "wall_max": 12.547576600001776,
+     "segs": 1370,
+     "uniq": 282
+    }
+   ]
+  }
+ ],
+ "ts/mixed_cpu_T6": [
+  {
+   "mode": "ts",
+   "work": "mixed_cpu",
+   "n": 56,
+   "series": [
+    38.3,
+    38.6,
+    39.2,
+    41.1,
+    41.5,
+    41.7,
+    41.9,
+    41.9,
+    42.0,
+    42.3,
+    42.4,
+    42.7,
+    43.0,
+    43.1,
+    43.4,
+    43.5,
+    43.7,
+    43.8,
+    43.8,
+    44.0,
+    44.2,
+    44.9,
+    45.0,
+    45.5,
+    46.8,
+    47.2,
+    47.5,
+    47.6,
+    48.0,
+    48.1,
+    48.5,
+    48.6,
+    48.8,
+    49.4,
+    49.5,
+    49.7,
+    50.2,
+    50.6,
+    50.6,
+    50.8,
+    51.2,
+    51.3,
+    51.4,
+    51.5,
+    51.6,
+    51.7,
+    52.1,
+    52.2,
+    52.3,
+    53.2,
+    53.5,
+    53.9,
+    55.4,
+    55.4,
+    56.3,
+    61.6
+   ]
+  }
+ ]
+}
