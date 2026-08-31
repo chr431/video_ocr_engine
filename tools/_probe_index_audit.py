@@ -48,11 +48,67 @@ def read_bytes(p: str) -> bytes:
         return f.read()
 
 
+def fix_index(lines_of: dict[str, int], bytes_of: dict[str, int]) -> None:
+    """就地校准 INDEX.md：表格里的行数、头部合计、D 节合计。
+
+    只改**数字**，不动分类、不增删条目 —— 哪些文件属于 A/B/C/D/E 是人工
+    判断，脚本不猜。动了 tools/ 之后跑一次，别让索引漂成第二份过期文档。
+    """
+    src = read_bytes(INDEX).decode("utf-8")
+    out, n_row = [], 0
+    for line in src.split("\n"):
+        m = re.match(r"\|\s*`([^`]+\.py)`\s*\|\s*(\d+)\s*\|(.*)$", line)
+        if m:
+            name, claimed, tail = m.group(1), int(m.group(2)), m.group(3)
+            real = lines_of.get(os.path.basename(name))
+            if real is not None and real != claimed:
+                line = "| `%s` | %d |%s" % (name, real, tail)
+                n_row += 1
+        out.append(line)
+    src = "\n".join(out)
+
+    n_file, n_line = len(lines_of), sum(lines_of.values())
+    n_byte = sum(bytes_of.values())
+    src = re.sub(r"\*\*\d+\s*个\s*`\.py`\*\*[^\n]*?[\d,]+\s*行[^\n]*?~?\d+\s*KB",
+                 "**%d 个 `.py`**（%s 行 / ~%d KB）"
+                 % (n_file, format(n_line, ","), n_byte // 1024), src, count=1)
+
+    m = re.search(r"## D\..*?(?=\n## E\.)", src, re.S)
+    if m:
+        listed = []
+        for line in m.group(0).split("\n"):
+            if not line.lstrip().startswith("|"):
+                continue
+            for mm in re.finditer(r"`([^`]+\.py)`", line):
+                n = os.path.basename(mm.group(1))
+                if n in lines_of and n not in listed:
+                    listed.append(n)
+        tl = sum(lines_of[n] for n in listed)
+        tb = sum(bytes_of[n] for n in listed)
+        src = re.sub(r"共\s*\d+\s*个\s*/\s*[\d,]+\s*行\s*/\s*[\d.]+\s*KB",
+                     "共 %d 个 / %d 行 / %.1f KB" % (len(listed), tl, tb / 1024),
+                     src, count=1)
+
+    with open(INDEX, "w", encoding="utf-8", newline="\n") as f:
+        f.write(src)
+    print("已校准 INDEX.md：%d 行行数、头部合计、D 节合计" % n_row)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--fix-hint", action="store_true",
                     help="额外打印可直接粘贴回 INDEX.md 的修正值")
+    ap.add_argument("--fix", action="store_true",
+                    help="就地校准 INDEX.md 的行数与合计（只改数字，不动分类）")
     args = ap.parse_args()
+
+    if args.fix:
+        files: dict[str, bytes] = {}
+        for f in glob.glob(os.path.join(HERE, "*.py")):
+            files[os.path.basename(f)] = read_bytes(f)
+        fix_index({k: v.count(b"\n") + 1 for k, v in files.items()},
+                  {k: len(v) for k, v in files.items()})
+        return 0
 
     problems: list[str] = []
 

@@ -20,8 +20,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from decord import VideoReader, gpu
+import os
+_VIDEO_DIR = Path(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"))
 
-VID = r"D:\Videos\racelog_test\test5.mp4"
+
+VID = str(_VIDEO_DIR / "test5.mp4")
 WINDOW = (362, 3362)                      # 3000 源帧
 BATCH = 64                                # = config.GPU_PIPELINE_DECODE_BATCH
 

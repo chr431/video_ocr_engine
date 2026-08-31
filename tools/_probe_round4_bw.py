@@ -20,13 +20,17 @@ ONNX 走 **NVDEC** 时的值；本轮对端改成 **CPU 解码** 后，它的 DR
 import json
 import subprocess
 import sys
+import os
+from pathlib import Path
+_VIDEO_DIR = Path(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"))
+
 
 PY = sys.executable
 HERE = __file__.rsplit("\\", 1)[0] + "\\"
 SCRIPT = HERE + "_probe_mem_bw.py"
 
-T6 = r"D:\Videos\racelog_test\test6.mp4"
-T5 = r"D:\Videos\racelog_test\test5.mp4"
+T6 = str(_VIDEO_DIR / "test6.mp4")
+T5 = str(_VIDEO_DIR / "test5.mp4")
 
 BMAX = 55.8          # 第三轮标定：本机 copy 口径可达带宽上限
 

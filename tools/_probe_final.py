@@ -9,12 +9,21 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
+
+# WORKER 以 `python -c` 执行，-c 下 __file__ 未定义，
+# 故本进程算好根目录后经 PROBE_ROOT 传给子进程。
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.environ["PROBE_ROOT"] = ROOT  # 供 `python -c` 的 WORKER 子进程使用
+_BATCH_DIR = Path(os.environ.get("RACELOG_BATCH_DIR", r"D:\Videos\batch_test"))
+_VIDEO_DIR = Path(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"))
+
 
 PY = sys.executable
 
 WORKER = r"""
 import os, sys, time, json
-sys.path.insert(0, r"D:\Repo\video_ocr_engine")
+sys.path.insert(0, os.environ["PROBE_ROOT"])
 aff = int(sys.argv[1])
 if aff > 0:
     import psutil
@@ -82,9 +91,9 @@ def main():
     ap.add_argument("--affinity", type=int, default=0)
     a = ap.parse_args()
 
-    T5 = r"D:\Videos\racelog_test\test5.mp4"
+    T5 = str(_VIDEO_DIR / "test5.mp4")
     T5ROI = "843,993,948,1025"
-    SUB = r"D:\Videos\batch_test\新三国01.mkv"
+    SUB = str(_BATCH_DIR / "新三国01.mkv")
     SUBROI = "144,398,551,423"
 
     h264_cases = [

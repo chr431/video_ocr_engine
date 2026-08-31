@@ -24,14 +24,18 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+_VIDEO_DIR = Path(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"))
 
-GT = Path(r"D:\Videos\racelog_test\ground_truth_csv")
-VID = Path(r"D:\Videos\racelog_test")
+
+GT = _VIDEO_DIR / "ground_truth_csv"
+VID = _VIDEO_DIR
 
 # ── 抽取：一次拿到 (rep_frame, crop_path) ──
 EXTRACT = r"""
 import sys, json, os
-sys.path.insert(0, r"D:\Repo\video_ocr_engine")
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, ROOT)
 import numpy as np
 from video_ocr_engine import FieldExtractor
 vp, roi_s, s, e, stride, fa, out = sys.argv[1:8]
@@ -58,7 +62,7 @@ print(json.dumps({"n": len(rows)}))
 # ── 变体评估：读 npz，按变体预处理 + OCR，与真值比对 ──
 EVAL = r"""
 import sys, json, os, math
-sys.path.insert(0, r"D:\Repo\video_ocr_engine")
+sys.path.insert(0, ROOT)
 import numpy as np
 import engine_config as config
 from video_utils import _preprocess_standard, _np_resize

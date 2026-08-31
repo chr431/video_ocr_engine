@@ -680,7 +680,7 @@ v3 的短板：**CPU 明显慢于 NVDEC（8 核亲和模拟弱 CPU）时 hybrid 
 1. **`HybridDecoder.next_roi` 步长修复**：`_seq_fi = fi + 1` 硬编码漏
    `sample_stride`（现役 hybrid 安全门要求 stride==1 故未触发；放宽安全门
    后校准帧号会错位）。已改为按 `ex._sample_stride` 推进，新增
-   `tests/test_hybrid_next_roi.py` 防回归。
+   `tests/decode/test_hybrid_next_roi.py` 防回归。
 2. **env 解析收敛**：`engine_config` 新增 `env_int` / `env_float` 统一解析
    （缺省/空/非法 → default），全部 HYBRID_*/OCR_* 数值解析从调用点迁移：
    `HYBRID_CALIB_FRAMES` / `HYBRID_SLOW_INFLIGHT` / `HYBRID_SLOW_DISCOUNT`
@@ -700,7 +700,7 @@ v3 的短板：**CPU 明显慢于 NVDEC（8 核亲和模拟弱 CPU）时 hybrid 
    本文 §18（§18.A 混合 OCR/解码旧档案、§18.B 双流水线全史），正文只留
    指针与现役结论。当时的维护工具 `tools/trim_perf_doc.py`（把章节剪切到
    `docs/ARCHIVE.md`）**已于 2026-08-30 删除**——多文档架构取消后无用途。
-5. **新增单测**：`tests/test_hybrid_next_roi.py`（stride 1/2/3 推进、起始帧
+5. **新增单测**：`tests/decode/test_hybrid_next_roi.py`（stride 1/2/3 推进、起始帧
    取 starts[0]）。
 
 > 真机验证已完成（test5 3000帧 stride8，3 轮中位）：`GPU_PIPELINE_ASYNC=1`
@@ -764,7 +764,7 @@ v3 的短板：**CPU 明显慢于 NVDEC（8 核亲和模拟弱 CPU）时 hybrid 
 
      → **HEVC/AV1 + stride>1 上 hybrid 首次跑赢最佳单端**；h264 上纯 CPU 仍最优
      （CPU 比 NVDEC 快 ~2×，两路合起来也追不上单路 CPU）。
-   - 新增单测 `tests/test_hybrid_producer_stride.py`（桩 reader 数 seek 次数，
+   - 新增单测 `tests/decode/test_hybrid_producer_stride.py`（桩 reader 数 seek 次数，
      stride=1/3/8 + 交付完整性；已验证改回 `+1` 会 FAIL）。
      注意：`__new__` 绕过构造时 `_roi` 必须手动补，否则生产者在首帧抛异常、
      seek 计数恰好也是 1 → **假通过**。

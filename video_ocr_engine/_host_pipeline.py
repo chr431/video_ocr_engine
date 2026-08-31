@@ -9,22 +9,17 @@ _host_calibrate` 等仍可用（extractor 顶部 re-export）。
 from __future__ import annotations
 
 import logging
-import os as _os
 import threading
 import time
 
 import numpy as np
 
 import engine_config as config
-from segmentation import (
-    _cluster_win3, _gray_seg, _gray_seg_batch,
-    _gray_seg_yuv, _gray_seg_yuv_batch, _otsu,
-)
+from segmentation import _cluster_win3, _otsu
 from video_utils import _nv12_luma_full
 from ._helpers import (
-    _ocr_batch_size, _ndarray_device_ptr, _otsu_from_hist,
+    _ocr_batch_size, _ndarray_device_ptr,
     _decode_progress_pct, _ocr_progress_pct, _otsu_median_threshold,
-    _read_fps_from_vr,
 )
 
 logger = logging.getLogger(__name__)

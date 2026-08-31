@@ -30,13 +30,21 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+import os
 
-GT = Path(r"D:\Videos\racelog_test\ground_truth_csv")
-VID = Path(r"D:\Videos\racelog_test")
+# WORKER 以 `python -c` 执行，-c 下 __file__ 未定义，
+# 故本进程算好根目录后经 PROBE_ROOT 传给子进程。
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.environ["PROBE_ROOT"] = ROOT  # 供 `python -c` 的 WORKER 子进程使用
+_VIDEO_DIR = Path(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"))
+
+
+GT = _VIDEO_DIR / "ground_truth_csv"
+VID = _VIDEO_DIR
 
 WORKER = r"""
 import sys, json
-sys.path.insert(0, r"D:\Repo\video_ocr_engine")
+sys.path.insert(0, os.environ["PROBE_ROOT"])
 import numpy as np
 from segmentation import _otsu
 from video_ocr_engine import FieldExtractor

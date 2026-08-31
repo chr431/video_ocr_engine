@@ -7,9 +7,6 @@ ocr_trt 顶部 re-export 本模块三个类，保持旧导入路径兼容。
 """
 from __future__ import annotations
 
-import os
-import time
-
 import numpy as np
 
 import engine_config as config

@@ -24,13 +24,16 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, r"D:\Repo\video_ocr_engine")
-sys.path.insert(0, r"D:\Repo\video_ocr_engine\tools")
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, ROOT)
+sys.path.insert(0, HERE)
 
 import numpy as np
 
 from _probe_det_crop_eval import GT, VID, load_truth, truth_meta
 from _probe_merge_audit import (BATCH_DIR, actual_merges, build, load_xsg)
+import os
 
 
 def max_block(mask: np.ndarray) -> tuple[int, list[int]]:

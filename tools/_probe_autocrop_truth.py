@@ -22,11 +22,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+# WORKER 以 `python -c` 执行，-c 下 __file__ 未定义，
+# 故本进程算好根目录后经 PROBE_ROOT 传给子进程。
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.environ["PROBE_ROOT"] = ROOT  # 供 `python -c` 的 WORKER 子进程使用
+_VIDEO_DIR = Path(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"))
+
+
 PY = sys.executable
 
 WORKER = r"""
 import os, sys, time, json
-sys.path.insert(0, os.getcwd())
+sys.path.insert(0, os.environ["PROBE_ROOT"])
 path, roi_s, n, dbe, obe, stride, fa = sys.argv[1:8]
 roi = tuple(int(x) for x in roi_s.split(','))
 from video_ocr_engine import FieldExtractor
@@ -81,7 +88,7 @@ def run(video, roi, n, dbe, obe, stride, fa, env, reps):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--video", default=r"D:\Videos\racelog_test\test5.mp4")
+    ap.add_argument("--video", default=str(_VIDEO_DIR / "test5.mp4"))
     ap.add_argument("--roi", default="843,993,948,1025")
     ap.add_argument("--truth",
                     default=r"D:\Videos\racelog_test\ground_truth_csv\test5_ref.csv")

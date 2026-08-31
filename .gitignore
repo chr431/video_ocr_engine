@@ -33,3 +33,9 @@ index/
 # 探针输出产物
 tools/_probe_truth_env.json
 tools/_int8_probe/
+# 探针生成的拼图/裁图产物
+tools/_slf_vis/
+
+# 外部只读审查报告（本地生成的一次性分析输入，非项目文档；
+# 其结论已沉淀进 docs/PERFORMANCE.md 与 docs/DECISIONS.md）
+PERFORMACE_REPORT.txt

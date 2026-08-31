@@ -12,6 +12,10 @@ import argparse
 import re
 import subprocess
 import time
+import os
+from pathlib import Path
+_VIDEO_DIR = Path(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"))
+
 
 FFMPEG = r"D:\Software\ffmpeg8\bin\ffmpeg.exe"
 
@@ -37,7 +41,7 @@ def run(args, label):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--video", default=r"D:\Videos\racelog_test\test5.mp4")
+    ap.add_argument("--video", default=str(_VIDEO_DIR / "test5.mp4"))
     ap.add_argument("--frames", type=int, default=3000)
     a = ap.parse_args()
     v = ["-i", a.video, "-frames:v", str(a.frames), "-an", "-sn"]

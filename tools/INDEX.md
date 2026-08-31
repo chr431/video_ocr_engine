@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **47 个 `.py`**（9,164 行 / ~366 KB），其中 42 个是探针
+`tools/` 现有 **49 个 `.py`**（10,349 行 / ~410 KB）），其中 42 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -28,17 +28,18 @@
 | `e2e_smoke.py` | 351 | 端到端冒烟 / 真值验证（真实视频） | README「测试」节 |
 | `bench_hybrid.py` | 123 | hybrid 解码基准 | PERF §4 |
 | `probe_decode_rates.py` | 125 | 各后端解码速率探测 | — |
-| `_probe_index_audit.py` | 221 | 核对本索引的每个数字是否与磁盘一致 | 本文件（自检） |
+| `_probe_index_audit.py` | 277 | 核对本索引的每个数字是否与磁盘一致 | 本文件（自检） |
+| `_probe_discipline_audit.py` | 538 | **项目纪律审计**（12 项：硬编码路径 / 异常吞噬 / 未用 import / 未门控 print / 版本号 / 文档引用 / 注入预算…） | CLAUDE.md「纪律与自动化守卫」 |
 
 ## B. 库型 / worker 型（**被其他探针依赖，动不得**）
 
 | 文件 | 行 | 被谁依赖 | 形式 |
 |---|---:|---|---|
-| `_probe_det_crop_eval.py` | 407 | `_probe_block_audit` / `_probe_domain_audit` / `_probe_merge_audit` | `from ... import` |
-| `_probe_merge_audit.py` | 409 | `_probe_block_audit` / `_probe_domain_audit` | `from ... import` |
-| `_probe_block_audit.py` | 210 | `_probe_domain_audit` | `from ... import` |
+| `_probe_det_crop_eval.py` | 412 | `_probe_block_audit` / `_probe_domain_audit` / `_probe_merge_audit` | `from ... import` |
+| `_probe_merge_audit.py` | 414 | `_probe_block_audit` / `_probe_domain_audit` | `from ... import` |
+| `_probe_block_audit.py` | 213 | `_probe_domain_audit` | `from ... import` |
 | `_probe_mp_scale.py` | 173 | `_probe_mem_bw` | 子进程 worker（`SCALE` 常量） |
-| `_probe_roi_segcost.py` | 124 | `_probe_seg_share` | 代码引用 |
+| `_probe_roi_segcost.py` | 132 | `_probe_seg_share` | 代码引用 |
 
 ## C. 证据链探针（按"它支撑的结论在哪一章"分组）
 
@@ -48,52 +49,52 @@
 
 | 文件 | 行 | 改于 |
 |---|---:|---|
-| `_probe_truth_env.py` | 253 | 2026-08-29 |
-| `_probe_slf_diff.py` | 109 | 2026-08-29 |
-| `_probe_slf_adjudicate.py` | 135 | 2026-08-29 |
+| `_probe_truth_env.py` | 260 | 2026-08-29 |
+| `_probe_slf_diff.py` | 116 | 2026-08-29 |
+| `_probe_slf_adjudicate.py` | 142 | 2026-08-29 |
 
 ### §13 裁切换 det 模型评估
 
 | 文件 | 行 | 改于 |
 |---|---:|---|
-| `_probe_det_crop_eval.py` | 407 | 2026-08-30 |
+| `_probe_det_crop_eval.py` | 412 | 2026-08-30 |
 
 ### §14 分段合并收口
 
 | 文件 | 行 | 改于 |
 |---|---:|---|
-| `_probe_merge_audit.py` | 409 | 2026-08-30 |
-| `_probe_block_audit.py` | 210 | 2026-08-30 |
-| `_probe_domain_audit.py` | 140 | 2026-08-30 |
+| `_probe_merge_audit.py` | 414 | 2026-08-30 |
+| `_probe_block_audit.py` | 213 | 2026-08-30 |
+| `_probe_domain_audit.py` | 143 | 2026-08-30 |
 
 ### §15 yuv 输出税（否定结果）
 
 | 文件 | 行 | 改于 |
 |---|---:|---|
-| `_probe_yuv_tax.py` | 129 | 2026-08-30 |
+| `_probe_yuv_tax.py` | 132 | 2026-08-30 |
 
 ### §16 路线图归档（**该章已归档，探针仅留证据**）
 
 | 文件 | 行 | 改于 | | 文件 | 行 | 改于 |
 |---|---:|---|---|---|---:|---|
-| `_probe_pad_variants.py` | 336 | 2026-08-29 | | `_probe_ffmpeg.py` | 54 | 2026-08-28 |
+| `_probe_pad_variants.py` | 340 | 2026-08-29 | | `_probe_ffmpeg.py` | 54 | 2026-08-28 |
 | `_probe_drop_nonref.py` | 417 | 2026-08-29 | | `_probe_final.py` | 104 | 2026-08-28 |
-| `_probe_crop_miscut.py` | 225 | 2026-08-30 | | `_probe_perframe.py` | 120 | 2026-08-28 |
-| `_probe_autocrop_truth.py` | 145 | 2026-08-29 | | `_probe_ceiling.py` | 131 | 2026-08-28 |
-| `_probe_autocrop_ab.py` | 133 | 2026-08-29 | | `_probe_e2e_ab.py` | 116 | 2026-08-28 |
-| `_probe_cpu_onnx.py` | 269 | 2026-08-29 | | `_probe_threads.py` | 64 | 2026-08-28 |
-| `_probe_pad_width.py` | 187 | 2026-08-29 | | `_probe_skip_frame.py` | 168 | 2026-08-29 |
+| `_probe_crop_miscut.py` | 233 | 2026-08-30 | | `_probe_perframe.py` | 120 | 2026-08-28 |
+| `_probe_autocrop_truth.py` | 152 | 2026-08-29 | | `_probe_ceiling.py` | 131 | 2026-08-28 |
+| `_probe_autocrop_ab.py` | 140 | 2026-08-29 | | `_probe_e2e_ab.py` | 116 | 2026-08-28 |
+| `_probe_cpu_onnx.py` | 271 | 2026-08-29 | | `_probe_threads.py` | 64 | 2026-08-28 |
+| `_probe_pad_width.py` | 194 | 2026-08-29 | | `_probe_skip_frame.py` | 168 | 2026-08-29 |
 | `_probe_roi_crop_ocr.py` | 182 | 2026-08-29 | | `_probe_gpu_ctc.py` | 126 | 2026-08-29 |
 | `_probe_roi_width.py` | 171 | 2026-08-29 | | `_probe_guard_clean.py` | 177 | 2026-08-29 |
-| `_probe_roi_whitespace.py` | 152 | 2026-08-30 | | | | |
+| `_probe_roi_whitespace.py` | 159 | 2026-08-30 | | | | |
 
 ### §17 下一步候选
 
 | 文件 | 行 | 改于 |
 |---|---:|---|
 | `_probe_python_cost.py` | 130 | 2026-08-30 |
-| `_probe_seg_share.py` | 146 | 2026-08-30 |
-| `_probe_hybrid_ab.py` | 111 | 2026-08-29 |
+| `_probe_seg_share.py` | 154 | 2026-08-30 |
+| `_probe_hybrid_ab.py` | 119 | 2026-08-29 |
 | `_probe_batch_coldstart.py` | 101 | 2026-08-31 |
 
 ### §19 / §20 / §21 IO 与内存带宽与并发争用（**现役，本轮在用**）
@@ -101,14 +102,14 @@
 | 文件 | 行 | 改于 | 支撑 |
 |---|---:|---|---|
 | `_probe_io_budget.py` | 577 | 2026-08-31 | §19 IO、§21 |
-| `_probe_mem_bw.py` | 644 | 2026-08-31 | §20 带宽、§21 |
-| `_probe_round4_wall.py` | 115 | 2026-08-31 | §21 墙钟矩阵 |
-| `_probe_round4_bw.py` | 98 | 2026-08-31 | §21 带宽矩阵 |
+| `_probe_mem_bw.py` | 647 | 2026-08-31 | §20 带宽、§21 |
+| `_probe_round4_wall.py` | 119 | 2026-08-31 | §21 墙钟矩阵 |
+| `_probe_round4_bw.py` | 102 | 2026-08-31 | §21 带宽矩阵 |
 | `_probe_cr_roundtrip.py` | 182 | 2026-08-31 | 裸 CR 保真性（CLAUDE.md 编辑护栏） |
 
 ## D. 孤儿（无任何文档引用、也无代码引用）
 
-**共 4 个 / 542 行 / 20.2 KB**。量很小，**建议保留**——删掉的代价（断了未记录的
+**共 4 个 / 550 行 / 20.6 KB**。量很小，**建议保留**——删掉的代价（断了未记录的
 结论链）远大于留着的代价（一个文件名）。
 
 > 数字由 `python tools/_probe_index_audit.py` 实测维护，别手改。
@@ -117,7 +118,7 @@
 |---|---:|---|---|
 | `_probe_lifecycle_repeat.py` | 210 | 2026-08-31 | 生命周期修复轮的重复压测，**近期在用的可能性最高，留** |
 | `_probe_cluster_dtype.py` | 105 | 2026-08-30 | `_cluster_win3` 改 uint8 的 dtype 验证，留作证据 |
-| `_probe_slf_vis.py` | 102 | 2026-08-29 | 生成 `tools/_slf_vis/` 拼图（DECISIONS「P0-6 翻案」引用了该目录），留 |
+| `_probe_slf_vis.py` | 110 | 2026-08-29 | 生成 `tools/_slf_vis/` 拼图（DECISIONS「P0-6 翻案」引用了该目录），留 |
 | `probe_decode_rates.py` | 125 | 2026-08-28 | 探测各后端解码速率，与 §21 结论同主题，留 |
 
 ## E. 一次性迁移工具（任务已完成）
@@ -126,6 +127,7 @@
 |---|---:|---|
 | `_split_claude_md.py` | 263 | 2026-08-31 把 CLAUDE.md 拆成注入核 + `docs/DECISIONS.md`。**已完成，可删** |
 | `_split_perf_md.py` | 194 | 2026-08-31 按「活/归档」把 PERFORMANCE.md 切出 `docs/ARCHIVE.md`。**已完成，可删** |
+| `_fix_probe_paths.py` | 416 | 2026-08-31 把探针里写死的路径改成 `__file__` 推导 / 环境变量。**已完成，可删** |
 
 ## 清理判据（想删探针时按这个顺序）
 

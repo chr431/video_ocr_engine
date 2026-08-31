@@ -29,6 +29,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+_VIDEO_DIR = Path(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"))
+
 
 ROOT = Path(__file__).resolve().parent.parent
 PY = sys.executable
@@ -137,7 +139,7 @@ def show(tag: str, r: dict, ref: dict | None = None) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--video", default=r"D:\Videos\racelog_test\test5.mp4")
+    ap.add_argument("--video", default=str(_VIDEO_DIR / "test5.mp4"))
     ap.add_argument("--roi", default="843,993,948,1025")
     ap.add_argument("--frames", type=int, default=3000)
     ap.add_argument("--stride", type=int, default=8)

@@ -14,6 +14,9 @@ import sys
 import time
 
 import numpy as np
+from pathlib import Path
+_VIDEO_DIR = Path(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"))
+
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -99,7 +102,7 @@ def bench_full(path, roi, nframes, stride, backend, ocr):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--video", default=r"D:\Videos\racelog_test\test5.mp4")
+    ap.add_argument("--video", default=str(_VIDEO_DIR / "test5.mp4"))
     ap.add_argument("--roi", default="843,993,948,1025")
     ap.add_argument("--frames", type=int, default=3000)
     ap.add_argument("--stride", type=int, default=1)

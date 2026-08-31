@@ -39,13 +39,17 @@
 import json
 import subprocess
 import sys
+import os
+from pathlib import Path
+_VIDEO_DIR = Path(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"))
+
 
 PY = sys.executable
 HERE = __file__.rsplit("\\", 1)[0] + "\\"
 SCRIPT = HERE + "_probe_mem_bw.py"
 
-T6 = r"D:\Videos\racelog_test\test6.mp4"
-T5 = r"D:\Videos\racelog_test\test5.mp4"
+T6 = str(_VIDEO_DIR / "test6.mp4")
+T5 = str(_VIDEO_DIR / "test5.mp4")
 
 # (标签, work, video, video2, secs)
 RUNS = [

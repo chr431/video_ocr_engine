@@ -51,6 +51,9 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
+_VIDEO_DIR = Path(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"))
+
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
@@ -609,8 +612,8 @@ def main() -> int:
                     help="hog 工作集：512=DRAM 常驻 / 64=L3 / 4=L2")
     ap.add_argument("--hog-kernel", default="copy", choices=["copy", "triad", "sum", "scale"])
     # worker
-    ap.add_argument("--video", default=r"D:\Videos\racelog_test\test6.mp4")
-    ap.add_argument("--video2", default=r"D:\Videos\racelog_test\test5.mp4")
+    ap.add_argument("--video", default=str(_VIDEO_DIR / "test6.mp4"))
+    ap.add_argument("--video2", default=str(_VIDEO_DIR / "test5.mp4"))
     ap.add_argument("--roi", default="841,994,949,1026")
     ap.add_argument("--frame-start", type=int, default=139)
     ap.add_argument("--frames", type=int, default=4000)

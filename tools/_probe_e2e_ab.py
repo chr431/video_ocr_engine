@@ -11,12 +11,20 @@ import argparse
 import os
 import subprocess
 import sys
+from pathlib import Path
+
+# WORKER 以 `python -c` 执行，-c 下 __file__ 未定义，
+# 故本进程算好根目录后经 PROBE_ROOT 传给子进程。
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.environ["PROBE_ROOT"] = ROOT  # 供 `python -c` 的 WORKER 子进程使用
+_VIDEO_DIR = Path(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"))
+
 
 PY = sys.executable
 
 WORKER = r"""
 import os, sys, time
-sys.path.insert(0, r"D:\Repo\video_ocr_engine")
+sys.path.insert(0, os.environ["PROBE_ROOT"])
 os.environ['ENGINE_PROFILE'] = '1'
 path, roi_s, nframes, stride, dbe, obe, keep = sys.argv[1:8]
 roi = tuple(int(x) for x in roi_s.split(','))
@@ -69,7 +77,7 @@ def run(video, roi, nframes, stride, dbe, obe, env=None, keep='0', reps=1):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--video", default=r"D:\Videos\racelog_test\test5.mp4")
+    ap.add_argument("--video", default=str(_VIDEO_DIR / "test5.mp4"))
     ap.add_argument("--roi", default="843,993,948,1025")
     ap.add_argument("--frames", type=int, default=3000)
     ap.add_argument("--stride", type=int, default=1)

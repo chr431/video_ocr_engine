@@ -12,9 +12,16 @@ from pathlib import Path
 
 import numpy as np
 
-GT = Path(r"D:\Videos\racelog_test\ground_truth_csv")
-VID = Path(r"D:\Videos\racelog_test")
-OUT = Path(r"D:\Repo\video_ocr_engine\tools\_slf_vis")
+# WORKER 以 `python -c` 执行，-c 下 __file__ 未定义，
+# 故本进程算好根目录后经 PROBE_ROOT 传给子进程。
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.environ["PROBE_ROOT"] = ROOT  # 供 `python -c` 的 WORKER 子进程使用
+_VIDEO_DIR = Path(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"))
+
+
+GT = _VIDEO_DIR / "ground_truth_csv"
+VID = _VIDEO_DIR
+OUT = Path(__file__).resolve().parent / "_slf_vis"
 video = 'test4'
 tp = GT / f"{video}_truth.csv"
 meta = {}
@@ -44,7 +51,7 @@ with open(tp, encoding="utf-8-sig") as f:
 
 WORKER = r'''
 import os, sys, json
-sys.path.insert(0, os.getcwd())
+sys.path.insert(0, os.environ["PROBE_ROOT"])
 path, roi_s, start, end = sys.argv[1:5]
 roi = tuple(int(x) for x in roi_s.split(','))
 from video_ocr_engine import FieldExtractor

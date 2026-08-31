@@ -34,14 +34,19 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, r"D:\Repo\video_ocr_engine")
-sys.path.insert(0, r"D:\Repo\video_ocr_engine\tools")
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, ROOT)
+sys.path.insert(0, HERE)
 
 import numpy as np
 import onnxruntime as ort
+import os
+_VIDEO_DIR = Path(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"))
 
-GT = Path(r"D:\Videos\racelog_test\ground_truth_csv")
-VID = Path(r"D:\Videos\racelog_test")
+
+GT = _VIDEO_DIR / "ground_truth_csv"
+VID = _VIDEO_DIR
 DET = Path(__file__).resolve().parent / "tiny_det.onnx"
 DET_THRESH = 0.3
 
