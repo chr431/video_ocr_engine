@@ -116,7 +116,7 @@ extern "C" __global__ void prep_gray_raw(
 }
 '''
 
-    def __init__(self) -> None:
+    def __init__(self, stream: int | None = None) -> None:
         from cuda.core import Buffer, Device, LaunchConfig, launch
         self._dev = Device()
         self._dev.set_current()
@@ -127,7 +127,10 @@ extern "C" __global__ void prep_gray_raw(
         self._launch = launch
         self._buffer_cls = Buffer
         from cuda.bindings import runtime as cudart
-        _err, self._stream = cudart.cudaStreamCreate()
+        self._stream = stream
+        self._owns_stream = stream is None
+        if self._stream is None:
+            _err, self._stream = cudart.cudaStreamCreate()
         self._raw_size = 0
         self._raw_dev = None
         self._raw_buf = None
@@ -196,9 +199,14 @@ extern "C" __global__ void prep_gray_raw(
                                                            nbytes)
 
     def release(self) -> None:
-        """释放全部设备缓冲（DESIGN-REVIEW C5）。重复调用安全；再次使用
-        时各 _ensure_* 按需重建。"""
+        """释放全部设备缓冲及本对象拥有的 stream；重复调用安全。"""
         from cuda.bindings import runtime as cudart
+        stream = getattr(self, "_stream", None)
+        if stream is not None:
+            try:
+                cudart.cudaStreamSynchronize(stream)
+            except Exception:
+                pass
         for attr in ("_raw_dev", "_out_dev", "_width_dev", "_bases_dev",
                      "_i32_dev"):
             ptr = getattr(self, attr, None)
@@ -208,8 +216,17 @@ extern "C" __global__ void prep_gray_raw(
                 except Exception:
                     pass
             setattr(self, attr, None)
+        for attr in ("_raw_buf", "_out_buf", "_width_buf", "_bases_buf"):
+            setattr(self, attr, None)
         self._raw_size = self._out_size = self._width_size = 0
         self._bases_size = self._i32_size = 0
+        if stream is not None and getattr(self, "_owns_stream", False):
+            try:
+                cudart.cudaStreamDestroy(stream)
+            except Exception:
+                pass
+        self._stream = None
+        self._owns_stream = False
 
     def process_gray_raw(self, infos: list, out_width: int,
                          force_aspect: float = 0.0):
@@ -389,6 +406,7 @@ extern "C" __global__ void argmax_last(
         self._buffer_cls = Buffer
         from cuda.bindings import runtime as cudart
         self._stream = stream
+        self._owns_stream = stream is None
         if self._stream is None:
             _err, self._stream = cudart.cudaStreamCreate()
         self._idx_dev = None
@@ -396,8 +414,14 @@ extern "C" __global__ void argmax_last(
         self._prob_dev = None
 
     def release(self) -> None:
-        """释放设备缓冲（DESIGN-REVIEW C5）。重复调用安全。"""
+        """释放设备缓冲及本对象拥有的 stream；重复调用安全。"""
         from cuda.bindings import runtime as cudart
+        stream = getattr(self, "_stream", None)
+        if stream is not None:
+            try:
+                cudart.cudaStreamSynchronize(stream)
+            except Exception:
+                pass
         for attr in ("_idx_dev", "_prob_dev"):
             ptr = getattr(self, attr, None)
             if ptr:
@@ -407,6 +431,13 @@ extern "C" __global__ void argmax_last(
                     pass
             setattr(self, attr, None)
         self._idx_size = 0
+        if stream is not None and getattr(self, "_owns_stream", False):
+            try:
+                cudart.cudaStreamDestroy(stream)
+            except Exception:
+                pass
+        self._stream = None
+        self._owns_stream = False
 
     def reduce(self, preds_dev: int, out_shape: tuple):
         """对显存中的 (B,S,C) 输出做归约，回传 (idx int32[B*S], prob f32[B*S])。"""
@@ -418,6 +449,8 @@ extern "C" __global__ void argmax_last(
         if self._idx_size < nbytes_idx:
             if self._idx_dev is not None:
                 cudart.cudaFree(self._idx_dev)
+            if self._prob_dev is not None:
+                cudart.cudaFree(self._prob_dev)
             _err, self._idx_dev = cudart.cudaMalloc(nbytes_idx)
             self._idx_size = nbytes_idx
             self._prob_dev = None
@@ -644,6 +677,7 @@ extern "C" __global__ void luma_nv12(
         self._kernel_ink = self._mod.get_kernel("col_ink")
         from cuda.bindings import runtime as cudart
         _err, self._stream = cudart.cudaStreamCreate()
+        self._owns_stream = True
         self._summary_size = 0
         self._summary_dev = None
         self._prev_size = 0
@@ -655,9 +689,14 @@ extern "C" __global__ void luma_nv12(
         self._range_dev = None
 
     def release(self) -> None:
-        """释放全部设备缓冲（DESIGN-REVIEW C5）。重复调用安全；再次使用
-        时各 _ensure_* / content_range / compare_pair 按需重建。"""
+        """释放全部设备缓冲及本对象拥有的 stream；重复调用安全。"""
         from cuda.bindings import runtime as cudart
+        stream = getattr(self, "_stream", None)
+        if stream is not None:
+            try:
+                cudart.cudaStreamSynchronize(stream)
+            except Exception:
+                pass
         for attr in ("_prev_dev", "_histpf_dev", "_summary_dev",
                      "_luma_dev", "_range_dev", "_sim_dev"):
             ptr = getattr(self, attr, None)
@@ -669,6 +708,13 @@ extern "C" __global__ void luma_nv12(
             setattr(self, attr, None)
         self._prev_size = self._histpf_size = self._summary_size = 0
         self._luma_size = 0
+        if stream is not None and getattr(self, "_owns_stream", False):
+            try:
+                cudart.cudaStreamDestroy(stream)
+            except Exception:
+                pass
+        self._stream = None
+        self._owns_stream = False
 
     def _ensure_prev(self, nbytes: int) -> int:
         from cuda.bindings import runtime as cudart

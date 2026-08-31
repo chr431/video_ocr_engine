@@ -101,20 +101,28 @@ class TrtEngine:
         self._dev_out: int | None = None
         self._out_nbytes = 0
         self._stream = None  # CUDA stream：异步 HtoD/execute/DtoH 流水线用
+        self._owns_stream = True
         # 输出 DtoH 目标：复用一块『最大尺寸』np.float32 连续缓冲，避免每
         # 子批/每批重新分配（生产路径批 16 输出 ~12.6MB，分配 + 拷贝是
         # 稳定开销；缓冲按需增长，不主动释放）。
         self._out_host: "np.ndarray | None" = None
 
     def release(self) -> None:
-        """释放设备缓冲（DESIGN-REVIEW C5：cudaMalloc 块原本只在进程退出
-        随 context 销毁归还，长进程批量显存单调增长）。重复调用安全；
-        再次使用时各缓冲按需重建（_ensure_*/execute 路径自愈）。"""
+        """释放设备缓冲、归约器及本对象拥有的 stream；重复调用安全。"""
         from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
-        try:
-            self.synchronize()
-        except Exception:
-            pass
+        stream = getattr(self, "_stream", None)
+        if stream is not None:
+            try:
+                self.synchronize()
+            except Exception:
+                pass
+        reducer = getattr(self, "_reducer", None)
+        if reducer is not None:
+            try:
+                reducer.release()
+            except Exception:
+                pass
+            self._reducer = None
         for attr in ("_dev_in", "_dev_out"):
             ptr = getattr(self, attr, None)
             if ptr:
@@ -125,13 +133,13 @@ class TrtEngine:
             setattr(self, attr, None)
         self._out_nbytes = 0
         self._out_host = None
-        reducer = getattr(self, "_reducer", None)
-        if reducer is not None:
+        if stream is not None and getattr(self, "_owns_stream", False):
             try:
-                reducer.release()
+                cudart.cudaStreamDestroy(stream)
             except Exception:
                 pass
-            self._reducer = None
+        self._stream = None
+        self._owns_stream = False
 
     @staticmethod
     def _engine_candidates(size: str) -> list[Path]:
@@ -217,6 +225,7 @@ class TrtEngine:
         if self._stream is None:
             from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
             _err, self._stream = cudart.cudaStreamCreate()
+            self._owns_stream = True
         return self._stream
 
     def synchronize(self) -> None:

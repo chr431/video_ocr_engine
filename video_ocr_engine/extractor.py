@@ -615,39 +615,68 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         end = min(self._frame_end or total, total)
         frames = list(range(self._frame_start, end, self._sample_stride))
         if not frames:
+            try:
+                vr.close()
+            except Exception:
+                pass
             raise ValueError(
                 f"帧区间为空: frame_start={self._frame_start}, "
                 f"frame_end={end}, total={total}")
         # 混合解码（hybrid_begin）：采样帧序列就绪后才生成关键帧分片并
         # 启动双解码生产者竞争。
         hybrid = hasattr(vr, 'hybrid_begin')
-        if self._frame_start > 0 and not hybrid:
-            # hybrid 的分片定位由生产者在片首完成（其 seek_accurate 已显式
-            # 报错，DESIGN-REVIEW B4）——跳过外部 seek。
-            vr.seek_accurate(self._frame_start)
-        if hybrid:
-            vr.hybrid_begin(frames)
+        try:
+            if self._frame_start > 0 and not hybrid:
+                # hybrid 的分片定位由生产者在片首完成（其 seek_accurate 已显式
+                # 报错，DESIGN-REVIEW B4）——跳过外部 seek。
+                vr.seek_accurate(self._frame_start)
+            if hybrid:
+                vr.hybrid_begin(frames)
+        except BaseException:
+            try:
+                vr.close()
+            except Exception:
+                pass
+            raise
         self._prof_end('producer', 'open_and_fps', _t_open)
         # OCR 会话（引擎初始化/模型加载）提前到校准前启动：worker 线程内
         # 构建引擎，与校准（_host_calibrate，前 50 帧解码+Otsu）并行重叠，
         # 引擎就绪前 _emit_ocr 自动走 host 回退，语义不变。
-        ocr_session = self._start_ocr_session(_ocr_engines)
+        try:
+            ocr_session = self._start_ocr_session(_ocr_engines)
+        except BaseException:
+            try:
+                vr.close()
+            except Exception:
+                pass
+            raise
         q = ocr_session["q"]
         results = ocr_session["results"]
         ocr_err = ocr_session["err"]
         ocr_wall = ocr_session["wall"]
         _put_ocr = ocr_session["put"]
-        _t_cal = time.perf_counter()
-        # 宿主校准统一走 _host_calibrate（stride>1 用 get_batch 等差快速路径、
-        # stride==1 用 next_roi 顺序流——校准帧号与后续流水线帧号一致）。
-        # with_dev=True：保留 GPU 单通道帧的 DLPack 指针供 GPU raw OCR 直通。
-        # 混合解码（HybridDecoder）交付的是 asnumpy() 宿主数组（_Batch 无
-        # to_dlpack），不存在可为 raw OCR 直通的 GPU 指针 —— 4D 单通道
-        # gray 时强采 _ndarray_device_ptr 会 AttributeError 崩溃，必须跳过。
-        _with_dev = not hybrid
-        calib, th = _host_calibrate(self, vr, frames, with_dev=_with_dev)
-        self._bin_thresh = th
-        self._prof_end('producer', 'calib_total', _t_cal)
+        try:
+            _t_cal = time.perf_counter()
+            # 宿主校准统一走 _host_calibrate（stride>1 用 get_batch 等差快速路径、
+            # stride==1 用 next_roi 顺序流——校准帧号与后续流水线帧号一致）。
+            # with_dev=True：保留 GPU 单通道帧的 DLPack 指针供 GPU raw OCR 直通。
+            # 混合解码（HybridDecoder）交付的是 asnumpy() 宿主数组（_Batch 无
+            # to_dlpack），不存在可为 raw OCR 直通的 GPU 指针 —— 4D 单通道
+            # gray 时强采 _ndarray_device_ptr 会 AttributeError 崩溃，必须跳过。
+            _with_dev = not hybrid
+            calib, th = _host_calibrate(self, vr, frames, with_dev=_with_dev)
+            self._bin_thresh = th
+            self._prof_end('producer', 'calib_total', _t_cal)
+        except BaseException:
+            try:
+                ocr_session["finish"]()
+            except BaseException:
+                pass
+            try:
+                vr.close()
+            except Exception:
+                pass
+            raise
 
         segs: list = []
         rep_crops: dict = {}

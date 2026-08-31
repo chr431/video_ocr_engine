@@ -15,6 +15,7 @@ import math
 import os
 import sys
 import threading
+from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
@@ -147,23 +148,21 @@ class OcrEngine:
         return "tensorrt" if self._trt is not None else "onnxruntime"
 
     def release(self) -> None:
-        """释放设备资源（TRT 缓冲 / GPU 预处理器，DESIGN-REVIEW C5）。
-
-        池淘汰或进程收尾时调用；重复调用安全。host 侧 ONNX session 由
-        GC 管理（无设备显存），不在此处理。
-        """
+        """释放设备资源（TRT 缓冲 / GPU 预处理器）。重复调用安全。"""
+        if self._gpu_pre is not None:
+            try:
+                # GpuPreprocessor 借用 TRT stream，必须先释放其缓冲，
+                # 再由 TrtEngine 销毁共享 stream。
+                self._gpu_pre.release()
+            except Exception:
+                pass
+            self._gpu_pre = None
         if self._trt is not None:
             try:
                 self._trt.release()
             except Exception:
                 pass
             self._trt = None
-        if self._gpu_pre is not None:
-            try:
-                self._gpu_pre.release()
-            except Exception:
-                pass
-            self._gpu_pre = None
 
     # ═══════════════ ONNX 后端 ═══════════════
 
@@ -374,8 +373,7 @@ class OcrEngine:
         """创建 GpuPreprocessor 并与 TrtEngine 共享同一 CUDA stream。"""
         from ocr_trt import GpuPreprocessor
         if self._gpu_pre is None:
-            self._gpu_pre = GpuPreprocessor()
-            self._gpu_pre._stream = self._trt._ensure_stream()
+            self._gpu_pre = GpuPreprocessor(stream=self._trt._ensure_stream())
         return self._gpu_pre
 
     def _call_trt_gpu(self, img_list: list, max_wh: float,
@@ -502,7 +500,9 @@ class OcrEngine:
 # 引擎。池内引擎常驻（显存换复用），淘汰/进程退出才释放。
 _POOL_LOCK = threading.Lock()
 _ENGINE_POOL: dict = {}          # key -> list[OcrEngine]（空闲栈）
-_POOL_MAX_PER_KEY = 4            # 防异常并发下池无限膨胀；超出即 release
+_POOL_IDLE_ORDER: OrderedDict = OrderedDict()  # id(engine) -> engine（最旧优先）
+_POOL_MAX_PER_KEY = 4            # 防异常并发下池无限膨胀
+_POOL_MAX_TOTAL = 16             # 限制所有 key 的空闲引擎总数
 
 
 def acquire_ocr_engine(variant: str = "v6_small",
@@ -514,7 +514,9 @@ def acquire_ocr_engine(variant: str = "v6_small",
     with _POOL_LOCK:
         idle = _ENGINE_POOL.get(key)
         if idle:
-            return idle.pop()
+            eng = idle.pop()
+            _POOL_IDLE_ORDER.pop(id(eng), None)
+            return eng
     eng = OcrEngine(variant, engine_type, fill_width=fill_width,
                     num_threads=num_threads)
     eng._pool_key = key
@@ -522,28 +524,57 @@ def acquire_ocr_engine(variant: str = "v6_small",
 
 
 def checkin_ocr_engine(engine: OcrEngine) -> None:
-    """归还引擎入池；池满或非池来源（无 _pool_key）→ release 释放。"""
+    """归还引擎入池；超过单 key 或总空闲上限时淘汰最旧引擎。"""
     key = getattr(engine, "_pool_key", None)
     if key is None:
         engine.release()
         return
+    # 淘汰对象用列表收集：while 可能一次淘汰多个（如 _POOL_MAX_TOTAL 被
+    # 调小或多 key 并发归还），单变量会被覆盖导致前面的引擎漏释放。
+    evicted: list = []
     with _POOL_LOCK:
         idle = _ENGINE_POOL.setdefault(key, [])
         if len(idle) < _POOL_MAX_PER_KEY:
             idle.append(engine)
-            return
-    engine.release()
+            _POOL_IDLE_ORDER[id(engine)] = engine
+            while len(_POOL_IDLE_ORDER) > _POOL_MAX_TOTAL:
+                _oldest_id, old = _POOL_IDLE_ORDER.popitem(last=False)
+                evicted_key = getattr(old, "_pool_key", None)
+                bucket = _ENGINE_POOL.get(evicted_key, [])
+                for i, candidate in enumerate(bucket):
+                    if candidate is old:
+                        del bucket[i]
+                        break
+                if not bucket:
+                    _ENGINE_POOL.pop(evicted_key, None)
+                evicted.append(old)
+        else:
+            evicted.append(engine)
+    for eng in evicted:
+        try:
+            eng.release()
+        except Exception:
+            pass
 
 
 def release_ocr_pool() -> None:
     """清空并释放整池（诊断/测试用；正常长驻进程靠池复用，不清空）。"""
     with _POOL_LOCK:
-        idle_all = [idle for idle in _ENGINE_POOL.values() if idle]
+        idle_all = []
+        seen = set()
+        for eng in _POOL_IDLE_ORDER.values():
+            if id(eng) not in seen:
+                idle_all.append(eng)
+                seen.add(id(eng))
+        for idle in _ENGINE_POOL.values():
+            for eng in idle:
+                if id(eng) not in seen:
+                    idle_all.append(eng)
+                    seen.add(id(eng))
         _ENGINE_POOL.clear()
-    for idle in idle_all:
-        while idle:
-            eng = idle.pop()
-            try:
-                eng.release()
-            except Exception:
-                pass
+        _POOL_IDLE_ORDER.clear()
+    for eng in idle_all:
+        try:
+            eng.release()
+        except Exception:
+            pass

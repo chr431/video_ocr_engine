@@ -53,6 +53,11 @@ _HYBRID_PROBE_CSV = os.environ.get(config.HYBRID_PROBE_CSV_ENV, "") or None
 # 宽 ROI 字幕整集防单大片 2000+ 帧一次性缓存在 ch['data']）。0 = 不拆
 #（兼容 v3 原行为）。env 读取在 extractor 构造 HybridDecoder 时完成。
 
+# close() 等待后台生产者退出的上限（秒）。正常路径下线程响应 _stop 后
+# 立即退出，此值只是防挂死兜底：宁可留下一个已停摆的 daemon 线程，也不
+# 让 close() 无限期阻塞调用方。
+_CLOSE_JOIN_TIMEOUT = 5.0
+
 
 class _Batch:
     """最小 decord NDArray 兼容壳：asnumpy() / shape。
@@ -313,9 +318,10 @@ class HybridDecoder:
         self._stop = threading.Event()
         self._err = []
         self._cv = threading.Condition()
-        self._chunks = []      # {'fis','data','off','done','owner','started'}
+        self._chunks = []      # {'fis','data','off','delivered','done','owner','started'}
         self._starts = []      # 每片首帧（bisect 用）
         self._begun = False
+        self._closed = False
         self._seq_fi = None
         self._threads = []
         # ── v3 状态 ──
@@ -335,6 +341,8 @@ class HybridDecoder:
     # ─────────────── 分片生成与启动（frames 就绪后调用） ───────────────
 
     def hybrid_begin(self, frames) -> None:
+        if getattr(self, '_closed', False):
+            raise RuntimeError('HybridDecoder 已关闭')
         if self._begun:
             return
         self._begun = True
@@ -366,6 +374,8 @@ class HybridDecoder:
             if not fis:
                 continue
             self._chunks.append({'fis': fis, 'data': [], 'off': 0,
+                                 'delivered': 0, 'all_delivered': False,
+                                 'counted': False, 'consumed': False,
                                  'done': False, 'owner': None,
                                  'started': False})
             self._starts.append(fis[0])
@@ -565,7 +575,9 @@ class HybridDecoder:
                     i = be
                 with self._cv:
                     ch['done'] = True
-                    self._unconsumed[who] += 1
+                    if not ch.get('all_delivered', False):
+                        self._unconsumed[who] += 1
+                        ch['counted'] = True
                     self._cv.notify_all()
                 prev_end = fis[-1] + step
                 t_done = time.perf_counter()
@@ -593,8 +605,8 @@ class HybridDecoder:
     def _pop_frames(self, fis: list[int]) -> list:
         """批量弹出连续帧：同片内一次锁取尽可能多的帧，减少锁/等待次数。
 
-        帧必须按序（fis 递增且落在同一片）；跨片边界逐片处理。保持
-        _pop_frame 的交付序与"片排空释放未消费计数"语义。
+        帧必须按序（fis 递增且落在同一片）；跨片边界逐片处理。已交付的
+        帧会从分片缓存中删除，避免 NumPy 数组一直保留到整个 decoder 销毁。
         """
         out: list = []
         i = 0
@@ -605,24 +617,44 @@ class HybridDecoder:
             stalled = 0
             while True:
                 with self._cv:
-                    if ch['off'] < len(ch['data']):
-                        # 一次锁内取本片连续可用的帧（保持 fis 序）
-                        while (i < len(fis) and ch['off'] < len(ch['data'])
-                               and self._chunk_index(fis[i]) == ci):
-                            got, crop = ch['data'][ch['off']]
-                            ch['off'] += 1
-                            if got != fis[i]:
+                    delivered = int(ch.get('delivered', ch.get('off', 0)))
+                    if ch['data']:
+                        n_take = 0
+                        while (i + n_take < len(fis)
+                               and n_take < len(ch['data'])
+                               and self._chunk_index(fis[i + n_take]) == ci):
+                            got, crop = ch['data'][n_take]
+                            if got != fis[i + n_take]:
                                 raise RuntimeError(
                                     'hybrid 序错位: want=%d got=%d'
-                                    % (fis[i], got))
+                                    % (fis[i + n_take], got))
                             out.append(crop)
-                            i += 1
-                        if ch['off'] == len(ch['fis']):
-                            # 该片已全部交付：释放"未消费"计数
+                            n_take += 1
+                        if n_take:
+                            del ch['data'][:n_take]
+                            delivered += n_take
+                            ch['delivered'] = delivered
+                            ch['off'] = 0
+                            i += n_take
+                            if delivered >= len(ch['fis']):
+                                ch['all_delivered'] = True
+                                if ch.get('done') and ch.get('counted'):
+                                    own = ch.get('owner')
+                                    if own and own in self._unconsumed:
+                                        self._unconsumed[own] -= 1
+                                    ch['counted'] = False
+                                ch['consumed'] = True
+                            self._cv.notify_all()
+                            break
+                    if ch.get('done') and delivered < len(ch['fis']):
+                        raise RuntimeError('hybrid 片数据不足')
+                    if ch.get('done') and delivered >= len(ch['fis']):
+                        if ch.get('counted'):
                             own = ch.get('owner')
                             if own and own in self._unconsumed:
                                 self._unconsumed[own] -= 1
-                            self._cv.notify_all()
+                            ch['counted'] = False
+                        ch['consumed'] = True
                         break
                     if self._err:
                         raise RuntimeError('hybrid 解码失败: %r'
@@ -699,9 +731,35 @@ class HybridDecoder:
             return []
 
     def close(self):
+        if getattr(self, '_closed', False):
+            return
+        self._closed = True
         self._stop.set()
         with self._cv:
             self._cv.notify_all()
+        current = threading.current_thread()
+        threads = [getattr(self, '_cpu_thread', None),
+                   *getattr(self, '_threads', [])]
+        # join 带超时：收尾的目的是"不留活线程干扰下一任务"，但如果某个
+        # producer 卡死，无超时 join 会把"线程泄漏"升级成"close 永久挂死"，
+        # 后者更糟。超时后线程不再等待，名字留在 _unjoined 供诊断。
+        unjoined = []
+        for t in threads:
+            if t is None or t is current:
+                continue
+            t.join(_CLOSE_JOIN_TIMEOUT)
+            if t.is_alive():
+                unjoined.append(t)
+        self._unjoined = [t.name for t in unjoined]
+        self._threads = []
+        for reader in (getattr(self, '_cpu', None),
+                       getattr(self, '_gpu', None)):
+            close = getattr(reader, 'close', None)
+            if close is not None:
+                try:
+                    close()
+                except Exception:
+                    pass
         if self._probe and self._probe_rows:
             rows, self._probe_rows = self._probe_rows, []
             self._dump_probe(rows)

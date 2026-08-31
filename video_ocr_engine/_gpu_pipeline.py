@@ -18,6 +18,11 @@ from ._helpers import (_ndarray_device_ptr, _otsu_from_hist,
 
 logger = logging.getLogger(__name__)
 
+# 收尾时等待 producer 退出的上限（秒）。正常路径下 producer 响应
+# producer_stop 后立即退出；这里只作防挂死兜底——无超时 join 一旦碰上
+# producer 卡在 put，会把"线程泄漏"升级成"整条流水线永久阻塞"。
+_PRODUCER_JOIN_TIMEOUT = 5.0
+
 
 def _cuda_python_available() -> bool:
     """cuda-python（cuda.core / cuda.bindings）是否可导入。
@@ -138,8 +143,18 @@ class _CpuFrameRef:
         self.k = int(k)
 
     def host_crop(self):
-        c = self.batch.host[self.k]
+        # drop_host() 之后整批宿主数组已释放：返回 None 让调用方回退到设备
+        # D2H，而不是抛 TypeError（None 下标）。当前该分支不可达——
+        # raw_ready 单调递增，排空后不会再有同批帧走宿主回退。
+        c = self.batch.host
+        if c is None:
+            return None
+        c = c[self.k]
         return c[..., 0] if c.ndim == 3 else c
+
+    def drop_host(self) -> None:
+        """释放批量宿主数组，保留设备 owner 供 raw OCR 使用。"""
+        self.batch.host = None
 
 
 class _DevBatchPool:
@@ -161,6 +176,7 @@ class _DevBatchPool:
         return _DevBatch(self, int(ptr), self._nbytes, host)
 
     def _release(self, b: _DevBatch) -> None:
+        b.host = None
         if len(self._free) < self._MAX:
             self._free.append(b)
             return
@@ -252,6 +268,14 @@ class _GpuPipelineMixin:
         import threading
         from cuda.bindings import runtime as cudart
         from ocr_trt import GpuFrameAnalyzer
+        # Cleanup handles are initialized before any calibration/setup can fail.
+        ocr_session = None
+        analyzer = None
+        pool = None
+        _y_pool = None
+        calib_owner = None
+        producer = None
+        producer_stop = threading.Event()
         _t_open = time.perf_counter()
         vr = self._open_vr()
         # hybrid（§8.3 合并）：HybridDecoder 后端名 decord/GPU+CPU-hybrid
@@ -259,17 +283,50 @@ class _GpuPipelineMixin:
         # 匹配，否则会误入 NVDEC 分支对 _Batch 取 DLPack 崩溃。
         on_gpu = (self._backend == 'decord/GPU')
 
+        def _cleanup_partial() -> None:
+            """收尾尚未进入主消费循环的资源。"""
+            nonlocal ocr_session, analyzer, pool, _y_pool, calib_owner
+            nonlocal calib_nds, calib_base, prev_holder, prev_ptr
+            if ocr_session is not None:
+                try:
+                    ocr_session["finish"]()
+                except BaseException:
+                    pass
+                ocr_session = None
+            calib_owner = None
+            calib_nds = None
+            calib_base = 0
+            prev_holder = None
+            prev_ptr = 0
+            for _p in (_y_pool, pool):
+                if _p is not None:
+                    try:
+                        _p.release_all()
+                    except BaseException:
+                        pass
+            _y_pool = None
+            pool = None
+            if analyzer is not None:
+                try:
+                    analyzer.release()
+                except Exception:
+                    pass
+                analyzer = None
+
         def _fallback_to_host():
             """GPU→宿主回退（C10）：普通 reader 直接复用（get_batch 随机
             访问、无消费状态，免去二次打开/解码器悬挂）；hybrid 必须重开
             ——其分片消费指针已在校准 get_batch 中前进，复用会序错位。"""
-            try:
-                vr.close()   # hybrid：停生产者线程；普通 decord VR 无 close（no-op）
-            except Exception:
-                pass
+            _cleanup_partial()
+            hybrid_reader = hasattr(vr, 'hybrid_begin')
+            if hybrid_reader:
+                try:
+                    vr.close()   # hybrid 分片状态不可复用，必须重开
+                except Exception:
+                    pass
             self._degraded.append('GPU 管线形状不符，回退宿主管线')
             return self._run_pipelined_host(
-                _ocr_engines, None if hasattr(vr, 'hybrid_begin') else vr)
+                _ocr_engines, None if hybrid_reader else vr)
         if self._fps is None:
             _fps = _read_fps_from_vr(vr)
             self._fps = _fps if _fps else config.DEFAULT_FPS_FALLBACK
@@ -281,92 +338,134 @@ class _GpuPipelineMixin:
         end = min(self._frame_end or total, total)
         frames = list(range(self._frame_start, end, self._sample_stride))
         if not frames:
+            try:
+                vr.close()
+            except Exception:
+                pass
             raise ValueError(
                 f"帧区间为空: frame_start={self._frame_start}, "
                 f"frame_end={end}, total={total}")
         hybrid = hasattr(vr, 'hybrid_begin')
-        if self._frame_start > 0 and not hybrid:
-            # hybrid 分片定位由生产者在片首完成（其 seek_accurate 已显式
-            # 报错，DESIGN-REVIEW B4）——跳过外部 seek。
-            vr.seek_accurate(self._frame_start)
-        # hybrid 解码（§8.3）：采样帧序列就绪后生成关键帧分片并启动
-        # 双解码生产者（与宿主管线同一钩子；其后 get_batch 按全局帧序
-        # 交付，CPU 解码分支无需感知）。
-        if hybrid:
-            vr.hybrid_begin(frames)
+        try:
+            if self._frame_start > 0 and not hybrid:
+                # hybrid 分片定位由生产者在片首完成（其 seek_accurate 已显式
+                # 报错，DESIGN-REVIEW B4）——跳过外部 seek。
+                vr.seek_accurate(self._frame_start)
+            if hybrid:
+                vr.hybrid_begin(frames)
+        except BaseException:
+            try:
+                vr.close()
+            except Exception:
+                pass
+            raise
         self._prof_end('producer', 'open_and_fps', _t_open)
         # OCR 会话（引擎初始化/模型加载）提前到校准前启动：worker 线程内
         # 构建引擎，与校准（前 50 帧 hist+Otsu）并行重叠；引擎就绪前
         # _emit_ocr 自动走 host 回退（raw_ready=False），语义不变。
-        ocr_session = self._start_ocr_session(_ocr_engines)
+        try:
+            ocr_session = self._start_ocr_session(_ocr_engines)
+        except BaseException:
+            try:
+                vr.close()
+            except Exception:
+                pass
+            raise
         q = ocr_session["q"]
         results = ocr_session["results"]
         ocr_err = ocr_session["err"]
         ocr_wall = ocr_session["wall"]
         _put_ocr = ocr_session["put"]
 
-        calib_n = min(config.SEG_CALIB_FRAMES, len(frames))
-        roi_kw = (x1, y1, x2 + 1, y2 + 1)
-        analyzer = GpuFrameAnalyzer()
+        calib_n = 0
+        roi_kw = None
+        calib_nds = None
+        calib_base = 0
+        calib_gray = 0
+        src_h = src_w = fnb = 0
+        prev_holder = None
+        prev_ptr = 0
+        th = 0
         yuv = self._yuv_output
-        if on_gpu:
-            # ── NVDEC：decord 设备批直通（校准批同样不落 RAM）──
-            calib_nds = vr.get_batch(frames[:calib_n], roi=roi_kw)
-            calib_base, calib_shape = _ndarray_device_ptr(calib_nds)
-            if yuv:
-                # yuv420（packed NV12）：先 D2D 提取 Y 平面（luma_nv12 与宿主
-                # _nv12_luma_full 逐位一致），histogram/analyze 都只消费灰度 Y。
-                if len(calib_shape) != 3:
-                    return _fallback_to_host()
-                src_h = calib_shape[1] * 2 // 3
-                src_w = calib_shape[2]
-                calib_gray = analyzer.extract_luma(
-                    calib_base, calib_n, src_h, src_w,
-                    limited=self._color_range != 1)
+
+        def _prepare_gpu_calibration() -> bool:
+            nonlocal analyzer, pool, calib_owner
+            nonlocal calib_n, roi_kw, calib_nds, calib_base, calib_gray
+            nonlocal src_h, src_w, fnb, prev_holder, prev_ptr, th
+            analyzer = GpuFrameAnalyzer()
+            calib_n = min(config.SEG_CALIB_FRAMES, len(frames))
+            roi_kw = (x1, y1, x2 + 1, y2 + 1)
+            if on_gpu:
+                # ── NVDEC：decord 设备批直通（校准批同样不落 RAM）──
+                calib_nds = vr.get_batch(frames[:calib_n], roi=roi_kw)
+                calib_base, calib_shape = _ndarray_device_ptr(calib_nds)
+                if yuv:
+                    # yuv420（packed NV12）：先 D2D 提取 Y 平面（luma_nv12 与宿主
+                    # _nv12_luma_full 逐位一致），histogram/analyze 都只消费灰度 Y。
+                    if len(calib_shape) != 3:
+                        return False
+                    src_h = calib_shape[1] * 2 // 3
+                    src_w = calib_shape[2]
+                    calib_gray = analyzer.extract_luma(
+                        calib_base, calib_n, src_h, src_w,
+                        limited=self._color_range != 1)
+                else:
+                    if len(calib_shape) != 4 or calib_shape[-1] != 1:
+                        # 灰度帧非 4D 单通道（部分 decord fork 输出 (B,H,W)）：GPU
+                        # 分段不支持，回退宿主。直接 _run_pipelined_host（防递归）。
+                        return False
+                    src_h, src_w = calib_shape[1], calib_shape[2]
+                    calib_gray = calib_base
+                fnb = src_h * src_w
+                prev_holder = calib_nds      # 保住前一 decord NDArray（防解码池复用）
+                prev_ptr = calib_base        # 灰色模式：上一批/校准末帧 device 指针
             else:
-                if len(calib_shape) != 4 or calib_shape[-1] != 1:
-                    # 灰度帧非 4D 单通道（部分 decord fork 输出 (B,H,W)）：GPU
-                    # 分段不支持，回退宿主。直接 _run_pipelined_host（防递归）。
-                    return _fallback_to_host()
-                src_h, src_w = calib_shape[1], calib_shape[2]
-                calib_gray = calib_base
-            fnb = src_h * src_w
-            prev_holder = calib_nds      # 保住前一 decord NDArray（防解码池复用）
-            prev_ptr = calib_base        # 灰色模式：上一批/校准末帧 device 指针
-            pool = None
-        else:
-            # ── CPU 解码（P1-3）：校准批 asnumpy → 宿主灰度 → H2D ──
-            calib_nds = vr.get_batch(frames[:calib_n], roi=roi_kw)
-            crops = calib_nds.asnumpy()
-            if yuv:
-                if crops.ndim != 3:
-                    return _fallback_to_host()
-                src_h = crops.shape[1] * 2 // 3
-                src_w = crops.shape[2]
-            else:
-                if crops.ndim != 4 or crops.shape[-1] != 1:
-                    return _fallback_to_host()
-                src_h, src_w = crops.shape[1], crops.shape[2]
-            fnb = src_h * src_w
-            g = np.ascontiguousarray(self._batch_luma(crops))
-            if g.shape != (calib_n, src_h, src_w):
-                return _fallback_to_host()
-            pool = _DevBatchPool(config.GPU_PIPELINE_DECODE_BATCH * fnb)
-            calib_owner = pool.acquire(crops)
-            cudart.cudaMemcpyAsync(
-                calib_owner.ptr, g.ctypes.data, calib_n * fnb,
-                cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
-                analyzer._stream)
-        # 逐帧直方图校准：与单流水线"前 50 帧 Otsu 取中位数"语义逐位一致
-        # （含退化双值帧的阈值行为），D2H 仅 B×1KB 标量表，校准帧不落 RAM。
-        # 注意必须用 _otsu_from_hist（输入是直方图行）；_otsu 接收的是
-        # 灰度图像并在内部做直方图——传错曾产生"直方图的直方图"垃圾阈值。
-        calib_gray_dev = (calib_gray if on_gpu else calib_owner.ptr)
-        _hist_mat = analyzer.histograms_perframe(
-            calib_gray_dev, calib_n, src_h, src_w)
-        ths = [_otsu_from_hist(_hist_mat[k]) for k in range(calib_n)]
-        th = _otsu_median_threshold(ths)
-        self._bin_thresh = th
+                # ── CPU 解码（P1-3）：校准批 asnumpy → 宿主灰度 → H2D ──
+                calib_nds = vr.get_batch(frames[:calib_n], roi=roi_kw)
+                crops = calib_nds.asnumpy()
+                if yuv:
+                    if crops.ndim != 3:
+                        return False
+                    src_h = crops.shape[1] * 2 // 3
+                    src_w = crops.shape[2]
+                else:
+                    if crops.ndim != 4 or crops.shape[-1] != 1:
+                        return False
+                    src_h, src_w = crops.shape[1], crops.shape[2]
+                fnb = src_h * src_w
+                g = np.ascontiguousarray(self._batch_luma(crops))
+                if g.shape != (calib_n, src_h, src_w):
+                    return False
+                pool = _DevBatchPool(config.GPU_PIPELINE_DECODE_BATCH * fnb)
+                calib_owner = pool.acquire(crops)
+                cudart.cudaMemcpyAsync(
+                    calib_owner.ptr, g.ctypes.data, calib_n * fnb,
+                    cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
+                    analyzer._stream)
+
+            # 逐帧直方图校准：与单流水线"前 50 帧 Otsu 取中位数"语义逐位一致
+            # （含退化双值帧的阈值行为），D2H 仅 B×1KB 标量表，校准帧不落 RAM。
+            # 注意必须用 _otsu_from_hist（输入是直方图行）；_otsu 接收的是
+            # 灰度图像并在内部做直方图——传错曾产生"直方图的直方图"垃圾阈值。
+            calib_gray_dev = (calib_gray if on_gpu else calib_owner.ptr)
+            _hist_mat = analyzer.histograms_perframe(
+                calib_gray_dev, calib_n, src_h, src_w)
+            ths = [_otsu_from_hist(_hist_mat[k]) for k in range(calib_n)]
+            th = _otsu_median_threshold(ths)
+            self._bin_thresh = th
+            return True
+
+        try:
+            _calib_ok = _prepare_gpu_calibration()
+        except BaseException:
+            _cleanup_partial()
+            try:
+                vr.close()
+            except Exception:
+                pass
+            raise
+        if not _calib_ok:
+            return _fallback_to_host()
 
         self._gpu_pipeline_mode = True
 
@@ -533,7 +632,6 @@ class _GpuPipelineMixin:
         producer_err: list = []
         # C6：消费端任何异常都会跳出消费循环——producer 必须可被叫停，
         # 否则永久阻塞在 put（daemon 线程 + 解码器 + 设备引用泄漏）。
-        producer_stop = threading.Event()
 
         def _put_q(item) -> bool:
             while not producer_stop.is_set():
@@ -578,13 +676,18 @@ class _GpuPipelineMixin:
         _y_pool = (_YFramePool(src_h * src_w) if (yuv and on_gpu) else None)
         _limited = self._color_range != 1
 
-        def _d2h_rep(dev):
-            """代表帧 → 宿主：NVDEC = D2H；CPU 解码 = 宿主切片直取（拷贝
-            返回，防 rep_crops 的 numpy view 钉住整批解码数组）。
-            gray = (H,W[,1])；yuv = packed NV12 (rows,W) 原样保留。"""
+        def _d2h_rep(dev, *, prefer_device=False):
+            """代表帧 → 宿主：NVDEC = D2H；CPU 解码默认宿主切片直取。
+
+            raw GPU OCR 的 CPU 解码代表帧改为从设备单帧 D2H，随后可释放
+            整批宿主数组；宿主 OCR 回退仍使用切片拷贝。
+            """
             hc = getattr(dev[0], 'host_crop', None)
-            if hc is not None:
-                return np.array(hc())
+            if hc is not None and not prefer_device:
+                h = hc()
+                if h is not None:
+                    return np.array(h)
+                # 宿主副本已被 drop_host() 释放 → 落到下面的设备 D2H
             from cuda.bindings import runtime as cudart
             arr = np.empty((dev[2], dev[3]), dtype=np.uint8)
             cudart.cudaMemcpy(arr.ctypes.data, int(dev[1]), dev[2] * dev[3],
@@ -681,11 +784,19 @@ class _GpuPipelineMixin:
                 # 回退（ONNX/无 TRT/引擎未就绪）：代表帧 D2H → 宿主预处理，
                 # crop 与 keep_crops 共用同一副本。
                 crop_h = _d2h_rep(r_dev)
-            _put_ocr((idx, r_frame, crop_h, dev_ocr, frac))
             if self._keep_crops:
-                # keep_crops 是结果输出（给外部转 RGB），不可避免的传输
+                # keep_crops 是结果输出（给外部转 RGB），不可避免的传输。
+                # CPU 解码 raw 路径从单帧设备缓冲复制，避免钉住整批 host 数组。
                 rep_crops[r_frame] = (crop_h if crop_h is not None
-                                      else _d2h_rep(r_dev))
+                                      else _d2h_rep(
+                                          r_dev,
+                                          prefer_device=(dev_ocr is not None
+                                                         and not yuv)))
+            if dev_ocr is not None and not yuv:
+                drop_host = getattr(dev_ocr[0], 'drop_host', None)
+                if drop_host is not None:
+                    drop_host()
+            _put_ocr((idx, r_frame, crop_h, dev_ocr, frac))
             self._prof_end('producer', 'q_put_block', _t_push)
 
         try:
@@ -755,9 +866,17 @@ class _GpuPipelineMixin:
                 seg_idx += 1
         finally:
             producer_stop.set()   # C6：任何退出路径都叫停 producer
+            if producer is not None:
+                try:
+                    producer.join(_PRODUCER_JOIN_TIMEOUT)
+                except BaseException:
+                    pass
             _t_consume_end = time.perf_counter()
             self.timing['decode'] = _t_consume_end - t0
-            ocr_session["finish"]()
+            try:
+                ocr_session["finish"]()
+            except BaseException:
+                pass
             self.timing['ocr_tail'] = time.perf_counter() - _t_consume_end
             try:
                 vr.close()   # HybridDecoder：显式停生产者线程；decord VR 无此方法
@@ -769,11 +888,11 @@ class _GpuPipelineMixin:
                 if _p is not None:
                     try:
                         _p.release_all()
-                    except Exception:
+                    except BaseException:
                         pass
             try:
                 analyzer.release()
-            except Exception:
+            except BaseException:
                 pass
         if ocr_err:
             raise RuntimeError(f"OCR worker 失败: {ocr_err[0]!r}") from ocr_err[0]
