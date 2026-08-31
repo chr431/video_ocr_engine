@@ -1,13 +1,9 @@
 """engine_config 一致性 + 模型资产存在性（引擎可运行的基础）。"""
 from __future__ import annotations
 
-from pathlib import Path
-
 import engine_config as config
 import video_ocr_engine
-
-
-ROOT = Path(__file__).resolve().parent.parent
+from _paths import ROOT  # tests/_paths.py：与目录深度无关的仓库根
 
 
 def test_version_single_source():

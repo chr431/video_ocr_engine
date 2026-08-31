@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from _paths import PKG  # tests/_paths.py：与目录深度无关的 video_ocr_engine/ 路径
+
 ENGINE_MODULES = [
     "engine_config", "gpu_setup", "hybrid_decode", "ocr_native",
     "ocr_trt", "segmentation", "video_utils", "video_ocr_engine",
@@ -37,7 +39,7 @@ def test_engine_import_does_not_pull_app_modules():
 
 def test_extractor_ast_no_app_imports():
     """AST 审计：video_ocr_engine/extractor.py 顶层 import 无应用层/constants。"""
-    src = Path(__file__).resolve().parent.parent / "video_ocr_engine" / "extractor.py"
+    src = PKG / "extractor.py"
     tree = ast.parse(src.read_text(encoding="utf-8"))
     imports: set[str] = set()
     for n in ast.walk(tree):
