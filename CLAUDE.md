@@ -83,7 +83,7 @@
 
 ## 编辑护栏（docs/PERFORMANCE.md）
 
-✅ **2026-08-31 已清除全部 934 个裸 `\r`**（提交 `3086a92`），现为**纯 LF 文件**，
+✅ **2026-08-31 已清除全部 934 个裸 `\r`**（提交 `fd2a76a`），现为**纯 LF 文件**，
 裸 CR = **0**。**任何工具都安全** —— 文本模式（含默认 `newline=None`）、Edit 工具、
 二进制模式，对纯 LF 文件都 100% 保真。
 
@@ -94,6 +94,33 @@
 - 修法（若哪天又出现）：`re.sub(r'\r(>?[ ]*)(?=\n)', '', txt)`
 - 自检：`open(p,'rb').read().count(b'\r') == 0`
 - 回归防护：`tests/test_docs_hygiene.py`
+
+## 纪律与自动化守卫
+
+**改完代码跑一次**（12 项，退出码非 0 即违规；关键项另有单测守护）：
+
+```bash
+python tools/_probe_discipline_audit.py          # 全量
+python tools/_probe_discipline_audit.py --only 1,3,7
+python tools/_probe_index_audit.py               # tools/INDEX.md 数字一致性
+```
+
+几条容易踩、且已自动化的：
+
+- **路径不许写死**。仓库内路径一律 `__file__` 推导；外部测试视频走环境变量
+  （`RACELOG_VIDEO_DIR` / `RACELOG_BATCH_DIR`），硬编码值只能当默认值。
+  ⚠️ **`WORKER = r"""..."""` 子进程模板是特例**：它以 `python -c` 执行，
+  **`-c` 下 `__file__` 未定义**，必须靠父进程注入 `PROBE_ROOT` 环境变量
+  （`_probe_cpu_onnx.py` 例外：它做新旧版本 A/B，子进程 cwd 就是旧 worktree，
+  **必须插 cwd** 才不会变成"新代码 vs 新代码"）。
+- **`except … pass` 不许无声**。要么 `logger.debug`，要么 `pass  # 为何可忽略`。
+  存量 63 处登记在 `tools/_discipline_baseline.json` —— **存量豁免、增量严格**。
+  改到某个文件时顺手补注释，它自然脱出 baseline。
+  `except BaseException` 只在清理路径允许（否则连 Ctrl-C 一起吞）。
+- **产品代码的 print 必须受 debug 开关保护**（`env_bool(DEBUG_BOUNDS_ENV)` /
+  `self._probe`），否则走 `logging`。docstring 里的用法示例不算。
+- **未使用的 import**：有意 re-export 加 `# noqa: F401`，否则删掉。
+- **文档裸 CR = 0、CLAUDE.md ≤ 12 KB**：`tests/test_docs_hygiene.py` 守护。
 
 ⚠️ **旧规矩双向都错，别再照着做**：
 - 「只能用二进制」—— 从来不是必需。文本模式显式 `newline=''` 或 `'\n'` 就
