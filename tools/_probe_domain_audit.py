@@ -17,6 +17,7 @@ r"""专项审计：合并判据的口径问题——原始灰度域 vs OCR 输�
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -30,7 +31,6 @@ import numpy as np
 from _probe_det_crop_eval import GT, truth_meta
 from _probe_merge_audit import actual_merges, build, load_xsg
 from _probe_block_audit import max_block
-import os
 
 
 def pair_diff_domain(crops, reps, i, fa, mode):

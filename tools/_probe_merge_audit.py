@@ -22,6 +22,7 @@ r"""离线审计 v3：merge_similar 的合并空间、误合并 oracle 与候选
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
@@ -34,7 +35,6 @@ sys.path.insert(0, HERE)
 import numpy as np
 
 from _probe_det_crop_eval import GT, VID, load_truth, truth_meta
-import os
 _BATCH_DIR = Path(os.environ.get("RACELOG_BATCH_DIR", r"D:\Videos\batch_test"))
 
 

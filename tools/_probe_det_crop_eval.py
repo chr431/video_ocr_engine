@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import os
 import re
 import statistics
 import sys
@@ -41,7 +42,6 @@ sys.path.insert(0, HERE)
 
 import numpy as np
 import onnxruntime as ort
-import os
 _VIDEO_DIR = Path(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"))
 
 

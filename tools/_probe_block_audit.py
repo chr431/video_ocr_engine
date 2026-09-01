@@ -21,6 +21,7 @@ r"""专项审计：「最大连通变化块」判据能否区分误合并与安�
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -33,7 +34,6 @@ import numpy as np
 
 from _probe_det_crop_eval import GT, VID, load_truth, truth_meta
 from _probe_merge_audit import (BATCH_DIR, actual_merges, build, load_xsg)
-import os
 
 
 def max_block(mask: np.ndarray) -> tuple[int, list[int]]:
