@@ -400,8 +400,11 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
                     # 32 逻辑核上 cpuT 0→24 使 hybrid decode -13.5%、
                     # 墙钟 -5.3%。改为按核数分档，上限 24（32 时反而略差，
                     # CPU 生产者与 NVDEC/消费者抢 host CPU）。
+                    # v5：系数 3/4→3/8、上限 24→16（理由见 engine_config
+                    # HYBRID_CPU_THREADS_AUTO_MAX 的注释）。h264/AV1 两编码
+                    # 交叉实测的公共最优在 12（32 逻辑核）。
                     _ct = max(config.HYBRID_CPU_THREADS_AUTO_MIN,
-                              min((_os.cpu_count() or 8) * 3 // 4,
+                              min((_os.cpu_count() or 8) * 3 // 8,
                                   config.HYBRID_CPU_THREADS_AUTO_MAX))
                 _mcf = config.env_int(config.HYBRID_MAX_CHUNK_FRAMES_ENV, 0)
                 vr = HybridDecoder(self, vr, max_chunks=_mc,

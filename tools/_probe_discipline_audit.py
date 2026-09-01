@@ -116,12 +116,28 @@ def check_hardcoded_paths() -> None:
 BASELINE = os.path.join(HERE, "_discipline_baseline.json")
 
 
-def _load_baseline() -> set[str]:
+def _load_baseline() -> dict[str, int]:
+    """读存量豁免登记：{文件: 静默吞噬处数}。
+
+    ⚠️ 键是**文件 + 计数**，不是 `文件:行号`。
+    第一版用行号，结果往 extractor.py 里加 19 行注释就把该文件的存量条目
+    全部顶掉行号、审计立刻报 6 处"新增违规"——纯属误报，却逼得人去
+    重新登记，久而久之 baseline 就没人维护了。
+    按文件计数对行号漂移天然免疫，且语义更贴合本意：**不许新增**。
+    """
     import json
     if not os.path.isfile(BASELINE):
-        return set()
+        return {}
     with open(BASELINE, encoding="utf-8") as f:
-        return set(json.load(f).get("except_pass", []))
+        data = json.load(f)
+    if isinstance(data.get("except_pass_by_file"), dict):
+        return {k: int(v) for k, v in data["except_pass_by_file"].items()}
+    # 兼容旧格式（行号列表）→ 折算成按文件计数
+    out: dict[str, int] = {}
+    for key in data.get("except_pass", []):
+        f2 = key.rsplit(":", 1)[0]
+        out[f2] = out.get(f2, 0) + 1
+    return out
 
 
 def check_bare_except() -> None:
@@ -130,15 +146,20 @@ def check_bare_except() -> None:
     判据（三者满足其一即合规）：
       1. `pass` 行带行尾注释（`pass  # 为何可忽略`）；
       2. `except` 上一行是注释（解释性说明）；
-      3. 登记在 baseline 里（**存量豁免、增量严格**）。
+      3. 该文件当前的静默吞噬总数**未超过** baseline 登记数（存量豁免、增量严格）。
 
-    为什么要 baseline：全项目有 61 处 `except … pass`，绝大多数在清理/释放
+    为什么要 baseline：全项目有 60+ 处 `except … pass`，绝大多数在清理/释放
     路径（cudaFree / release / rollback），逐条改要动产品代码行为、风险不小。
-    但"以后别再新增静默吞噬"必须立刻生效 —— 所以存量登记豁免，新增一律报。
-    改到某个文件时顺手补注释，补了之后它自然从 baseline 里脱出。
+    但"以后别再新增静默吞噬"必须立刻生效 —— 所以存量豁免，新增一律报。
+    改到某个文件时顺手补注释，补了之后它的计数自然下降。
+
+    ⚠️ baseline 以**文件为键、计数值为量**（不是行号），否则给某个文件加几行
+    注释就会让存量条目全部失配、刷出一堆假"新增违规"。
     """
     base = _load_baseline()
-    bare, swallow, exempted = [], [], 0
+    bare: list[tuple[str, int]] = []
+    raw: list[tuple[str, int, str]] = []     # 无注释的静默吞噬
+    exempted = 0
     for rel in ALL_PY:
         src = read(rel)
         lines = src.split("\n")
@@ -154,7 +175,6 @@ def check_bare_except() -> None:
                 continue
             if len(n.body) != 1 or not isinstance(n.body[0], ast.Pass):
                 continue
-            key = "%s:%d" % (rel.replace(os.sep, "/"), n.lineno)
             # 1) pass 行自带注释
             pl = lines[n.body[0].lineno - 1] if n.body[0].lineno <= len(lines) else ""
             if "#" in pl:
@@ -164,12 +184,22 @@ def check_bare_except() -> None:
             if n.lineno >= 2 and lines[n.lineno - 2].strip().startswith("#"):
                 exempted += 1
                 continue
-            # 3) baseline 存量豁免
-            if key in base:
-                exempted += 1
-                continue
-            swallow.append((rel, n.lineno, ast.unparse(n.type)))
-    print("    裸 except %d 处；静默吞噬 %d 处（另有 %d 处已带注释或登记豁免）"
+            raw.append((rel, n.lineno, ast.unparse(n.type)))
+
+    # 3) 按文件与 baseline 比对：超出登记数的部分才算新增违规
+    key_of = lambda r: r.replace(os.sep, "/")
+    cur: dict[str, int] = {}
+    for rel, _, _ in raw:
+        cur[key_of(rel)] = cur.get(key_of(rel), 0) + 1
+    swallow = []
+    for rel, ln, t in raw:
+        k = key_of(rel)
+        allowed = base.get(k, 0)
+        if cur[k] <= allowed:
+            exempted += 1
+        else:
+            swallow.append((rel, ln, t))
+    print("    裸 except %d 处；静默吞噬 %d 处（另有 %d 处已带注释或存量豁免）"
           % (len(bare), len(swallow), exempted))
     for rel, ln in bare[:10]:
         print("      裸 %-42s L%-5d" % (rel, ln))
@@ -178,9 +208,10 @@ def check_bare_except() -> None:
     if bare:
         fail("裸 except %d 处 —— 会连 KeyboardInterrupt / SystemExit 一起吞" % len(bare))
     if swallow:
-        fail("新增静默吞噬 %d 处：异常消失得无声无息。要么记 logger.debug，"
-             "要么 `pass  # 说明为何可忽略`；确属存量可 --update-baseline 登记"
-             % len(swallow))
+        files = sorted({key_of(r) for r, _, _ in swallow})
+        fail("新增静默吞噬 %d 处（文件 %s）：异常消失得无声无息。要么记 "
+             "logger.debug，要么 `pass  # 说明为何可忽略`；确属存量可 "
+             "--update-baseline 登记" % (len(swallow), ", ".join(files)))
 
 
 def check_unused_imports() -> None:
@@ -474,22 +505,27 @@ def update_baseline() -> None:
     不在 baseline 里，审计会报。
     """
     import json
-    items = []
+    items: dict[str, int] = {}
     for rel in ALL_PY:
         src = read(rel)
         try:
             tree = ast.parse(src)
         except SyntaxError:
             continue
+        n_hit = 0
         for n in ast.walk(tree):
             if not isinstance(n, ast.ExceptHandler) or n.type is None:
                 continue
             if len(n.body) == 1 and isinstance(n.body[0], ast.Pass):
-                items.append("%s:%d" % (rel.replace(os.sep, "/"), n.lineno))
+                n_hit += 1
+        if n_hit:
+            items[rel.replace(os.sep, "/")] = n_hit
     with open(BASELINE, "w", encoding="utf-8", newline="\n") as f:
-        json.dump({"except_pass": sorted(items)}, f, ensure_ascii=False, indent=2)
+        json.dump({"except_pass_by_file": dict(sorted(items.items()))},
+                  f, ensure_ascii=False, indent=2)
         f.write("\n")
-    print("已登记 %d 处存量 `except … pass` → %s" % (len(items), BASELINE))
+    print("已登记 %d 个文件 / 共 %d 处存量 `except … pass` → %s"
+          % (len(items), sum(items.values()), BASELINE))
 
 
 def main() -> int:

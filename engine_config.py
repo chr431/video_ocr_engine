@@ -103,8 +103,22 @@ HYBRID_CPU_THREADS_ENV: str = "HYBRID_CPU_THREADS"              # CPU reader 线
 #   -13.5%），0→32 = 2.077s（略差于 24：CPU 生产者与 NVDEC/消费者抢 host CPU）。
 # 故自动值取 逻辑核×3/4 钳 [8, 24]（与 _decode_num_threads 的 stride>1
 # 分档同式）。段数与唯一文本在所有档位下完全一致。
+#
+# v5（2026-09-01）：**上限与系数下调** —— 逻辑核×3/8 钳 [8, 16]。
+# 那条 §17.2 实测只测了 h264 单一编码，而 CPU/NVDEC 速度比随编码反转
+# （§21：h264 CPU 快 2.88×、AV1 CPU 慢 2.56×），线程预算的最优值同样
+# 随编码变。两编码交叉实测（4000 帧 stride1，runs=3 中位）：
+#     cpuT    8      12     16     24     32
+#     h264  2.94   2.99   3.55   3.57   3.56   ← ≤12 明显优（差 18%）
+#     AV1   2.387  2.231  2.239  2.221   —     ← ≥12 都在噪声内（±1%）
+# 交集在 12：AV1 与最优持平，h264 快 16%。
+# 机理：CPU 生产者的 FFmpeg 线程池与 NVDEC 的 host 侧喂料、以及 TRT
+# 消费者**抢 host CPU**；线程越多抢得越狠。实测 h264 并发下 CPU 生产者
+# 从单跑 2827fps 掉到 966fps（-66%），NVDEC 侧几乎不受影响 —— 争用是
+# **不对称**的，吃亏的总是软解那一侧。
+# 32 逻辑核下：旧式 3/4→24，新式 3/8→12。
 HYBRID_CPU_THREADS_AUTO_MIN: int = 8
-HYBRID_CPU_THREADS_AUTO_MAX: int = 24
+HYBRID_CPU_THREADS_AUTO_MAX: int = 16
 HYBRID_MAX_CHUNKS_ENV: str = "HYBRID_MAX_CHUNKS"                # 分片上限
 # 分片粒度上限：>0 时 hybrid 分片超过该采样帧数继续拆小（内存上界 =
 # inflight × 该上限，防宽 ROI 字幕整集单大片 2000+ 帧一次性缓存在
@@ -118,8 +132,23 @@ HYBRID_SLOW_DISCOUNT_ENV: str = "HYBRID_SLOW_DISCOUNT"
 HYBRID_CALIB_FRAMES_ENV: str = "HYBRID_CALIB_FRAMES"
 # v4 默认值（解析收敛：调用点统一走 env_int / env_float，勿再各自解析）
 HYBRID_SLOW_INFLIGHT_DEFAULT: int = 4      # 慢端预取上限（片）
-HYBRID_SLOW_DISCOUNT_DEFAULT_CPU: float = 0.45  # 慢端=CPU 软解稳态折扣
-HYBRID_SLOW_DISCOUNT_DEFAULT_GPU: float = 0.85  # 慢端=NVDEC 稳态折扣
+# v5（2026-09-01）：慢端速率折扣默认改为 **1.0（不折损）**，两档都是。
+#
+# 原值 CPU 0.45 / GPU 0.85 是错的 —— 折扣只乘在慢端上，而分界决策只看
+# **两端速率之比**，单端折损必然把比值扭曲 → 慢端被系统性少分。实测
+# （test6 AV1 4000 帧，runs=3 中位，段数/唯一文本逐位一致）：
+#     0.45 → 2.481s   0.70 → 2.349s   0.90 → 2.339s   1.00 → 2.217s
+# 单调改善，1.00 比 0.45 快 10.5%，且从"输给纯 NVDEC 2.623s"翻转为赢。
+#
+# 原理：标定本来就是**两后端并发**跑的（见 hybrid_decode.hybrid_begin），
+# 所以 rf/rs 已经含了并发折损；再乘一次折扣是重复折损。实测也印证这点：
+# 标定 gpu=2003/cpu=844（比 0.42）与生产实测 gpu=1625/cpu=690（比 0.42）
+# **比值一致** —— 两端同比例衰减，比值不受并发影响。
+#
+# 慢端"分太多"由 max_share=0.45 与 safety=0.95 两个**比值约束**兜底，
+# 它们与折扣无关。特殊场景仍可用 HYBRID_SLOW_DISCOUNT 覆盖。
+HYBRID_SLOW_DISCOUNT_DEFAULT_CPU: float = 1.0   # 慢端=CPU 软解：不折损
+HYBRID_SLOW_DISCOUNT_DEFAULT_GPU: float = 1.0   # 慢端=NVDEC：不折损
 HYBRID_CALIB_FRAMES_DEFAULT: int = 40      # 速率校准帧数（弱 CPU 下压缩固定开销）
 # 注：HYBRID_CALIB_ROUNDS（多轮校准取中位）已于 0.9.0 删除——实测净负
 # （3 轮 -21%：~0.68s 测速成本 > 分界精度收益），见 docs/PERFORMANCE.md §10.5。
