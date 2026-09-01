@@ -73,16 +73,24 @@ def decode_loop(video: str, roi: tuple, n: int, threads: int, ctx,
         out[key + "_err"] = str(e)
 
 
-def spin(stop: threading.Event, nthreads: int) -> None:
-    def one():
-        x = 0
+def blas_hog(stop: threading.Event, size: int = 1200) -> None:
+    """**释放 GIL** 的 CPU 负载：numpy BLAS 在 C 层运算，不吃 GIL。
+
+    与 `spin()`（纯 Python 循环 → 持续持有 GIL）形成对照。两组都大约吃掉
+    2 个核的算力，唯一差别就是**抢不抢 GIL**。
+    """
+    try:
+        import numpy as np
+        a = np.random.rand(size, size)
+        b = np.random.rand(size, size)
         while not stop.is_set():
-            x = (x + 1) % 1000003
-    ts = [threading.Thread(target=one, daemon=True) for _ in range(nthreads)]
-    for t in ts:
-        t.start()
-    for t in ts:
-        t.join()
+            _ = a @ b
+    except ImportError:
+        return
+
+
+def spin(stop: threading.Event, nthreads: int) -> None:
+    """纯 Python 忙等 —— **持有 GIL**（每 switchinterval 才让出一次）。"""
 
 
 def bandwidth_hog(stop: threading.Event, mb: int = 512) -> None:
@@ -98,7 +106,8 @@ def bandwidth_hog(stop: threading.Event, mb: int = 512) -> None:
 
 
 def run_case(threads: int, video: str, roi: tuple, n: int, runs: int,
-             dual_cpu: bool, with_nvdec: bool, nspin: int, hog: bool):
+             dual_cpu: bool, with_nvdec: bool, nspin: int, hog: bool,
+             nblas: int = 0):
     per_thread = []
     for _ in range(runs):
         stop = threading.Event()
@@ -117,6 +126,9 @@ def run_case(threads: int, video: str, roi: tuple, n: int, runs: int,
         if hog:
             bg.append(threading.Thread(
                 target=bandwidth_hog, args=(stop,), daemon=True))
+        for _ in range(nblas):
+            bg.append(threading.Thread(
+                target=blas_hog, args=(stop,), daemon=True))
         for t in bg:
             t.start()
         time.sleep(0.2)                      # 让背景负载先进入稳态
@@ -161,18 +173,20 @@ def main() -> int:
     e = c(dual_cpu=False, with_nvdec=False, nspin=0, hog=True)
     print("  E  CPU ∥ 内存带宽 hog              %6.0f fps   %+.1f%%"
           % (e, (e / a - 1) * 100))
+    f = c(dual_cpu=False, with_nvdec=False, nspin=0, hog=False, nblas=2)
+    print("  F  CPU ∥ 2 个 BLAS hog（**放 GIL**）%6.0f fps   %+.1f%%"
+          % (f, (f / a - 1) * 100))
 
     print("\n  判读：")
+    print("    D 与 F 都约吃 2 个核，唯一差别是**抢不抢 GIL**：")
+    if d < a * 0.75 and f > a * 0.9:
+        print("      → D 大跌、F 几乎不跌 ⇒ **元凶是 GIL 争抢，不是 CPU 算力**。")
+        print("        这解释了「任务管理器只看到 ~50% 占用却有争用」：")
+        print("        被 GIL 阻塞的线程在**等待**，不产生 CPU 占用。")
+    elif abs(d - f) < a * 0.1:
+        print("      → D 与 F 跌幅相近 ⇒ 是真实算力竞争，与 GIL 无关。")
     if b < a * 0.75 and cc > a * 0.9:
-        print("    B 大跌而 C 几乎不跌 → 拖慢来自**CPU 解码路径内部的共享资源**")
-        print("    （内存带宽 / decord 内部锁 / 分配器），与 NVDEC 无关。")
-        print("    这正是 hybrid 里 CPU 掉一半的机理：不是 NVDEC 抢，是**第二个")
-        print("    解码流本身**抢。")
-    elif b > a * 0.9:
-        print("    B 几乎不跌 → 两路 CPU 解码可以并行，共享资源不是瓶颈；")
-        print("    hybrid 里的 966fps 需另找解释（如流水线结构）。")
-    if e < a * 0.8:
-        print("    E 大跌 → 内存带宽是 CPU 软解的关键资源。")
+        print("    B 大跌而 C 几乎不跌 → 第二路 CPU 解码的代价远大于 NVDEC。")
     return 0
 
 

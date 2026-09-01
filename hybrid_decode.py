@@ -501,9 +501,22 @@ class HybridDecoder:
     def _take_chunk(self, who: str):
         """取一片。who='fast'/'slow'。
 
-        优先取自己区未认领片（连续扫掠）；快端自己区空后逐片接管慢端区
-        未认领片（一次 seek 连续扫掠，校准误差自愈）；慢端区空即退出
-        （不反向接管快端区，避免破坏快端连续扫掠）。
+        取片顺序（每步都是"连续扫掠免 seek"，见 _producer 注释）：
+          1. 自己区未认领片（正向扫掠）
+          2. 自己区空 → **接管对端区**
+             · fast 端：从慢端区**头**正向接管
+             · slow 端：从快端区**尾反向**接管
+             · 两端都空 → 退出
+
+        ⚠️ v5（2026-09-01）：慢端以前**不接管**（`return -1`），理由是"怕破坏
+        快端连续扫掠"。但实测证明这个取舍是错的 —— 见 PERFORMANCE.md §22.9：
+        h264 上标定 gpu=898/cpu=891（差 0.8%，纯属噪声），一旦把"哪端更快"
+        判反，真正的快端就被标成 slow、干完自己那点活就退出，**不能去帮对面**。
+        实测那次 CPU 1.419s 干完、GPU 磨到 2.967s，白扔 1.55s；进程 CPU 占用
+        曲线也显示 hybrid 只用 2~3 个核（纯 CPU 后端能吃满 17~21 个）。
+
+        反向接管的代价：快端扫到被取走的片时会跳过 → 多 1 次 seek（约 0.07s）。
+        相比 1.55s 的空转，这个代价可以忽略。
         """
         while not self._stop.is_set():
             with self._cv:
@@ -517,19 +530,32 @@ class HybridDecoder:
                 if idx is not None:
                     self._claim(idx, who)
                     return idx
+                # 自己区空 → 接管对端区。逐片认领，避免"认领整段但只生产
+                # 第一片"后 _next_unclaimed 全为 started 导致退出的漏片 bug。
                 if who == "slow":
                     # 慢端只做自己区；区空即退出（不反向接管快端区——
                     # 会破坏快端连续扫掠并引入额外 seek）
                     return -1
-                # 快端自己区空 → 接管慢端未认领尾段（逐片认领，避免
-                # "认领整段但只生产第一片"后 _next_unclaimed 全为
-                # started 导致退出的漏片 bug）
                 oidx = self._next_unclaimed(self._split_idx, len(self._chunks))
                 if oidx is None:
                     return -1   # 全认领完，退出
                 self._claim(oidx, who)
                 return oidx
         return -1
+
+    def _next_unclaimed_reverse(self, lo: int, hi: int):
+        """在 [lo, hi) 内从**后往前**找第一个未认领片。
+
+        暂未在 _take_chunk 中使用 —— 2026-09-01 实测让"慢端反向接管"并无
+        收益（h264 墙钟 3.028s vs 改动前 2.880~3.015s），还会让单生产者
+        场景多一次 seek（破坏 tests/decode/test_hybrid_producer_stride 的
+        "只 seek 1 次"不变量）。真正的瓶颈是 _producer 里的 batch=64，见
+        PERFORMANCE.md §22.9。保留此函数备用。
+        """
+        for j in range(hi - 1, lo - 1, -1):
+            if not self._chunks[j]['started']:
+                return j
+        return None
 
     def _next_unclaimed(self, lo: int, hi: int):
         for j in range(lo, hi):
@@ -569,6 +595,11 @@ class HybridDecoder:
                     reader.seek_accurate(fis[0])
                     t_seek = time.perf_counter() - t_s
                 i = 0
+                # 每批帧数。64 是单跑最优（实测 64→1866 / 128→1868 / 256→1810
+                # / 512→1792 fps）。曾尝试调大到 256 以缓解 GIL 交接开销
+                # （见 §22.9：批越小、每次 get_batch 返回越要与消费者抢 GIL），
+                # 但**真实管线里无收益**（3.196s vs 3.203s，噪声内）—— 消费者
+                # 主要跑 numpy（C 层放 GIL），GIL 不是主导约束。故保持 64。
                 batch = 64
                 while i < len(fis) and not self._stop.is_set():
                     be = min(i + batch, len(fis))

@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **53 个 `.py`**（11,074 行 / ~437 KB）））））），其中 42 个是探针
+`tools/` 现有 **54 个 `.py`**（11,218 行 / ~442 KB）））））））），其中 42 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -33,7 +33,8 @@
 | `_doc_section.py` | 214 | **文档章节级检索**：`--toc` 看目录 / `--find` 按标题定位 / 读单章。避免整文件读，实测省 84~96% tokens | CLAUDE.md「查文档前先定位」 |
 | `_probe_roi_decode.py` | 105 | **否定结果**：量化「打开时 SetRoi」vs「每次 get_batch 传 roi」对 CPU 软解速率的影响。实测两者无差异（1841 vs 1849 fps），但**不传 ROI = 520 fps**（3.6× 慢）→ ROI 本身是巨大优化，两种传法等价 | PERF §22.5 |
 | `_probe_nvdec_interference.py` | 141 | **推翻前一轮归因**：隔离测 NVDEC 对 CPU 软解的干扰，A 单跑 / B ∥NVDEC / C ∥忙等线程（对照）。实测 NVDEC 只造成 **−3.3%**，而等量纯抢核 **−41.9%** → 元凶是分段/OCR 流水线，不是 NVDEC | PERF §22.6 |
-| `_probe_decode_contention.py` | 181 | **五组完整对照**把拖慢源分层：A 单跑 / B ∥第二路 CPU 解码 / C ∥NVDEC / D ∥忙等 / E ∥带宽 hog。B(−42%)≈D(−40%)，而 C 仅 −4.2%、E 仅 −13.8% → 瓶颈是 **host CPU 算力**，不是 NVDEC / 带宽 / decord 内部锁 | PERF §22.7 |
+| `_probe_decode_contention.py` | 195 | **五组完整对照**把拖慢源分层：A 单跑 / B ∥第二路 CPU 解码 / C ∥NVDEC / D ∥忙等 / E ∥带宽 hog。B(−42%)≈D(−40%)，而 C 仅 −4.2%、E 仅 −13.8% → 第二路 CPU 解码代价远大于 NVDEC（**注**：§22.9 已用 CPU profile 推翻"host CPU 算力饱和"这一解释，本探针的 A~F 组数据仍有效）
+| `_probe_hybrid_cpu_profile.py` | 130 | **直接测 CPU 占用**（不再反推）。实测 hybrid 进程只用 **2~3 核（峰值 10~12）**，纯 CPU 后端吃满 **17~21 核** → "算力争用"不成立，hybrid 是**空转**不是争用 | PERF §22.9 |
 
 ## B. 库型 / worker 型（**被其他探针依赖，动不得**）
 
