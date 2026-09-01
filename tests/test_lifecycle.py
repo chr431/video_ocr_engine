@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import threading
 from collections import OrderedDict
+from collections import deque
 
 import numpy as np
 import pytest
@@ -237,6 +238,31 @@ def test_hybrid_pop_frames_releases_delivered_data():
     assert ch["data"] == [], "已交付数据应被删除"
     assert ch["delivered"] == n
     assert dec._unconsumed["fast"] == 0, "排空后应释放未消费计数"
+
+
+def test_hybrid_pop_frames_consumes_deque_across_chunk_boundary():
+    """生产者使用 deque 时，跨片批次仍按全局帧序交付。"""
+    dec = _hybrid_stub()
+    dec._chunks = []
+    for start, end, owner in ((0, 4, "fast"), (4, 8, "slow")):
+        dec._chunks.append({
+            "fis": list(range(start, end)),
+            "data": deque((i, np.full((2, 2), i))
+                          for i in range(start, end)),
+            "off": 0, "delivered": 0, "all_delivered": False,
+            "counted": True, "consumed": False, "done": True,
+            "owner": owner, "started": True,
+        })
+    dec._starts = [0, 4]
+    dec._unconsumed = {"fast": 1, "slow": 1}
+    dec._inflight = dec._inflight_slow = 8
+    dec._split_idx = 1
+
+    got = dec._pop_frames(list(range(8)))
+
+    assert [int(frame[0, 0]) for frame in got] == list(range(8))
+    assert all(not ch["data"] for ch in dec._chunks)
+    assert dec._unconsumed == {"fast": 0, "slow": 0}
 
 
 # ═══════════════ 5. OCR 引擎池 LRU 上限 ═══════════════

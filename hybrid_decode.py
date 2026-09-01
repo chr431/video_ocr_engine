@@ -35,6 +35,7 @@ v3 设计（2026-08，探针定位 v2 退化后重写）：
 from __future__ import annotations
 
 import bisect
+from collections import deque
 import os
 import threading
 import time
@@ -145,8 +146,12 @@ def _split_oversized(specs, frames: list[int], key_frames: list[int],
     out: list[tuple[int, int]] = []
     _key_list = sorted(k for k in key_frames)
     for a, b in specs:
-        fis = [f for f in frames if a <= f < b]
-        if len(fis) <= max_frames:
+        # frames is a strictly increasing sampling grid.  Use its indexes
+        # instead of rebuilding a filtered list for every sub-segment; long
+        # videos with HYBRID_MAX_CHUNK_FRAMES enabled otherwise pay O(n^2).
+        frame_lo = bisect.bisect_left(frames, a)
+        frame_hi = bisect.bisect_left(frames, b)
+        if frame_hi - frame_lo <= max_frames:
             out.append((a, b))
             continue
         # 候选切点：片内关键帧（吸附到采样帧，去重、排除端点）
@@ -160,30 +165,28 @@ def _split_oversized(specs, frames: list[int], key_frames: list[int],
         # 从片首开始，按"当前片 + 下一关键帧 ≤ 上限"贪心切；关键帧不够时
         # 按帧数等分补足
         seg_start = a
+        seg_lo = frame_lo
         while True:
-            seg_fis = [f for f in frames if seg_start <= f < b]
-            if len(seg_fis) <= max_frames:
+            if frame_hi - seg_lo <= max_frames:
                 out.append((seg_start, b))
                 break
             # 找最远的关键帧切点，使左片 ≤ 上限；无则等分
             chosen = None
             for c in cuts:
                 if seg_start < c < b:
-                    left = [f for f in frames if seg_start <= f < c]
-                    if len(left) <= max_frames:
+                    cut_i = bisect.bisect_left(frames, c)
+                    if cut_i - seg_lo <= max_frames:
                         chosen = c
             if chosen is None:
-                left_fis = seg_fis[:max_frames]
-                last = left_fis[-1]
                 # 切点必须是采样帧边界（半开区间 [seg_start, chosen)）：
                 # chosen = 左片最后采样帧的下一个采样帧。frames 严格递增，
-                # 用 index+1 取下一个；已是最后一个采样帧则切到片尾。
-                pos = frames.index(last)
-                chosen = frames[pos + 1] if pos + 1 < len(frames) else b
+                # 直接按索引取左片后的采样帧，避免全局 frames.index 扫描。
+                chosen = frames[seg_lo + max_frames]
                 if chosen <= seg_start:
                     chosen = b
             out.append((seg_start, chosen))
             seg_start = chosen
+            seg_lo = bisect.bisect_left(frames, seg_start, seg_lo, frame_hi)
     return out
 
 
@@ -368,12 +371,15 @@ class HybridDecoder:
         # 分片粒度上限（HYBRID_MAX_CHUNK_FRAMES>0）：超过上限的片继续拆小。
         # 优先按已有关键帧边界切（seek 便宜），否则等分到 ≤ 上限。
         if self._max_chunk_frames > 0:
-            specs = self._split_oversized(specs, fr, keys)
+            specs = _split_oversized(specs, fr, keys,
+                                     self._max_chunk_frames)
         for a, b in specs:
-            fis = [f for f in fr if a <= f < b]
+            lo = bisect.bisect_left(fr, a)
+            hi = bisect.bisect_left(fr, b, lo)
+            fis = fr[lo:hi]
             if not fis:
                 continue
-            self._chunks.append({'fis': fis, 'data': [], 'off': 0,
+            self._chunks.append({'fis': fis, 'data': deque(), 'off': 0,
                                  'delivered': 0, 'all_delivered': False,
                                  'counted': False, 'consumed': False,
                                  'done': False, 'owner': None,
@@ -614,24 +620,38 @@ class HybridDecoder:
             fi = fis[i]
             ci = self._chunk_index(fi)
             ch = self._chunks[ci]
+            # The requested frame list is ordered and chunk starts are sorted.
+            # Resolve the next boundary once so a batch crossing no boundary
+            # does not call bisect for every frame.
+            next_start = (self._starts[ci + 1]
+                          if ci + 1 < len(self._starts) else None)
             stalled = 0
             while True:
                 with self._cv:
                     delivered = int(ch.get('delivered', ch.get('off', 0)))
                     if ch['data']:
-                        n_take = 0
-                        while (i + n_take < len(fis)
-                               and n_take < len(ch['data'])
-                               and self._chunk_index(fis[i + n_take]) == ci):
-                            got, crop = ch['data'][n_take]
-                            if got != fis[i + n_take]:
+                        # Count this request's frames in the current chunk once,
+                        # then consume from the queue head.  Production queues
+                        # are deques, so consuming a large chunk is O(request)
+                        # instead of repeatedly shifting a list prefix.  Lists
+                        # remain accepted for lightweight test doubles.
+                        n_req = 0
+                        while (i + n_req < len(fis)
+                               and (next_start is None
+                                    or fis[i + n_req] < next_start)):
+                            n_req += 1
+                        n_take = min(n_req, len(ch['data']))
+                        for j in range(n_take):
+                            if hasattr(ch['data'], 'popleft'):
+                                got, crop = ch['data'].popleft()
+                            else:
+                                got, crop = ch['data'].pop(0)
+                            if got != fis[i + j]:
                                 raise RuntimeError(
                                     'hybrid 序错位: want=%d got=%d'
-                                    % (fis[i + n_take], got))
+                                    % (fis[i + j], got))
                             out.append(crop)
-                            n_take += 1
                         if n_take:
-                            del ch['data'][:n_take]
                             delivered += n_take
                             ch['delivered'] = delivered
                             ch['off'] = 0
@@ -759,7 +779,7 @@ class HybridDecoder:
                 try:
                     close()
                 except Exception:
-                    pass
+                    pass  # Reader teardown is best effort after producer shutdown.
         if self._probe and self._probe_rows:
             rows, self._probe_rows = self._probe_rows, []
             self._dump_probe(rows)
@@ -808,4 +828,4 @@ class HybridDecoder:
         try:
             self.close()
         except Exception:
-            pass
+            pass  # Finalizers must not surface teardown errors during GC.

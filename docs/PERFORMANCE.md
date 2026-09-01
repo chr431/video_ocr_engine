@@ -320,6 +320,22 @@ test5 全片 hybrid 峰值 RSS 1022MB（大头不在 ch['data']，而在 decord
 （真实世界超长 GOP >256 帧/片时生效），单测覆盖拆片正确性。
 `HYBRID_MAX_CHUNK_FRAMES` 默认 0 不改变现行为。
 
+**2026-09-01 修复 + 热路径优化追加**：
+
+- **入口从未生效**：自 `bbe218c` 引入起 `hybrid_begin` 一直写的是
+  `self._split_oversized`（函数实为模块级），`HYBRID_MAX_CHUNK_FRAMES>0`
+  必抛 AttributeError。之所以长期无人发现：开关默认 0 + 单测只调纯函数、
+  不经过入口。已修调用点并补入口回归测试
+  （`test_hybrid_begin_applies_chunk_frame_limit`）。
+- **`_split_oversized` 去 O(n²)**：旧实现对每个子段/切点候选重扫全帧
+  列表，改 bisect 索引定位。实测无关键帧 30000 帧、上限 256：
+  115.7ms → 0.1ms（≈1000×）；3000 组随机差分对比（stride/关键帧密度/
+  上限全遍历）与旧实现输出完全一致，覆盖/无缝隙/上限三不变量全过。
+- **`ch['data']` 消费队列 list → deque**：逐帧弹出（`next_roi` 单帧
+  路径）从 O(片长)/帧 降为 O(1)/帧，实测 2000 帧片逐帧排空
+  8.0ms → 2.3ms（3.4×）；批量排空持平（2.0 vs 1.95ms，按请求保留
+  list 兼容路径）。
+
 ### 10.5 实验⑤：hybrid 批量交付减锁 + 多轮校准（均无净收益，保留开关）
 
 - `_pop_frames` 批量交付（get_batch 一次锁取同片连续帧）：3.203s vs
