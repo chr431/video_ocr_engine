@@ -62,6 +62,7 @@ def main():
     ap.add_argument("--runs", type=int, default=2)
     ap.add_argument("--envs", default="GPU_PIPELINE=0",
                     help="逗号分隔 K=V（如 GPU_PIPELINE=0,HYBRID_PROBE=1）")
+    ap.add_argument("--stride", type=int, default=1)
     ap.add_argument("--hybrid-max-chunks", type=int, default=16)
     ap.add_argument("--affinity", type=int, default=0,
                     help="把进程绑定到前 N 个逻辑 CPU（弱 CPU 模拟；0=不限制）")
@@ -95,7 +96,8 @@ def main():
         walls, segs_n, texts, metas, timings = [], [], set(), [], []
         for i in range(args.runs):
             ex, res, wall = run_once(args.video, roi, args.frames,
-                                     BACKENDS[bk], envs=envs)
+                                     BACKENDS[bk], stride=args.stride,
+                                     envs=envs)
             walls.append(wall)
             segs_n.append(len(res.segments))
             texts |= {s.text for s in res.segments if s.text}

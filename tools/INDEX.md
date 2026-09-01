@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **50 个 `.py`**（10,563 行 / ~417 KB））），其中 42 个是探针
+`tools/` 现有 **50 个 `.py`**（10,565 行 / ~417 KB））），其中 42 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -26,7 +26,7 @@
 | 文件 | 行 | 用途 | 引用 |
 |---|---:|---|---|
 | `e2e_smoke.py` | 351 | 端到端冒烟 / 真值验证（真实视频） | README「测试」节 |
-| `bench_hybrid.py` | 123 | hybrid 解码基准 | PERF §4 |
+| `bench_hybrid.py` | 125 | hybrid 解码基准 | PERF §4 |
 | `probe_decode_rates.py` | 125 | 各后端解码速率探测 | — |
 | `_probe_index_audit.py` | 277 | 核对本索引的每个数字是否与磁盘一致 | 本文件（自检） |
 | `_probe_discipline_audit.py` | 538 | **项目纪律审计**（12 项：硬编码路径 / 异常吞噬 / 未用 import / 未门控 print / 版本号 / 文档引用 / 注入预算…） | CLAUDE.md「纪律与自动化守卫」 |
