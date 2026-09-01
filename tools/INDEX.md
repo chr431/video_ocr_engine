@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **52 个 `.py`**（10,847 行 / ~428 KB））））），其中 42 个是探针
+`tools/` 现有 **53 个 `.py`**（11,074 行 / ~437 KB）））））），其中 42 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -26,13 +26,14 @@
 | 文件 | 行 | 用途 | 引用 |
 |---|---:|---|---|
 | `e2e_smoke.py` | 351 | 端到端冒烟 / 真值验证（真实视频） | README「测试」节 |
-| `bench_hybrid.py` | 125 | hybrid 解码基准 | PERF §4 |
+| `bench_hybrid.py` | 171 | hybrid 解码基准 | PERF §4 |
 | `probe_decode_rates.py` | 125 | 各后端解码速率探测 | — |
 | `_probe_index_audit.py` | 277 | 核对本索引的每个数字是否与磁盘一致 | 本文件（自检） |
 | `_probe_discipline_audit.py` | 574 | **项目纪律审计**（12 项：硬编码路径 / 异常吞噬 / 未用 import / 未门控 print / 版本号 / 文档引用 / 注入预算…） | CLAUDE.md「纪律与自动化守卫」 |
 | `_doc_section.py` | 214 | **文档章节级检索**：`--toc` 看目录 / `--find` 按标题定位 / 读单章。避免整文件读，实测省 84~96% tokens | CLAUDE.md「查文档前先定位」 |
 | `_probe_roi_decode.py` | 105 | **否定结果**：量化「打开时 SetRoi」vs「每次 get_batch 传 roi」对 CPU 软解速率的影响。实测两者无差异（1841 vs 1849 fps），但**不传 ROI = 520 fps**（3.6× 慢）→ ROI 本身是巨大优化，两种传法等价 | PERF §22.5 |
 | `_probe_nvdec_interference.py` | 141 | **推翻前一轮归因**：隔离测 NVDEC 对 CPU 软解的干扰，A 单跑 / B ∥NVDEC / C ∥忙等线程（对照）。实测 NVDEC 只造成 **−3.3%**，而等量纯抢核 **−41.9%** → 元凶是分段/OCR 流水线，不是 NVDEC | PERF §22.6 |
+| `_probe_decode_contention.py` | 181 | **五组完整对照**把拖慢源分层：A 单跑 / B ∥第二路 CPU 解码 / C ∥NVDEC / D ∥忙等 / E ∥带宽 hog。B(−42%)≈D(−40%)，而 C 仅 −4.2%、E 仅 −13.8% → 瓶颈是 **host CPU 算力**，不是 NVDEC / 带宽 / decord 内部锁 | PERF §22.7 |
 
 ## B. 库型 / worker 型（**被其他探针依赖，动不得**）
 

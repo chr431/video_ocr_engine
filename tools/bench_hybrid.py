@@ -1,5 +1,7 @@
 """hybrid 解码 A/B 基准：纯 NVDEC / 纯 CPU / hybrid 同窗口墙钟对比。
 
+测量前会做**空闲检查**（--allow-busy 可跳过）：残留进程会污染结果且不会报错。
+
 用法：
   python tools/bench_hybrid.py --video X --roi A,B,C,D --frames 3000
     [--backends nvdec,cpu,hybrid] [--runs 2] [--envs GPU_PIPELINE=0]
@@ -50,6 +52,41 @@ def run_once(video, roi, frames, cfg, stride=1, envs=None):
     return ex, res, wall
 
 
+def check_idle(max_pct: float = 20.0, strict: bool = False) -> bool:
+    """测量前确认机器空闲；不空闲就大声报警（或中止）。
+
+    为什么需要（2026-09-01 真踩过）：
+    一个探针被中断后留下**孤儿进程**，它的解码线程继续跑，占了 ~48% CPU
+    并把 CPU 从 2501MHz 压到 1987MHz（降频）。之后十几轮 benchmark 全部
+    偏慢 ~2.4s，而**输出看起来完全正常** —— 差点据此得出错误结论。
+    数字会骗人，但"开跑前先看看机器忙不忙"不会。
+    """
+    try:
+        import psutil
+    except ImportError:
+        print("  [空闲检查] psutil 未装，跳过")
+        return True
+    p = psutil.Process()
+    p.cpu_percent(interval=None)          # 先给自身计数器打基线
+    busy = psutil.cpu_percent(interval=1.5)
+    try:
+        freq = psutil.cpu_freq()
+        fs = " 频率 %.0f/%.0f MHz" % (freq.current, freq.max) if freq else ""
+    except Exception:
+        fs = ""
+    ok = busy <= max_pct
+    print("  [空闲检查] CPU 占用 %.1f%%%s → %s"
+          % (busy, fs, "OK" if ok else "**偏高**"))
+    if not ok:
+        print("     ⚠️ 机器不空闲：可能有残留的进程在跑（上次中断的探针？）。")
+        print("     测量值会系统性偏慢，且**不会有任何报错**。")
+        print("     Windows: Stop-Process -Name python -Force")
+        print("     或加 --allow-busy 忽略（不推荐）。")
+    if not ok and strict:
+        raise SystemExit("机器不空闲，已中止（去掉 --strict 或先清理进程）")
+    return ok
+
+
 def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -66,7 +103,16 @@ def main():
     ap.add_argument("--hybrid-max-chunks", type=int, default=16)
     ap.add_argument("--affinity", type=int, default=0,
                     help="把进程绑定到前 N 个逻辑 CPU（弱 CPU 模拟；0=不限制）")
+    ap.add_argument("--allow-busy", action="store_true",
+                    help="跳过测量前的空闲检查（不推荐）")
+    ap.add_argument("--strict", action="store_true",
+                    help="机器不空闲时直接中止")
+    ap.add_argument("--idle-max", type=float, default=20.0,
+                    help="空闲检查阈值（CPU 占用 %%，默认 20）")
     args = ap.parse_args()
+
+    if not args.allow_busy:
+        check_idle(args.idle_max, args.strict)
 
     if args.affinity > 0:
         try:
