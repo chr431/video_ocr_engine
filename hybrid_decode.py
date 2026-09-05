@@ -31,6 +31,20 @@ v3 设计（2026-08，探针定位 v2 退化后重写）：
 
   对外仍是 VideoReader 同形替身：len / get_batch / next_roi / seek_accurate
   / get_*；正确性依赖 v0.7.8+ 双后端 YUV420 逐位一致。
+
+  v7（2026-09-05，HYBRID_SCHED=split）：对齐 repo/hybrid_decoder_prototype
+  的 split 思路 —— 并发校准后直接最小化预测墙钟 max(前缀/rf, 后缀/rs)
+  分界，无 safety/max_share/折扣；校准缺省帧数加大到 128 源帧。调度器
+  仍可用 "dynamic"（v3~v5 约束式）回退。两调度共用分片/生产者/消费者
+  机制（含快端接管：原型因固定 ffmpeg 段无法窃取、靠多轮自适应纠错，
+  本引擎单遍解码无多轮机会，保留接管作标定误差保险）。
+
+  v7.1（2026-09-05，HYBRID_MIGRATE=1 默认开）：**在线移界** —— 原型
+  "多轮动态分配、两端同时完成"的单遍等价物。每片完成后用两端生产实测
+  速率（EMA，剔除 seek、首片预热跳过）重算未认领片的最优分界（min-max
+  剩余完成时间，in-flight 剩余按实际产出进度折算），预测改善 >5% 才把
+  split_idx 左移（把过量未认领片让给慢端）；只动未 started 的片，两端
+  连续扫掠不破坏。反方向（慢端是尾巴）由既有快端窃取自动覆盖。
 """
 from __future__ import annotations
 
@@ -263,6 +277,81 @@ def _dynamic_split(counts: list[int], rf: float, rs: float, *,
     return max(1, min(n - 1, best_split))
 
 
+def _split_minmax(counts: list[int], rf: float, rs: float) -> int:
+    """原型式分界（HYBRID_SCHED=split）：返回快端片数 split_idx。
+
+    对齐 repo/hybrid_decoder_prototype 的 choose_split：在关键帧分片边界中
+    直接最小化预测墙钟 max(前缀帧数/rf, 后缀帧数/rs) —— 均衡即两路同时
+    完成，这就是目标本身；**不加** safety/max_share/折扣（rf/rs 是并发
+    条件下的实测速率，已含争用；§22.10 曾证明该目标在 dynamic 调度下与
+    约束式无差异——但那有窃取与 max_share 兜底，split 调度刻意裸用）。
+    返回 split_idx ∈ [1, n-1]（两端各至少 1 片）。
+    """
+    n = len(counts)
+    if n <= 1:
+        return n
+    total = sum(counts)
+    if total <= 0 or rf <= 0 or rs <= 0:
+        return max(1, n - 1)
+    best_idx, best_t = 1, float("inf")
+    acc = 0
+    for k in range(1, n):     # 快端 = [0, k)
+        acc += counts[k - 1]
+        t = max(acc / rf, (total - acc) / rs)
+        if t < best_t:
+            best_t, best_idx = t, k
+    return best_idx
+
+
+def _migrate_boundary(counts: list[int], started: list[bool], k: int,
+                      rem_fast: float, rem_slow: float,
+                      r_fast: float, r_slow: float,
+                      min_gain: float = 0.85) -> int | None:
+    """在线移界（纯函数）：在 fast 未认领前缀 [p_f, k) 内找新分界 m。
+
+    调用方保证：started[j] 为 False 的 j 在 fast 区构成后缀 [p_f, k)、在
+    slow 区构成 [q_s, n)（两端各自按序认领的自然结果）。候选 m ∈ (p_f, k)：
+    fast 保留 [p_f, m)，把 [m, k) 让给 slow（slow 未认领变为 [m,k) ∪ [q_s,n)）。
+    目标 = 最小化两端剩余完成时间的较大值（in-flight 剩余 rem_* 按
+    delivered+len(data) 实际进度折算，由调用方算好传入）。
+
+    仅当预测墙钟比现状（m=k）改善超过 1-min_gain 时返回 m，否则 None。
+    门槛 15%：输入速率是 EMA 后的生产实测（±10-30% 噪声），门槛太松会被
+    噪声牵着来回移界（首轮实测 5% 门槛 + 污染样本三连移界拖成 4.17s）。
+    返回的 m ≥ p_f+1（fast 至少保留 1 片未认领，防止"全让光→窃取抖回"）。
+    """
+    n = len(counts)
+    if k <= 0 or k >= n or r_fast <= 0 or r_slow <= 0:
+        return None
+    p_f = k
+    for j in range(k):
+        if not started[j]:
+            p_f = j
+            break
+    if p_f >= k - 1:      # fast 未认领不足 2 片，无可移空间
+        return None
+    q_s = n
+    for j in range(k, n):
+        if not started[j]:
+            q_s = j
+            break
+    slow_own = sum(counts[q_s:n])
+    base = max((rem_fast + sum(counts[p_f:k])) / r_fast,
+               (rem_slow + slow_own) / r_slow)
+    best_m, best_t = None, base
+    shed = 0
+    for m in range(k - 1, p_f, -1):
+        shed += counts[m]
+        t_fast = (rem_fast + sum(counts[p_f:m])) / r_fast
+        t_slow = (rem_slow + shed + slow_own) / r_slow
+        t = t_fast if t_fast > t_slow else t_slow
+        if t < best_t:
+            best_t, best_m = t, m
+    if best_m is not None and best_t < base * min_gain:
+        return best_m
+    return None
+
+
 class HybridDecoder:
     """双解码读取器 v3：速率比例分界 + 两端连续扫掠（对下游透明）。"""
 
@@ -277,14 +366,33 @@ class HybridDecoder:
         # 分片粒度上限：>0 时把超过该帧数的片继续拆小（内存上界 =
         # inflight × max_chunk_frames 帧）。0 = 不拆（兼容 v3）。
         self._max_chunk_frames = max(0, int(max_chunk_frames))
-        # 速率校准帧数：0 = 用 env HYBRID_CALIB_FRAMES，缺省 40（弱 CPU
-        # 下 256 帧校准 ~0.4s，会吃掉混合解码的收益；40 帧 ~0.06-0.12s
-        # 已足够稳定，且 seek 是固定成本与帧数无关；短校准配合稳态折扣
-        # HYBRID_SLOW_DISCOUNT 修正 CPU 软解的缓冲衰减高估）。
-        calib = config.env_int(
-            config.HYBRID_CALIB_FRAMES_ENV,
-            config.HYBRID_CALIB_FRAMES_DEFAULT) if calib_frames <= 0 else int(calib_frames)
+        # 调度器：dynamic（v3~v5 约束式分界 + 折扣）| split（原型式
+        # min-max 分界，无约束）。见 engine_config HYBRID_SCHED 注释。
+        self._sched = (os.environ.get(config.HYBRID_SCHED_ENV,
+                                      config.HYBRID_SCHED_DEFAULT)
+                       or "dynamic").strip().lower()
+        if self._sched not in ("dynamic", "split"):
+            raise ValueError(f'HYBRID_SCHED 非法: {self._sched!r}'
+                             '（可选 dynamic / split）')
+        # 速率校准帧数：0 = 用 env HYBRID_CALIB_FRAMES；split 调度的分界
+        # 精度更关键（无 safety/max_share 兜底），缺省帧数更大。
+        if calib_frames <= 0:
+            calib = config.env_int(
+                config.HYBRID_CALIB_FRAMES_ENV,
+                (config.HYBRID_SPLIT_CALIB_FRAMES_DEFAULT if self._sched == "split"
+                 else config.HYBRID_CALIB_FRAMES_DEFAULT))
+        else:
+            calib = int(calib_frames)
         self._calib_frames = max(32, calib)
+        # ── 在线移界（v7.1）状态 ──
+        # 生产实测速率 EMA（hybrid_begin 里用并发校准值初始化作先验）；
+        # 首片含解码预热（软解首片可虚高 2 倍+，§22.2）不参与 EMA。
+        self._migrate_on = config.env_bool(config.HYBRID_MIGRATE_ENV,
+                                           bool(config.HYBRID_MIGRATE_DEFAULT))
+        self._rate_est: dict = {}
+        self._done_count = {"fast": 0, "slow": 0}
+        self._mig_cooldown = 0
+        self._slow_alive = True
         self._gpu = gpu_vr
         self._ex = ex
         self._roi = (ex._roi[0], ex._roi[1], ex._roi[2] + 1, ex._roi[3] + 1)
@@ -453,8 +561,8 @@ class HybridDecoder:
         r_gpu = rates.get("gpu", 0.0)
         r_cpu = rates.get("cpu", 0.0)
         if self._probe:
-            print(f"[hybrid] calib: gpu={r_gpu:.0f}fps cpu={r_cpu:.0f}fps "
-                  f"chunks={n}", flush=True)
+            print(f"[hybrid] calib(sched={self._sched}): gpu={r_gpu:.0f}fps "
+                  f"cpu={r_cpu:.0f}fps chunks={n}", flush=True)
         # ── 速率比例分界（快端在前） ──
         if r_gpu >= r_cpu:
             self._fast_tag = "gpu"
@@ -466,31 +574,46 @@ class HybridDecoder:
             self._fast_reader = self._cpu
             self._slow_reader = self._gpu
             rf, rs = max(r_cpu, 1.0), max(r_gpu, 1.0)
-        # ── 动态分界（v4）：在"慢端不拖尾"约束下给慢端尽量多的片 ──
-        # 理论最优 = 速率比例（两端同时完成 → decode = N/(rf+rs)）；但
-        # 并发解码时慢端速率会打折（争抢），比例份额会给慢端过多片 →
-        # 慢端拖尾、decode 反被拖慢（实测 HEVC 8 核：比例 25% → 慢端 3 片
-        # 1.36s > 快端 1.16s，decode 被拖到 1.36s）。
-        # 另：短校准会高估慢端稳态速率（HEVC 软解有缓冲衰减：48 帧测
-        # 495fps、384 帧测 205fps，快测高估 2 倍+）→ 需按稳态折扣修正。
-        # 慢端 = CPU 软解：×0.45（缓冲衰减，48 帧快测 ≈ 稳态的 2.2 倍）；
-        # 慢端 = NVDEC：×0.85（NVDEC 稳态略降）。env HYBRID_SLOW_DISCOUNT
-        # 可覆盖。
+        # 速率先验（并发校准值）：生产实测 EMA 到位前用于移界决策
+        self._rate_est = {"fast": rf, "slow": rs}
         counts = [len(ch['fis']) for ch in self._chunks]
         slow_is_cpu = (self._slow_reader is self._cpu)
-        default_disc = (config.HYBRID_SLOW_DISCOUNT_DEFAULT_CPU if slow_is_cpu
-                        else config.HYBRID_SLOW_DISCOUNT_DEFAULT_GPU)
-        slow_disc = config.env_float(config.HYBRID_SLOW_DISCOUNT_ENV,
-                                     default_disc)
-        self._split_idx = _dynamic_split(
-            counts, rf, rs, slow_is_cpu=slow_is_cpu,
-            discount_cpu=slow_disc, discount_gpu=slow_disc)
-        if self._probe:
-            print(f"[hybrid] split: fast={self._fast_tag}->[0,{self._split_idx}) "
-                  f"slow->[{self._split_idx},{len(self._chunks)}) "
-                  f"rf={rf:.0f} rs={rs:.0f} "
-                  f"rs_eff={rs*slow_disc:.0f} disc={slow_disc:.2f}",
-                  flush=True)
+        if self._sched == "split":
+            # ── 原型式分界（HYBRID_SCHED=split）：直接最小化预测墙钟 ──
+            # rf/rs 为并发标定速率（已含争用），不再乘折扣/加约束。
+            self._split_idx = _split_minmax(counts, rf, rs)
+            if self._probe:
+                fast_fr = sum(counts[:self._split_idx])
+                slow_fr = sum(counts[self._split_idx:])
+                print(f"[hybrid] split: fast={self._fast_tag}->[0,{self._split_idx}) "
+                      f"slow->[{self._split_idx},{len(self._chunks)}) "
+                      f"rf={rf:.0f} rs={rs:.0f} "
+                      f"预测 fast={fast_fr/rf:.2f}s slow={slow_fr/rs:.2f}s",
+                      flush=True)
+        else:
+            # ── 动态分界（v4）：在"慢端不拖尾"约束下给慢端尽量多的片 ──
+            # 理论最优 = 速率比例（两端同时完成 → decode = N/(rf+rs)）；但
+            # 并发解码时慢端速率会打折（争抢），比例份额会给慢端过多片 →
+            # 慢端拖尾、decode 反被拖慢（实测 HEVC 8 核：比例 25% → 慢端 3 片
+            # 1.36s > 快端 1.16s，decode 被拖到 1.36s）。
+            # 另：短校准会高估慢端稳态速率（HEVC 软解有缓冲衰减：48 帧测
+            # 495fps、384 帧测 205fps，快测高估 2 倍+）→ 需按稳态折扣修正。
+            # 慢端 = CPU 软解：×0.45（缓冲衰减，48 帧快测 ≈ 稳态的 2.2 倍）；
+            # 慢端 = NVDEC：×0.85（NVDEC 稳态略降）。env HYBRID_SLOW_DISCOUNT
+            # 可覆盖。（v5 起默认 1.0 —— 折扣只乘一端扭曲比值，见 §22.2。）
+            default_disc = (config.HYBRID_SLOW_DISCOUNT_DEFAULT_CPU if slow_is_cpu
+                            else config.HYBRID_SLOW_DISCOUNT_DEFAULT_GPU)
+            slow_disc = config.env_float(config.HYBRID_SLOW_DISCOUNT_ENV,
+                                         default_disc)
+            self._split_idx = _dynamic_split(
+                counts, rf, rs, slow_is_cpu=slow_is_cpu,
+                discount_cpu=slow_disc, discount_gpu=slow_disc)
+            if self._probe:
+                print(f"[hybrid] split: fast={self._fast_tag}->[0,{self._split_idx}) "
+                      f"slow->[{self._split_idx},{len(self._chunks)}) "
+                      f"rf={rf:.0f} rs={rs:.0f} "
+                      f"rs_eff={rs*slow_disc:.0f} disc={slow_disc:.2f}",
+                      flush=True)
         self._pname[id(self._gpu)] = "gpu"
         self._pname[id(self._cpu)] = "cpu"
         for tag, reader in ((self._fast_tag, self._fast_reader),
@@ -581,6 +704,79 @@ class HybridDecoder:
         ch['claim_t'] = time.perf_counter()
         ch['claim_by'] = who
 
+    # ─────────────── 在线移界（v7.1） ───────────────
+
+    def _note_chunk_done(self, who: str, r_chunk: float,
+                         clean: bool) -> None:
+        """片完成记账（须持 self._cv）：更新生产速率 EMA，节流触发移界。
+
+        clean=False 的样本（seek 邻接片）直接丢弃：反向 seek 落 GOP 中段
+        时参考帧重建成本记在解码里，样本会被污染（实测 rf 一度 486fps），
+        且"移界→seek→坏样本→再移界"会形成死循环。首个干净样本直接替换
+        并发校准先验（校准含系统性偏差——NVDEC 被并发低估、CPU 被"如实"
+        测弱——拖慢收敛）；两端各攒够 2 个干净样本才允许移界。
+        """
+        if not self._migrate_on or not clean:
+            return
+        n = self._done_count.get(who, 0) + 1
+        self._done_count[who] = n
+        if n == 1:
+            self._rate_est[who] = r_chunk
+        else:
+            prev = self._rate_est.get(who)
+            self._rate_est[who] = (r_chunk if prev is None
+                                   else prev * 0.5 + r_chunk * 0.5)
+        if (self._done_count.get("fast", 0) < 2
+                or self._done_count.get("slow", 0) < 2):
+            return
+        if self._mig_cooldown > 0:
+            self._mig_cooldown -= 1
+            return
+        self._maybe_migrate()
+
+    def _inflight_remain(self, who: str) -> int:
+        """who 名下 started-not-done 片的剩余帧数（按实际产出进度折算）。"""
+        rem = 0
+        for ch in self._chunks:
+            if (ch.get('owner') == who and ch['started']
+                    and not ch['done']):
+                produced = int(ch.get('delivered', 0)) + len(ch['data'])
+                rem += max(len(ch['fis']) - produced, 0)
+        return rem
+
+    def _maybe_migrate(self) -> None:
+        """生产速率驱动的在线移界（须持 self._cv）。
+
+        原型多轮自适应的单遍等价物：两端各自按序认领 → 未认领片在 fast 区
+        构成后缀 [p_f, k)、在 slow 区构成 [q_s, n)。用生产实测 EMA 速率在
+        [p_f, k) 内重算 min-max 分界，把过量份额从"标签快端"让给慢端。
+        只动未 started 的片：两端连续扫掠不破坏，接收端至多 1 次反向 seek；
+        快端窃取保留作反方向的自动纠正（对 fast 恒为无缝前向）。
+        防呆：慢端已退出不移界（防片搁浅）；移界后冷却 1 片防震荡。
+        """
+        if not self._slow_alive:
+            return
+        n = len(self._chunks)
+        k = self._split_idx
+        if k <= 1 or k >= n:
+            return
+        started = [bool(ch['started']) for ch in self._chunks]
+        counts = [len(ch['fis']) for ch in self._chunks]
+        old = k
+        m = _migrate_boundary(counts, started, k,
+                              float(self._inflight_remain("fast")),
+                              float(self._inflight_remain("slow")),
+                              float(self._rate_est.get("fast", 0.0)),
+                              float(self._rate_est.get("slow", 0.0)))
+        if m is None:
+            return
+        self._split_idx = m
+        self._mig_cooldown = 1
+        if self._probe:
+            print(f"[hybrid] migrate: split {old}->{m} "
+                  f"rf={self._rate_est.get('fast', 0.0):.0f} "
+                  f"rs={self._rate_est.get('slow', 0.0):.0f}", flush=True)
+
     def _producer(self, reader):
         fast = (reader is self._fast_reader)
         who = "fast" if fast else "slow"
@@ -595,6 +791,9 @@ class HybridDecoder:
         while not self._stop.is_set():
             idx = self._take_chunk(who)
             if idx < 0:
+                if who == "slow":
+                    with self._cv:
+                        self._slow_alive = False
                 return
             ch = self._chunks[idx]
             fis = ch['fis']
@@ -621,16 +820,19 @@ class HybridDecoder:
                             ch['data'].append((fi, arr[k]))
                         self._cv.notify_all()
                     i = be
+                t_done = time.perf_counter()
+                ch['produce_s'] = t_done - t_chunk
+                ch['seek_s'] = t_seek
+                # 生产实测速率（帧/s，剔除 seek）：移界决策的输入。
+                r_chunk = len(fis) / max(ch['produce_s'] - t_seek, 1e-4)
                 with self._cv:
                     ch['done'] = True
                     if not ch.get('all_delivered', False):
                         self._unconsumed[who] += 1
                         ch['counted'] = True
                     self._cv.notify_all()
+                    self._note_chunk_done(who, r_chunk, t_seek <= 0.005)
                 prev_end = fis[-1] + step
-                t_done = time.perf_counter()
-                ch['produce_s'] = t_done - t_chunk
-                ch['seek_s'] = t_seek
                 if self._probe:
                     with self._probe_lock:
                         self._probe_rows.append(

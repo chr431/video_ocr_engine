@@ -110,6 +110,7 @@ def test_hybrid_begin_applies_chunk_frame_limit(monkeypatch):
     dec._min_gap = 16
     dec._max_chunk_frames = 100
     dec._calib_frames = 40
+    dec._sched = "dynamic"
     dec._chunks = []
     dec._starts = []
     dec._begun = False

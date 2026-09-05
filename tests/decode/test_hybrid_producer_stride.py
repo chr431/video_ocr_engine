@@ -83,6 +83,12 @@ def _make(stride: int, chunk_bounds: list[int]):
     dec._inflight_slow = 8
     # 慢端区从第 1 片起（第 0 片留给快端），让 _producer 连扫多片
     dec._split_idx = 1
+    # 在线移界状态（__new__ 绕过构造必须补齐，否则 _note_chunk_done 抛错）
+    dec._migrate_on = False
+    dec._rate_est = {}
+    dec._done_count = {'fast': 0, 'slow': 0}
+    dec._mig_cooldown = 0
+    dec._slow_alive = True
     dec._probe = False
     dec._probe_lock = threading.Lock()
     dec._probe_rows = []

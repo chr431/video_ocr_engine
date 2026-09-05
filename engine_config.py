@@ -132,6 +132,28 @@ HYBRID_SLOW_DISCOUNT_ENV: str = "HYBRID_SLOW_DISCOUNT"
 HYBRID_CALIB_FRAMES_ENV: str = "HYBRID_CALIB_FRAMES"
 # v4 默认值（解析收敛：调用点统一走 env_int / env_float，勿再各自解析）
 HYBRID_SLOW_INFLIGHT_DEFAULT: int = 4      # 慢端预取上限（片）
+# v6（2026-09-01）：**单端守卫** —— 用 CPU 的**单端**采样速率判断是否值得开第二路。
+#
+# 背景：hybrid 的标定是**两路并发**跑的，测出的 cpu 速率含了并发惩罚，无法
+# 反映 CPU 单跑时的潜力。实测 h264：并发标定 cpu≈850fps，而纯 CPU 后端能到
+# ~2358fps。于是"该不该用 NVDEC 这第二路"在并发标定下永远判断不出来。
+#
+# 突破口：CPU reader 是在**后台线程**打开的（HybridDecoder.__init__ 的
+# _cpu_thread），那时还没有任何其它解码流在跑 —— 在那里测一次就是单端速率，
+# 而且不占主线程墙钟。
+#
+# 判据：`cpu_solo > gpu_rate × ratio` 时，说明 CPU 单跑就明显更快，第二路
+# （NVDEC）只会稀释 → 退化为 CPU 单路。两个场景分离度极大，粗略采样即可：
+#   h264: cpu_solo≈2358 / gpu≈962  → 2.4×（触发）
+#   av1 : cpu_solo≈566  / gpu≈1772 → 0.32×（不触发）
+HYBRID_SOLO_GUARD_ENV: str = "HYBRID_SOLO_GUARD"          # 1=开 / 0=关
+HYBRID_SOLO_GUARD_DEFAULT: int = 1
+HYBRID_SOLO_GUARD_RATIO_ENV: str = "HYBRID_SOLO_GUARD_RATIO"
+HYBRID_SOLO_GUARD_RATIO_DEFAULT: float = 1.8
+# 单端采样帧数。40 帧太少（FFmpeg 帧并行没喂饱，实测只有 ~850fps）；
+# 192 帧约 0.11s，且落在后台线程上。
+HYBRID_SOLO_PROBE_FRAMES_ENV: str = "HYBRID_SOLO_PROBE_FRAMES"
+HYBRID_SOLO_PROBE_FRAMES_DEFAULT: int = 192
 # v5（2026-09-01）：慢端速率折扣默认改为 **1.0（不折损）**，两档都是。
 #
 # 原值 CPU 0.45 / GPU 0.85 是错的 —— 折扣只乘在慢端上，而分界决策只看
@@ -150,6 +172,33 @@ HYBRID_SLOW_INFLIGHT_DEFAULT: int = 4      # 慢端预取上限（片）
 HYBRID_SLOW_DISCOUNT_DEFAULT_CPU: float = 1.0   # 慢端=CPU 软解：不折损
 HYBRID_SLOW_DISCOUNT_DEFAULT_GPU: float = 1.0   # 慢端=NVDEC：不折损
 HYBRID_CALIB_FRAMES_DEFAULT: int = 40      # 速率校准帧数（弱 CPU 下压缩固定开销）
+# v7（2026-09-05）：hybrid 调度器选择 —— 对齐 repo/hybrid_decoder_prototype
+# 的 split 思路（按并发实测速度把帧区间沿关键帧分成两段，直接最小化预测
+# 墙钟 max(前缀/rf, 后缀/rs)，两路各解一段、同时完成）：
+#   dynamic（v3~v5 现役）：约束式分界（safety=0.95 + max_share=0.45 + 折扣），
+#       依赖快端工作窃取自愈标定误差；
+#   split（原型式）：去掉 safety/max_share/折扣，直接最小化预测墙钟；
+#       标定帧数加大（原型用 600 源帧，此处折中 128）。
+# 两种调度共用同一分片/生产者/消费者机制（连续扫掠 + 快端接管）——原型
+# 因固定 ffmpeg 段无法窃取、只能靠多轮自适应纠错，本引擎单遍解码没有
+# 多轮机会，保留快端接管作标定误差保险（对均衡情况零成本）。
+HYBRID_SCHED_ENV: str = "HYBRID_SCHED"
+HYBRID_SCHED_DEFAULT: str = "dynamic"
+# split 调度的速率校准帧数（源帧口径；分界精度比 dynamic 更关键，
+# 因为没有 safety/max_share 兜底）。40 帧 §22.10 实测标定读数 ±30%。
+HYBRID_SPLIT_CALIB_FRAMES_DEFAULT: int = 128
+# v7.1（2026-09-05）：**在线移界** —— 原型多轮自适应的单遍等价物。
+# 背景：一次性并发校准的速率含系统性偏差（NVDEC 对并发免疫→被低估、
+# CPU 被消费者拉低→"如实"反映弱），导致份额错配直接成为拖尾（实测
+# h264 均衡分割应 ~2.05s decode，错配实测 2.8s）。
+# 机制：每片完成后用两端**生产实测**速率重算未认领片的最优分界
+# （min-max 剩余完成时间），预测改善 >15% 才生效；只动未 started 的片
+# （连续扫掠不破坏），快端窃取保留作反方向纠正。
+# 两个关键教训（见 PERF §23）：seek 邻接片的速率样本被参考帧重建污染
+# （必须丢弃，否则"移界→seek→坏样本→再移界"死循环，实测拖到 4.17s）；
+# 改善门槛低于噪声（±10-30%）会被噪声牵着来回移界。
+HYBRID_MIGRATE_ENV: str = "HYBRID_MIGRATE"                # 1=开（默认）/ 0=关
+HYBRID_MIGRATE_DEFAULT: int = 1
 # 注：HYBRID_CALIB_ROUNDS（多轮校准取中位）已于 0.9.0 删除——实测净负
 # （3 轮 -21%：~0.68s 测速成本 > 分界精度收益），见 docs/PERFORMANCE.md §10.5。
 # ═══════════════════ CPU 软解线程预算（按 OCR 是否在 GPU 分档）═══════════════
