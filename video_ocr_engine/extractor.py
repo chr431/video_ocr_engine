@@ -389,32 +389,64 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         # h264 场景显著更快；尊重用户显式选择。NVDEC 不可用时上面已回退
         # CPU 并警告；初始化失败回退纯 GPU 不致命。
         if backend == 'hybrid' and label == 'GPU':
+            # ── decord 原生混合解码（fork ≥ v0.7.15，2026-09）──────────
+            # 单 demux 流在解码器内部按关键帧 chunk 路由 CPU 软解 + NVDEC，
+            # 引擎只需把 ctx 换成 hybrid/hybrid_gpu，参数面（output_format /
+            # roi / num_threads）与 cpu/gpu 完全一致 —— 零适配透传：
+            #   hybrid_gpu：输出帧驻留显存（GPU chunk 零拷贝、CPU chunk 解码
+            #     器内部 H2D 上载），get_batch 返回 CUDA 批 —— gpu_pipeline 的
+            #     设备指针通路（_ndarray_device_ptr）直接可用，OCR on GPU（TRT）
+            #     时选它；
+            #   hybrid：输出宿主帧（与 cpu() 同布局），OCR on CPU / 宿主管线
+            #     时选它。
+            # 旧 decord（无 hybrid ctx）回退项目层 HybridDecoder 壳（v3~v7）。
             try:
-                from hybrid_decode import HybridDecoder
-                _mc = config.env_int(config.HYBRID_MAX_CHUNKS_ENV, 16)
+                from decord import hybrid as _hy, hybrid_gpu as _hyg
                 _ct = config.env_int(config.HYBRID_CPU_THREADS_ENV, 0)
                 if _ct <= 0:
-                    # 0 的历史语义是"不传 num_threads"→ 落到 fork 的
-                    # clamp(hw/4, 2, 8)，把 CPU 生产者钉在 8 线程。实测该
-                    # 默认值偏小（见 docs/PERFORMANCE.md §17.2）：本机
-                    # 32 逻辑核上 cpuT 0→24 使 hybrid decode -13.5%、
-                    # 墙钟 -5.3%。改为按核数分档，上限 24（32 时反而略差，
-                    # CPU 生产者与 NVDEC/消费者抢 host CPU）。
-                    # v5：系数 3/4→3/8、上限 24→16（理由见 engine_config
-                    # HYBRID_CPU_THREADS_AUTO_MAX 的注释）。h264/AV1 两编码
-                    # 交叉实测的公共最优在 12（32 逻辑核）。
+                    # 延续项目层 hybrid 的 CPU 线程分档（见下方 v5 注释的历史
+                    # 依据）：核数 3/8，钳 [MIN, MAX]。
                     _ct = max(config.HYBRID_CPU_THREADS_AUTO_MIN,
                               min((_os.cpu_count() or 8) * 3 // 8,
                                   config.HYBRID_CPU_THREADS_AUTO_MAX))
-                _mcf = config.env_int(config.HYBRID_MAX_CHUNK_FRAMES_ENV, 0)
-                vr = HybridDecoder(self, vr, max_chunks=_mc,
-                                   cpu_threads=_ct, max_chunk_frames=_mcf)
-                self._backend = 'decord/GPU+CPU-hybrid'
-                logger.info('混合解码开启(速率分界): codec=%s chunks<=%d cpuT=%d mcf=%d',
-                            self._codec, _mc, _ct, _mcf)
+                _hctx = _hyg(0) if self._ocr_on_gpu() else _hy(0)
+                vr = self._open_decord_reader(_hctx, roi_kw, num_threads=_ct)
+                self._backend = 'decord/hybrid'
+                logger.info('混合解码开启(原生): codec=%s ctx=%s cpuT=%d',
+                            self._codec,
+                            'hybrid_gpu' if self._ocr_on_gpu() else 'hybrid',
+                            _ct)
+            except ImportError:
+                # ── 旧 decord：项目层双 reader 壳（v3~v7，保留兼容）──────
+                try:
+                    from hybrid_decode import HybridDecoder
+                    _mc = config.env_int(config.HYBRID_MAX_CHUNKS_ENV, 16)
+                    _ct = config.env_int(config.HYBRID_CPU_THREADS_ENV, 0)
+                    if _ct <= 0:
+                        # 0 的历史语义是"不传 num_threads"→ 落到 fork 的
+                        # clamp(hw/4, 2, 8)，把 CPU 生产者钉在 8 线程。实测该
+                        # 默认值偏小（见 docs/PERFORMANCE.md §17.2）：本机
+                        # 32 逻辑核上 cpuT 0→24 使 hybrid decode -13.5%、
+                        # 墙钟 -5.3%。改为按核数分档，上限 24（32 时反而略差，
+                        # CPU 生产者与 NVDEC/消费者抢 host CPU）。
+                        # v5：系数 3/4→3/8、上限 24→16（理由见 engine_config
+                        # HYBRID_CPU_THREADS_AUTO_MAX 的注释）。h264/AV1 两编码
+                        # 交叉实测的公共最优在 12（32 逻辑核）。
+                        _ct = max(config.HYBRID_CPU_THREADS_AUTO_MIN,
+                                  min((_os.cpu_count() or 8) * 3 // 8,
+                                      config.HYBRID_CPU_THREADS_AUTO_MAX))
+                    _mcf = config.env_int(config.HYBRID_MAX_CHUNK_FRAMES_ENV, 0)
+                    vr = HybridDecoder(self, vr, max_chunks=_mc,
+                                       cpu_threads=_ct, max_chunk_frames=_mcf)
+                    self._backend = 'decord/GPU+CPU-hybrid'
+                    logger.info('混合解码开启(速率分界): codec=%s chunks<=%d cpuT=%d mcf=%d',
+                                self._codec, _mc, _ct, _mcf)
+                except Exception as e:  # noqa: BLE001
+                    self._degraded.append(f'hybrid 初始化失败，回退纯 GPU: {e}')
+                    logger.warning('混合解码初始化失败，回退纯 GPU: %s', e)
             except Exception as e:  # noqa: BLE001
-                self._degraded.append(f'hybrid 初始化失败，回退纯 GPU: {e}')
-                logger.warning('混合解码初始化失败，回退纯 GPU: %s', e)
+                self._degraded.append(f'hybrid 打开失败，回退纯 GPU: {e}')
+                logger.warning('原生混合解码打开失败，回退纯 GPU: %s', e)
         return vr
 
     def _decord_format(self) -> str:
