@@ -991,7 +991,7 @@ col-ink 每段同步、NVDEC 逐帧同步去除、PP-OCRv6 det 替换裁切（§
 > 既没归档数据、方向也与实测相反。默认值已改为按核数分档。
 
 **疑点**：`HYBRID_CPU_THREADS=0` → CPU 生产者跑 fork 默认 **8 线程**
-（`hybrid_decode.py:290-291`：0 时不传 `num_threads` → decord 落到
+（旧项目层 HybridDecoder 的行为：0 时不传 `num_threads` → decord 落到
 `DECORD_FFMPEG_THREAD_COUNT = clamp(hw/4, 2, 8)`）。而 P0-1（§16.1.2）已证
 同机型 CPU 软解 16~32 线程比 8 线程快 **24~32%**。hybrid 里的 CPU 端正是
 `_dynamic_split` 判定的"慢端"——**它越快，分界能给它的片越多，hybrid 总收益越大**。
@@ -1212,7 +1212,7 @@ B5 引擎池落地后还应在同一批改测（池化会改变并发下的冷�
 
 ### 19.1 测量方法
 
-探针 `tools/_probe_io_budget.py`，三层指标：
+探针（已删除，随项目层 HybridDecoder 退役）`tools/_probe_io_budget.py`，三层指标：
 
 | 层 | 指标 | 口径 |
 | -- | ---- | ---- |

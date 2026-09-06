@@ -80,8 +80,8 @@ def test_gpu_pipeline_cpu_decode_enabled_p13(gpu_ok, monkeypatch):
 
 
 def test_gpu_pipeline_hybrid_enabled_p83(gpu_ok):
-    # §8.3 合并：hybrid 走 GPU 管线 CPU 分支（消费 HybridDecoder 宿主数组，
-    # 双解码收益 + 零拷贝 OCR 叠加；原互斥门控已移除）
+    # hybrid（decord 原生）：OCR on GPU 时走 hybrid_gpu 驻留显存路径
+    # （设备指针通路），OCR on CPU 时走宿主管线。
     ex = _make(rep_crop_format="gray", decode_backend="hybrid")
     assert ex._gpu_pipeline_enabled() is True
 

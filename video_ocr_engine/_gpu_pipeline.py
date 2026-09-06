@@ -278,10 +278,11 @@ class _GpuPipelineMixin:
         producer_stop = threading.Event()
         _t_open = time.perf_counter()
         vr = self._open_vr()
-        # hybrid（§8.3 合并）：HybridDecoder 后端名 decord/GPU+CPU-hybrid
-        # 以 'decord/GPU' 开头，但交付的是宿主数组（无设备指针）——必须精确
-        # 匹配，否则会误入 NVDEC 分支对 _Batch 取 DLPack 崩溃。
-        on_gpu = (self._backend == 'decord/GPU')
+        # decord 原生 hybrid：OCR on GPU 时 reader 是 hybrid_gpu（输出 CUDA
+        # 批，设备指针通路可用）；OCR on CPU 时是 hybrid（宿主帧）。
+        # （旧项目层 HybridDecoder 已移除 —— 混合解码完全由 decord 承担。）
+        on_gpu = (self._backend == 'decord/GPU'
+                  or (self._backend == 'decord/hybrid' and self._ocr_on_gpu()))
 
         def _cleanup_partial() -> None:
             """收尾尚未进入主消费循环的资源。"""
@@ -314,19 +315,11 @@ class _GpuPipelineMixin:
                 analyzer = None
 
         def _fallback_to_host():
-            """GPU→宿主回退（C10）：普通 reader 直接复用（get_batch 随机
-            访问、无消费状态，免去二次打开/解码器悬挂）；hybrid 必须重开
-            ——其分片消费指针已在校准 get_batch 中前进，复用会序错位。"""
+            """GPU→宿主回退（C10）：reader 直接复用（get_batch 随机访问、
+            无消费状态，免去二次打开/解码器悬挂）。"""
             _cleanup_partial()
-            hybrid_reader = hasattr(vr, 'hybrid_begin')
-            if hybrid_reader:
-                try:
-                    vr.close()   # hybrid 分片状态不可复用，必须重开
-                except Exception:
-                    pass
             self._degraded.append('GPU 管线形状不符，回退宿主管线')
-            return self._run_pipelined_host(
-                _ocr_engines, None if hybrid_reader else vr)
+            return self._run_pipelined_host(_ocr_engines, vr)
         if self._fps is None:
             _fps = _read_fps_from_vr(vr)
             self._fps = _fps if _fps else config.DEFAULT_FPS_FALLBACK

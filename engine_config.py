@@ -83,124 +83,15 @@ GPU_CTC_ENV: str = "GPU_CTC"                                    # 0 关闭 TRT �
 ENGINE_PROFILE_ENV: str = "ENGINE_PROFILE"                      # 1 开启引擎级性能剖面
 TRT_SUBPROBE_ENV: str = "TRT_SUBPROBE"                          # 1 开启 TRT 子相位探针
 DEBUG_BOUNDS_ENV: str = "DEBUG_BOUNDS"                          # 1 打印分段边界调试信息
-HYBRID_PROBE_ENV: str = "HYBRID_PROBE"                          # 1 打印混合解码逐片时序
-HYBRID_PROBE_CSV_ENV: str = "HYBRID_PROBE_CSV"                  # 逐片时序另落盘 CSV 路径
-# CPU+NVDEC 混合解码（hybrid_decode.HybridDecoder v4，decode_backend="hybrid"）：
-# 显式选择且 NVDEC 可用时生效（编码不限，含 AV1）；stride>1 已支持
-# （分片/扫掠/校准均按采样步长推进）；GPU 全驻留管线开启时由其 CPU
-# 分支消费（§8.3 合并，原互斥门控已移除）。v4 = 动态分界（慢端不拖尾
-# 约束下给慢端尽量多片）+ 稳态速率折扣（短校准高估 CPU 软解稳态速率）
-# + 缩短校准帧数（弱 CPU 下 256 帧校准 ~0.4s 会吃掉混合收益）。
-# h264 CPU 软解吞吐可达 NVDEC 两倍以上，闲置 CPU 的正确用途是帮解码；
-# CPU 明显慢于 NVDEC（HEVC/AV1/弱 CPU）时 decode 仍可提升（8 核亲和
-# 模拟实测 h264 decode -18%、HEVC decode -3%）。
+# CPU+NVDEC 混合解码（decode_backend="hybrid"）：实现完全在 decord fork 内
+# （hybrid / hybrid_gpu 设备上下文，v0.7.15+），引擎只透传解码参数：
+#   hybrid_gpu —— OCR on GPU（TRT）：输出帧驻留显存，gpu_pipeline 设备指针通路；
+#   hybrid     —— OCR on CPU：输出宿主帧（与 cpu() 同布局）。
+# 历史参数（项目层 HybridDecoder 的 SCHED/MIGRATE/SOLO_GUARD/CALIB/折扣等）
+# 已随该实现一并删除；调度由 decord 内部的生产速率实测 + min-max 积压贪心承担。
 HYBRID_CPU_THREADS_ENV: str = "HYBRID_CPU_THREADS"              # CPU reader 线程数；
-                                                                # 0 = 按核数自动分档（见下方 AUTO_MIN/MAX）
-# 2026-08-30：0 的历史语义是"不传 num_threads"→ 落到 fork 的
-# DECORD_FFMPEG_THREAD_COUNT=clamp(hw/4,2,8)，把 CPU 生产者钉在 8 线程。
-# 实测（docs/PERFORMANCE.md §17.2，test5 3000 帧 stride1，3 轮最快）：
-#   cpuT 0→16 = 2.166→2.084s，0→24 = 2.166→2.051s（decode 1.288→1.114s，
-#   -13.5%），0→32 = 2.077s（略差于 24：CPU 生产者与 NVDEC/消费者抢 host CPU）。
-# 故自动值取 逻辑核×3/4 钳 [8, 24]（与 _decode_num_threads 的 stride>1
-# 分档同式）。段数与唯一文本在所有档位下完全一致。
-#
-# v5（2026-09-01）：**上限与系数下调** —— 逻辑核×3/8 钳 [8, 16]。
-# 那条 §17.2 实测只测了 h264 单一编码，而 CPU/NVDEC 速度比随编码反转
-# （§21：h264 CPU 快 2.88×、AV1 CPU 慢 2.56×），线程预算的最优值同样
-# 随编码变。两编码交叉实测（4000 帧 stride1，runs=3 中位）：
-#     cpuT    8      12     16     24     32
-#     h264  2.94   2.99   3.55   3.57   3.56   ← ≤12 明显优（差 18%）
-#     AV1   2.387  2.231  2.239  2.221   —     ← ≥12 都在噪声内（±1%）
-# 交集在 12：AV1 与最优持平，h264 快 16%。
-# 机理：CPU 生产者的 FFmpeg 线程池与 NVDEC 的 host 侧喂料、以及 TRT
-# 消费者**抢 host CPU**；线程越多抢得越狠。实测 h264 并发下 CPU 生产者
-# 从单跑 2827fps 掉到 966fps（-66%），NVDEC 侧几乎不受影响 —— 争用是
-# **不对称**的，吃亏的总是软解那一侧。
-# 32 逻辑核下：旧式 3/4→24，新式 3/8→12。
 HYBRID_CPU_THREADS_AUTO_MIN: int = 8
 HYBRID_CPU_THREADS_AUTO_MAX: int = 16
-HYBRID_MAX_CHUNKS_ENV: str = "HYBRID_MAX_CHUNKS"                # 分片上限
-# 分片粒度上限：>0 时 hybrid 分片超过该采样帧数继续拆小（内存上界 =
-# inflight × 该上限，防宽 ROI 字幕整集单大片 2000+ 帧一次性缓存在
-# ch['data']）；0=不拆（默认，兼容 v3）。仅 decode_backend="hybrid" 生效。
-HYBRID_MAX_CHUNK_FRAMES_ENV: str = "HYBRID_MAX_CHUNK_FRAMES"
-# v4 新增：慢端预取上限（默认 4 片，防 decode 早结束导致 OCR 尾批堆积）；
-# 慢端速率折扣（慢端=CPU 默认 0.45 修正软解缓冲衰减、=NVDEC 默认 0.85）；
-# 速率校准帧数（默认 40，弱 CPU 下压缩固定开销）。
-HYBRID_SLOW_INFLIGHT_ENV: str = "HYBRID_SLOW_INFLIGHT"
-HYBRID_SLOW_DISCOUNT_ENV: str = "HYBRID_SLOW_DISCOUNT"
-HYBRID_CALIB_FRAMES_ENV: str = "HYBRID_CALIB_FRAMES"
-# v4 默认值（解析收敛：调用点统一走 env_int / env_float，勿再各自解析）
-HYBRID_SLOW_INFLIGHT_DEFAULT: int = 4      # 慢端预取上限（片）
-# v6（2026-09-01）：**单端守卫** —— 用 CPU 的**单端**采样速率判断是否值得开第二路。
-#
-# 背景：hybrid 的标定是**两路并发**跑的，测出的 cpu 速率含了并发惩罚，无法
-# 反映 CPU 单跑时的潜力。实测 h264：并发标定 cpu≈850fps，而纯 CPU 后端能到
-# ~2358fps。于是"该不该用 NVDEC 这第二路"在并发标定下永远判断不出来。
-#
-# 突破口：CPU reader 是在**后台线程**打开的（HybridDecoder.__init__ 的
-# _cpu_thread），那时还没有任何其它解码流在跑 —— 在那里测一次就是单端速率，
-# 而且不占主线程墙钟。
-#
-# 判据：`cpu_solo > gpu_rate × ratio` 时，说明 CPU 单跑就明显更快，第二路
-# （NVDEC）只会稀释 → 退化为 CPU 单路。两个场景分离度极大，粗略采样即可：
-#   h264: cpu_solo≈2358 / gpu≈962  → 2.4×（触发）
-#   av1 : cpu_solo≈566  / gpu≈1772 → 0.32×（不触发）
-HYBRID_SOLO_GUARD_ENV: str = "HYBRID_SOLO_GUARD"          # 1=开 / 0=关
-HYBRID_SOLO_GUARD_DEFAULT: int = 1
-HYBRID_SOLO_GUARD_RATIO_ENV: str = "HYBRID_SOLO_GUARD_RATIO"
-HYBRID_SOLO_GUARD_RATIO_DEFAULT: float = 1.8
-# 单端采样帧数。40 帧太少（FFmpeg 帧并行没喂饱，实测只有 ~850fps）；
-# 192 帧约 0.11s，且落在后台线程上。
-HYBRID_SOLO_PROBE_FRAMES_ENV: str = "HYBRID_SOLO_PROBE_FRAMES"
-HYBRID_SOLO_PROBE_FRAMES_DEFAULT: int = 192
-# v5（2026-09-01）：慢端速率折扣默认改为 **1.0（不折损）**，两档都是。
-#
-# 原值 CPU 0.45 / GPU 0.85 是错的 —— 折扣只乘在慢端上，而分界决策只看
-# **两端速率之比**，单端折损必然把比值扭曲 → 慢端被系统性少分。实测
-# （test6 AV1 4000 帧，runs=3 中位，段数/唯一文本逐位一致）：
-#     0.45 → 2.481s   0.70 → 2.349s   0.90 → 2.339s   1.00 → 2.217s
-# 单调改善，1.00 比 0.45 快 10.5%，且从"输给纯 NVDEC 2.623s"翻转为赢。
-#
-# 原理：标定本来就是**两后端并发**跑的（见 hybrid_decode.hybrid_begin），
-# 所以 rf/rs 已经含了并发折损；再乘一次折扣是重复折损。实测也印证这点：
-# 标定 gpu=2003/cpu=844（比 0.42）与生产实测 gpu=1625/cpu=690（比 0.42）
-# **比值一致** —— 两端同比例衰减，比值不受并发影响。
-#
-# 慢端"分太多"由 max_share=0.45 与 safety=0.95 两个**比值约束**兜底，
-# 它们与折扣无关。特殊场景仍可用 HYBRID_SLOW_DISCOUNT 覆盖。
-HYBRID_SLOW_DISCOUNT_DEFAULT_CPU: float = 1.0   # 慢端=CPU 软解：不折损
-HYBRID_SLOW_DISCOUNT_DEFAULT_GPU: float = 1.0   # 慢端=NVDEC：不折损
-HYBRID_CALIB_FRAMES_DEFAULT: int = 40      # 速率校准帧数（弱 CPU 下压缩固定开销）
-# v7（2026-09-05）：hybrid 调度器选择 —— 对齐 repo/hybrid_decoder_prototype
-# 的 split 思路（按并发实测速度把帧区间沿关键帧分成两段，直接最小化预测
-# 墙钟 max(前缀/rf, 后缀/rs)，两路各解一段、同时完成）：
-#   dynamic（v3~v5 现役）：约束式分界（safety=0.95 + max_share=0.45 + 折扣），
-#       依赖快端工作窃取自愈标定误差；
-#   split（原型式）：去掉 safety/max_share/折扣，直接最小化预测墙钟；
-#       标定帧数加大（原型用 600 源帧，此处折中 128）。
-# 两种调度共用同一分片/生产者/消费者机制（连续扫掠 + 快端接管）——原型
-# 因固定 ffmpeg 段无法窃取、只能靠多轮自适应纠错，本引擎单遍解码没有
-# 多轮机会，保留快端接管作标定误差保险（对均衡情况零成本）。
-HYBRID_SCHED_ENV: str = "HYBRID_SCHED"
-HYBRID_SCHED_DEFAULT: str = "dynamic"
-# split 调度的速率校准帧数（源帧口径；分界精度比 dynamic 更关键，
-# 因为没有 safety/max_share 兜底）。40 帧 §22.10 实测标定读数 ±30%。
-HYBRID_SPLIT_CALIB_FRAMES_DEFAULT: int = 128
-# v7.1（2026-09-05）：**在线移界** —— 原型多轮自适应的单遍等价物。
-# 背景：一次性并发校准的速率含系统性偏差（NVDEC 对并发免疫→被低估、
-# CPU 被消费者拉低→"如实"反映弱），导致份额错配直接成为拖尾（实测
-# h264 均衡分割应 ~2.05s decode，错配实测 2.8s）。
-# 机制：每片完成后用两端**生产实测**速率重算未认领片的最优分界
-# （min-max 剩余完成时间），预测改善 >15% 才生效；只动未 started 的片
-# （连续扫掠不破坏），快端窃取保留作反方向纠正。
-# 两个关键教训（见 PERF §23）：seek 邻接片的速率样本被参考帧重建污染
-# （必须丢弃，否则"移界→seek→坏样本→再移界"死循环，实测拖到 4.17s）；
-# 改善门槛低于噪声（±10-30%）会被噪声牵着来回移界。
-HYBRID_MIGRATE_ENV: str = "HYBRID_MIGRATE"                # 1=开（默认）/ 0=关
-HYBRID_MIGRATE_DEFAULT: int = 1
-# 注：HYBRID_CALIB_ROUNDS（多轮校准取中位）已于 0.9.0 删除——实测净负
-# （3 轮 -21%：~0.68s 测速成本 > 分界精度收益），见 docs/PERFORMANCE.md §10.5。
 # ═══════════════════ CPU 软解线程预算（按 OCR 是否在 GPU 分档）═══════════════
 # 背景：decord fork 在引擎不显式传 num_threads 时，CPU 解码线程数落到
 # DECORD_FFMPEG_THREAD_COUNT = clamp(hw/4, 2, 8)（fork 源码

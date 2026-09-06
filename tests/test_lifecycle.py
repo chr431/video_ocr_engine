@@ -4,7 +4,6 @@
   1. GpuOutputReducer 扩容时旧 _prob_dev 未释放；
   2. GPU helper 的 stream 所有权与释放（owned 销毁 / borrowed 保留）；
   3. 校准异常时 OCR 会话与 reader 的收尾（宿主管线）；
-  4. HybridDecoder.close 幂等、join 后台线程、释放已交付分片数据；
   5. OCR 引擎池总量上限与 LRU 淘汰。
 
 第 1/2 项需要真实 cuda.bindings（monkeypatch 其 runtime 函数为记录器，
@@ -170,99 +169,6 @@ def test_host_calibration_failure_finishes_session_and_closes_reader():
     assert session.finished is True, "校准异常应 finish OCR 会话"
     assert vr.closed is True, "校准异常应 close reader"
 
-
-
-# ═══════════════ 4. HybridDecoder 生命周期 ═══════════════
-
-class _CountingVR:
-    def __init__(self):
-        self.seeks = []
-        self.closed = False
-    def seek_accurate(self, fi): self.seeks.append(fi)
-    def close(self): self.closed = True
-
-
-def _hybrid_stub():
-    from hybrid_decode import HybridDecoder
-    dec = HybridDecoder.__new__(HybridDecoder)
-    dec._closed = False
-    dec._stop = threading.Event()
-    dec._cv = threading.Condition()
-    dec._threads = []
-    dec._cpu_thread = None
-    dec._cpu = None
-    dec._gpu = _CountingVR()
-    dec._probe = False
-    dec._probe_rows = []
-    return dec
-
-
-def test_hybrid_close_is_idempotent_and_joins_threads():
-    dec = _hybrid_stub()
-
-    def worker():
-        # 真实后台线程靠 _stop 退出；close 必须先置位再 join。
-        dec._stop.wait(10.0)
-    t = threading.Thread(target=worker)
-    t.start()
-    dec._threads = [t]
-    dec.close()
-    assert not t.is_alive(), "close 应 join 后台线程后再返回"
-    assert dec._stop.is_set(), "close 应先置 stop 再 join"
-    dec.close()   # 幂等，不抛
-    assert dec._closed is True
-    assert dec._gpu.closed is True, "close 应关闭底层 GPU reader"
-
-
-def test_hybrid_pop_frames_releases_delivered_data():
-    """已交付的帧应从 ch['data'] 删除，避免 NumPy 数组被钉住。"""
-    dec = _hybrid_stub()
-    n = 8
-    # counted=True：模拟"生产者已完成本片并计数"这一可达时序；done 与
-    # counted 由生产者同时置位，done=True+counted=False 在真实流程中不可达。
-    ch = {"fis": list(range(n)),
-          "data": [(i, np.full((2, 2), i)) for i in range(n)],
-          "off": 0, "delivered": 0, "all_delivered": False, "counted": True,
-          "consumed": False, "done": True, "owner": "fast", "started": True}
-    dec._chunks = [ch]
-    dec._starts = [0]
-    dec._unconsumed = {"fast": 1, "slow": 0}
-    dec._inflight = dec._inflight_slow = 8
-    dec._split_idx = 1
-    dec._fast_reader = _CountingVR()
-    dec._slow_reader = None
-    dec._err = []
-
-    got = dec._pop_frames(list(range(n)))
-    assert len(got) == n
-    assert ch["data"] == [], "已交付数据应被删除"
-    assert ch["delivered"] == n
-    assert dec._unconsumed["fast"] == 0, "排空后应释放未消费计数"
-
-
-def test_hybrid_pop_frames_consumes_deque_across_chunk_boundary():
-    """生产者使用 deque 时，跨片批次仍按全局帧序交付。"""
-    dec = _hybrid_stub()
-    dec._chunks = []
-    for start, end, owner in ((0, 4, "fast"), (4, 8, "slow")):
-        dec._chunks.append({
-            "fis": list(range(start, end)),
-            "data": deque((i, np.full((2, 2), i))
-                          for i in range(start, end)),
-            "off": 0, "delivered": 0, "all_delivered": False,
-            "counted": True, "consumed": False, "done": True,
-            "owner": owner, "started": True,
-        })
-    dec._starts = [0, 4]
-    dec._unconsumed = {"fast": 1, "slow": 1}
-    dec._inflight = dec._inflight_slow = 8
-    dec._split_idx = 1
-
-    got = dec._pop_frames(list(range(8)))
-
-    assert [int(frame[0, 0]) for frame in got] == list(range(8))
-    assert all(not ch["data"] for ch in dec._chunks)
-    assert dec._unconsumed == {"fast": 0, "slow": 0}
 
 
 # ═══════════════ 5. OCR 引擎池 LRU 上限 ═══════════════

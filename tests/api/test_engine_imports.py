@@ -11,7 +11,7 @@ import pytest
 from _paths import PKG  # tests/_paths.py：与目录深度无关的 video_ocr_engine/ 路径
 
 ENGINE_MODULES = [
-    "engine_config", "gpu_setup", "hybrid_decode", "ocr_native",
+    "engine_config", "gpu_setup", "ocr_native",
     "ocr_trt", "segmentation", "video_utils", "video_ocr_engine",
 ]
 

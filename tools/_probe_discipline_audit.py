@@ -52,7 +52,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
 # 产品代码（不含 tools/ 探针与 tests/）
-PRODUCT = ["engine_config.py", "gpu_setup.py", "hybrid_decode.py", "ocr_native.py",
+PRODUCT = ["engine_config.py", "gpu_setup.py", "ocr_native.py",
            "ocr_trt.py", "segmentation.py", "video_utils.py"]
 PRODUCT += [os.path.join("video_ocr_engine", f)
             for f in sorted(os.listdir(os.path.join(ROOT, "video_ocr_engine")))

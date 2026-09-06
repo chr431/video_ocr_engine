@@ -57,7 +57,7 @@ python tools/_doc_section.py docs/ARCHIVE.md 4.4b        # 支持 16 / 16.8 / 4.
 
 | 阶段 | 入口 |
 |---|---|
-| 解码 | `decord.VideoReader.get_batch` / `hybrid_decode.HybridDecoder.get_batch`（**唯一入口**） |
+| 解码 | `decord.VideoReader.get_batch`（**唯一入口**；decode_backend=hybrid 走 decord 原生混合解码 ctx） |
 | 分段 | `segmentation.py` |
 | 宿主管线 | `video_ocr_engine/_host_pipeline.py` |
 | GPU 管线 | `video_ocr_engine/_gpu_pipeline.py`（gray+NVDEC+TRT 时默认） |
