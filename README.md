@@ -93,11 +93,9 @@ NVDEC 与 CPU 软解并行解码，分片与负载调度在 decord 内部完成�
 OCR 在 GPU（TRT）时走 `hybrid_gpu` 上下文，输出帧驻留显存、直通零拷贝管线；
 OCR 在 CPU 时输出宿主帧。打开失败自动降级（`meta.degraded_reason` 有记录）。
 
-> **迁移记录**：混合解码原为项目层实现（`hybrid_decode.py` v3~v7：动态分界 /
-> 稳态折扣 / 在线移界 / 快端接管），2026-09-06 随 decord 原生混合解码上线整体
-> 删除（commit `fd3bcda`；迁移后 e2e 实测 hevc 1.42× / h264 1.22× vs 纯
-> NVDEC）。决策过程与历史数据见 `docs/DECISIONS.md`「混合解码迁移 decord
-> 原生实现」与 `docs/PERFORMANCE.md` §24。
+> **迁移记录**：原项目层实现（hybrid_decode.py，已于 2026-09-06 删除）由 decord
+> 原生实现取代（commit `fd3bcda`）；决策/历史见 `docs/DECISIONS.md` 与
+> `docs/PERFORMANCE.md` §24，结论状态见 `docs/CONCLUSIONS.md` C-05/C-06。
 
 `result` 为 `ExtractionResult`：
 
@@ -152,41 +150,11 @@ seg/text 与顺序完全一致）：
 | 2×CPU+TRT | ~1.4× | 靠核富余；少核机收益递减 |
 | 2×NVDEC+TRT | **~1.0–1.2×** | 单 NVDEC 硬件单元，双会话互相争抢，基本等于串行 |
 
-> **2026-08-31 修订（实测，详见 `docs/PERFORMANCE.md` §19）**
->
-> 1. **"IO 竞争导致并行更慢"已证伪**。同视频同负载下并发跑，系统落盘量为
->    **0.0MB**（页缓存全命中），NVDEC∥NVDEC 仍退化 1.88×（加速比 1.04×）。
->    磁盘 IO 在单次提取中只占墙钟 **<1%**（冷/热 A/B 实测 0.03–0.05s /
->    5–7s），PCIe 传输占 0.01%。**不要再去 IO 方向找原因。**
-> 2. `2×NVDEC+TRT ~1.1×` → 确认为**单一 NVDEC 固定功能单元串行化**。消元证据：
->    CPU∥CPU 同样并发两个 TRT OCR，退化仅 1.16×；把解码器从 NVDEC 换成 CPU，
->    退化从 1.88× 掉到 1.16×。
-> 3. `1×NVDEC+TRT ∥ 1×CPU+TRT` 与 `2×CPU+TRT` 的 ~1.4× **受负载失衡影响**：
->    NVDEC 侧 ~5s 而 CPU 侧 ~14s，makespan 被慢侧锁死。同负载实测 CPU∥CPU 为
->    **1.70×**（AV1 样本）；加速比只在两实例耗时相近时才有意义。
->
-> 结论不变：**NVDEC∥CPU 互补配对仍是首选**，但理由是资源互补，不是"避开 IO"。
->
-> **2026-08-31 二次修订（实测，详见 `docs/PERFORMANCE.md` §21）**
->
-> 4. **互补设计的加速比被严重低估**。按聚合吞吐口径（Σ 单跑/并发，理想 2.00）
->    重测（两条流水线跑同一条 test6，同视频同编码）：互补配对 **1.83–1.87×**，
->    双 NVDEC 只有 **1.01–1.20×**，差 **1.8 倍**。对端干扰仅 **1.02–1.05×**
->    （独立复现 1.870× / 1.833×）。上表的 ~1.4× 是 makespan 口径被慢侧锁死的
->    结果，批量多视频场景应看聚合吞吐。
-> 5. ⚠️ **互补设计此前从未真正落地**：`decode_backend=auto` **不区分 OCR 后端**
->    （`extractor.py:349` 只看 `backend in ('auto','nvdec','hybrid')`，不读
->    `ocr_backend`），所以 `--ocr-backend cpu --decode-backend auto` 的流水线
->    实测上报 `used_decode = decord/GPU` —— **ONNX 那条也开了 NVDEC**，直接掉进
->    2.0× 档。必须**显式**传 `decode_backend='cpu'`，并核验
->    `FieldExtractor._backend` 确实为 `decord/CPU`。
-> 6. 支配变量是**对端往 GPU 提交工作的速率**，不是 CPU 也不是内存：
->    ONNX 纯 CPU 对端 → 1.02×；TRT 对端但陷在 AV1 慢软解 → 1.06×；
->    TRT 对端且 h264 快软解 → 1.33×；对端走 NVDEC → 2.01–2.06×。
->    反向证据：`mixed_cpu` 的对端是全场最重的 CPU/访存负载（AV1 软解 8.757s，
->    比主侧慢 3.4 倍），主侧却只退化 1.02× —— **CPU 负载与退化负相关**。
-> 7. 编码决定一切：h264 上 CPU 软解比 NVDEC **快 2.6×**，AV1 上**慢 2.9×**。
->    选配对前先看对端视频的编码。
+> **实测修订**（证据与消元过程见 `docs/PERFORMANCE.md` §19/§21）：「IO 竞争」
+> 与「内存带宽」均已证伪——并发退化真因是**单一 NVDEC 硬件单元串行化**；
+> 加速比按聚合吞吐口径看（互补配对 1.83–1.87×，双 NVDEC 仅 1.01–1.20×）。
+> 支配变量是对端往 GPU 提交工作的速率；编码决定一切（h264 上 CPU 软解比
+> NVDEC 快 2.6×，AV1 上慢 2.9×），选配对前先看对端视频的编码。
 
 ```python
 import threading
@@ -281,24 +249,19 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 | `TRT_SUBPROBE` | `1` 开启 TRT 子相位探针 |
 | `DEBUG_BOUNDS` | `1` 打印分段边界调试信息 |
 
-> 0.9.0 清理删除的钩子（历史结论见 docs/PERFORMANCE.md）：`GPU_PIPELINE_ASYNC`
->（GPU 分段异步实验，NVDEC/CPU 分支均无收益）、`HYBRID_CALIB_ROUNDS`
->（多轮校准，实测 -21% 净负）、`DECORD_FORCE_CPU`（旧钩子，用
-> `decode_backend="cpu"`）、merge_similar 的 `contrast` 分离模式。
-> 构造参数 `gray_output` / `yuv_output` 同时删除。
->
-> 2026-09-06 混合解码迁移 decord 原生实现（commit `fd3bcda`）时删除的项目层
-> 钩子：`HYBRID_MAX_CHUNKS`、`HYBRID_MAX_CHUNK_FRAMES`、`HYBRID_PROBE`、
-> `HYBRID_PROBE_CSV` 及校准/折扣/移界等其余全部 `HYBRID_*` 参数
-> （仅 `HYBRID_CPU_THREADS` 保留，见上表）。
+> 已删除钩子（0.9.0 清理轮；2026-09-06 hybrid 迁移轮删除的项目层
+> `HYBRID_*` 参数，仅 `HYBRID_CPU_THREADS` 保留见上表）的完整清单与历史
+> 结论见 `docs/DECISIONS.md`，结论状态见 `docs/CONCLUSIONS.md`。
 
 内部实现（`engine_config` 常量、`_gpu_pipeline` 门控等）不在本表；如需深入，
 以 `engine_config.py` 为唯一事实源。
 
 ## 文档
 
-- [性能调优记录](docs/PERFORMANCE.md) —— **性能现状以此为准**：现役性能基线、后端矩阵、
-  线程预算、已锁定参数、已验证死路（§1–§15, §17, §19–§21）。
+- [现役结论索引](docs/CONCLUSIONS.md) —— **动手前先查**：每条结论带状态
+  （active / superseded / dead）、前提条件与复评触发；新结论一行写这里。
+- [性能调优记录](docs/PERFORMANCE.md) —— 性能实验史与实测细节（**已冻结增长**，
+  新叙事进 `docs/log/`）；需要证据链/原始数据时按节读，勿整读。
 - [历史归档](docs/ARCHIVE.md) —— §4 / §8 / §16 / §18（**编号保留**）：2026-08-29 路线图
   快照（开头有校正表）、已删除功能档案。**纯历史，勿当现役依据**。
 - [开发决策档案](docs/DECISIONS.md) —— 每轮决策过程与设计审查结论（维护者向）。
@@ -306,10 +269,8 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 - `CLAUDE.md` —— 维护者向**注入核**：铁律 + 现役架构 + 结论指针。
   ⚠️ 该文件在每个会话开头被全量注入，**硬上限 12 KB**（由单测守护）。
 
-> 文档共六份。2026-08-30 把一次性的路线图 / 设计评审 / 历史档案三份并入
-> PERFORMANCE.md 与 CLAUDE.md；2026-08-31 再按「活 / 归档」切分，把归档章节
-> 与历史决策分别迁出为 `docs/ARCHIVE.md`、`docs/DECISIONS.md`。
->
+> 文档共七份（另有 `docs/log/` 实验叙事目录）。2026-09-08 起按
+> 「事实 / 结论 / 决策 / 历史」四层管理，见 `docs/DECISIONS.md`「文档分层管理」。
 > `docs/PERFORMANCE.md` 中凡提及 §4 / §8 / §16 / §18 的，均指 `docs/ARCHIVE.md`
 > 的对应章节。工具脚本索引见 [`tools/INDEX.md`](tools/INDEX.md)。
 

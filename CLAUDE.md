@@ -3,25 +3,28 @@
 > 本文件在每个会话开头被注入，**只放"现在必须知道的"**。
 > **硬上限 12 KB** — 超了就把内容迁到 `docs/DECISIONS.md`，这里只留指针。
 
-## 文档地图（6 份，别再新增）
+## 文档地图（7 份，别再新增）
 
 | 文件 | 性质 | 什么时候读 |
 |---|---|---|
 | `README.md` | 用户向 API / 用法 | 写调用代码时 |
 | `CLAUDE.md`（本文件） | 维护者向**注入核**：铁律 + 现役架构 + 结论指针 | 自动注入 |
-| `docs/PERFORMANCE.md` | 现役性能实测（§1–§15, §17, §19–§21） | 动性能相关代码前 |
+| `docs/CONCLUSIONS.md` | **L1 结论索引**（状态/前提/复评触发），唯一允许规范性结论处 | 动手前查结论、出结论写这里 |
+| `docs/PERFORMANCE.md` | 性能实验史（**已冻结增长**，新叙事进 `docs/log/`） | 需要实测细节/证据链时 |
 | `docs/DECISIONS.md` | 每轮决策过程、已删除功能、设计审查结论 | 想问"为什么这么做"时 |
 | `docs/ARCHIVE.md` | 归档（PERF §4 / §8 / §16 / §18），**编号保留勿重编** | 只看"为什么不做" |
 | `docs/DEPENDENCIES.md` | 依赖版本与已知问题 | 装环境 / 报 bug 时 |
 
 ⚠️ **现役规则以本文件为准**。`docs/DECISIONS.md` 是迁出的原文存档，
-两者冲突时以本文件为真相（避免"两套真相"，见设计审查 D6）。
+两者冲突时以本文件为真相（避免"两套真相"，见设计审查 D6）。结论的
+**当前状态**（active / superseded / dead）以 `docs/CONCLUSIONS.md` 为准。
 
 ### ⛔ 查文档前先定位，不要整文件读
 
-实测（tiktoken）：读整个 PERFORMANCE.md = **42,470 tokens**，ARCHIVE.md =
-**46,253** —— 而本文件每会话注入才 **3,636 tokens**。**误读一次大文档 ≈
-12.7 倍的注入成本**，这是本项目最大的 token 浪费点。
+实测（tiktoken cl100k，2026-09-08）：PERFORMANCE.md ≈ **30k**、
+ARCHIVE.md ≈ **28k**、DECISIONS.md ≈ **17k** tokens —— 而本文件每会话注入
+才 **~2.4k tokens**。**误读一次大文档 ≈ 12 倍的注入成本**，这是本项目最大的
+token 浪费点。查结论先读 `docs/CONCLUSIONS.md`（≈3k，预算受测试守护）。
 
 ```bash
 python tools/_doc_section.py --find <关键词>        # 跨文档按标题定位，≈357 tokens
@@ -47,8 +50,12 @@ python tools/_doc_section.py docs/ARCHIVE.md 4.4b        # 支持 16 / 16.8 / 4.
 6. **别按"看起来旧"删脚本**：`tools/` 的探针是**证据链**，删之前先查引用
    （35/40 被文档引用，另有 5 处跨探针 import 与 69 处文档路径引用）。
 7. **探针放 `tools/_probe_*.py`**（下划线前缀 = 调查工具，不随产品发布）。
-8. **新结论一律追加到现役章节，不新建文档**；版本号改动必须打同名 git tag。
-9. **向后兼容**：新功能默认关闭，除非明确作为新默认；新增遗留面一律先标
+8. **结论分离**：结论一行进 `docs/CONCLUSIONS.md`（必须带状态/前提/复评
+   触发），实验叙事进 `docs/log/`（PERFORMANCE.md 已冻结增长）；历史章节
+   不回溯重写。版本号改动必须打同名 git tag。
+9. **迁移清扫**：依赖升级 / 大迁移落地时，grep `docs/CONCLUSIONS.md` 的
+   "前提/触发"列，逐条复核命中行并翻状态（active / superseded / dead）。
+10. **向后兼容**：新功能默认关闭，除非明确作为新默认；新增遗留面一律先标
    deprecated、两个版本后删除。
 
 ## 现役架构
@@ -82,22 +89,16 @@ python tools/_doc_section.py docs/ARCHIVE.md 4.4b        # 支持 16 / 16.8 / 4.
 - **OCR 引擎池**：`_POOL_MAX_PER_KEY=4`、`_POOL_MAX_TOTAL=16`，
   key=(model, type, fill_width, threads)。
 
-## 已封板结论（勿重复投入）
+## 已封板结论 → `docs/CONCLUSIONS.md`
 
-| 结论 | 详见 |
-|---|---|
-| **IO 不是并发退化原因**：磁盘 IO 占单次墙钟 <1%（0.03–0.05s / 5–7s），PCIe 0.01% | PERF §19 |
-| **内存带宽数字被高估 1.8×**：本机 B_max 只有 **55.8 GB/s**（非 ~100） | PERF §20 |
-| **并发退化真因 = NVDEC 会话数**（单硬件单元串行）。互补设计（CPU 软解+ONNX ∥ NVDEC+TRT）聚合加速 **1.87×**；两条都走 NVDEC 只有 1.01~1.20× | PERF §21 |
-| **解码后端必须按编码选**：h264 CPU 快 2.88×，AV1 CPU 慢 2.56×（7.4× 反转）；解码占管线 98%+ | PERF §21 |
-| **冷启动 yuv 格式税不存在**，是测量假象；冷轮多出的 ~0.55s 里 0.50–0.53s 是 TRT 引擎构造 | PERF §15 |
-| **分段合并**在不误合并约束下已无普适空间 | PERF §14 |
-| **GPU 分段 + ONNX OCR 无净收益**，默认门控只放行 NVDEC+TRT | PERF §9 |
-| **真跳帧**（丢 `nal_ref_idc==0` 整包）安全，但收益仅 1.03~1.48×（原估 2~4×） | DECISIONS「下一步三目标轮」 |
-| **`skip_loop_filter`** 1.11~1.36×，但改变输出像素；默认关闭（opt-in） | DECISIONS「P0-6 翻案」 |
-| **pad 224 保持**：160 已回退（生产误读退化），320 已证伪 | ARCHIVE §16.2 |
-| **裁切余量 10% 优于 0%**；裁切即使省不到算力也能提准确率（旧"守卫"前提是错的） | DECISIONS「第四轮」 |
-| **`auto` 后端在 h264 多核不是最优**（CPU+TRT 快约 2×），但静态判据不可靠、判错代价成倍 → 保持现状 | DECISIONS 设计审查 A2 |
+全部 30 条结论（含状态 / 前提 / 复评触发）在 `docs/CONCLUSIONS.md`，
+这里只留最容易踩的五条：
+
+- 并发退化真因 = **NVDEC 会话数**；互补配对首选 NVDEC∥CPU，聚合 1.87×（PERF §21）
+- 批量互补必须**显式** `decode_backend="cpu"` —— `auto` 不区分 OCR 后端（C-07）
+- GPU 分段 + ONNX OCR 无净收益，门控只放行 NVDEC+TRT（PERF §9）
+- 解码后端按编码选：h264 CPU 快 ~2.9×、AV1 反转慢 ~2.6×（PERF §21）
+- hybrid 已迁 **decord 原生**（fork ≥v0.7.15）；项目层实现已删除，勿再引用（PERF §24）
 
 ## 编辑护栏（docs/PERFORMANCE.md）
 
