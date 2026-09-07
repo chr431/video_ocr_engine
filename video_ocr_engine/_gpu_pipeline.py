@@ -513,7 +513,7 @@ class _GpuPipelineMixin:
                 # chunk 粒度流水发射（decord get_batch_stream）：后台预取
                 # 下一批，解码完成即交付 —— 消费（extract_luma/analyze）与
                 # 解码重叠。GPU_PIPELINE_STREAM=0 可关（回退同步 get_batch）。
-                _use_stream = (_os.environ.get('GPU_PIPELINE_STREAM', '1') == '1'
+                _use_stream = (_os.environ.get('GPU_PIPELINE_STREAM', '0') == '1'
                                and hasattr(vr, 'get_batch_stream'))
 
                 def _batch_iter():
