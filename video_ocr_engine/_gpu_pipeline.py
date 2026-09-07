@@ -510,12 +510,29 @@ class _GpuPipelineMixin:
                         _d2d, analyzer._stream)
                     have_prev_front = True
 
-                for bstart in range(calib_n, len(frames), DECODE_BATCH):
-                    bend = min(bstart + DECODE_BATCH, len(frames))
-                    nds = vr.get_batch(
-                        frames[bstart:bend], roi=(x1, y1, x2 + 1, y2 + 1))
+                # chunk 粒度流水发射（decord get_batch_stream）：后台预取
+                # 下一批，解码完成即交付 —— 消费（extract_luma/analyze）与
+                # 解码重叠。GPU_PIPELINE_STREAM=0 可关（回退同步 get_batch）。
+                _use_stream = (_os.environ.get('GPU_PIPELINE_STREAM', '1') == '1'
+                               and hasattr(vr, 'get_batch_stream'))
+
+                def _batch_iter():
+                    if _use_stream:
+                        for s0, nds in vr.get_batch_stream(
+                                frames[calib_n:], roi=(x1, y1, x2 + 1, y2 + 1),
+                                batch=DECODE_BATCH):
+                            yield s0, nds
+                    else:
+                        for bstart in range(calib_n, len(frames), DECODE_BATCH):
+                            bend = min(bstart + DECODE_BATCH, len(frames))
+                            yield bstart, vr.get_batch(
+                                frames[bstart:bend],
+                                roi=(x1, y1, x2 + 1, y2 + 1))
+
+                for bstart, nds in _batch_iter():
+                    bend = bstart + int(nds.shape[0])
                     base, shape = _ndarray_device_ptr(nds)
-                    B = bend - bstart
+                    B = int(bend - bstart)
                     if yuv:
                         if len(shape) != 3:
                             raise RuntimeError(
@@ -541,9 +558,12 @@ class _GpuPipelineMixin:
                             prev_front, gray_base + (B - 1) * fnb, fnb,
                             _d2d, analyzer._stream)
                         have_prev_front = True
+                    # stream 模式 bstart 即首帧号；seq 模式 bstart 是
+                    # frames 下标 → 统一转帧号
+                    f0 = (bstart if _use_stream else frames[bstart])
                     for k in range(B):
                         cur = base + k * (rows * W if yuv else fnb)
-                        yield (frames[bstart + k], (nds, cur, rows, W),
+                        yield (f0 + k, (nds, cur, rows, W),
                                float(sums[k, 0]), float(sums[k, 1]))
                         prev_holder = nds
                         prev_ptr = cur
