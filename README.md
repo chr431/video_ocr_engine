@@ -87,18 +87,17 @@ CPU 且片源为 h264 时，可手动选 `"cpu"` 获得更高软解吞吐（NVDE
 建议保持 `auto` 或 `nvdec`。（auto 不自动选 CPU 是刻意决策：按编码/核数的静态
 判据不可靠、判错代价成倍，见 `docs/ARCHIVE.md` §16.2 P0-3。）
 
-`decode_backend="hybrid"` 是**实验性功能**：同一实例内 NVDEC 与 CPU 软解并行
-解码（动态分界：慢端在"不拖尾"约束下尽量多分片，快端从头连续扫掠、扫完
-自动接管慢端剩余片，校准误差自愈）。要求 NVDEC 可用；`sample_stride>1` 已支持
-（分片与扫掠按采样步长推进）；NVDEC 不可用时自动回退纯 NVDEC/CPU。
+`decode_backend="hybrid"` 由 **decord fork 原生实现**（≥v0.7.15）：同一实例内
+NVDEC 与 CPU 软解并行解码，分片与负载调度在 decord 内部完成，引擎只透传解码
+参数（参数面与 `cpu` / `nvdec` 完全一致，含 `sample_stride`）。要求 NVDEC 可用；
+OCR 在 GPU（TRT）时走 `hybrid_gpu` 上下文，输出帧驻留显存、直通零拷贝管线；
+OCR 在 CPU 时输出宿主帧。打开失败自动降级（`meta.degraded_reason` 有记录）。
 
-> ⚠️ **适用限制（务必先读）**：hybrid 仅在 **h264 + 较强 CPU** 上有明显
-> 优势（本机 8 核亲和模拟实测 h264 decode -18%、墙钟 -2%）；**其他情况
-> （HEVC / AV1 / 弱 CPU / OCR 为 CPU 后端）可能相比单 NVDEC 更慢**——CPU
-> 明显慢于 NVDEC 时 decode 提升有限（HEVC 实测仅 -3%），且 CPU 解码线程会
-> 与 CPU 侧 OCR 争抢资源、校准与预取带来固定开销，墙钟可能不降反升。
-> 不确定时请保持默认 `"auto"`，并对你的实际片源 A/B 后再启用。详细数据与
-> 机制见 `docs/PERFORMANCE.md`。
+> **迁移记录**：混合解码原为项目层实现（`hybrid_decode.py` v3~v7：动态分界 /
+> 稳态折扣 / 在线移界 / 快端接管），2026-09-06 随 decord 原生混合解码上线整体
+> 删除（commit `fd3bcda`；迁移后 e2e 实测 hevc 1.42× / h264 1.22× vs 纯
+> NVDEC）。决策过程与历史数据见 `docs/DECISIONS.md`「混合解码迁移 decord
+> 原生实现」与 `docs/PERFORMANCE.md` §24。
 
 `result` 为 `ExtractionResult`：
 
@@ -231,8 +230,8 @@ Otsu 校准、merge_similar 判定（GPU `sim_pair`；contrast 模式在边界�
 - 默认只放行"全程 raw"（NVDEC+TRT）；GPU 分段 + ONNX OCR 实测无净收益
   （见 `docs/PERFORMANCE.md` §9）→ 无 TRT / `ocr_backend="cpu"` 走宿主
 - env `GPU_PIPELINE=0` 显式关闭；`=1` 强制启用（含 GPU 分段+ONNX 实验组合）；
-  `decode_backend="hybrid"` 走 GPU 管线的 CPU 解码分支（消费宿主数组，仍享受
-  零拷贝 OCR）
+  `decode_backend="hybrid"` + TRT 走 decord 原生 `hybrid_gpu`，帧全程驻留
+  显存、直接进零拷贝管线的设备指针通路
 
 **CPU 解码也走 GPU 管线（P1-3 解耦）**：`decode_backend="cpu"`（或 auto 的
 NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一套 GPU
@@ -249,7 +248,7 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 （例：构造 `fill_width=320` 会被残留的 `OCR_PAD_SMALL` 静默盖过——排查调参时
 先确认 env 是否残留）。**仅 env 入口**（无构造参数承接）的旋钮：
 `OCR_GAMMA`、`OCR_ROI_AUTOCROP / _MARGIN / _MIN_GAIN`、`OCR_REORDER_WINDOW`、
-`OCR_INSTANCES`、`GPU_PIPELINE`、`DECODE_THREADS`、全部 `HYBRID_*`。
+`OCR_INSTANCES`、`GPU_PIPELINE`、`DECODE_THREADS`、`HYBRID_CPU_THREADS`。
 
 **生效时机**：下列 env 全部为**调用期读取**——构造 `FieldExtractor(...)` 之后
 再改 env 同样生效，无需重建实例（`DECORD_SKIP_LOOP_FILTER` 例外，由 decord
@@ -270,9 +269,7 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 | `DECORD_SKIP_LOOP_FILTER` | **显式 opt-in**（2026-08-30 起，默认**不设置**——import 不再改写进程级 env）：设为 `all` 开启 CPU 软解关去块滤波，须在打开解码器前设置。收益：HEVC **-8.3%~-14.3% 墙钟**、h264 -0.6%~-4.2%、AV1 无效（-0.2%）；NVDEC 不受影响。六片真值 + test4 逐帧**视觉裁定**确认对 OCR 无负面影响（5 片 +0.00~+0.08pp；test4 账面 −0.19pp 系真值伪影——显示为三位补零 `020`、真值剥零，视觉裁定按显示忠实度关滤波反而略优）。注意：显示为 2 位数字时输出会带前导零（`020`，更忠实于显示），下游字符串匹配需注意；rep_crop 预览有块状伪影。需 decord fork ≥v0.7.13 |
 | `DECODE_THREADS` | CPU 软解 FFmpeg 帧线程数覆盖（默认按 OCR 落点 + 采样步长分档：OCR 在 GPU 取满逻辑核钳 8~32；OCR 在 CPU 时 stride>1 取逻辑核 3/4 钳 8~24、stride==1 取 1/3 钳 8~12） |
 | `TEXT_SEP_MERGE` | 相似段合并分离模式（binary/off；contrast 已于 0.9.0 删除） |
-| `HYBRID_MAX_CHUNKS` | 混合解码分片上限（默认 16） |
-| `HYBRID_CPU_THREADS` | 混合解码中 CPU 软解线程数（默认 0 = **按核数自动**：逻辑核×3/4 钳 [8, 24]，32 核机取 24）。⚠️ 旧版注释称「给更多反而略差」是**错的**（无归档依据，实测方向相反）：交错 5 轮 A/B 实测 8 → 24 线程墙钟 **−8.6%**、`decode` **−14.4%**，两分布完全分离，段数与唯一文本不变；32 线程略差于 24（过订阅）。见 `docs/PERFORMANCE.md` §17.2 |
-| `HYBRID_MAX_CHUNK_FRAMES` | 混合解码单片采样帧数上限（默认 0=不拆；>0 时超限片按关键帧/等分拆小，内存上界 = inflight × 上限） |
+| `HYBRID_CPU_THREADS` | 混合解码（decord 原生）中 CPU 软解线程数（默认 0 = **按核数自动**：逻辑核×3/4 钳 [8, 16]）。项目层时代的线程数 A/B 实测（方向性结论仍可参考）见 `docs/PERFORMANCE.md` §17.2 |
 
 ### 实验/诊断（排查问题时用）
 
@@ -283,14 +280,17 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 | `ENGINE_PROFILE` | `1` 开启引擎细粒度性能剖面 |
 | `TRT_SUBPROBE` | `1` 开启 TRT 子相位探针 |
 | `DEBUG_BOUNDS` | `1` 打印分段边界调试信息 |
-| `HYBRID_PROBE` | `1` 打印混合解码逐片时序（速率校准/分界/接管诊断） |
-| `HYBRID_PROBE_CSV` | 设为 CSV 路径时，`HYBRID_PROBE` 逐片时序另落盘一份明细 |
 
 > 0.9.0 清理删除的钩子（历史结论见 docs/PERFORMANCE.md）：`GPU_PIPELINE_ASYNC`
 >（GPU 分段异步实验，NVDEC/CPU 分支均无收益）、`HYBRID_CALIB_ROUNDS`
 >（多轮校准，实测 -21% 净负）、`DECORD_FORCE_CPU`（旧钩子，用
 > `decode_backend="cpu"`）、merge_similar 的 `contrast` 分离模式。
 > 构造参数 `gray_output` / `yuv_output` 同时删除。
+>
+> 2026-09-06 混合解码迁移 decord 原生实现（commit `fd3bcda`）时删除的项目层
+> 钩子：`HYBRID_MAX_CHUNKS`、`HYBRID_MAX_CHUNK_FRAMES`、`HYBRID_PROBE`、
+> `HYBRID_PROBE_CSV` 及校准/折扣/移界等其余全部 `HYBRID_*` 参数
+> （仅 `HYBRID_CPU_THREADS` 保留，见上表）。
 
 内部实现（`engine_config` 常量、`_gpu_pipeline` 门控等）不在本表；如需深入，
 以 `engine_config.py` 为唯一事实源。

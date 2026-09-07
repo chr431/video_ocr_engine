@@ -66,8 +66,10 @@ python tools/_doc_section.py docs/ARCHIVE.md 4.4b        # 支持 16 / 16.8 / 4.
 | 配置常量 | `engine_config.py`（`GPU_PIPELINE_DECODE_BATCH=64` 等） |
 | 分相打桩 | `video_ocr_engine/extractor.py:317 _prof_end` |
 
-**现役并行维度只有一个**：`decode_backend="hybrid"` 的 CPU+NVDEC 双解码生产者
-竞争（`hybrid_decode.py`）。**没有 dual pipeline、没有 `DUAL_*` 环境变量、
+**现役并行维度只有一个**：`decode_backend="hybrid"` 的 CPU+NVDEC 双解码，
+**已由 decord fork 原生实现**（v0.7.15+ 的 `hybrid`/`hybrid_gpu` ctx，引擎只
+透传解码参数；项目层 `hybrid_decode.py` 已删除，迁移记录见 DECISIONS 同名
+章节与 PERF §24）。**没有 dual pipeline、没有 `DUAL_*` 环境变量、
 没有 `_dual_pipeline.py`** —— 历史提及均为旧档案，勿据此调优。
 
 其他现役事实：

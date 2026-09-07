@@ -36,8 +36,8 @@
 16. 相似段合并的分离模式（生产默认 binary）
 17. Race 跨编码实测（2026-08 一轮，1500 帧窗口，旧 CPU+ONNX 互补对）
 18. 七轮修正：kfe 转正为唯一分片方法（2026-08）
-19. CPU+NVDEC 混合解码 v3（2026-08，速率比例分界 + 两端连续扫掠）
-20. CPU+NVDEC 混合解码 v4（2026-08，动态分界 + 稳态折扣 + 短校准）
+19. CPU+NVDEC 混合解码 v3（2026-08，速率比例分界 + 两端连续扫掠）（历史，已删除 — fd3bcda）
+20. CPU+NVDEC 混合解码 v4（2026-08，动态分界 + 稳态折扣 + 短校准）（历史，已删除 — fd3bcda）
 21. 底层重构轮（2026-08，维护性收尾：env 收敛 + next_roi 步长修复 + GPU 异步开关 + 文档归档）
 22. 下一步三目标轮（2026-08）：真跳帧证伪 / CPU+ONNX 提速 / hybrid 修复
 23. 路线图收口轮（2026-08-29）：P0-4 GPU 直通 + P1-3 解耦 + hybrid 启动重叠
@@ -46,6 +46,7 @@
 26. §8 扫描轮落地（2026-08-29 晚）：TRT 批对齐 -9.1% + hybrid 合并 + NVDEC 同步证伪
 27. 0.9.0 清理轮（2026-08-29）：删除已证实无收益的实验钩子，API 收干净
 28. 设计审查结论（2026-08-30，原 docs/DESIGN-REVIEW.md 已并入本节）
+29. **混合解码迁移 decord 原生实现（2026-09-06，项目层 hybrid_decode.py 删除 — fd3bcda）**
 
 ---
 
@@ -583,6 +584,10 @@ sharp 用 int64 精确累加 + summary float64 直传，保证近平局选帧与
 
 ### CPU+NVDEC 混合解码 v3（2026-08，速率比例分界 + 两端连续扫掠）
 
+> **历史（2026-09-06 删除）**：v3/v4 项目层实现已随混合解码迁移 decord 原生
+> 实现整体删除（见文末「混合解码迁移 decord 原生实现」）。正文保留为设计
+> 原文，勿据此调参。
+
 v1 曾因无净收益被删除（见 docs/PERFORMANCE.md §4）；v2（kfe 共享队列竞争）
 2026-08-25 复活但实测退化（见下）；v3 以探针定位 v2 根因后重写为现役实现。
 
@@ -630,6 +635,9 @@ v1 曾因无净收益被删除（见 docs/PERFORMANCE.md §4）；v2（kfe 共�
   `HYBRID_PROBE=1`（逐片时序）保留。
 
 ### CPU+NVDEC 混合解码 v4（2026-08，动态分界 + 稳态折扣 + 短校准）
+
+> **历史（2026-09-06 删除）**：同 v3，项目层实现已删除，现状见文末
+> 「混合解码迁移 decord 原生实现」。
 
 v3 的短板：**CPU 明显慢于 NVDEC（8 核亲和模拟弱 CPU）时 hybrid 无收益**。
 本机实测（7945HX + RTX 4060 Laptop，进程亲和 8 逻辑核，GPU_PIPELINE=0）：
@@ -973,3 +981,33 @@ UTF-8 源码，CJK 注释行尾字节被 GBK 配对吞掉换行（行号漂移�
 - **0.10.0**：上述设计审查修复轮（25 条）+ 版本号提升。
   ⚠️ 按版本纪律，`engine_config.__version__` 改动必须同步打同名 git tag
   （v0.10.0 已打）。
+
+---
+
+## 混合解码迁移 decord 原生实现（2026-09-06，项目层 hybrid_decode.py 删除 — fd3bcda）
+
+> **现状唯一描述**：`decode_backend="hybrid"` = decord fork（≥v0.7.15）原生
+> `hybrid` / `hybrid_gpu` 设备上下文，引擎只透传解码参数。本文 v3 / v4 及
+> PERFORMANCE §10.4 / §10.5 / §12.3 / §17.2 / §22 / §23 的项目层机制均为
+> **已删除实现**的历史记录，勿据此调参；性能现状见 PERFORMANCE §24。
+
+**背景与决策**：decord fork v0.7.15 起原生提供 `hybrid`（宿主帧输出）与
+`hybrid_gpu`（显存帧输出）设备上下文，单 demux 流的关键帧 chunk 路由 +
+生产速率实测 min-max 积压贪心在解码器内部完成——项目层壳（v3~v7 迭代出的
+kfe 分片、并发校准、稳态折扣、在线移界、快端窃取/接管）与之完全重复。
+调度复杂度下沉解码器后，壳的维护成本（跨 reader 指针/seek 语义、GIL 与
+线程边界、庞大的调参面）不再值得，决策整体删除、零项目层适配。
+
+**删除清单**（commit `fd3bcda`）：`hybrid_decode.py`（1075 行）、
+`tests/decode/` 5 个壳测试、引用壳的 probe 工具
+（`_probe_hybrid_prodtime.py` / `_probe_io_budget.py`）、engine_config 死参数
+（SCHED / MIGRATE / SOLO_GUARD / CALIB / 折扣 / `HYBRID_MAX_CHUNKS` /
+`HYBRID_MAX_CHUNK_FRAMES` / `HYBRID_PROBE*` 等）。
+
+**保留**：`HYBRID_CPU_THREADS`（CPU reader 线程数，默认 0 = 逻辑核×3/4 钳
+[8, 16]，分档依据见 PERFORMANCE §17.2）。`hybrid` 打开失败降级纯 GPU
+（`meta.degraded_reason` 有记录）。
+
+**迁移后验证**（提交记录）：引擎 98 单测全过；三编码 e2e（hevc/h264/av1，
+`nvdec` vs `hybrid`，TRT + gpu_pipeline 全程显存）帧数与文本一致，hybrid 侧
+hevc 1.42× / h264 1.22× 加速。

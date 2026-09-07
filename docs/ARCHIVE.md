@@ -17,6 +17,11 @@
 **本文件的数值多数已过期**，用于理解"当时为什么这么做"。查"现在是什么样"
 请看 `docs/PERFORMANCE.md`。
 
+> **2026-09-06 追注**：混合解码已迁移 **decord fork 原生实现**
+> （commit `fd3bcda`）。本文所有「现役 `hybrid_decode.py` / 项目层 hybrid
+> v3/v4」表述均已过时——该实现已删除，现状见 `docs/PERFORMANCE.md` §24
+> 与 `docs/DECISIONS.md` 同名章节。
+
 ---
 
 ## 4. 已删除的混合解码 / 混合 OCR（历史结论，档案见本文 §18.A）
