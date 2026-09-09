@@ -12,8 +12,10 @@ import numpy as np
 
 import engine_config as config
 from video_utils import nvdec_available, tensorrt_available
+from segmentation import (SegmentStateMachine, similar_decision,
+                          otsu_median_threshold)
 from ._helpers import (_ndarray_device_ptr, _otsu_from_hist,
-                       _decode_progress_pct, _otsu_median_threshold,
+                       _decode_progress_pct,
                        _read_fps_from_vr)
 
 logger = logging.getLogger(__name__)
@@ -443,8 +445,8 @@ class _GpuPipelineMixin:
             calib_gray_dev = (calib_gray if on_gpu else calib_owner.ptr)
             _hist_mat = analyzer.histograms_perframe(
                 calib_gray_dev, calib_n, src_h, src_w)
-            ths = [_otsu_from_hist(_hist_mat[k]) for k in range(calib_n)]
-            th = _otsu_median_threshold(ths)
+            th = otsu_median_threshold(
+                [_otsu_from_hist(_hist_mat[k]) for k in range(calib_n)])
             self._bin_thresh = th
             return True
 
@@ -668,17 +670,8 @@ class _GpuPipelineMixin:
         producer = threading.Thread(target=_producer, daemon=True)
         producer.start()
 
-        segs: list = []
         rep_crops: dict = {}
         seg_idx = 0
-        s = 0
-        rep_frame = frames[0]
-        rep_dev = None           # 代表帧设备元组：gray=(nds,yptr,H,W)；
-                                 # yuv=(nds,nv12ptr,rows,W)。owner 保活，
-                                 # 全程留显存，不做持续 D2H。
-        last_rep_dev = None      # 上一"已发出"段的代表帧设备元组
-        rep_sharp = -1.0
-        prev_seen = False
         k = 0
         t0 = time.perf_counter()
         # 零拷贝管线：代表帧只在两处过 RAM —— keep_crops 输出（每段一张
@@ -766,9 +759,9 @@ class _GpuPipelineMixin:
                 ya = yb = None
             n = src_h * src_w
             mean = 255.0 * mad / n if use_bin else mad / n
-            if mean > self._merge_similar_threshold:
-                return False
-            return chg <= self._merge_max_changed_pixels
+            return similar_decision(mean, chg,
+                                    self._merge_similar_threshold,
+                                    self._merge_max_changed_pixels)
 
         def _emit_ocr(idx, r_frame, r_dev, frac, r_sharp) -> None:
             _t_push = time.perf_counter()
@@ -812,6 +805,23 @@ class _GpuPipelineMixin:
             _put_ocr((idx, r_frame, crop_h, dev_ocr, frac))
             self._prof_end('producer', 'q_put_block', _t_push)
 
+        # 分段状态机与宿主管线共用（segmentation.SegmentStateMachine）：
+        # GPU 侧数据源是设备侧 kernel 已算好的 win3 分数（cluster）。
+        def _on_emit(seg, rep, frac):
+            nonlocal seg_idx
+            _emit_ocr(seg_idx, rep[0], rep[1], frac, rep[2])
+            seg_idx += 1
+
+        machine = SegmentStateMachine(
+            frames, C=self._C,
+            on_emit=_on_emit,
+            on_similar=lambda a, b: _similar_device(a[1], b[1]),
+            on_cancel=self._cancel,
+            on_progress=lambda kk, frac: self._progress(
+                f'[{self._backend}] GPU分段: {kk}/{len(frames)}',
+                _decode_progress_pct(frac)),
+            debug_tag='GB')
+
         try:
             while True:
                 try:
@@ -828,55 +838,16 @@ class _GpuPipelineMixin:
                         f"GPU 解码生产者失败: {producer_err[0]!r}"
                     ) from producer_err[0]
                 fi, dev, sharp, cluster = item
-                if prev_seen:
-                    changed = float(cluster) >= self._C
-                    if changed:
-                        seg = frames[s:k]
-                        if config.env_bool(config.DEBUG_BOUNDS_ENV):
-                            print(f'[GB]{fi}:{float(cluster):.0f}',
-                                  flush=True)
-                        similar = _similar_device(last_rep_dev, rep_dev)
-                        if similar:
-                            segs[-1].extend(seg)
-                        else:
-                            segs.append(seg)
-                            _emit_ocr(seg_idx, rep_frame, rep_dev,
-                                      k / max(len(frames), 1), rep_sharp)
-                            seg_idx += 1
-                            last_rep_dev = rep_dev
-                        s = k
-                        rep_frame = fi
-                        rep_dev = dev
-                        rep_sharp = sharp
-                    elif sharp > rep_sharp:
-                        rep_sharp = sharp
-                        rep_frame = fi
-                        rep_dev = dev
-                else:
-                    rep_frame = fi
-                    rep_dev = dev
-                    rep_sharp = sharp
-                    prev_seen = True
-                if k % 100 == 0:
-                    self._cancel()
-                if k % 500 == 0:
-                    self._progress(
-                        f'[{self._backend}] GPU分段: {k}/{len(frames)}',
-                        _decode_progress_pct(k / max(len(frames), 1)))
+                machine.feed(k, fi, sharp, (fi, dev, sharp),
+                             cluster=float(cluster))
                 k += 1
             producer.join()
             if producer_err:
                 raise RuntimeError(
                     f"GPU 解码生产者失败: {producer_err[0]!r}"
                 ) from producer_err[0]
-            seg = frames[s:]
-            similar = _similar_device(last_rep_dev, rep_dev)
-            if similar:
-                segs[-1].extend(seg)
-            else:
-                segs.append(seg)
-                _emit_ocr(seg_idx, rep_frame, rep_dev, 1.0, rep_sharp)
-                seg_idx += 1
+            machine.finish()
+            segs = machine.segs
         finally:
             producer_stop.set()   # C6：任何退出路径都叫停 producer
             if producer is not None:

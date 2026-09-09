@@ -8,14 +8,15 @@
 
 模块划分（2026-08 七轮修正后按逻辑拆分）：
   extractor.py      — 引擎骨架：构造/参数校验/解码器打开/流水线分发/结果组装
-  _host_pipeline.py — 宿主流水线：校准/帧流/分段状态机/OCR 会话
+  _host_pipeline.py — 宿主管线：校准/帧流/分段状态机/OCR 会话
                       （_host_calibrate / _host_frame_stream /
                       _host_segment_frames / _HostPipelineMixin）
   _helpers.py       — 无类依赖的独立工具函数
   _result_types.py  — ExtractedSegment / ExtractionResult
   _gpu_pipeline.py  — _GpuPipelineMixin（GPU 全驻留管线）
 双流水线并行已被移除（2026-08 清理）；CPU+NVDEC 双解码（decode_backend=
-"hybrid"，与 auto/cpu/nvdec 并列）由顶层 hybrid_decode.py 承担。
+"hybrid"）由 decord fork 原生实现（≥v0.7.15 的 hybrid/hybrid_gpu ctx），
+引擎只透传解码参数；项目层 hybrid_decode.py 已删除，勿再引用。
 """
 import logging
 import os as _os
@@ -172,6 +173,7 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
                 f"frame_end 必须大于 frame_start（或为 0/None 表示到末尾）: "
                 f"start={self._frame_start}, end={self._frame_end}")
 
+
     # ── env 旋钮统一调用期读取（A6：与 OCR_PAD_SMALL/OCR_GAMMA 等同时机，
     #    构造后改 env 即生效；此前 autocrop 四项在构造期烘焙，语义不一致）──
     @property
@@ -244,11 +246,12 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         # int16 精确差：避免 float32 双全帧临时数组（a/b 为 uint8 灰度或
         # float32 分离图，255.0/0.0 转 int16 精确）。与 GPU sim_pair 的
         # 整数精确累加一致（阈值处仅 float32 末位舍入差异，文档已承认）。
+        # 两阈值判定统一走 segmentation.similar_decision（GPU 共用）。
         diff = np.abs(a.astype(np.int16) - b.astype(np.int16))
-        if float(diff.mean()) > self._merge_similar_threshold:
-            return False
-        changed = int(np.sum(diff > 10))
-        return changed <= self._merge_max_changed_pixels
+        from segmentation import similar_decision
+        return similar_decision(float(diff.mean()), int(np.sum(diff > 10)),
+                                self._merge_similar_threshold,
+                                self._merge_max_changed_pixels)
 
     def extract(self):
         """通用文本提取：解码∥分段∥OCR → 结构化结果（每段原始文本+置信度）。
@@ -405,10 +408,17 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
                 _ct = config.env_int(config.HYBRID_CPU_THREADS_ENV, 0)
                 if _ct <= 0:
                     # 延续项目层 hybrid 的 CPU 线程分档（见下方 v5 注释的历史
-                    # 依据）：核数 3/8，钳 [MIN, MAX]。
-                    _ct = max(config.HYBRID_CPU_THREADS_AUTO_MIN,
-                              min((_os.cpu_count() or 8) * 3 // 8,
-                                  config.HYBRID_CPU_THREADS_AUTO_MAX))
+                    # 依据）：核数 3/8，钳 [MIN, MAX]。av1 例外：fork 0.8.1
+                    # (FFmpeg9) 的 dav1d 帧线程扩展到 ~逻辑核 3/4 才饱和
+                    # （NT16 797fps → NT24 1164fps → NT32 1178fps），沿用手持
+                    # 策略会让 hybrid 的 CPU 分片喂不满（见 _decode_num_threads
+                    # av1 分支的实测）。
+                    if self._codec == 'av1':
+                        _ct = self._decode_num_threads(codec='av1') or _ct
+                    else:
+                        _ct = max(config.HYBRID_CPU_THREADS_AUTO_MIN,
+                                  min((_os.cpu_count() or 8) * 3 // 8,
+                                      config.HYBRID_CPU_THREADS_AUTO_MAX))
                 _hctx = _hyg(0) if self._ocr_on_gpu() else _hy(0)
                 vr = self._open_decord_reader(_hctx, roi_kw, num_threads=_ct)
                 self._backend = 'decord/hybrid'
@@ -447,9 +457,10 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
             ── OCR 在 GPU（TRT，现役默认）────────────────────────────
             host CPU 空闲 → 解码吃满逻辑核（上下限见
             config.DECODE_THREADS_GPU_OCR_MIN/MAX）。
-            背景：decord fork 在引擎不传 num_threads 时落到
-            DECORD_FFMPEG_THREAD_COUNT = clamp(hw/4, 2, 8)，把 CPU 软解钉在
-            8 线程。实测（7945HX 16C32T + RTX 4060，test5 1080p h264 全片
+            背景：fork 的默认线程上限（DECORD_FFMPEG_THREAD_COUNT，随版本
+            变化）是"ONNX 占满物理核"时代定的；TRT 成默认后 host 在解码
+            阶段基本空闲，旧上限成为瓶颈。实测（7945HX 16C32T + RTX 4060，
+            test5 1080p h264 全片
             7223 帧，TRT）：8 线程 6.452s → 16 线程 4.875s（-24%）→ 32 线程
             5.085s；新三国01 标清整集 73430 源帧 stride8：8 线程 15.897s →
             32 线程 10.812s（-32%）。相对现役默认（NVDEC+TRT）为 -45%/-50%。
@@ -471,9 +482,9 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
             低段密度场景白丢 ~28%；且它引用的"加线程变慢"实测来自 OCR
             受限的高段密度场景，被错误地当成了普适结论。）
 
-            codec='av1'：dav1d 自带线程池，吞吐**不随** FFmpeg 帧线程数
-            扩展（实测 8/16/24/32 线程全为 5.8~5.9s）→ 一律 cores//2，
-            把核留给 OCR。
+            codec='av1'：fork 0.8.1 (FFmpeg9) 起 dav1d 帧线程扩展性改善
+            （FFmpeg8 时代"不随 FFmpeg 帧线程数扩展"的旧实测是被 OCR 墙钟
+            掩盖的口径）→ 逻辑核 3/4 钳 [8, 24]，不分 OCR 位置。
             GPU(NVDEC) 不调用本方法。
 
             DECODE_THREADS env 覆盖（>0 时直接返回，与 OCR_THREADS 对齐）：
@@ -485,7 +496,15 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         from ocr_native import auto_ocr_thread_count
         cores = auto_ocr_thread_count()
         if codec == 'av1':
-            return max(2, cores // 2)
+            # fork 0.8.1 (FFmpeg9) 复测：dav1d 帧线程扩展性大幅改善，
+            # 旧结论（8/16/24/32 线程全 5.8~5.9s，FFmpeg8 口径且被 OCR
+            # 墙钟掩盖）已过时。顺序解码 16T 797fps → 24T 1164fps →
+            # 32T 1178fps（饱和）；seek+批读扫掠 24T 合计 2.84s，优于旧
+            # 构建 16T 的 3.16s。OCR-on-CPU 下同样大赚（e2e host_cpu av1
+            # 8T 6.26s → 24T 3.42s，-45%，ORT 争核远抵不过解码收益）
+            # → 不分 OCR 位置，逻辑核 3/4 钳 [8, 24]。
+            logical = _os.cpu_count() or cores
+            return max(8, min(24, logical * 3 // 4))
         if self._ocr_on_gpu():
             logical = _os.cpu_count() or cores
             return max(config.DECODE_THREADS_GPU_OCR_MIN,

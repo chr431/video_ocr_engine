@@ -165,60 +165,23 @@ def _np_resize(img: "np.ndarray", new_w: int, new_h: int) -> "np.ndarray":
 
 def _preprocess_standard(crop: "np.ndarray", force_aspect: float = 0.0,
                          gamma: "float | None" = None) -> "np.ndarray":
-    """标准预处理：resize 到 OCR_TARGET_H 高 + 可选强制宽高比 + 灰度 gamma。
-
-    force_aspect > 0 时强制横向宽度 = OCR_TARGET_H × force_aspect（px，
-    宽高比固定；可能放大或缩小——"force" 语义，非上限）。0 = 按原宽高比
-    resize。输出 float32（与 cv2 路径数值差 <= 1e-5）。
-
-    gamma：灰度对比度增强指数（255*(gray/255)^g）。None = 用 env
-    OCR_GAMMA，都没有则 config.OCR_GAMMA（正式默认 2.0）。
-    白字黄底等背景色块场景放大高段分离，平滑无裁剪不侵蚀笔画。
-    gamma <= 0 跳过灰度变换（保留 RGB，回退旧行为）；
-    灰度权重与 segment 灰度共用 config.GRAY_RGB_WEIGHTS。
-
-    宽度 pad（fill_width）在 OCR 引擎 _resize_norm 层处理（替换固定 224），
-    此处不 pad。
-    """
-    target_h = config.OCR_TARGET_H
-    h, w = crop.shape[:2]
-    new_w = max(1, int(w * target_h / h)) if h > 0 else w
-    if force_aspect > 0:
-        new_w = max(1, int(round(target_h * force_aspect)))
-    if new_w == w and abs(target_h - h) <= config.OCR_RESIZE_TOL * target_h:
-        # 目标尺寸已一致（或高差在容差内）→ 跳过无谓 resize；宽高任一需变
-        # 都必须走 _np_resize（force_aspect 改宽时不能只比高度）
-        resized = crop.astype(np.float32)
-    else:
-        resized = _np_resize(crop, new_w, target_h)
-    if gamma is None:
-        gamma = config.env_float(config.OCR_GAMMA_ENV, float(config.OCR_GAMMA))
-    if gamma > 0:
-        # 灰度 + gamma（正式预处理）：RGB 逐通道 gamma 视觉差异小、回归多
-        # （tools/_gamma_misread_montage 对比），灰度版视觉更清晰、回归少。
-        if resized.ndim == 2:
-            gray = resized                                # 2D (H,W) 灰度输入
-        elif resized.shape[-1] == 1:
-            gray = resized[..., 0]                        # decord gray 输出
-        else:
-            gray = resized @ _GRAY_W                      # (h, w) float32
-        resized = 255.0 * np.power(gray / 255.0, gamma)
-        resized = np.stack([resized] * 3, axis=-1)
-    return resized
+    """标准预处理（转发）。统一实现见 segmentation.preprocess_standard
+    （0.11.0 起分段+预处理实现收敛到 segmentation.py，双管线共用）。"""
+    from segmentation import preprocess_standard
+    return preprocess_standard(crop, force_aspect=force_aspect, gamma=gamma)
 
 
 def _text_sep_gray(gray: "np.ndarray", mode: str = "binary",
                    th: "int | None" = None) -> "np.ndarray":
-    """从背景中分离字幕文字的灰度图（merge_similar 判定用）。
+    """分离图（转发）。统一实现见 segmentation._text_sep_binary。
 
-    mode 仅支持 "binary"：用阈值把文字变白、背景变黑。
-    （contrast 模式——局部背景估计 + 绝对差分——实验证实无净收益，
-    0.9.0 清理删除，历史见 docs/PERFORMANCE.md。）
+    mode/th 为历史签名兼容：仅支持 binary；th 缺省 = 灰度均值
+    （merge_similar 判定恒显式传校准阈值，缺省分支仅剩独立调用方）。
     """
-    g = gray.astype(np.float32)
+    from segmentation import _text_sep_binary
     if th is None:
-        th = int(np.mean(g))
-    return np.where(g > th, 255.0, 0.0).astype(np.float32)
+        th = int(np.mean(gray.astype(np.float32)))
+    return _text_sep_binary(gray, th)
 
 
 def nvdec_available(video_path=None) -> bool:

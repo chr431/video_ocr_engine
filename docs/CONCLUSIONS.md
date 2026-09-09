@@ -15,8 +15,8 @@
 | C-01 | 并发退化真因 = NVDEC 会话数（单硬件单元串行）；NVDEC∥CPU 互补聚合 1.83–1.87×，双 NVDEC 仅 1.01–1.20× | active | 本机单 NVDEC 单元；同视频同负载 | 多 NVDEC 单元 GPU / 驱动调度变更 | PERF §19 §21 |
 | C-02 | IO 不是并发退化原因（<1% 墙钟；页缓存全命中仍退化 1.88×） | active | NVMe + 页缓存命中 | 冷盘/网络盘/超长视频使 IO 占比抬升 | PERF §19 |
 | C-03 | 内存带宽不是并发变量（B_max 实测 55.8 GB/s；互补设计仅 7.8 GB/s 退化 1.02×） | active | 2×16GB DDR5-6000 独显平台 | 共享内存带宽的集成平台 / 内存减半 | PERF §20 §21 |
-| C-04 | 解码后端按编码选：h264 CPU 快 ~2.9×，AV1 反转慢 ~2.6× | active | fork 0.7.x 解码路径、本机核数 | decord 侧重写解码后端 / 新增编码 | PERF §21 §22.1 |
-| C-05 | hybrid = decord fork 原生（≥v0.7.15）：TRT 走 hybrid_gpu 显存直通、CPU OCR 走宿主帧；e2e hevc 1.42× / h264 1.22× vs 纯 NVDEC | active | decord fork ≥v0.7.15 | fork 版本升级；AV1 侧数据补齐 | PERF §24；DECISIONS「混合解码迁移」 |
+| C-04 | 解码后端按编码选：h264 CPU 快 ~2.9×，AV1 反转慢 ~2.6× | active | fork 0.7.x 解码路径、本机核数；**0.8.1/FFmpeg9 下 av1 CPU 经济性已变**（顺序 393→1164fps @24T，见 C-31），并行/互补场景的选型数字待重测 | 并行场景重测（C-31 策略修复后） | PERF §21 §22.1；log 2026-09-08 |
+| C-05 | hybrid = decord fork 原生（≥v0.7.15）：TRT 走 hybrid_gpu 显存直通、CPU OCR 走宿主帧；e2e hevc 1.42× / h264 1.22× vs 纯 NVDEC（0.7.x 口径） | active | decord fork ≥v0.7.15；0.8.1/FFmpeg9 下 bench_hybrid hevc hybrid 仍优于两侧单后端，av1 优势收窄（seek 落点变慢，见 C-31） | hevc/h264 e2e 口径重测；fork 再升级 | PERF §24；log 2026-09-08 decord-0.8.1；DECISIONS「混合解码迁移」 |
 | C-06 | 项目层 hybrid 调度（v3~v7：kfe 分片/校准/折扣/在线移界/窃取） | superseded(C-05) | — | — | PERF §22 §23（历史）；DECISIONS v3/v4 |
 | C-07 | `auto` 不区分 OCR 后端、一律尝试 NVDEC：批量互补必须显式 `decode_backend="cpu"` 并核验 `_backend` | active | — | auto 实现按 ocr_backend 分叉后复核 | README 批量章；PERF §19 §21 |
 | C-08 | `auto` 在 h264 多核非最优（CPU+TRT 约 2×），但静态判据不可靠、判错代价成倍 → 保持 auto | active | — | 出现可靠的运行时解码速率探测 | DECISIONS 审查 A2 |
@@ -42,3 +42,5 @@
 | C-28 | 多预处理自动选择 / 窗口重 OCR 自动化 / scipy 连通域 | dead | 均被现有方案覆盖或净负 | — | PERF §6 |
 | C-29 | 短任务 hybrid 固定开销交叉点（N*≈8182 帧前不如纯 NVDEC） | superseded(C-05) | 项目层调度实测 | — | PERF §22.1 |
 | C-30 | GPU 分段异步（GPU_PIPELINE_ASYNC） | dead | NVDEC/CPU 分支均无收益，钩子已删 | — | DECISIONS「0.9.0 清理轮」 |
+| C-31 | decord 0.8.1 + FFmpeg9 升级：seek 本身未变慢（两构建同斜率 ~2.6ms/帧×关键帧距离）；此前"av1 seek 变慢"是 NT=4 探针口径假象 + FFmpeg9 dav1d 线程扩展性改善被引擎旧 av1 线程策略（cores//2=8T，FFmpeg8 时代口径）埋没。修复：av1 → 逻辑核 3/4 钳 [8,24]（不分 OCR 位置），CPU 后端 5.47→2.72s（−50%）、hybrid 1.90→1.80s、host_cpu e2e 6.26→3.42s（−45%）；release 初版 yuv 路径必挂（shim 误用 v1 cuMemcpy2D 导出 → 201），须含 cuMemcpy2D_v2 修复（fork 7ef70f5） | active | pip wheel 0.8.2（dll md5 6597eea6，已含修复，DLL 随包自带） | fork 再升级 / 驱动或 FFmpeg 再换代 | log 2026-09-08 decord-0.8.1；tools/_ab_decord081/；DEPENDENCIES decord 节 |
+| C-32 | 分段判定/状态机/裁切/预处理的实现唯一出处 = segmentation.py：宿主管线直接调用，GPU kernel 为其设备侧逐位镜像、判定阈值/余量/合并判据引用同一文件；不做插件抽象面（GPU 设备侧实现不可插拔，插件语义=降速到宿主管线，已回退） | active | 0.11.0；两侧行为由真值用例逐位守护 | 出现真实的 GPU 侧算法插件需求（需设备侧实现面，另立结论） | log 2026-09-09 引擎四方向；tests/ 全套 |

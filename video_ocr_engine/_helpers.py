@@ -57,38 +57,17 @@ def _ndarray_device_ptr(nd):
 
 
 def _otsu_from_hist(hist) -> int:
-    """从 256-bin 直方图算 Otsu 阈值（与 segmentation._otsu 等价）。"""
-    hist = np.asarray(hist, dtype=np.int64)
-    total = int(hist.sum())
-    if total <= 0:
-        return config.OTSU_FALLBACK_THRESH
-    st = float((np.arange(256) * hist).sum())
-    sb = 0.0
-    wb = 0
-    best = config.OTSU_FALLBACK_THRESH
-    vmax = -1.0
-    for t in range(256):
-        wb += int(hist[t])
-        if wb == 0:
-            continue
-        wf = total - wb
-        if wf == 0:
-            break
-        sb += t * int(hist[t])
-        mb = sb / wb
-        mf = (st - sb) / wf
-        vb = wb * wf * (mb - mf) ** 2
-        if vb > vmax:
-            vmax = vb
-            best = t
-    return best
+    """从 256-bin 直方图算 Otsu 阈值（转发；统一实现见
+    segmentation._otsu_from_hist，GPU 校准直方图行经此调用）。"""
+    from segmentation import _otsu_from_hist as _impl
+    return _impl(hist)
 
 
 def _otsu_median_threshold(ths) -> int:
-    """校准阈值：Otsu 列表取中位数；空列表回退 OTSU_FALLBACK_THRESH。"""
-    if not ths:
-        return config.OTSU_FALLBACK_THRESH
-    return int(np.median(ths))
+    """校准阈值 = Otsu 中位数（转发；统一实现见
+    segmentation.otsu_median_threshold）。"""
+    from segmentation import otsu_median_threshold as _impl
+    return _impl(ths)
 
 
 def _read_fps_from_vr(vr):

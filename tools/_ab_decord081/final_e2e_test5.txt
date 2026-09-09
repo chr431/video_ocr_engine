@@ -1,0 +1,36 @@
+D:\Repo\video_ocr_engine\video_ocr_engine\extractor.py:529: UserWarning: hybrid decoding contexts (decord.hybrid / decord.hybrid_gpu) are EXPERIMENTAL: scheduling, performance and memory bounds may change between releases without notice. Prefer decord.gpu() (NVDEC) or decord.cpu() for production use.
+  return VideoReader(str(self._video_path), ctx=ctx, output_format=fmt, **nt_kw, **roi_kw)
+truth 元数据: roi=843 frames=362..7585 codec=h264 fps=59.767 行数=7223
+
+== 功能矩阵 ==  roi=(843, 993, 948, 1025) frames=[362,3362) stride=8
+  [gpu_yuv] 段=337 文本=198 墙钟=4.00s 后端=decord/GPU OCR=tensorrt 空文本=0
+  [gpu_gray] 段=337 文本=198 墙钟=3.25s 后端=decord/GPU OCR=tensorrt 空文本=0
+      与首配置唯一文本重合率=100.0%
+  [gpu_keepoff] 段=337 文本=198 墙钟=3.25s 后端=decord/GPU OCR=tensorrt 空文本=0
+      与首配置唯一文本重合率=100.0%
+  [host_trt] 段=337 文本=198 墙钟=3.26s 后端=decord/GPU OCR=tensorrt 空文本=0
+      与首配置唯一文本重合率=100.0%
+  [host_cpu] 段=334 文本=198 墙钟=2.03s 后端=decord/CPU OCR=onnxruntime 空文本=0
+      与首配置唯一文本重合率=100.0%
+  [hybrid] 段=337 文本=198 墙钟=1.63s 后端=decord/hybrid OCR=tensorrt 空文本=0
+      与首配置唯一文本重合率=100.0%
+  [gpu_onnx] 段=337 文本=198 墙钟=3.44s 后端=decord/GPU OCR=onnxruntime 空文本=0
+      与首配置唯一文本重合率=100.0%
+
+== 文本验证 vs ground truth ==
+  [gpu_yuv] 匹配率=100.0% ✓
+  [gpu_gray] 匹配率=100.0% ✓
+  [gpu_keepoff] 匹配率=100.0% ✓
+  [host_trt] 匹配率=100.0% ✓
+  [host_cpu] 匹配率=100.0% ✓
+  [hybrid] 匹配率=100.0% ✓
+  [gpu_onnx] 匹配率=100.0% ✓
+
+== 性能测试 ==  配置=gpu_yuv runs=2 frames=3000 stride=8
+  run1: 墙钟=3.271s 分段=337 时序={'decode': 2.608, 'ocr_tail': 0.037, 'ocr': 3.146}
+  run2: 墙钟=3.269s 分段=337 时序={'decode': 2.615, 'ocr_tail': 0.034, 'ocr': 3.148}
+  中位数墙钟=3.270s min=3.269s max=3.271s
+  采样帧=375 等效源帧吞吐≈917 fps(源帧) @视频 59.8 fps
+
+== 结论 ==
+  PASS

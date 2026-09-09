@@ -1,0 +1,7 @@
+decord.dll md5: 5638e23be9985427fbdbe1e4eb99a4a4 (0.8.1+cuMemcpy2D_v2 fix, FFmpeg9)
+loaded: D:\Repo\decord\build\Release\avcodec-63.dll
+loaded: D:\Repo\decord\build\Release\avformat-63.dll
+loaded: D:\Repo\decord\build\Release\swscale-10.dll
+loaded: D:\Repo\decord\build\Release\avutil-61.dll
+loaded: D:\Repo\decord\build\Release\swresample-7.dll
+loaded: D:\Repo\decord\build\Release\decord.dll

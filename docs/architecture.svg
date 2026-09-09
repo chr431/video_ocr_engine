@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="660" viewBox="0 0 980 660" font-family="'Segoe UI','Microsoft YaHei',sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5a6572"/>
+    </marker>
+    <style>
+      .box { fill:#ffffff; stroke:#5a6572; stroke-width:1.2; rx:8; }
+      .grp { fill:#f7f9fb; stroke:#9aa7b4; stroke-width:1.2; rx:12; }
+      .unified { fill:#fffdf5; stroke:#c47f17; stroke-width:1.6; rx:10; }
+      .lbl { fill:#2b3440; font-size:14px; font-weight:600; }
+      .sub { fill:#5a6572; font-size:11.5px; }
+      .code { fill:#8a5a00; font-size:11px; font-family:Consolas,monospace; }
+      .flow { stroke:#5a6572; stroke-width:1.4; fill:none; marker-end:url(#arrow); }
+      .title { fill:#1d2733; font-size:17px; font-weight:700; }
+      .badge { fill:#eef3f8; stroke:#9aa7b4; rx:5; }
+    </style>
+  </defs>
+
+  <text x="24" y="34" class="title">video-ocr-engine 识别链架构（0.11.x）</text>
+  <rect x="24" y="44" width="470" height="20" class="badge"/>
+  <text x="32" y="58" class="sub">链路：解码 → 像素分段 → 代表帧 → OCR → 相似段合并（引擎零领域语义）</text>
+
+  <!-- 输入 -->
+  <rect x="24" y="96" width="130" height="64" class="box" rx="8"/>
+  <text x="89" y="122" text-anchor="middle" class="lbl">视频输入</text>
+  <text x="89" y="140" text-anchor="middle" class="sub">roi / frame_start..end</text>
+  <text x="89" y="153" text-anchor="middle" class="sub">stride / keep_crops</text>
+
+  <!-- 解码层 -->
+  <rect x="196" y="80" width="264" height="96" class="grp" rx="12"/>
+  <text x="328" y="102" text-anchor="middle" class="lbl">decord fork（chr431/decord 0.8.2，pip wheel）</text>
+  <text x="328" y="121" text-anchor="middle" class="sub">ctx：cpu(24T·av1) / gpu(NVDEC) / hybrid / hybrid_gpu</text>
+  <text x="328" y="138" text-anchor="middle" class="sub">ROI-first 裁切 · gray / yuv420 输出 · stride 等差快径</text>
+  <text x="328" y="158" text-anchor="middle" class="code">decode_backend = auto | cpu | nvdec | hybrid</text>
+  <line x1="154" y1="128" x2="192" y2="128" class="flow"/>
+
+  <!-- 分发 -->
+  <line x1="460" y1="128" x2="502" y2="128" class="flow"/>
+  <path d="M502,128 H520 V88 H560 M520,128 V238 H560" class="flow" fill="none"/>
+  <text x="512" y="80" class="sub">TRT 可用</text>
+  <text x="474" y="200" class="sub">无 TRT / ocr=cpu</text>
+
+  <!-- GPU 全驻留管线 -->
+  <rect x="560" y="60" width="396" height="150" class="grp" rx="12" style="stroke:#3f7cac"/>
+  <text x="758" y="82" text-anchor="middle" class="lbl" fill="#2c5d82">GPU 全驻留零拷贝管线（默认）</text>
+  <rect x="576" y="94" width="176" height="46" class="box" rx="8"/>
+  <text x="664" y="112" text-anchor="middle" class="sub" fill="#2b3440" font-size="12.5">GPU kernels：luma / sharp</text>
+  <text x="664" y="128" text-anchor="middle" class="sub" fill="#2b3440" font-size="12.5">win3 聚类 / Otsu 直方图 / sim_pair</text>
+  <rect x="768" y="94" width="172" height="46" class="box" rx="8"/>
+  <text x="854" y="112" text-anchor="middle" class="sub" fill="#2b3440" font-size="12.5">TensorRT raw 直通</text>
+  <text x="854" y="128" text-anchor="middle" class="sub" font-size="12.5">GPU 预处理 → 推理 → GPU CTC</text>
+  <line x1="752" y1="117" x2="764" y2="117" class="flow"/>
+  <text x="758" y="158" text-anchor="middle" class="sub">帧全程驻留显存；过 RAM 的只有标量 / 校准表 / idx+prob / keep_crops</text>
+  <text x="758" y="176" text-anchor="middle" class="sub">env GPU_PIPELINE=0 关 / =1 强制（GPU 分段+ONNX 实验组合）</text>
+  <text x="758" y="196" text-anchor="middle" class="code">kernel 为 segmentation.py 算法的设备侧逐位镜像</text>
+
+  <!-- 宿主管线 -->
+  <rect x="560" y="238" width="396" height="212" class="grp" rx="12" style="stroke:#4c8c5f"/>
+  <text x="758" y="260" text-anchor="middle" class="lbl" fill="#386e49">宿主管线（无 TRT / ocr=cpu 时）</text>
+
+  <rect x="576" y="274" width="170" height="58" class="box" rx="8"/>
+  <text x="661" y="292" text-anchor="middle" class="sub" fill="#2b3440" font-size="12.5">帧流：asnumpy → 批灰度</text>
+  <text x="661" y="308" text-anchor="middle" class="sub" font-size="12.5">→ sharp(std) → 二值</text>
+  <text x="661" y="323" text-anchor="middle" class="sub" font-size="12.5">g_buf 跨批复用</text>
+
+  <rect x="762" y="274" width="178" height="58" class="box" rx="8"/>
+  <text x="851" y="292" text-anchor="middle" class="sub" fill="#2b3440" font-size="12.5">分段状态机（共用）</text>
+  <text x="851" y="308" text-anchor="middle" class="sub" font-size="12.5">win3 ≥ C 断段 · std 选代表帧</text>
+  <text x="851" y="323" text-anchor="middle" class="sub" font-size="12.5">相似段合并（binary 分离图）</text>
+  <line x1="746" y1="303" x2="758" y2="303" class="flow"/>
+
+  <rect x="576" y="352" width="170" height="58" class="box" rx="8"/>
+  <text x="661" y="370" text-anchor="middle" class="sub" fill="#2b3440" font-size="12.5">预处理：Y 展开 → autocrop</text>
+  <text x="661" y="386" text-anchor="middle" class="sub" font-size="12.5">→ 48 高 resize + gamma 2.0</text>
+  <text x="661" y="402" text-anchor="middle" class="sub" font-size="12.5">余量/门槛数学双管线同一份</text>
+
+  <rect x="762" y="352" width="178" height="58" class="box" rx="8"/>
+  <text x="851" y="370" text-anchor="middle" class="sub" fill="#2b3440" font-size="12.5">OCR 会话（宽度重排分批）</text>
+  <text x="851" y="388" text-anchor="middle" class="sub" font-size="12">TensorRT：GPU 预处理 + CTC 归约</text>
+  <text x="851" y="403" text-anchor="middle" class="sub" font-size="12">ONNX：双实例并行（CPU 后端）</text>
+  <line x1="746" y1="381" x2="758" y2="381" class="flow"/>
+
+  <!-- 结果 -->
+  <rect x="560" y="490" width="396" height="72" class="box" rx="8"/>
+  <text x="758" y="514" text-anchor="middle" class="lbl">ExtractionResult</text>
+  <text x="758" y="534" text-anchor="middle" class="sub">segments[start/end/rep_frame/text/confidence/rep_crop]</text>
+  <text x="758" y="551" text-anchor="middle" class="sub">frames · fps · timing · meta(backend/codec/degraded)</text>
+  <line x1="758" y1="450" x2="758" y2="486" class="flow"/>
+
+  <!-- 统一实现文件（左侧大标注） -->
+  <rect x="24" y="200" width="500" height="128" class="unified" rx="10"/>
+  <text x="274" y="224" text-anchor="middle" class="lbl" fill="#8a5a00" font-size="15">segmentation.py —— 分段 + 预处理统一实现（双管线唯一出处）</text>
+  <text x="40" y="248" class="sub">§1 像素原语：批量灰度（g_buf 复用）/ NV12 Y 展开 / Otsu（帧+直方图）/ win3 聚类</text>
+  <text x="40" y="268" class="sub">§2 校准与判定：otsu_median_threshold · similar_decision（两阈值判据）· similar_binary</text>
+  <text x="40" y="288" class="sub">§3 SegmentStateMachine：断段/代表帧/合并统一编排 —— 宿主喂 bin，GPU 喂 cluster 分数</text>
+  <text x="40" y="308" class="sub">§4 裁切与预处理：content_range_to_crop 余量+门槛 · crop_to_content / crop_after_aspect（顺序⑦）</text>
+  <path d="M524,264 H560 V303" class="flow" style="stroke:#c47f17;stroke-dasharray:5 3" fill="none"/>
+  <path d="M524,264 H540 V117 H560" class="flow" style="stroke:#c47f17;stroke-dasharray:5 3" fill="none"/>
+
+  <!-- 侧栏：引擎池 -->
+  <rect x="24" y="352" width="500" height="118" class="grp" rx="12" style="stroke:#9aa7b4"/>
+  <text x="274" y="374" text-anchor="middle" class="lbl">OCR 引擎池（进程级）与引擎</text>
+  <text x="40" y="396" class="sub">acquire_ocr_engine / checkin —— 按 model+backend+fill_width+threads 复用（跨视频免重建 TRT）</text>
+  <text x="40" y="416" class="sub">OcrEngine：ONNX(ORT 动态批) / TensorRT（GPU 预处理 + 显存全驻留 CTC 归约）</text>
+  <text x="40" y="436" class="sub">CTC：argmax → 相邻去重 → 去 blank → 字符表（与 rapidocr 逐位对齐）</text>
+  <text x="40" y="458" class="sub">模型单一出处 assets/ocr_models（PP-OCRv6_rec_small + 字符表）</text>
+
+  <!-- 底部结论条 -->
+  <rect x="24" y="580" width="932" height="56" class="grp" rx="12" style="stroke:#c47f17;stroke-dasharray:6 3"/>
+  <text x="40" y="603" class="lbl" fill="#8a5a00" font-size="13">统一实现约定（0.11.0）</text>
+  <text x="40" y="623" class="sub">分段判定/状态机/裁切/预处理只住 segmentation.py；GPU kernel 为其设备侧逐位镜像（回归由真值用例守护）；engine_config 为参数/env 单一事实源</text>
+</svg>

@@ -15,11 +15,12 @@ import time
 import numpy as np
 
 import engine_config as config
-from segmentation import _cluster_win3, _otsu
+from segmentation import (SegmentStateMachine, _otsu,
+                          otsu_median_threshold)
 from video_utils import _nv12_luma_full
 from ._helpers import (
     _ocr_batch_size, _ndarray_device_ptr,
-    _decode_progress_pct, _ocr_progress_pct, _otsu_median_threshold,
+    _decode_progress_pct, _ocr_progress_pct,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,8 +73,8 @@ def _host_calibrate(ex, vr, frames, *, with_dev=False):
                 base, shape = _ndarray_device_ptr(nd)
                 dev_info = (nd, base, shape[0], shape[1])
             calib.append((frames[k], c, g, float(g.std()), dev_info))
-    ths = [_otsu(g) for _fi, _c, g, _s, _dev in calib]
-    return calib, _otsu_median_threshold(ths)
+    return calib, otsu_median_threshold(
+        [_otsu(g) for _fi, _c, g, _s, _dev in calib])
 
 
 def _host_frame_stream(ex, frames, vr, calib, th, *, with_dev=False):
@@ -136,217 +137,72 @@ def _host_frame_stream(ex, frames, vr, calib, th, *, with_dev=False):
 
 def _host_segment_frames(ex, frames, stream, *, debug_tag, progress_prefix,
                          emit, segs):
-    """宿主分段状态机（单流水线统一入口）。
+    """宿主分段状态机 —— 编排统一实现在 segmentation.SegmentStateMachine
+    （0.11.0 起与 GPU 全驻留管线共用同一状态机；本函数只做宿主侧接线）。
 
     ex: FieldExtractor。
     stream: (fi, crop, gray, sharp, bin, dev_info) 迭代器（_host_frame_stream）。
-    emit(seg, rep_frame, rep_crop, rep_dev, rep_gray, frac)：段闭合时投递
+    emit(seg, rep_frame, rep_crop, rep_dev, rep_gray, frac)：段闭合投递
         OCR，由调用方闭包实现（入队/全局段号/keys/reps/rep_crops 收敛在
-        闭包里；调用方在 emit 前已把 seg 追加进 segs）。
-    segs 由调用方传入（emit 闭包直写 rep_crops）。
-    debug_tag 非 None 且 DEBUG_BOUNDS 开启时打印边界（[HB]=单流水线，与
-    GPU 路径 [GB] 对齐）。
-    返回 (first_rep_gray, last_rep_gray)：首发射段代表灰度与末发射段代表灰度。
+        闭包里；调用方在 emit 前已把 seg 追加进 segs —— 现由状态机持有
+        segs，结束时拷回传入列表）。
+    debug_tag 非 None 且 DEBUG_BOUNDS 开关开启时打印边界（[HB]=单流水线，
+    与 GPU 路径 [GB] 对齐；分值 = win3 聚类分数）。
+    返回传入的 segs（同一列表，内容 = 状态机产出的段）。
     """
-    s = 0
-    rep_frame = frames[0]
-    rep_crop = None
-    rep_dev = None
-    rep_sharp = -1.0
-    rep_gray = None
-    last_rep_gray = None
-    first_rep_gray = None
-    prev_b = None
-    for k, (fi, c, g, sharp, b, dev_info) in enumerate(stream):
-        if prev_b is not None:
-            d = prev_b != b
-            _t_seg = time.perf_counter()
-            c3 = _cluster_win3(d)
-            changed = c3 >= ex._C
-            ex._prof_end('producer', 'segmentation', _t_seg)
-            if changed:
-                seg = frames[s:k]
-                if (debug_tag is not None
-                        and config.env_bool(config.DEBUG_BOUNDS_ENV)):
-                    print(f'[{debug_tag}]{fi}:{c3:.0f}',
-                          flush=True)
-                similar = (
-                    ex._merge_similar and segs
-                    and ex._segments_similar(last_rep_gray, rep_gray))
-                if similar:
-                    # 同一视觉内容被噪声切成多段：并入前一段，不产生新的
-                    # OCR 任务，保留前一段代表帧/文本。
-                    segs[-1].extend(seg)
-                else:
-                    segs.append(seg)
-                    emit(seg, rep_frame, rep_crop, rep_dev, rep_gray,
-                         k / max(len(frames), 1))
-                    if first_rep_gray is None:
-                        first_rep_gray = rep_gray
-                    last_rep_gray = rep_gray
-                s = k
-                rep_frame = fi
-                rep_crop = c
-                rep_dev = dev_info
-                rep_sharp = sharp
-                rep_gray = g
-            elif sharp > rep_sharp:
-                rep_sharp = sharp
-                rep_frame = fi
-                rep_crop = c
-                rep_dev = dev_info
-                rep_gray = g
-        else:
-            rep_frame = fi
-            rep_crop = c
-            rep_dev = dev_info
-            rep_sharp = sharp
-            rep_gray = g
-        prev_b = b
-        if k % 100 == 0:
-            ex._cancel()
-        if k % 500 == 0:
-            ex._progress(f'{progress_prefix}: {k}/{len(frames)}',
-                         _decode_progress_pct(k / max(len(frames), 1)))
-    seg = frames[s:]
-    similar = (
-        ex._merge_similar and segs
-        and ex._segments_similar(last_rep_gray, rep_gray))
-    if similar:
-        segs[-1].extend(seg)
-    else:
-        segs.append(seg)
-        emit(seg, rep_frame, rep_crop, rep_dev, rep_gray, 1.0)
-        if first_rep_gray is None:
-            first_rep_gray = rep_gray
-    return first_rep_gray, last_rep_gray
+    machine = SegmentStateMachine(
+        frames, C=ex._C,
+        on_emit=lambda seg, rep, frac: emit(seg, rep[0], rep[1], rep[3],
+                                            rep[2], frac),
+        on_similar=lambda a, b: (ex._merge_similar
+                                 and ex._segments_similar(a[2], b[2])),
+        on_cancel=ex._cancel,
+        on_progress=lambda k, frac: ex._progress(
+            f'{progress_prefix}: {k}/{len(frames)}',
+            _decode_progress_pct(frac)),
+        debug_tag=debug_tag)
+    for k, (fi, c, g, sharp, b, dev) in enumerate(stream):
+        machine.feed(k, fi, sharp, (fi, c, g, dev), bin=b)
+    machine.finish()
+    segs[:] = machine.segs
+    return segs
 
 
 class _HostPipelineMixin:
     """宿主流水线 mixin：FieldExtractor 组合本类获得 OCR 会话与宿主管线。"""
 
     # ═══════════════ OCR 输入宽度自适应裁切 ═══════════════
+    # 统一实现（含余量/最小收益门槛的实测依据 docstring）在
+    # segmentation.content_range_to_crop / crop_to_content / crop_after_aspect；
+    # GPU 直通（_autocrop_device）与宿主预处理共用同一余量数学。
 
     def _content_range_to_crop(self, first: int, last: int, w: int):
-        """「有墨迹列范围」→ 裁切区间 (x_off, crop_w)；满宽返回 None。
-
-        宿主 `_crop_to_content` 与 GPU 直通（`_run_pipelined_gpu` 的
-        `_autocrop_device`）共用同一余量数学，保证两条路径对同一 rep 帧
-        给出同一裁切区间。余量 `OCR_ROI_AUTOCROP_MARGIN`（占 ROI 宽 %）。
-
-        **最小收益门槛** `OCR_ROI_AUTOCROP_MIN_GAIN`（占 ROI 宽 %，默认 10）：
-        裁掉宽度占 ROI 宽的比例低于门槛时返回 None（整段不裁）。
-
-        这一条比"加大余量"更根本。余量是全局的，为规避紧凑 ROI 的误裁而
-        调大，会连宽 ROI 的收益一起削掉（test5 裁掉量中位数：余量 10 时
-        13.2% → 余量 20 时只剩 3.8%）。而误裁**只发生在"微裁"段** ——
-        test 在余量 10 下 72% 的段被裁、裁掉量中位数却只有 1.2%，61 段
-        误裁全在这些段里；test5/test6 裁掉 13% 且零误裁。
-        有了门槛后，紧凑 ROI 自动几乎不裁、宽 ROI 照裁，两者不再需要折中。
-        """
-        m = max(1, int(round(w * self._ocr_autocrop_margin_pct / 100.0)))
-        lo = max(0, int(first) - m)
-        hi = min(w, int(last) + 1 + m)
-        if lo == 0 and hi == w:
-            return None
-        if getattr(self, "_ocr_autocrop_min_gain", 0.0) > 0.0:
-            if (w - (hi - lo)) / w < self._ocr_autocrop_min_gain:
-                return None          # 收益太小：不值得承担切笔画的风险
-        return lo, hi - lo
+        """「有墨迹列范围」→ 裁切区间；实现见 segmentation.content_range_to_crop。"""
+        from segmentation import content_range_to_crop
+        return content_range_to_crop(
+            first, last, w,
+            margin_pct=self._ocr_autocrop_margin_pct,
+            min_gain=self._ocr_autocrop_min_gain)
 
     def _crop_to_content(self, crop):
-        """按二值图的"有墨迹列范围"裁掉两侧空白（宽 ROI 字幕省 OCR 计算）。
-
-        判据与分段完全一致（`g > self._bin_thresh`，墨迹为亮），
-        每列墨迹数 ≥ 2 才算有效列（抗孤立噪点）。
-
-        不裁的三类情况（无收益或有风险，一律原样返回）：
-          · 关闭 / `force_aspect > 0`（宽度被强制，裁切只改缩放不省宽）
-          · 动态范围过小（std < 3，纯黑/纯白帧，Otsu 阈值无意义）
-          · 内容已占满 ROI（cols 覆盖全宽）
-        余量 `OCR_ROI_AUTOCROP_MARGIN`（占 ROI 宽 %，默认 10）——**不能省**：
-        裁太紧会改变 CTC 序列长度，实测会插入多余空格（一致率 98% → 100%）。
-
-        ⚠️ **不要再补"裁后宽度会被 pad 回 OCR_PAD_WIDTH_MIN 就跳过"的守卫。**
-        曾有一版守卫，前提是"省不到算力就别冒准确率风险"；用真值复核证明
-        前提错了 —— 裁切让输入更贴近模型训练分布（文字填满图像），
-        **即使省不到算力也能提准确率**：
-
-        | 视频 | 不裁 | 有守卫（窄 ROI 被全跳过 = 不裁） | 无守卫（裁切生效） |
-        |---|---:|---:|---:|
-        | test5（h264 7223帧） | 97.951% | 97.951% | **98.768%（+0.82pp）** |
-        | test6（AV1 23441帧） | 98.187% | 98.187% | **99.125%（+0.94pp）** |
-
-        逐帧看：文本变化 1.2%，其中**由错变对 69 帧、由对变错 10 帧**
-        （`8日→88`、`日1→81` 是纠错；`51→S1`、`115→11S` 是新增错字）。
-        墙钟代价 +2.1% / -0.3%（≈噪声）。**净赚约 0.9pp，守卫必须去掉。**
-        """
-        if not self._ocr_autocrop or getattr(self, '_force_aspect', 0):
-            return crop
-        import numpy as _np
-        g = crop[..., 0] if crop.ndim == 3 else crop
-        w = int(g.shape[1])
-        if w <= 8 or float(g.std()) < 3.0:
-            return crop
-        cols = _np.nonzero((g > self._bin_thresh).sum(axis=0) >= 2)[0]
-        if len(cols) == 0:
-            return crop
-        rng = self._content_range_to_crop(int(cols[0]), int(cols[-1]), w)
-        if rng is None:
-            return crop
-        lo, cw = rng
-        return crop[:, lo:lo + cw]
+        """按二值图裁掉两侧空白（fa=0 路径）；实现见
+        segmentation.crop_to_content（fa>0 走 _crop_after_aspect 顺序⑦）。"""
+        from segmentation import crop_to_content
+        return crop_to_content(
+            crop, self._bin_thresh,
+            autocrop=self._ocr_autocrop,
+            force_aspect=float(getattr(self, '_force_aspect', 0) or 0.0),
+            margin_pct=self._ocr_autocrop_margin_pct,
+            min_gain=self._ocr_autocrop_min_gain)
 
     def _crop_after_aspect(self, img):
-        """`force_aspect > 0` 时，在**已定比例**的图上再按内容列裁。
-
-        ## 顺序很关键：必须"先定比例、后裁切"（⑦），不能"先裁再定比例"（⑥）
-        实测（生产口径：段代表帧 + 数值 tol=1 误读数）：
-
-        | 顺序 | test5 | test6 |
-        |---|---:|---:|
-        | ① 不裁（原行为） | 7 | 17 |
-        | ⑥ 先裁再定比例 | 9 | 5 |
-        | **⑦ 先定比例再裁** | **0** | **0** |
-
-        先裁会改变内容的宽高比，再拉到 force 宽度就引入畸变；先定比例则
-        force 宽度作用于完整 ROI，裁掉的只是定比例后残留的空白边。
-
-        ## 只在 force_aspect>0 时调用
-        fa=0 时裁切**反而更差**（test2 52→80、test 78→127）：
-
-        | 视频 | fa | ① 不裁 | ⑦ |
-        |---|---:|---:|---:|
-        | test5 | 1.5 | 7 | **0** |
-        | test6 | 1.5 | 17 | **0** |
-        | test2 | 0.0 | 52 | 80 ✗ |
-        | test  | 0.0 | 78 | 127 ✗ |
-
-        所以调用方只在 `force_aspect > 0` 时调本函数；fa=0 继续走
-        `_crop_to_content`（前裁，按 ROI 原图判据）。
-
-        ## 阈值必须现算
-        不能用 `self._bin_thresh`——那是**原始灰度**的阈值，而这里输入已过
-        `force_aspect` 缩放 + `gamma=2.0`，数值分布完全不同 → 对当前图现算
-        Otsu。余量数学复用 `_content_range_to_crop`，与另两条路径保持一致。
-        """
-        if not self._ocr_autocrop:
-            return img
-        import numpy as _np
-        from segmentation import _otsu
-        g = img[..., 0] if img.ndim == 3 else img
-        w = int(g.shape[1])
-        if w <= 8 or float(g.std()) < 3.0:
-            return img
-        g8 = _np.clip(g, 0, 255).astype(_np.uint8)
-        cols = _np.nonzero((g > _otsu(g8)).sum(axis=0) >= 2)[0]
-        if len(cols) == 0:
-            return img
-        rng = self._content_range_to_crop(int(cols[0]), int(cols[-1]), w)
-        if rng is None:
-            return img
-        lo, cw = rng
-        return img[:, lo:lo + cw]
+        """已定比例图上再按内容列裁（fa>0 路径）；实现见
+        segmentation.crop_after_aspect（阈值现算 Otsu，不能用校准阈值）。"""
+        from segmentation import crop_after_aspect
+        return crop_after_aspect(
+            img, autocrop=self._ocr_autocrop,
+            margin_pct=self._ocr_autocrop_margin_pct,
+            min_gain=self._ocr_autocrop_min_gain)
 
     def _start_ocr_session(self, _ocr_engines: list | None = None) -> dict:
         """启动一个可跨多个切片持续复用的 OCR 会话。

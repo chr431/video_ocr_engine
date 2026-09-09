@@ -1,0 +1,102 @@
+########## test6_h264 run1
+视频: D:/Videos/racelog_test/test6_h264.mp4
+ROI: (841, 994, 949, 1026)
+
+[GPU(NVDEC)] open=1321ms frames=23970 codec=h264 avg_fps=59.92505992505993 keyframes=100
+  关键帧间隔: min=240 med=240 max=240
+  [顺序扫掠] 4000 帧 4.152s → 963 fps
+  [8 片 seek+读] 2.266s（≈217 ms/次 seek 净额）
+  [连续扫掠 8 片] 2.274s（1759 fps）
+
+[CPU] open=20ms frames=23970 codec=h264 avg_fps=59.92505992505993 keyframes=100
+  关键帧间隔: min=240 med=240 max=240
+  [顺序扫掠] 4000 帧 6.554s → 610 fps
+  [8 片 seek+读] 3.469s（≈329 ms/次 seek 净额）
+  [连续扫掠 8 片] 3.478s（1150 fps）
+
+[关键帧吸附] 前 3999 帧内 100 个关键帧，其中 17 个离采样网格 ≤stride/2（吸附成本低）
+########## test6_h264 run2
+视频: D:/Videos/racelog_test/test6_h264.mp4
+ROI: (841, 994, 949, 1026)
+
+[GPU(NVDEC)] open=134ms frames=23970 codec=h264 avg_fps=59.92505992505993 keyframes=100
+  关键帧间隔: min=240 med=240 max=240
+  [顺序扫掠] 4000 帧 4.142s → 966 fps
+  [8 片 seek+读] 2.287s（≈220 ms/次 seek 净额）
+  [连续扫掠 8 片] 2.275s（1758 fps）
+
+[CPU] open=20ms frames=23970 codec=h264 avg_fps=59.92505992505993 keyframes=100
+  关键帧间隔: min=240 med=240 max=240
+  [顺序扫掠] 4000 帧 6.531s → 612 fps
+  [8 片 seek+读] 3.511s（≈334 ms/次 seek 净额）
+  [连续扫掠 8 片] 3.457s（1157 fps）
+
+[关键帧吸附] 前 3999 帧内 100 个关键帧，其中 17 个离采样网格 ≤stride/2（吸附成本低）
+########## test6_hevc run1
+视频: D:/Videos/racelog_test/test6_hevc.mp4
+ROI: (841, 994, 949, 1026)
+
+[GPU(NVDEC)] open=1171ms frames=23970 codec=hevc avg_fps=59.92505992505993 keyframes=100
+  关键帧间隔: min=240 med=240 max=240
+  [顺序扫掠] 4000 帧 1.968s → 2032 fps
+  [8 片 seek+读] 1.343s（≈136 ms/次 seek 净额）
+  [连续扫掠 8 片] 1.322s（3026 fps）
+
+[CPU] open=10ms frames=23970 codec=hevc avg_fps=59.92505992505993 keyframes=100
+  关键帧间隔: min=240 med=240 max=240
+  [顺序扫掠] 4000 帧 9.342s → 428 fps
+  [8 片 seek+读] 5.447s（≈531 ms/次 seek 净额）
+  [连续扫掠 8 片] 5.564s（719 fps）
+
+[关键帧吸附] 前 3999 帧内 100 个关键帧，其中 17 个离采样网格 ≤stride/2（吸附成本低）
+########## test6_hevc run2
+视频: D:/Videos/racelog_test/test6_hevc.mp4
+ROI: (841, 994, 949, 1026)
+
+[GPU(NVDEC)] open=114ms frames=23970 codec=hevc avg_fps=59.92505992505993 keyframes=100
+  关键帧间隔: min=240 med=240 max=240
+  [顺序扫掠] 4000 帧 1.951s → 2050 fps
+  [8 片 seek+读] 1.304s（≈132 ms/次 seek 净额）
+  [连续扫掠 8 片] 1.326s（3018 fps）
+
+[CPU] open=8ms frames=23970 codec=hevc avg_fps=59.92505992505993 keyframes=100
+  关键帧间隔: min=240 med=240 max=240
+  [顺序扫掠] 4000 帧 9.335s → 428 fps
+  [8 片 seek+读] 5.237s（≈505 ms/次 seek 净额）
+  [连续扫掠 8 片] 5.336s（750 fps）
+
+[关键帧吸附] 前 3999 帧内 100 个关键帧，其中 17 个离采样网格 ≤stride/2（吸附成本低）
+########## test6 run1
+视频: D:/Videos/racelog_test/test6.mp4
+ROI: (841, 994, 949, 1026)
+
+[GPU(NVDEC)] open=282ms frames=23970 codec=av1 avg_fps=59.92552434833805 keyframes=80
+  关键帧间隔: min=291 med=300 max=300
+  [顺序扫掠] 4000 帧 2.363s → 1693 fps
+  [8 片 seek+读] 1.937s（≈204 ms/次 seek 净额）
+  [连续扫掠 8 片] 1.931s（2072 fps）
+
+[CPU] open=9ms frames=23970 codec=av1 avg_fps=59.92552434833805 keyframes=80
+  关键帧间隔: min=291 med=300 max=300
+  [顺序扫掠] 4000 帧 10.209s → 392 fps
+  [8 片 seek+读] 3.844s（≈317 ms/次 seek 净额）
+  [连续扫掠 8 片] 3.880s（1031 fps）
+
+[关键帧吸附] 前 3999 帧内 80 个关键帧，其中 14 个离采样网格 ≤stride/2（吸附成本低）
+########## test6 run2
+视频: D:/Videos/racelog_test/test6.mp4
+ROI: (841, 994, 949, 1026)
+
+[GPU(NVDEC)] open=129ms frames=23970 codec=av1 avg_fps=59.92552434833805 keyframes=80
+  关键帧间隔: min=291 med=300 max=300
+  [顺序扫掠] 4000 帧 2.360s → 1695 fps
+  [8 片 seek+读] 1.943s（≈205 ms/次 seek 净额）
+  [连续扫掠 8 片] 1.934s（2068 fps）
+
+[CPU] open=9ms frames=23970 codec=av1 avg_fps=59.92552434833805 keyframes=80
+  关键帧间隔: min=291 med=300 max=300
+  [顺序扫掠] 4000 帧 10.144s → 394 fps
+  [8 片 seek+读] 4.183s（≈361 ms/次 seek 净额）
+  [连续扫掠 8 片] 3.813s（1049 fps）
+
+[关键帧吸附] 前 3999 帧内 80 个关键帧，其中 14 个离采样网格 ≤stride/2（吸附成本低）

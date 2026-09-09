@@ -1,0 +1,8 @@
+decord.dll md5: e77e4b9ce91ceabf8e9e85413db540aa
+loaded: D:\Repo\decord\build\Release\avcodec-62.dll
+loaded: D:\Repo\decord\build\Release\avformat-62.dll
+loaded: D:\Repo\decord\build\Release\swscale-9.dll
+loaded: D:\Repo\decord\build\Release\avutil-60.dll
+loaded: D:\Repo\decord\build\Release\swresample-6.dll
+loaded: D:\Repo\decord\build\Release\decord.dll
+video_reader.py: D:\Repo\decord\python\decord\video_reader.py

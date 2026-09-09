@@ -10,6 +10,8 @@
   ROI-first 管线），非识别区域不参与转换，显著提速。
 - 自 [RaceVideoToLog](https://github.com/chr431/RaceVideoToLog) v2.15.2 拆分独立。
 
+![架构图](docs/architecture.svg)
+
 ## 安装
 
 ### 直接使用源码（推荐；生产项目以 pip 依赖 + git tag 锁定，submodule 已于 2026-08-30 废弃）
@@ -33,11 +35,17 @@ Python 3.11+。运行时依赖 `numpy / onnxruntime / psutil`。
 ### 解码后端（decord fork，必需）
 
 解码使用自建 fork（`chr431/decord`，支持 NVDEC GPU 硬解码、ROI-only 输出、
-`yuv420` 输出）。PyPI 版 decord 不支持。本地运行需安装 fork：
+`yuv420` 输出）。PyPI 版 decord 不支持。**0.8.2 起直接 pip 安装 release wheel**
+（自带 `decord.dll` 与 FFmpeg 63 运行库，完全自包含；提供 cp39–cp314）：
 
-- 方式一：运行 `chr431/decord` 仓库的 Release workflow，把发布产物解压后将其
-  Python 层 + DLL 装入环境（RaceVideoToLog 的 `setup_venv.bat` 即此做法）。
-- 方式二：从源码构建 fork 并 `pip install`。
+```bash
+# 从 chr431/decord 的 release 下载对应 Python 版本的 wheel 后：
+pip install decord-0.8.2-cp313-cp313-win_amd64.whl
+```
+
+> 0.8.1 起硬性要求 FFmpeg 9（FFmpeg 7/8 支持已删除）；wheel 已打包运行库，
+> 无外部 FFmpeg 依赖。GPU OCR（TensorRT）还需 CUDA/TensorRT DLL 在 PATH；
+> 缺失时 OCR 自动回退 CPU（onnxruntime）。
 
 > GPU OCR（TensorRT）还需 CUDA Toolkit + TensorRT 并加入 PATH；缺失时自动回退
 > CPU（onnxruntime）。
@@ -178,6 +186,12 @@ OCR 后端、一律尝试 NVDEC（见上方修订第 5 条），指望 `--ocr-ba
 
 解码∥分段∥OCR 三级流水线 + 有界队列背压（`OCR_BATCH_SIZE` / `buffer_size`），
 解码与 OCR 线程重叠摊薄墙钟。
+
+**分段与预处理的实现单一出处**：校准/断段/相似合并的判定、分段状态机、
+内容自适应裁切与 resize+gamma 预处理统一实现于 `segmentation.py`，宿主管线
+直接调用；GPU 全驻留管线的 CUDA kernel（`_gpu_kernels.py`）是其设备侧
+**逐位镜像**（像素操作无法跨 numpy/CUDA 共享），判定阈值/裁切余量/合并
+判据统一引用同一文件，两侧语义只有一个出处。
 
 ### 显存全驻留零拷贝管线（NVDEC+TRT 时默认启用）
 

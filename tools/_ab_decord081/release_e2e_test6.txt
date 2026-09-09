@@ -1,0 +1,75 @@
+Traceback (most recent call last):
+  File "D:\Repo\video_ocr_engine\tools\e2e_smoke.py", line 270, in main
+    ex, res, wall = run_once(str(video), roi, frame_end - frame_start,
+                    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                             args.stride, cfg, truth_meta)
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Repo\video_ocr_engine\tools\e2e_smoke.py", line 128, in run_once
+    result = ex.extract()
+  File "D:\Repo\video_ocr_engine\video_ocr_engine\extractor.py", line 262, in extract
+    frames, segs, texts, confs, rep_frames = self._run_pipelined()
+                                             ~~~~~~~~~~~~~~~~~~~^^
+  File "D:\Repo\video_ocr_engine\video_ocr_engine\extractor.py", line 590, in _run_pipelined
+    return self._run_pipelined_gpu(_ocr_engines)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+  File "D:\Repo\video_ocr_engine\video_ocr_engine\_gpu_pipeline.py", line 452, in _run_pipelined_gpu
+    _calib_ok = _prepare_gpu_calibration()
+  File "D:\Repo\video_ocr_engine\video_ocr_engine\_gpu_pipeline.py", line 393, in _prepare_gpu_calibration
+    calib_nds = vr.get_batch(frames[:calib_n], roi=roi_kw)
+  File "D:\Repo\decord\python\decord\video_reader.py", line 333, in get_batch
+    arr = _CAPI_VideoReaderGetBatchRoi(
+        self._handle, indices, x1, y1, x2, y2)
+  File "D:\Repo\decord\python\decord\_ffi\_ctypes\function.py", line 173, in __call__
+    check_call(_LIB.DECORDFuncCall(
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+        self.handle, values, tcodes, ctypes.c_int(num_args),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        ctypes.byref(ret_val), ctypes.byref(ret_tcode)))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Repo\decord\python\decord\_ffi\base.py", line 90, in check_call
+    raise DECORDError(err_str)
+decord._ffi.base.DECORDError: [18:52:24] D:\a\decord\decord\src\video\video_reader.cc:1044: Check failed: err == 0 (3 vs. 0) : cudaMemcpy2D failed in CropRoiYuv420 (Y)
+truth 元数据: roi=841 frames=139..23580 codec=av1 fps=59.926 行数=23441
+
+== 功能矩阵 ==  roi=(841, 994, 949, 1026) frames=[139,3139) stride=8
+  [gpu_yuv] 失败: DECORDError: [18:52:24] D:\a\decord\decord\src\video\video_reader.cc:1044: Check failed: err == 0 (3 vs. 0) : cudaMemcpy2D failed in CropRoiYuv420 (Y)
+
+== 文本验证 vs ground truth ==
+
+== 性能测试 ==  配置=gpu_yuv runs=2 frames=3000 stride=8
+Traceback (most recent call last):
+  File "D:\Repo\video_ocr_engine\tools\e2e_smoke.py", line 350, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "D:\Repo\video_ocr_engine\tools\e2e_smoke.py", line 325, in main
+    ex, res, wall = run_once(str(video), roi,
+                    ~~~~~~~~^^^^^^^^^^^^^^^^^
+                             frame_end - frame_start, args.stride,
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                             perf_cfg, truth_meta)
+                             ^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Repo\video_ocr_engine\tools\e2e_smoke.py", line 128, in run_once
+    result = ex.extract()
+  File "D:\Repo\video_ocr_engine\video_ocr_engine\extractor.py", line 262, in extract
+    frames, segs, texts, confs, rep_frames = self._run_pipelined()
+                                             ~~~~~~~~~~~~~~~~~~~^^
+  File "D:\Repo\video_ocr_engine\video_ocr_engine\extractor.py", line 590, in _run_pipelined
+    return self._run_pipelined_gpu(_ocr_engines)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+  File "D:\Repo\video_ocr_engine\video_ocr_engine\_gpu_pipeline.py", line 452, in _run_pipelined_gpu
+    _calib_ok = _prepare_gpu_calibration()
+  File "D:\Repo\video_ocr_engine\video_ocr_engine\_gpu_pipeline.py", line 393, in _prepare_gpu_calibration
+    calib_nds = vr.get_batch(frames[:calib_n], roi=roi_kw)
+  File "D:\Repo\decord\python\decord\video_reader.py", line 333, in get_batch
+    arr = _CAPI_VideoReaderGetBatchRoi(
+        self._handle, indices, x1, y1, x2, y2)
+  File "D:\Repo\decord\python\decord\_ffi\_ctypes\function.py", line 173, in __call__
+    check_call(_LIB.DECORDFuncCall(
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+        self.handle, values, tcodes, ctypes.c_int(num_args),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        ctypes.byref(ret_val), ctypes.byref(ret_tcode)))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Repo\decord\python\decord\_ffi\base.py", line 90, in check_call
+    raise DECORDError(err_str)
+decord._ffi.base.DECORDError: [18:52:24] D:\a\decord\decord\src\video\video_reader.cc:1044: Check failed: err == 0 (3 vs. 0) : cudaMemcpy2D failed in CropRoiYuv420 (Y)

@@ -93,11 +93,12 @@ HYBRID_CPU_THREADS_ENV: str = "HYBRID_CPU_THREADS"              # CPU reader 线
 HYBRID_CPU_THREADS_AUTO_MIN: int = 8
 HYBRID_CPU_THREADS_AUTO_MAX: int = 16
 # ═══════════════════ CPU 软解线程预算（按 OCR 是否在 GPU 分档）═══════════════
-# 背景：decord fork 在引擎不显式传 num_threads 时，CPU 解码线程数落到
-# DECORD_FFMPEG_THREAD_COUNT = clamp(hw/4, 2, 8)（fork 源码
-# src/video/video_reader.cc），即把 CPU 软解钉在 8 线程。该默认值是在
-# "OCR 跑 ONNX 占满物理核"的时代定的；TensorRT 成为默认后 host CPU 在解码
-# 阶段基本空闲，旧上限反而成为瓶颈。
+# 背景：引擎不显式传 num_threads 时，CPU 解码线程数由 decord fork 的
+# DECORD_FFMPEG_THREAD_COUNT 决定（fork 源码 src/video/video_reader.cc，
+# 0.8.x = clamp(hw/2, 2, 16)；历史版本曾为 clamp(hw/4, 2, 8)，随 fork 版本
+# 变化——引擎侧不依赖该默认值，全部路径都显式传 num_threads）。显式分档的
+# 由来："OCR 跑 ONNX 占满物理核"的时代 fork 默认把软解钉在低线程；TensorRT
+# 成为默认后 host CPU 在解码阶段基本空闲，旧上限反而成为瓶颈。
 # 实测（7945HX 16C32T + RTX 4060 Laptop，TRT；段数/唯一文本逐位一致）：
 #   test5 1080p h264 全片 7223 帧  ：8 线程 6.452s → 16 线程 4.875s
 #   新三国01 标清整集 73430 帧 s8  ：8 线程 15.897s → 32 线程 10.812s
@@ -145,6 +146,7 @@ def app_logs_dir() -> Path:
 
 # ═══════════════════ 用户可配置默认值 ═══════════════════
 DEFAULT_OCR_MODEL: str = "v6_small"     # 唯一 OCR 模型（v2.13 起移除 tiny / 重 OCR）
+
 DEFAULT_REP_CROP_FORMAT: str = "yuv"    # 代表帧 keep_crops 默认格式：
                                         # "yuv"=packed NV12（内部只取 Y 平面，
                                         # 外部用 nv12_to_rgb 转 RGB——内部恒为

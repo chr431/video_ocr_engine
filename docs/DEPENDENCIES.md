@@ -10,7 +10,7 @@
 | numpy | 2.x | PyPI | 预处理/信号计算，纯 numpy 无 scipy |
 | onnxruntime | 1.29.x | PyPI | CPU OCR 后端；1.28 含 protobuf CVE 修复；1.29.0 实测升级安全、性能持平 |
 | psutil | 6+ | PyPI | 物理核数探测 / RSS 采样（缺失时降级） |
-| decord | **自建 fork** | chr431/decord | NVDEC 硬解 + CPU 软解；**PyPI 版不支持** `next_roi` / ROI-first / GPU gray / YUV420 / `sample_stride` 等差步长快速路径 |
+| decord | **0.8.2（pip wheel）** | chr431/decord release | NVDEC 硬解 + CPU 软解；**PyPI 官方版不支持** `next_roi` / ROI-first / GPU gray / YUV420 / `sample_stride` 等差步长快速路径；fork 自 0.8.2 起发布 cp39–cp314 全版本 wheel，`pip install <wheel>` 即用 |
 | cuda-python | 13.x | PyPI | TRT 执行 + decord GPU DLL 注册 |
 | tensorrt_*_bindings | 11.x | PyPI | TensorRT thin binding（~1MB）；运行 DLL 从系统 PATH 加载 |
 
@@ -29,9 +29,19 @@
 
 ## 已知问题与注意
 
-### decord（自建 fork）
-- 必须使用 `chr431/decord` release 构建，不能使用 PyPI 版。
-- 需与对应 FFmpeg DLL 同目录（Windows）。
+### decord（自建 fork，pip wheel 安装）
+- **0.8.2 起改用 release wheel + pip 安装**（不再 editable 源码导入、不再
+  手工部署 DLL）：wheel 自带 `decord.dll` 与 FFmpeg 63 运行库（包根目录），
+  `pip install decord-0.8.2-cp313-cp313-win_amd64.whl` 即用；0.8.2 已含
+  cuMemcpy2D_v2 修复（fork 7ef70f5）。当前 dll md5 6597eea6。
+- **v0.8.1 起硬性要求 FFmpeg 9（avcodec-63）**：FFmpeg 7/8 支持已删除
+  （跨版本关键帧索引与 seek 落点正确性 bug，fork 内 D4 决策）。wheel 已
+  打包 FFmpeg9 运行库，无外部依赖。
+- 升级实测（0.8.2 wheel vs 0.8.1 本地构建，NT=24 顺序 av1）：1143 vs
+  1143 fps，原生性能零差异；seek 成本本身不变（同步前向解码
+  ~2.6ms/帧×关键帧距离，两代一致），但 **FFmpeg9 dav1d 帧线程扩展性
+  大幅改善**（NT16 797fps → NT24 1164fps），引擎 av1 线程策略已随之
+  调整（见 `extractor._decode_num_threads`，C-31）。
 - 无 NVIDIA GPU 时自动回退 CPU 软解；强制 CPU 用 `decode_backend="cpu"`
   构造参数（`DECORD_FORCE_CPU` env 已于 0.9.0 删除）。
 - `sample_stride>1` 的等差步长快速路径需要 fork ≥v0.7.12；旧版退化为逐索引
