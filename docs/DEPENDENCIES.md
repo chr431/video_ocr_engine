@@ -34,6 +34,13 @@
   手工部署 DLL）：wheel 自带 `decord.dll` 与 FFmpeg 63 运行库（包根目录），
   `pip install decord-0.8.2-cp313-cp313-win_amd64.whl` 即用；0.8.2 已含
   cuMemcpy2D_v2 修复（fork 7ef70f5）。当前 dll md5 6597eea6。
+- **本地开发 dll（2026-09-10，含未发布修复）**：`build-081fix/decord.dll`
+  含 VideoReader 析构顺序 UAF 修复（hybrid_gpu 帧 Deleter 摸已析构池 →
+  av1 hybrid close 偶发/必现崩溃；fork 本地提交 73e5540，**未推送/未发
+  wheel**）。开发态用 `DECORD_LIBRARY_PATH=D:\Repo\decord\build-081fix`
+  切换；重建 `rebuild_dev.bat`（FFMPEG_DIR=D:/Software/ffmpeg-n9.0-...）。
+  pip wheel 0.8.2 与引擎当前代码兼容（已验证 sha 逐位一致），仅缺该崩溃
+  修复。诊断构建 `configure_asan.bat`（ASAN）。
 - **v0.8.1 起硬性要求 FFmpeg 9（avcodec-63）**：FFmpeg 7/8 支持已删除
   （跨版本关键帧索引与 seek 落点正确性 bug，fork 内 D4 决策）。wheel 已
   打包 FFmpeg9 运行库，无外部依赖。
