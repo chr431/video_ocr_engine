@@ -10,7 +10,8 @@ ENGINE_PROFILE 生产者相位 + 段数 + 唯一文本集 sha（跨配置一致�
       [--label baseline]   # JSON 里标注本次测量身份
 
 JSON 结构：{label, ts, machine, results:{video:{cfg:{...}}}, texts:{video:sha_ref}}
-比较两份 JSON：python tools/_probe_perf_baseline.py --compare a.json b.json
+比较两份 JSON：python tools/_probe_perf_baseline.py --compare A.json --out B.json
+（--out 为基线 A，--compare 为对比侧 B）
 """
 from __future__ import annotations
 

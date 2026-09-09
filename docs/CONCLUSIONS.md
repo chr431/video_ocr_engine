@@ -18,10 +18,10 @@
 | C-04 | 解码后端按编码选：h264 CPU 快 ~2.9×，AV1 反转慢 ~2.6× | active | fork 0.7.x 解码路径、本机核数；**0.8.1/FFmpeg9 下 av1 CPU 经济性已变**（顺序 393→1164fps @24T，见 C-31），并行/互补场景的选型数字待重测 | 并行场景重测（C-31 策略修复后） | PERF §21 §22.1；log 2026-09-08 |
 | C-05 | hybrid = decord fork 原生（≥v0.7.15）：TRT 走 hybrid_gpu 显存直通、CPU OCR 走宿主帧；e2e hevc 1.42× / h264 1.22× vs 纯 NVDEC（0.7.x 口径） | active | decord fork ≥v0.7.15；0.8.1/FFmpeg9 下 bench_hybrid hevc hybrid 仍优于两侧单后端，av1 优势收窄（seek 落点变慢，见 C-31） | hevc/h264 e2e 口径重测；fork 再升级 | PERF §24；log 2026-09-08 decord-0.8.1；DECISIONS「混合解码迁移」 |
 | C-06 | 项目层 hybrid 调度（v3~v7：kfe 分片/校准/折扣/在线移界/窃取） | superseded(C-05) | — | — | PERF §22 §23（历史）；DECISIONS v3/v4 |
-| C-07 | `auto` 不区分 OCR 后端、一律尝试 NVDEC：批量互补必须显式 `decode_backend="cpu"` 并核验 `_backend` | active | — | auto 实现按 ocr_backend 分叉后复核 | README 批量章；PERF §19 §21 |
-| C-08 | `auto` 在 h264 多核非最优（CPU+TRT 约 2×），但静态判据不可靠、判错代价成倍 → 保持 auto | active | — | 出现可靠的运行时解码速率探测 | DECISIONS 审查 A2 |
+| C-07 | `auto` 不区分 OCR 后端、一律尝试 NVDEC：批量互补必须显式 `decode_backend="cpu"` 并核验 `_backend` | superseded(C-33) | — | — | README 批量章；PERF §19 §21 |
+| C-08 | `auto` 在 h264 多核非最优（CPU+TRT 约 2×），但静态判据不可靠、判错代价成倍 → 保持 auto | superseded(C-33) | codec 探测（打开即关的轻量 reader，非速率探测）落地后判据可靠了 | — | DECISIONS 审查 A2；log 2026-09-09 深度性能优化 |
 | C-09 | GPU 分段+ONNX 无净收益，GPU 管线默认只放行 NVDEC+TRT | active | onnxruntime 1.29 CPU ep；解码为瓶颈 | ort 支持 IO binding / 新执行提供器；解码供给率大幅提升 | PERF §9 |
-| C-10 | GPU_PIPELINE_STREAM 默认关：流水发射零实测收益，decord 侧 API 保留 opt-in | active | 解码仍是瓶颈（消费不反超供给） | OCR 提速使消费反超解码供给 | 提交 9b83cba / d9c96f9 |
+| C-10 | GPU_PIPELINE_STREAM 默认关：流水发射零实测收益，decord 侧 API 保留 opt-in | active | 解码仍是瓶颈（消费不反超供给） | OCR 提速使消费反超解码供给 | 提交 9b83cba / d9c96f9；2026-09-09 decord 0.8.2 复确认零收益（log 深度性能优化）|
 | C-11 | 分段合并：不误合并约束下无普适空间 | active | 现有分段算法 + 5 真值视频 | 分段算法更换 / 真值扩容暴露误合并 | PERF §14 |
 | C-12 | det 裁切替换（PP-OCRv6 det 模型进热路径）：4559 段文本零变化 + 性能净负 | dead | 2026-08-30 实测 | PERF §13「重提条件」：自动发现 ROI / 离线 QA 工具 / 启发式无法处理的 ROI 形态 | PERF §13 |
 | C-13 | 真跳帧（丢 nal_ref_idc==0 整包）安全，但收益仅 1.03–1.48×（原估 2~4×） | active | H.264、fork 0.7.x | 新编码 / 更激进的过滤方案 | DECISIONS「下一步三目标轮」 |
@@ -44,3 +44,4 @@
 | C-30 | GPU 分段异步（GPU_PIPELINE_ASYNC） | dead | NVDEC/CPU 分支均无收益，钩子已删 | — | DECISIONS「0.9.0 清理轮」 |
 | C-31 | decord 0.8.1 + FFmpeg9 升级：seek 本身未变慢（两构建同斜率 ~2.6ms/帧×关键帧距离）；此前"av1 seek 变慢"是 NT=4 探针口径假象 + FFmpeg9 dav1d 线程扩展性改善被引擎旧 av1 线程策略（cores//2=8T，FFmpeg8 时代口径）埋没。修复：av1 → 逻辑核 3/4 钳 [8,24]（不分 OCR 位置），CPU 后端 5.47→2.72s（−50%）、hybrid 1.90→1.80s、host_cpu e2e 6.26→3.42s（−45%）；release 初版 yuv 路径必挂（shim 误用 v1 cuMemcpy2D 导出 → 201），须含 cuMemcpy2D_v2 修复（fork 7ef70f5） | active | pip wheel 0.8.2（dll md5 6597eea6，已含修复，DLL 随包自带） | fork 再升级 / 驱动或 FFmpeg 再换代 | log 2026-09-08 decord-0.8.1；tools/_ab_decord081/；DEPENDENCIES decord 节 |
 | C-32 | 分段判定/状态机/裁切/预处理的实现唯一出处 = segmentation.py：宿主管线直接调用，GPU kernel 为其设备侧逐位镜像、判定阈值/余量/合并判据引用同一文件；不做插件抽象面（GPU 设备侧实现不可插拔，插件语义=降速到宿主管线，已回退） | active | 0.11.0；两侧行为由真值用例逐位守护 | 出现真实的 GPU 侧算法插件需求（需设备侧实现面，另立结论） | log 2026-09-09 引擎四方向；tests/ 全套 |
+| C-33 | `auto` 按 codec 选路（打开前轻量 CPU reader 探测，(path,mtime,size) 缓存）：h264 → CPU 软解（GPU 管线 P1-3 分支），hevc/av1 → NVDEC。实测（3000 帧，GPU 管线+TRT）：h264 CPU 快 1.7~2.8×（test5 3.114→1.159s，全片 8.445→2.812s，stride8 -68%）；hevc NVDEC 快 2.2×、av1 NVDEC 快 1.5×。副产品：混合编码批量并发自动互补（t5∥t6 s8 全片 21.8s[nvdec∥nvdec] → 13.9s，优于顺序 16.3s，C-01/C-07 的互补不再要求显式 cpu）；同编码 h264 批量并发仍会争 CPU 核 | active | 显式 cpu/nvdec/hybrid 不受影响；探测 8~50ms/文件（缓存后 0） | 各编码相对速率反转（编解码器/驱动换代）；出现探测不可靠的封装 | log 2026-09-09 深度性能优化；tools/_ab_perf_20260909/；_probe_perf_baseline/_probe_perf_sweep |

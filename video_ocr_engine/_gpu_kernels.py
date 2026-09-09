@@ -7,6 +7,8 @@ ocr_trt 顶部 re-export 本模块三个类，保持旧导入路径兼容。
 """
 from __future__ import annotations
 
+import threading
+
 import numpy as np
 
 import engine_config as config
@@ -17,10 +19,30 @@ import engine_config as config
 # 都会重付一次 NVRTC 编译（长进程批量的固定开销）。
 _KERNEL_MODULE_CACHE: dict = {}
 
+# cuda.core 惰性导入（进程级一次，双检锁）。**必须锁**：两个 extract 线程
+# 同时首次导入 cuda.core 时会撞 Python 包部分初始化竞态（一个线程看到
+# sys.modules 里尚未初始化完的 cuda.core.cu13 命名空间 → `ImportError:
+# cannot import name 'Device'`）——多线程批量 extract 首次校准时真实踩到
+# （2026-09-09 nvdec∥nvdec 并发探针）。锁内成功导入一次后，后续所有
+# `from cuda.core import ...` 都命中完整的 sys.modules，天然安全。
+_CUDA_CORE_LOCK = threading.Lock()
+_CUDA_CORE = None
+
+
+def _cuda_core():
+    global _CUDA_CORE
+    if _CUDA_CORE is None:
+        with _CUDA_CORE_LOCK:
+            if _CUDA_CORE is None:
+                import cuda.core as _m
+                _CUDA_CORE = _m
+    return _CUDA_CORE
+
 
 def _compile_module(src: str, name_expressions: tuple):
     """按 (arch, src) 缓存编译 cubin 模块；返回共享 Module。"""
-    from cuda.core import Device, Program, ProgramOptions
+    Device, Program, ProgramOptions = (
+        _cuda_core().Device, _cuda_core().Program, _cuda_core().ProgramOptions)
     dev = Device()
     dev.set_current()
     key = (getattr(dev, "arch", "?"), src)
@@ -114,7 +136,9 @@ extern "C" __global__ void prep_gray_raw(
 '''
 
     def __init__(self, stream: int | None = None) -> None:
-        from cuda.core import Buffer, Device, LaunchConfig, launch
+        _cc = _cuda_core()
+        Buffer, Device, LaunchConfig, launch = (
+            _cc.Buffer, _cc.Device, _cc.LaunchConfig, _cc.launch)
         self._dev = Device()
         self._dev.set_current()
         self._mod = _compile_module(self._KERNEL, ("prep", "prep_gray_raw"))
@@ -393,7 +417,9 @@ extern "C" __global__ void argmax_last(
 '''
 
     def __init__(self, stream: int | None = None) -> None:
-        from cuda.core import Buffer, Device, LaunchConfig, launch
+        _cc = _cuda_core()
+        Buffer, Device, LaunchConfig, launch = (
+            _cc.Buffer, _cc.Device, _cc.LaunchConfig, _cc.launch)
         self._dev = Device()
         self._dev.set_current()
         self._mod = _compile_module(self._KERNEL, ("argmax_last",))
@@ -660,7 +686,7 @@ extern "C" __global__ void luma_nv12(
 '''
 
     def __init__(self) -> None:
-        from cuda.core import Device
+        Device = _cuda_core().Device
         self._dev = Device()
         self._dev.set_current()
         self._mod = _compile_module(

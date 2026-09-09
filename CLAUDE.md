@@ -91,13 +91,14 @@ python tools/_doc_section.py docs/ARCHIVE.md 4.4b        # 支持 16 / 16.8 / 4.
 
 ## 已封板结论 → `docs/CONCLUSIONS.md`
 
-全部 30 条结论（含状态 / 前提 / 复评触发）在 `docs/CONCLUSIONS.md`，
+全部 33 条结论（含状态 / 前提 / 复评触发）在 `docs/CONCLUSIONS.md`，
 这里只留最容易踩的五条：
 
 - 并发退化真因 = **NVDEC 会话数**；互补配对首选 NVDEC∥CPU，聚合 1.87×（PERF §21）
-- 批量互补必须**显式** `decode_backend="cpu"` —— `auto` 不区分 OCR 后端（C-07）
+- `auto` 已按 codec 选路（C-33）：h264→CPU 软解、hevc/av1→NVDEC；混合编码
+  批量并发自动互补，**同编码 h264 并发仍会争解码核**
 - GPU 分段 + ONNX OCR 无净收益，门控只放行 NVDEC+TRT（PERF §9）
-- 解码后端按编码选：h264 CPU 快 ~2.9×、AV1 反转慢 ~2.6×（PERF §21）
+- 解码后端按编码选：h264 CPU 快 1.7~2.8×、hevc/av1 NVDEC 快 1.5~2.2×（C-04/C-33）
 - hybrid 已迁 **decord 原生**（fork ≥v0.7.15）；项目层实现已删除，勿再引用（PERF §24）
 
 ## 编辑护栏（docs/PERFORMANCE.md）

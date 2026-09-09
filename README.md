@@ -89,11 +89,12 @@ for seg in result.segments:
 > ——`force_aspect>0`（内容被压窄）时越大越准，`=0` 时偏小更佳，两者应一起调
 > （2026-08-29 曾因单调 fill_width 踩坑回退默认值，见 `engine_config.py` 注释）。
 
-`decode_backend="auto"` 的默认逻辑：**优先 NVDEC，不可用时回退 CPU**。在强多核
-CPU 且片源为 h264 时，可手动选 `"cpu"` 获得更高软解吞吐（NVDEC h264 解码器约
-2Gp/s 上限，FFmpeg CPU 解码器最多可利用约 13 核）；弱 CPU / HEVC / AV1 场景仍
-建议保持 `auto` 或 `nvdec`。（auto 不自动选 CPU 是刻意决策：按编码/核数的静态
-判据不可靠、判错代价成倍，见 `docs/ARCHIVE.md` §16.2 P0-3。）
+`decode_backend="auto"` 的默认逻辑（2026-09 起 **按编码选路**）：打开前轻量
+探测 codec（带 (path, mtime, size) 缓存）—— **h264 → CPU 软解**（实测快
+1.7~2.8×），**hevc/av1 → NVDEC**（快 1.5~2.2×），NVDEC 不可用时回退 CPU
+（历史行为"一律优先 NVDEC"已被实测推翻：h264 上 NVDEC 慢 2~3×，见
+`docs/CONCLUSIONS.md` C-33/C-08；旧静态判据顾虑随可靠的 codec 探测落地
+而消除）。显式 `cpu` / `nvdec` / `hybrid` 不受影响。
 
 `decode_backend="hybrid"` 由 **decord fork 原生实现**（≥v0.7.15）：同一实例内
 NVDEC 与 CPU 软解并行解码，分片与负载调度在 decord 内部完成，引擎只透传解码
@@ -170,10 +171,11 @@ threads = [threading.Thread(target=extract, args=(video, backend)) for ...]
 ```
 
 要点：实例完全独立（各自 OCR 会话/TRT 上下文共存正常）；GIL 无碍
-（GPU 管线消费线程极轻）。`decode_backend="cpu"` 与 `"auto"` 混搭即可
-构成互补对 —— 但**必须显式**给要走 CPU 的那条传 `"cpu"`：`"auto"` 不区分
-OCR 后端、一律尝试 NVDEC（见上方修订第 5 条），指望 `--ocr-backend cpu`
-自动配成 CPU 解码是无效的。跑完后用 `FieldExtractor._backend` 核验实际后端。
+（GPU 管线消费线程极轻）。`auto` 已按编码自动选路（h264→CPU 软解、
+hevc/av1→NVDEC，见 engine_config/CONCLUSIONS C-33），因此**混合编码的
+批量天然构成互补对**，不需要手动指定；同一编码的批量（如全部 h264）会
+争同一种解码资源（CPU 核或 NVDEC 会话），建议错峰或显式混搭
+`decode_backend`。跑完后用 `FieldExtractor._backend` 核验实际后端。
 少核（≤8 核）机器收益递减，建议先小规模试测。详见
 `docs/ARCHIVE.md` §16.8.2 的实测表。
 
