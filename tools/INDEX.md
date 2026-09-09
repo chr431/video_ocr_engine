@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **56 个 `.py`**（10,982 行），其中 44 个是探针
+`tools/` 现有 **56 个 `.py`**（10,985 行），其中 44 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -25,7 +25,7 @@
 
 | 文件 | 行 | 用途 | 引用 |
 |---|---:|---|---|
-| `e2e_smoke.py` | 351 | 端到端冒烟 / 真值验证（真实视频） | README「测试」节 |
+| `e2e_smoke.py` | 354 | 端到端冒烟 / 真值验证（真实视频） | README「测试」节 |
 | `bench_hybrid.py` | 171 | hybrid 解码基准 | PERF §4 |
 | `probe_decode_rates.py` | 125 | 各后端解码速率探测 | — |
 | `_probe_perf_baseline.py` | 189 | 多轮性能优化的**基线/对比驱动**：视频×后端×管线全矩阵，含预热、timing 分相、ENGINE_PROFILE、唯一文本 sha 门禁与 `--compare` | docs/log/2026-09-09-深度性能优化.md |

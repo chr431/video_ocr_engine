@@ -95,11 +95,14 @@ python tools/_doc_section.py docs/ARCHIVE.md 4.4b        # 支持 16 / 16.8 / 4.
 这里只留最容易踩的五条：
 
 - 并发退化真因 = **NVDEC 会话数**；互补配对首选 NVDEC∥CPU，聚合 1.87×（PERF §21）
-- `auto` 已按 codec 选路（C-33）：h264→CPU 软解、hevc/av1→NVDEC；混合编码
-  批量并发自动互补，**同编码 h264 并发仍会争解码核**
+- `auto` **恒为 NVDEC 优先**（刻意决策，2026-09-10 重申）：本机 h264 CPU 软解虽快
+  1.7~2.8×（C-04，显式选型依据），但弱 CPU 上可能反慢，且 CPU 解码必带争用/
+  功耗代价，NVDEC 稳妥优先；批量互补仍需**显式** `decode_backend="cpu"`（C-07/C-08）
 - GPU 分段 + ONNX OCR 无净收益，门控只放行 NVDEC+TRT（PERF §9）
-- 解码后端按编码选：h264 CPU 快 1.7~2.8×、hevc/av1 NVDEC 快 1.5~2.2×（C-04/C-33）
-- hybrid 已迁 **decord 原生**（fork ≥v0.7.15）；项目层实现已删除，勿再引用（PERF §24）
+- hybrid 已迁 **decord 原生**且 0.8.2 上**不再优于任一编码的最优单侧**（C-05）；
+  项目层实现已删除，勿再引用（PERF §24）
+- **racelog_test 全部视频测量/验证一律 `sample_stride=1`**（2026-09-10 重申，
+  防漏信息）；stride>1 仅用于字幕场景（字幕更新频率慢，如批量剧集字幕提取）
 
 ## 编辑护栏（docs/PERFORMANCE.md）
 
@@ -159,5 +162,7 @@ python tools/_probe_index_audit.py               # tools/INDEX.md 数字一致�
   `ConfiguredClockSpeed`=6000 才是实际值）。
 - 测试视频 `D:\Videos\racelog_test\`，真值在 `ground_truth_csv/`
   （头是 `# roi=...`，**必须用正则取四个整数**，按逗号切只能拿到第一个）。
+  ⚠️ **该目录全部视频一律 `sample_stride=1`**（防漏信息）；`stride>1` 只
+  用于字幕提取场景（`text_text`/`batch_test`，字幕更新频率慢）。
 - 中文输出需 `sys.stdout.reconfigure(encoding="utf-8")`（GBK 控制台会崩）。
 - `tools/` 子目录下 `sys.path[0]` 是 tools/，探针须 `sys.path.insert(0, 上级目录)`。

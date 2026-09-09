@@ -200,7 +200,10 @@ def main():
     ap.add_argument("--truth", type=Path)
     ap.add_argument("--roi-from-truth", action="store_true")
     ap.add_argument("--frames", type=int, default=3000, help="采样源帧窗口长")
-    ap.add_argument("--stride", type=int, default=8)
+    ap.add_argument("--stride", type=int, default=1,
+                    help="采样步长（默认 1；⚠️ racelog_test 全部视频一律 "
+                         "stride=1 防漏信息——2026-09-10 用户重申；stride>1 "
+                         "仅用于字幕场景：字幕更新频率慢，允许稀疏采样）")
     ap.add_argument("--configs", default=",".join(CONFIGS),
                     help="功能矩阵配置名，逗号分隔")
     ap.add_argument("--probe", action="store_true", help="只打印视频元数据")
