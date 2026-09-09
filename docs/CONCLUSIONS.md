@@ -16,7 +16,7 @@
 | C-02 | IO 不是并发退化原因（<1% 墙钟；页缓存全命中仍退化 1.88×） | active | NVMe + 页缓存命中 | 冷盘/网络盘/超长视频使 IO 占比抬升 | PERF §19 |
 | C-03 | 内存带宽不是并发变量（B_max 实测 55.8 GB/s；互补设计仅 7.8 GB/s 退化 1.02×） | active | 2×16GB DDR5-6000 独显平台 | 共享内存带宽的集成平台 / 内存减半 | PERF §20 §21 |
 | C-04 | 解码后端按编码选：h264 CPU 快 ~2.9×，AV1 反转慢 ~2.6× | active | fork 0.7.x 解码路径、本机核数；**0.8.1/FFmpeg9 下 av1 CPU 经济性已变**（顺序 393→1164fps @24T，见 C-31），并行/互补场景的选型数字待重测 | 并行场景重测（C-31 策略修复后） | PERF §21 §22.1；log 2026-09-08 |
-| C-05 | hybrid = decord fork 原生（≥v0.7.15）：TRT 走 hybrid_gpu 显存直通、CPU OCR 走宿主帧；e2e hevc 1.42× / h264 1.22× vs 纯 NVDEC（0.7.x 口径） | active | decord fork ≥v0.7.15；0.8.1/FFmpeg9 下 bench_hybrid hevc hybrid 仍优于两侧单后端，av1 优势收窄（seek 落点变慢，见 C-31） | hevc/h264 e2e 口径重测；fork 再升级 | PERF §24；log 2026-09-08 decord-0.8.1；DECISIONS「混合解码迁移」 |
+| C-05 | hybrid = decord fork 原生（≥v0.7.15）：TRT 走 hybrid_gpu 显存直通、CPU OCR 走宿主帧。**0.8.2 复测：任一编码都不再优于最优单侧**（hevc 纯 NVDEC 1.515s vs hybrid 1.670s，0.7.x 的 1.42× 优势反转；h264 纯 CPU 1.163s vs hybrid 1.640s 且 CPU 线程越多越差；av1 持平） | active（能力保留，勿再默认推荐） | decord 0.8.2；GPU 管线+TRT；水填调度保底不恶化但合成不敌最快单侧 | fork 再升级 / 单侧速率格局反转 | log 2026-09-09 深度性能优化 §R7；DECISIONS「混合解码迁移」 |
 | C-06 | 项目层 hybrid 调度（v3~v7：kfe 分片/校准/折扣/在线移界/窃取） | superseded(C-05) | — | — | PERF §22 §23（历史）；DECISIONS v3/v4 |
 | C-07 | `auto` 不区分 OCR 后端、一律尝试 NVDEC：批量互补必须显式 `decode_backend="cpu"` 并核验 `_backend` | superseded(C-33) | — | — | README 批量章；PERF §19 §21 |
 | C-08 | `auto` 在 h264 多核非最优（CPU+TRT 约 2×），但静态判据不可靠、判错代价成倍 → 保持 auto | superseded(C-33) | codec 探测（打开即关的轻量 reader，非速率探测）落地后判据可靠了 | — | DECISIONS 审查 A2；log 2026-09-09 深度性能优化 |
