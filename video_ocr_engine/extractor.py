@@ -51,6 +51,39 @@ from ._gpu_pipeline import _GpuPipelineMixin
 
 logger = logging.getLogger(__name__)
 
+# auto 选路的 codec 探测缓存：(path, mtime_ns, size) → codec。同一文件
+# 重复 extract（GUI 重跑/批量多 ROI）时免掉 ~20-30ms 的探测性 reader
+# 打开；mtime+size 变化（文件被替换/重编码）自动失效。
+_CODEC_PROBE_CACHE: dict = {}
+
+
+def _cached_codec_probe(path: Path) -> str:
+    try:
+        st = path.stat()
+        key = (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = (str(path), -1, -1)
+    hit = _CODEC_PROBE_CACHE.get(key)
+    if hit is not None:
+        return hit
+    codec = _probe_codec_cpu_uncached(path)
+    _CODEC_PROBE_CACHE[key] = codec
+    return codec
+
+
+def _probe_codec_cpu_uncached(path: Path) -> str:
+    """轻量 CPU reader 打开即关（只读 codec）；失败返回 ''（调用方按
+    无 codec 处理，回退 NVDEC 优先的默认选路）。"""
+    try:
+        from decord import VideoReader, cpu as _cpu
+        vr = VideoReader(str(path), ctx=_cpu(0), num_threads=1)
+        try:
+            return str(vr.get_codec() or '').lower()
+        finally:
+            vr.close()
+    except Exception:
+        return ''
+
 
 class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
     """从视频固定区域提取文本的通用引擎（识别链：解码∥分段∥OCR）。
@@ -326,6 +359,20 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
             d = self.profile.setdefault(group, {})
             d[key] = d.get(key, 0.0) + elapsed
 
+    def _probe_codec_cpu(self) -> str:
+        """auto 选路的编码探测（带 (path, mtime, size) 缓存，实现见模块头）。
+
+        实测（2026-09-09，3000 帧窗口，GPU 管线+TRT）：
+          h264（test5 / test6_h264）：CPU 软解 1.11 / 1.83s vs NVDEC
+          3.11 / 3.17s（CPU 快 1.7~2.8×）；hevc：NVDEC 1.53s vs CPU 3.43s
+          （NVDEC 快 2.2×）；av1：NVDEC 1.79s vs CPU 2.63s（NVDEC 快 1.5×）。
+        → auto 按 codec 选 CPU/NVDEC（h264 → CPU，其余 → NVDEC），把
+        「解码后端按编码选」的既有结论落进默认路径。探测开销 = 一次
+        reader 打开（实测 8~50ms，长视频摊薄可忽略；缓存后重复
+        extract 为零开销）。
+        """
+        return _cached_codec_probe(self._video_path)
+
     def _open_vr(self):
         """按 decode_backend 打开解码器（auto/cpu/nvdec/hybrid）。
 
@@ -349,6 +396,10 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         backend = (self._decode_backend or 'auto').lower()
         vr = None
         label = 'CPU'
+        # auto 编码选路：h264 CPU 软解显著更快（见 _probe_codec_cpu 实测），
+        # 其余编码 NVDEC 更快。h264 时跳过 GPU 打开直接走 CPU 分支。
+        if backend == 'auto' and self._probe_codec_cpu() == 'h264':
+            backend = 'cpu_probe_h264'
         if backend in ('auto', 'nvdec', 'hybrid'):
             try:
                 from decord import gpu as _g

@@ -316,7 +316,15 @@ def _gpu_prepare_calibration(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
         g = np.ascontiguousarray(ex._batch_luma(crops))
         if g.shape != (calib_n, ctx.src_h, ctx.src_w):
             return False, 0
-        ctx.pool = _DevBatchPool(config.GPU_PIPELINE_DECODE_BATCH * ctx.fnb)
+        # 池子必须容得下**校准批**（SEG_CALIB_FRAMES=50 行）：calib_owner 与
+        # 后续解码批共用本池，校准 H2D/kernel 都按 calib_n 行访问。此前按
+        # DECODE_BATCH 定尺寸，DECODE_BATCH < 50（如调参试过 32）时校准批
+        # 向设备缓冲越界写 18 行 —— 越界破坏同 context 内其他分配（TRT 工作
+        # 缓冲），异步错误延迟到 TRT enqueue 才爆（invalid argument），并
+        # 污染 analyzer 后续结果（段数漂移）。默认 64 ≥ 50 从未触发。
+        # （2026-09-09 sweep batch=32 复现后定位，见 docs/log 同日叙事。）
+        ctx.pool = _DevBatchPool(
+            max(config.GPU_PIPELINE_DECODE_BATCH, calib_n) * ctx.fnb)
         ctx.calib_owner = ctx.pool.acquire(crops)
         cudart.cudaMemcpyAsync(
             ctx.calib_owner.ptr, g.ctypes.data, calib_n * ctx.fnb,
@@ -840,9 +848,11 @@ class _GpuPipelineMixin:
                 # P0-4 GPU 直通：rep 帧宽度自适应裁切（col_ink + 宿主同一
                 # 余量规则）；未裁切时 (0, src_w) 与旧全宽语义逐位一致。
                 xoff, cropw = 0, ctx.src_w
+                _t_ac = time.perf_counter()
                 rng = _autocrop_device(dev_ocr[1], r_sharp)
                 if rng is not None:
                     xoff, cropw = rng
+                self._prof_end('producer', 'emit_autocrop', _t_ac)
                 dev_ocr = (dev_ocr[0], dev_ocr[1], ctx.src_h, ctx.src_w,
                            xoff, cropw)
             else:
@@ -852,17 +862,19 @@ class _GpuPipelineMixin:
             if self._keep_crops:
                 # keep_crops 是结果输出（给外部转 RGB），不可避免的传输。
                 # CPU 解码 raw 路径从单帧设备缓冲复制，避免钉住整批 host 数组。
+                _t_d2h = time.perf_counter()
                 rep_crops[r_frame] = (crop_h if crop_h is not None
                                       else _d2h_rep(
                                           r_dev,
                                           prefer_device=(dev_ocr is not None
                                                          and not yuv)))
+                self._prof_end('producer', 'emit_d2h', _t_d2h)
             if dev_ocr is not None and not yuv:
                 drop_host = getattr(dev_ocr[0], 'drop_host', None)
                 if drop_host is not None:
                     drop_host()
             _put_ocr((idx, r_frame, crop_h, dev_ocr, frac))
-            self._prof_end('producer', 'q_put_block', _t_push)
+            self._prof_end('producer', 'emit_put', _t_push)
 
         # 分段状态机与宿主管线共用（segmentation.SegmentStateMachine）：
         # GPU 侧数据源是设备侧 kernel 已算好的 win3 分数（cluster）。

@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **54 个 `.py`**（10,675 行））））））））），其中 42 个是探针
+`tools/` 现有 **56 个 `.py`**（10,981 行），其中 44 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -28,6 +28,8 @@
 | `e2e_smoke.py` | 351 | 端到端冒烟 / 真值验证（真实视频） | README「测试」节 |
 | `bench_hybrid.py` | 171 | hybrid 解码基准 | PERF §4 |
 | `probe_decode_rates.py` | 125 | 各后端解码速率探测 | — |
+| `_probe_perf_baseline.py` | 188 | 多轮性能优化的**基线/对比驱动**：视频×后端×管线全矩阵，含预热、timing 分相、ENGINE_PROFILE、唯一文本 sha 门禁与 `--compare` | docs/log/2026-09-09-深度性能优化.md |
+| `_probe_perf_sweep.py` | 118 | 解码参数 sweep（batch/stream/threads/hybthreads），monkey-patch 模块常量；用于 C-10 复确认与 batch=32 越界 bug 的暴露 | docs/log/2026-09-09-深度性能优化.md |
 | `_probe_index_audit.py` | 277 | 核对本索引的每个数字是否与磁盘一致 | 本文件（自检） |
 | `_probe_discipline_audit.py` | 574 | **项目纪律审计**（12 项：硬编码路径 / 异常吞噬 / 未用 import / 未门控 print / 版本号 / 文档引用 / 注入预算…） | CLAUDE.md「纪律与自动化守卫」 |
 | `_doc_section.py` | 214 | **文档章节级检索**：`--toc` 看目录 / `--find` 按标题定位 / 读单章。避免整文件读，实测省 84~96% tokens | CLAUDE.md「查文档前先定位」 |
