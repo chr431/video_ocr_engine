@@ -37,6 +37,11 @@ class OcrSession:
         self.err: list = []
         self.wall = [0.0]
         self.raw_ready = [False]   # raw 直通可用：worker 引擎就绪后置位（单 TRT）
+        # 批量 autocrop 挂点（GPU 管线注入，2026-09-10）：autocropper 存在时，
+        # raw 项 emit 为 5 元组 (owner,ptr,h,w,sharp)，autocrop 推迟到 flush
+        # 批量执行（一次 kernel 处理整批段，消费端每段的 launch+sync 开销
+        # 在 hybrid 引擎口径下曾吃掉 ~14% 墙钟）。None = emit 内逐段裁切。
+        self.autocropper = None
         self._engines: list = []
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
@@ -211,6 +216,17 @@ class OcrSession:
                     and getattr(engines[0], '_trt', None) is not None
                     and getattr(ex, '_gpu_pipeline_mode', False)]
                 if raw_sel:
+                    # 批量 autocrop（emit 时推迟的 5 元组项）：一次 kernel
+                    # 处理整批，再按「裁后内容宽」分组。单帧判定内核与
+                    # 宿主 _crop_to_content 同判据，逐位一致。
+                    deferred = [i for i in raw_sel if len(b_devs[i]) == 5]
+                    if deferred and self.autocropper is not None:
+                        rngs = self.autocropper.ranges_for(
+                            [b_devs[i] for i in deferred])
+                        for i, rng in zip(deferred, rngs):
+                            o, p, h, w, _sharp = b_devs[i]
+                            xoff, cropw = rng if rng is not None else (0, w)
+                            b_devs[i] = (o, p, h, w, xoff, cropw)
                     # 跨批按「裁后内容宽」分组（与宿主裁切路径同一策略）：
                     # 顺序分批时每批几乎必有满宽成员 → pad 宽被顶回全宽，
                     # 裁切收益归零；把宽度相近的段分到同一批才真的降下来。

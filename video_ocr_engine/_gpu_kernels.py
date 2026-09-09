@@ -604,6 +604,47 @@ extern "C" __global__ void col_ink(
     }
 }
 
+extern "C" __global__ void col_ink_batch(
+    const long long* __restrict__ bases,
+    int* __restrict__ ranges,   // (B, 2) [首列, 末列]
+    int H, int W, int th, int B) {
+    // 批量 col_ink：block = 一帧，逻辑与 col_ink 逐位一致（每列 g>th
+    // 计数 ≥2 才算合格列；无合格列 first>last）。供 OCR worker 批量
+    // autocrop——把消费端每段一次的 launch+sync（~50-170µs）摊成每批
+    // 一次（hybrid 引擎内该提交开销曾吃掉 ~14% 墙钟）。
+    int b = blockIdx.x;
+    if (b >= B) return;
+    const unsigned char* raw = (const unsigned char*)(size_t)bases[b];
+    __shared__ int s_first[256];
+    __shared__ int s_last[256];
+    int t = threadIdx.x;
+    int first = 0x7fffffff, last = -1;
+    for (int x = t; x < W; x += 256) {
+        const unsigned char* col = raw + x;
+        int cnt = 0;
+        for (int y = 0; y < H; ++y)
+            cnt += (col[(size_t)y * W] > th) ? 1 : 0;
+        if (cnt >= 2) {
+            if (x < first) first = x;
+            last = x;
+        }
+    }
+    s_first[t] = first;
+    s_last[t] = last;
+    __syncthreads();
+    for (int s = 128; s > 0; s >>= 1) {
+        if (t < s) {
+            if (s_first[t + s] < s_first[t]) s_first[t] = s_first[t + s];
+            if (s_last[t + s] > s_last[t]) s_last[t] = s_last[t + s];
+        }
+        __syncthreads();
+    }
+    if (t == 0) {
+        ranges[b * 2] = s_first[0];
+        ranges[b * 2 + 1] = s_last[0];
+    }
+}
+
 extern "C" __global__ void sim_pair(
     const unsigned char* __restrict__ a,
     const unsigned char* __restrict__ b,
@@ -692,14 +733,21 @@ extern "C" __global__ void luma_nv12(
         self._mod = _compile_module(
             self._KERNEL,
             ("analyze_gray", "hist_gray_perframe", "luma_nv12",
-             "sim_pair", "col_ink"))
+             "sim_pair", "col_ink", "col_ink_batch"))
         self._kernel = self._mod.get_kernel("analyze_gray")
         self._kernel_hist_pf = self._mod.get_kernel("hist_gray_perframe")
         self._kernel_luma = self._mod.get_kernel("luma_nv12")
         self._kernel_sim = self._mod.get_kernel("sim_pair")
         self._kernel_ink = self._mod.get_kernel("col_ink")
+        self._kernel_ink_b = self._mod.get_kernel("col_ink_batch")
         from cuda.bindings import runtime as cudart
         _err, self._stream = cudart.cudaStreamCreate()
+        # 消费端专用流（2026-09-10）：content_range/sim_pair/luma_into 等
+        # 消费侧小 kernel 若排在生产者流上，其同步会等生产者在途的整批
+        # 解码侧工作 —— 生产者跑赢消费时（hybrid），每段一次的同步把消费
+        # 线程拖成全局瓶颈（实测 hybrid 引擎内 2400fps 产能被压到 2010）。
+        # 帧数据在 analyze_batch 的同步点已就绪，消费流无需跨流依赖。
+        _err, self._stream_c = cudart.cudaStreamCreate()
         self._owns_stream = True
         self._summary_size = 0
         self._summary_dev = None
@@ -714,14 +762,16 @@ extern "C" __global__ void luma_nv12(
     def release(self) -> None:
         """释放全部设备缓冲及本对象拥有的 stream；重复调用安全。"""
         from cuda.bindings import runtime as cudart
-        stream = getattr(self, "_stream", None)
-        if stream is not None:
-            try:
-                cudart.cudaStreamSynchronize(stream)
-            except Exception:
-                pass
+        for s in (getattr(self, "_stream", None),
+                  getattr(self, "_stream_c", None)):
+            if s is not None:
+                try:
+                    cudart.cudaStreamSynchronize(s)
+                except Exception:
+                    pass
         for attr in ("_prev_dev", "_histpf_dev", "_summary_dev",
-                     "_luma_dev", "_range_dev", "_sim_dev"):
+                     "_luma_dev", "_range_dev", "_sim_dev",
+                     "_ptrb_dev", "_rangeb_dev"):
             ptr = getattr(self, attr, None)
             if ptr:
                 try:
@@ -731,12 +781,15 @@ extern "C" __global__ void luma_nv12(
             setattr(self, attr, None)
         self._prev_size = self._histpf_size = self._summary_size = 0
         self._luma_size = 0
-        if stream is not None and getattr(self, "_owns_stream", False):
-            try:
-                cudart.cudaStreamDestroy(stream)
-            except Exception:
-                pass
-        self._stream = None
+        self._ptrb_size = self._rangeb_size = 0
+        for attr in ("_stream", "_stream_c"):
+            s = getattr(self, attr, None)
+            if s is not None and getattr(self, "_owns_stream", False):
+                try:
+                    cudart.cudaStreamDestroy(s)
+                except Exception:
+                    pass
+            setattr(self, attr, None)
         self._owns_stream = False
 
     def _ensure_prev(self, nbytes: int) -> int:
@@ -775,19 +828,21 @@ extern "C" __global__ void luma_nv12(
         return hists
 
     def content_range(self, raw_ptr: int, H: int, W: int,
-                      th: int) -> "tuple[int, int] | None":
+                      th: int, stream=None) -> "tuple[int, int] | None":
         """rep 帧的「有墨迹列范围」(first, last)：每列 g>th 计数 ≥2 的
         首/末列，判据与宿主 _crop_to_content 一致（P0-4 GPU 直通裁切）。
 
         DtoH 仅 8 字节；无合格列（全空帧）返回 None。调用方必须保证
         raw_ptr 上的帧数据在本次同步前有效（owner 存活）。
-        """
+        stream：消费端传 _stream_c（消费专用流，见 __init__ 注释），
+        同步只等消费流自己的工作，不被生产者在途批拖住。"""
         import numpy as np
         from cuda.bindings import runtime as cudart
         from cuda.core import Buffer, LaunchConfig, launch
+        s = self._stream if stream is None else stream
         if self._range_dev is None:
             _err, self._range_dev = cudart.cudaMalloc(2 * 4)
-        launch(self._stream, LaunchConfig(grid=1, block=256),
+        launch(s, LaunchConfig(grid=1, block=256),
                self._kernel_ink,
                Buffer.from_handle(int(raw_ptr), H * W),
                Buffer.from_handle(self._range_dev, 2 * 4),
@@ -795,25 +850,68 @@ extern "C" __global__ void luma_nv12(
         out = np.empty(2, dtype=np.int32)
         cudart.cudaMemcpyAsync(
             out.ctypes.data, self._range_dev, 2 * 4,
-            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, self._stream)
-        cudart.cudaStreamSynchronize(self._stream)
+            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, s)
+        cudart.cudaStreamSynchronize(s)
         if int(out[0]) > int(out[1]):
             return None
         return int(out[0]), int(out[1])
 
+    def content_range_batch(self, ptrs: list, H: int, W: int, th: int,
+                            stream=None) -> "np.ndarray":
+        """批量多帧 col_ink：ptrs = 各帧设备指针（不要求连续）。返回
+        (B, 2) int32（first/last；first>last = 该帧无合格列）。
+
+        供 OCR worker flush 时批量 autocrop：每批一次 launch + 一次
+        D2H + 一次 sync，取代消费端每段一次（每段 ~50-170µs 的提交
+        开销在 hybrid 引擎口径下曾吃掉 ~14% 墙钟）。调用方保证各帧
+        数据已就绪（帧在 yield 前已经生产者流同步）且本对象存活。"""
+        import numpy as np
+        from cuda.bindings import runtime as cudart
+        from cuda.core import Buffer, LaunchConfig, launch
+        s = self._stream if stream is None else stream
+        B = len(ptrs)
+        ptrs_arr = np.array([int(p) for p in ptrs], dtype=np.int64)
+        in_nbytes = B * 8
+        out_nbytes = B * 2 * 4
+        if getattr(self, "_ptrb_size", 0) < in_nbytes:
+            if getattr(self, "_ptrb_dev", None) is not None:
+                cudart.cudaFree(self._ptrb_dev)
+            _err, self._ptrb_dev = cudart.cudaMalloc(in_nbytes)
+            self._ptrb_size = in_nbytes
+        if getattr(self, "_rangeb_size", 0) < out_nbytes:
+            if getattr(self, "_rangeb_dev", None) is not None:
+                cudart.cudaFree(self._rangeb_dev)
+            _err, self._rangeb_dev = cudart.cudaMalloc(out_nbytes)
+            self._rangeb_size = out_nbytes
+        cudart.cudaMemcpyAsync(
+            self._ptrb_dev, ptrs_arr.ctypes.data, in_nbytes,
+            cudart.cudaMemcpyKind.cudaMemcpyHostToDevice, s)
+        launch(s, LaunchConfig(grid=B, block=256),
+               self._kernel_ink_b,
+               Buffer.from_handle(self._ptrb_dev, in_nbytes),
+               Buffer.from_handle(self._rangeb_dev, out_nbytes),
+               np.int32(H), np.int32(W), np.int32(int(th)), np.int32(B))
+        out = np.empty((B, 2), dtype=np.int32)
+        cudart.cudaMemcpyAsync(
+            out.ctypes.data, self._rangeb_dev, out_nbytes,
+            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, s)
+        cudart.cudaStreamSynchronize(s)
+        return out
+
     def luma_into(self, src_ptr: int, dst_ptr: int, H: int, W: int,
-                  limited: bool, B: int = 1) -> None:
+                  limited: bool, B: int = 1, stream=None) -> None:
         """packed NV12 → 灰度 Y，写入指定 dst（B 帧连续）。
 
         src: (B, H+ceil(H/2), W) packed；dst: (B, H, W)。与宿主
         _nv12_luma_full 逐位一致。调用方负责 dst 的生命周期/对齐。
-        """
+        stream：消费端传 _stream_c（消费专用流）。"""
         import numpy as np
         from cuda.core import Buffer, LaunchConfig, launch
+        s = self._stream if stream is None else stream
         nbytes = B * H * W
         block = 256
         grid = (nbytes + block - 1) // block
-        launch(self._stream, LaunchConfig(grid=grid, block=block),
+        launch(s, LaunchConfig(grid=grid, block=block),
                self._kernel_luma,
                Buffer.from_handle(src_ptr, B * (H + (H + 1) // 2) * W),
                Buffer.from_handle(dst_ptr, nbytes),
@@ -840,7 +938,7 @@ extern "C" __global__ void luma_nv12(
         return self._luma_dev
 
     def compare_pair(self, a_ptr: int, b_ptr: int, H: int, W: int,
-                     th: int, use_bin: bool) -> "tuple[int, int]":
+                     th: int, use_bin: bool, stream=None) -> "tuple[int, int]":
         """两帧差异标量（merge_similar 判定）：(mad_sum, changed_count)。
 
         use_bin=True 按二值化域：mad_sum = 阈值穿越像素数（宿主换算
@@ -848,15 +946,16 @@ extern "C" __global__ void luma_nv12(
         use_bin=False 按原始灰度域：mad_sum = |a-b| 整数和，changed =
         count(|a-b|>10)。整数精确累加（double 归约，值域 < 2^53），
         与宿主 _segments_similar 的两个条件一一对应。
-        """
+        stream：消费端传 _stream_c（消费专用流）。"""
         import numpy as np
         from cuda.bindings import runtime as cudart
         from cuda.core import Buffer, LaunchConfig, launch
+        s = self._stream if stream is None else stream
         if getattr(self, "_sim_dev", None) is None:
             _err, self._sim_dev = cudart.cudaMalloc(2 * 8)
         n = H * W
         out_buf = Buffer.from_handle(self._sim_dev, 2 * 8)
-        launch(self._stream, LaunchConfig(grid=1, block=256),
+        launch(s, LaunchConfig(grid=1, block=256),
                self._kernel_sim,
                Buffer.from_handle(a_ptr, n),
                Buffer.from_handle(b_ptr, n),
@@ -865,8 +964,8 @@ extern "C" __global__ void luma_nv12(
         out = np.empty(2, dtype=np.float64)
         cudart.cudaMemcpyAsync(
             out.ctypes.data, self._sim_dev, 2 * 8,
-            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, self._stream)
-        cudart.cudaStreamSynchronize(self._stream)
+            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, s)
+        cudart.cudaStreamSynchronize(s)
         return int(out[0]), int(out[1])
 
     def analyze_batch(self, raw_ptr: int, prev_ptr: int, B: int,
