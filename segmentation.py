@@ -86,29 +86,7 @@ def _nv12_batch_luma_full_out(crops: np.ndarray, color_range: int,
     return out
 
 
-def _otsu(g: np.ndarray) -> int:
-    hist, _ = np.histogram(g, bins=256, range=(0, 256))
-    total = int(g.size)
-    st = float((np.arange(256) * hist).sum())
-    sb = 0.0
-    wb = 0
-    best = config.OTSU_FALLBACK_THRESH
-    vmax = -1.0
-    for t in range(256):
-        wb += hist[t]
-        if wb == 0:
-            continue
-        wf = total - wb
-        if wf == 0:
-            break
-        sb += t * hist[t]
-        mb = sb / wb
-        mf = (st - sb) / wf
-        vb = wb * wf * (mb - mf) ** 2
-        if vb > vmax:
-            vmax = vb
-            best = t
-    return best
+
 
 
 def _otsu_from_hist(hist) -> int:
@@ -181,6 +159,13 @@ def _cluster_win3(diff: np.ndarray) -> float:
 
 
 # ═══════════════════ §2 校准与判定 ═══════════════════
+def _otsu(g: np.ndarray) -> int:
+    """灰度图 Otsu 阈值：做直方图后委托 _otsu_from_hist（算法单一实现）。"""
+    hist, _ = np.histogram(g, bins=256, range=(0, 256))
+    return _otsu_from_hist(hist)
+
+
+
 
 def otsu_median_threshold(ths) -> int:
     """校准阈值：Otsu 列表取中位数；空列表回退 OTSU_FALLBACK_THRESH。"""

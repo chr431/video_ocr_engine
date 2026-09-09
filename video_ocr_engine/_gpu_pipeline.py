@@ -224,6 +224,20 @@ class _GpuRunCtx:
         self.calib_n = 0
 
 
+def _gpu_fill_prev(analyzer, prev_buf, base, B, fnb, first_src) -> None:
+    """prev 缓冲错位填充（三处调用共用：NVDEC 帧流 / CPU 帧流校准 / 批循环）。
+
+    第 k 行 = (first_src if k==0 else base+(k-1)*fnb) 的 fnb 字节——
+    供 analyze_batch 读"上一帧"；D2D 异步到 analyzer._stream。
+    """
+    from cuda.bindings import runtime as cudart
+    _d2d = cudart.cudaMemcpyKind.cudaMemcpyDeviceToDevice
+    for k in range(B):
+        src = first_src if k == 0 else base + (k - 1) * fnb
+        cudart.cudaMemcpyAsync(
+            prev_buf + k * fnb, src, fnb, _d2d, analyzer._stream)
+
+
 def _gpu_release_partial(ctx: _GpuRunCtx) -> None:
     """释放尚未进入主消费循环的设备资源（池 / 校准缓冲 / 分析器）。"""
     ctx.calib_owner = None
@@ -350,19 +364,11 @@ def _gpu_frame_stream_nvdec(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
     limited = ex._color_range != 1
     analyzer = ctx.analyzer
 
-    def _fill_prev(prev_buf, base, B, frame_nbytes, prev_single):
-        for k in range(B):
-            src = (prev_single if k == 0
-                   else base + (k - 1) * frame_nbytes)
-            cudart.cudaMemcpyAsync(
-                prev_buf + k * frame_nbytes, src, frame_nbytes,
-                _d2d, analyzer._stream)
-
     def _analyze_batch(gray_base, prev_single, B, H, W):
         fnb = H * W
         prev_buf = analyzer._ensure_prev(
             max(B, DECODE_BATCH) * fnb)
-        _fill_prev(prev_buf, gray_base, B, fnb, prev_single)
+        _gpu_fill_prev(analyzer, prev_buf, gray_base, B, fnb, prev_single)
         return analyzer.analyze_batch(
             gray_base, prev_buf, B, H, W, th), fnb
 
@@ -469,11 +475,8 @@ def _gpu_frame_stream_cpu(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
     prev_buf = analyzer._ensure_prev(
         max(calib_n, DECODE_BATCH) * fnb)
     # ── 校准帧整批分析（校准批已在外部 H2D → calib_owner）──
-    for k in range(calib_n):
-        src = (ctx.calib_owner.ptr if k == 0
-               else ctx.calib_owner.ptr + (k - 1) * fnb)
-        cudart.cudaMemcpyAsync(
-            prev_buf + k * fnb, src, fnb, _d2d, analyzer._stream)
+    _gpu_fill_prev(analyzer, prev_buf, ctx.calib_owner.ptr,
+                   calib_n, fnb, ctx.calib_owner.ptr)
     sums = analyzer.analyze_batch(
         ctx.calib_owner.ptr, prev_buf, calib_n, src_h, src_w, th)
     for k in range(calib_n):
@@ -508,11 +511,7 @@ def _gpu_frame_stream_cpu(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
         base = owner.ptr
         prev_buf = analyzer._ensure_prev(
             max(B, DECODE_BATCH) * fnb)
-        for k in range(B):
-            src = prev_ptr if k == 0 else base + (k - 1) * fnb
-            cudart.cudaMemcpyAsync(
-                prev_buf + k * fnb, src, fnb, _d2d,
-                analyzer._stream)
+        _gpu_fill_prev(analyzer, prev_buf, base, B, fnb, prev_ptr)
         sums = analyzer.analyze_batch(
             base, prev_buf, B, src_h, src_w, th)
         for k in range(B):

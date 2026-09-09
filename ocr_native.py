@@ -13,7 +13,6 @@ from __future__ import annotations
 import logging
 import math
 import os
-import sys
 import threading
 from collections import OrderedDict
 from pathlib import Path
@@ -29,30 +28,9 @@ os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
 log = logging.getLogger(__name__)
 
 
-def _models_dir() -> Path:
-    """模型资产目录（源码 / wheel 安装 / frozen 多路径兼容）。
-
-    查找顺序：
-      1. frozen: PyInstaller _MEIPASS/ocr_models
-      2. 源码树: <repo>/assets/ocr_models（也兼容未来包内 assets）
-      3. site-packages/assets/ocr_models（若改为 package-data 布局）
-      4. sys.prefix/assets/ocr_models（当前 pyproject data-files 安装位置）
-    返回第一个包含模型文件的目录；都找不到时返回源码树候选，
-    让后续打开文件时给出自然的 FileNotFoundError。
-    """
-    if getattr(sys, "frozen", False):
-        return Path(getattr(sys, "_MEIPASS", "")) / "ocr_models"
-    here = Path(__file__).resolve().parent
-    candidates = [
-        here / "assets" / "ocr_models",          # 源码 / 包内资源
-        here.parent / "assets" / "ocr_models",   # 模块在 video_ocr_engine/ 包内时
-        Path(sys.prefix) / "assets" / "ocr_models",  # data-files 安装位置
-    ]
-    marker = "PP-OCRv6_rec_small.onnx"
-    for p in candidates:
-        if (p / marker).is_file():
-            return p
-    return candidates[0]
+# 模型资产目录解析统一走 engine_config.models_dir（0.11.0 收敛，
+# 原双份拷贝见 C-32 同轮清理）；保留旧名兼容既有导入。
+_models_dir = config.models_dir
 
 
 def cpu_physical_cores() -> int:
@@ -229,6 +207,19 @@ class OcrEngine:
         with self._lock:
             return self._infer_locked(batch_np)
 
+    @staticmethod
+    def _trt_subbatches(total: int, max_batch: int):
+        """TRT 子批计划：yield (offset, n, need_sync_before)。
+
+        末批 batch 维变化前必须 synchronize（TRT 不允许 in-flight 修改
+        context 形状）——仅"非首子批且 n < max_batch"时置同步标记。
+        _infer_locked（host 缓冲切片）与 _infer_trt_device（设备指针
+        偏移）共用同一计划，避免两份子批循环漂移。
+        """
+        for i in range(0, total, max_batch):
+            n = min(max_batch, total - i)
+            yield i, n, (i > 0 and n < max_batch)
+
     def _infer_locked(self, batch_np: np.ndarray) -> np.ndarray:
         if self._trt is not None:
             first_batch = batch_np[:min(len(batch_np), self._trt.max_batch)]
@@ -239,9 +230,9 @@ class OcrEngine:
                 (len(batch_np),) + tuple(out_shape[1:]), dtype=np.float32)
             # 所有子批全部异步 enqueue 到同一 CUDA stream，最后只同步一次；
             # 消除每个子批一次 host-GPU 往返同步，让 GPU 连续执行。
-            for i in range(0, len(batch_np), self._trt.max_batch):
-                n = min(self._trt.max_batch, len(batch_np) - i)
-                if i > 0 and n < self._trt.max_batch:
+            for i, n, need_sync in self._trt_subbatches(
+                    len(batch_np), self._trt.max_batch):
+                if need_sync:
                     # 末批 batch 维与前批不同 → execute_async 内会重设
                     # context shape；TRT 不支持 in-flight 修改 context 形状，
                     # 先同步再入队（仅超大批触发一次，代价可忽略）。
@@ -268,24 +259,9 @@ class OcrEngine:
     # ═══════════════ 后处理（复刻 CTCLabelDecode）═══════════════
 
     def _ctc_decode(self, pred: np.ndarray) -> RecOut:
-        """单帧 (seq, vocab) → (文本, 置信度)（vocab = 字符表长度）。
-
-        CTC：argmax → 相邻去重 → 移除 blank(0) → 字符映射。
-        置信度 = 选中帧概率均值（round 5，与 rapidocr 一致）。
-        """
-        idx = pred.argmax(axis=1)
-        prob = pred.max(axis=1)
-        keep = np.ones(len(idx), dtype=bool)
-        keep[1:] = idx[1:] != idx[:-1]
-        keep &= idx != 0  # blank
-        if keep.any():
-            text = "".join(self._chars[i] for i in idx[keep])
-            # 与 rapidocr 一致：每帧概率先 round(5) 再取均值，最后 round(5)
-            confs = [round(float(p), 5) for p in prob[keep]]
-            conf = round(float(np.mean(confs)), 5)
-        else:
-            text, conf = "", 0.0
-        return RecOut(text, conf)
+        """单帧 (seq, vocab) → (文本, 置信度)。统一委托 _ctc_decode_batch
+        （0.11.0 收敛：三处 CTC 实现合一，按行应用同一归约，逐位一致）。"""
+        return self._ctc_decode_batch(pred[None, ...])[0]
 
     def _ctc_decode_batch(self, preds: np.ndarray) -> list:
         """批 CTC decode：(B, seq, C) → list[RecOut]。
@@ -478,9 +454,8 @@ class OcrEngine:
         preds = np.empty(
             (B,) + tuple(out_shape[1:]), dtype=np.float32)
         elem_floats = int(np.prod(shape[1:]))
-        for i in range(0, B, max_batch):
-            n = min(max_batch, B - i)
-            if i > 0 and n < max_batch:
+        for i, n, need_sync in self._trt_subbatches(B, max_batch):
+            if need_sync:
                 # 同 _infer_locked：末批 shape 变更前先同步（TRT 不允许
                 # in-flight 修改 context 形状）。
                 self._trt.synchronize()

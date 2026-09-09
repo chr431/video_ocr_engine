@@ -8,7 +8,6 @@ video_ocr_engine._gpu_kernels（本模块 re-export 保持兼容）。
 from __future__ import annotations
 
 import logging
-import sys
 import time
 from pathlib import Path
 
@@ -33,25 +32,11 @@ def _sp_tick(key: str, t0: float) -> None:
         SUBPROBE[key] += time.perf_counter() - t0
 
 
-def _models_dir() -> Path:
-    """模型资产目录（源码 / wheel 安装 / frozen 多路径兼容）。
+# 模型资产目录解析统一走 engine_config.models_dir（0.11.0 收敛）；
+# 保留旧名兼容既有导入。TRT 引擎缓存候选目录基于同一解析结果。
+_models_dir = config.models_dir
 
-    与 ocr_native._models_dir 保持相同查找顺序：源码树 → site-packages
-    候选 → sys.prefix data-files 安装位置。
-    """
-    if getattr(sys, "frozen", False):
-        return Path(getattr(sys, "_MEIPASS", "")) / "ocr_models"
-    here = Path(__file__).resolve().parent
-    candidates = [
-        here / "assets" / "ocr_models",
-        here.parent / "assets" / "ocr_models",
-        Path(sys.prefix) / "assets" / "ocr_models",
-    ]
-    marker = "PP-OCRv6_rec_small.onnx"
-    for p in candidates:
-        if (p / marker).is_file():
-            return p
-    return candidates[0]
+
 class TrtEngine:
     """反序列化 TRT 引擎 + 执行上下文 + 输入/输出显存缓冲复用。"""
 
