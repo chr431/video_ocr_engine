@@ -783,7 +783,6 @@ extern "C" __global__ void luma_nv12(
         _nv12_luma_full 逐位一致。调用方负责 dst 的生命周期/对齐。
         """
         import numpy as np
-        from cuda.bindings import runtime as cudart
         from cuda.core import Buffer, LaunchConfig, launch
         nbytes = B * H * W
         block = 256

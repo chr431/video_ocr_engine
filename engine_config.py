@@ -79,6 +79,7 @@ TEXT_SEP_MERGE_ENV: str = "TEXT_SEP_MERGE"                      # 相似段合�
 DECODE_THREADS_ENV: str = "DECODE_THREADS"                      # CPU 软解 FFmpeg 帧线程数覆盖（值型；0=自动）
 # 实验/诊断开关
 GPU_PIPELINE_ENV: str = "GPU_PIPELINE"                          # 0 关闭 GPU 全驻留管线；1 强制（含 GPU 分段+ONNX 实验组合）
+GPU_PIPELINE_STREAM_ENV: str = "GPU_PIPELINE_STREAM"            # 1 开启 decord get_batch_stream chunk 粒度流水发射（默认关，C-10）
 GPU_CTC_ENV: str = "GPU_CTC"                                    # 0 关闭 TRT 输出 GPU 归约
 ENGINE_PROFILE_ENV: str = "ENGINE_PROFILE"                      # 1 开启引擎级性能剖面
 TRT_SUBPROBE_ENV: str = "TRT_SUBPROBE"                          # 1 开启 TRT 子相位探针

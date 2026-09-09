@@ -71,7 +71,7 @@ python tools/_doc_section.py docs/ARCHIVE.md 4.4b        # 支持 16 / 16.8 / 4.
 | OCR 调度 / 引擎池 | `ocr_native.py`（`acquire_ocr_engine` / `checkin_ocr_engine`） |
 | TRT | `ocr_trt.py` + `video_ocr_engine/_gpu_kernels.py` |
 | 配置常量 | `engine_config.py`（`GPU_PIPELINE_DECODE_BATCH=64` 等） |
-| 分相打桩 | `video_ocr_engine/extractor.py:317 _prof_end` |
+| 分相打桩 | `video_ocr_engine/extractor.py` 的 `_prof_end` |
 
 **现役并行维度只有一个**：`decode_backend="hybrid"` 的 CPU+NVDEC 双解码，
 **已由 decord fork 原生实现**（v0.7.15+ 的 `hybrid`/`hybrid_gpu` ctx，引擎只

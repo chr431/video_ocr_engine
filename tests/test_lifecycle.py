@@ -100,26 +100,21 @@ def test_reducer_release_borrowed_stream_not_destroyed(cuda_bindings):
 # ═══════════════ 3. 校准异常收尾（宿主管线） ═══════════════
 
 class _Session:
+    """OcrSession 桩（0.11.0 起生产侧为属性接口：q/results/err/wall/raw_ready）。"""
+
     def __init__(self):
+        from queue import Queue
         self.finished = False
-    def __getitem__(self, k):
-        if k == "finish":
-            return self._finish
-        if k == "q":
-            from queue import Queue
-            return Queue()
-        if k == "results":
-            return {}
-        if k == "err":
-            return []
-        if k == "wall":
-            return [0.0]
-        if k == "put":
-            return lambda *a, **k: None
-        if k == "raw_ready":
-            return [False]
-        raise KeyError(k)
-    def _finish(self):
+        self.q = Queue()
+        self.results = {}
+        self.err = []
+        self.wall = [0.0]
+        self.raw_ready = [False]
+
+    def put(self, *a, **k):
+        pass
+
+    def finish(self):
         self.finished = True
 
 

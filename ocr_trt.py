@@ -8,7 +8,6 @@ video_ocr_engine._gpu_kernels（本模块 re-export 保持兼容）。
 from __future__ import annotations
 
 import logging
-import os
 import sys
 import time
 from pathlib import Path

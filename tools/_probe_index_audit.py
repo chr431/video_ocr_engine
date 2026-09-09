@@ -264,7 +264,7 @@ def main() -> int:
             print("  头部    : **%d 个 `.py`**（%s 行 / ~%d KB）"
                   % (n_file, format(n_line, ","), n_byte // 1024))
             print("  D 节    : 共 %d 个 / %d 行 / %.1f KB"
-                  % (len(orphans), tl, tb / 1024))
+                  % (len(listed_d), tl, tb / 1024))
             for name, _, actual in bad_rows:
                 print("  行数    : %-32s %d" % (name, actual))
         return 1

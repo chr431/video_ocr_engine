@@ -676,11 +676,10 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
             except Exception:
                 pass
             raise
-        q = ocr_session["q"]
-        results = ocr_session["results"]
-        ocr_err = ocr_session["err"]
-        ocr_wall = ocr_session["wall"]
-        _put_ocr = ocr_session["put"]
+        results = ocr_session.results
+        ocr_err = ocr_session.err
+        ocr_wall = ocr_session.wall
+        _put_ocr = ocr_session.put
         try:
             _t_cal = time.perf_counter()
             # 宿主校准统一走 _host_calibrate（stride>1 用 get_batch 等差快速路径、
@@ -695,7 +694,7 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
             self._prof_end('producer', 'calib_total', _t_cal)
         except BaseException:
             try:
-                ocr_session["finish"]()
+                ocr_session.finish()
             except BaseException:
                 pass
             try:
@@ -730,7 +729,7 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
             _t_consume_end = time.perf_counter()
             self.timing['decode'] = _t_consume_end - t0
             self._prof_end('producer', 'consumer_total', t0)
-            ocr_session["finish"]()
+            ocr_session.finish()
             self.timing['ocr_tail'] = time.perf_counter() - _t_consume_end
             try:
                 vr.close()   # hybrid 探针/资源释放：显式停止生产者线程

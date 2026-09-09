@@ -199,6 +199,331 @@ class _DevBatchPool:
                 pass
 
 
+class _GpuRunCtx:
+    """_run_pipelined_gpu 单次运行的共享设备状态（显式替代闭包捕获，0.11.0）。
+
+    字段由 _gpu_prepare_calibration 填充，帧流生成器与消费循环只读/推进；
+    _gpu_release_partial 负责统一释放。"""
+    __slots__ = ("analyzer", "pool", "y_pool", "calib_owner", "calib_nds",
+                 "calib_base", "calib_gray", "src_h", "src_w", "fnb",
+                 "prev_holder", "prev_ptr", "calib_n")
+
+    def __init__(self) -> None:
+        self.analyzer = None
+        self.pool = None
+        self.y_pool = None
+        self.calib_owner = None
+        self.calib_nds = None
+        self.calib_base = 0
+        self.calib_gray = 0
+        self.src_h = 0
+        self.src_w = 0
+        self.fnb = 0
+        self.prev_holder = None
+        self.prev_ptr = 0
+        self.calib_n = 0
+
+
+def _gpu_release_partial(ctx: _GpuRunCtx) -> None:
+    """释放尚未进入主消费循环的设备资源（池 / 校准缓冲 / 分析器）。"""
+    ctx.calib_owner = None
+    ctx.calib_nds = None
+    ctx.calib_base = 0
+    ctx.prev_holder = None
+    ctx.prev_ptr = 0
+    for _p in (ctx.y_pool, ctx.pool):
+        if _p is not None:
+            try:
+                _p.release_all()
+            except BaseException:
+                pass
+    ctx.y_pool = None
+    ctx.pool = None
+    if ctx.analyzer is not None:
+        try:
+            ctx.analyzer.release()
+        except Exception:
+            pass
+        ctx.analyzer = None
+
+
+def _gpu_prepare_calibration(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
+                             on_gpu: bool, yuv: bool,
+                             roi: tuple) -> "tuple[bool, int]":
+    """GPU 管线校准：解码校准帧 + 逐帧直方图 Otsu（阈值取中位数）。
+
+    填充 ctx（analyzer/pool/calib_owner/calib_nds/calib_base/calib_gray/
+    src_h/src_w/fnb/calib_n）并写 ex._bin_thresh。返回 (ok, th)；
+    False = 帧形状不符（GPU 分段不支持），调用方回退宿主管线。
+    """
+    from cuda.bindings import runtime as cudart
+    from ocr_trt import GpuFrameAnalyzer
+    ctx.analyzer = analyzer = GpuFrameAnalyzer()
+    calib_n = ctx.calib_n = min(config.SEG_CALIB_FRAMES, len(frames))
+    if on_gpu:
+        # ── NVDEC：decord 设备批直通（校准批同样不落 RAM）──
+        ctx.calib_nds = vr.get_batch(frames[:calib_n], roi=roi)
+        calib_base, calib_shape = _ndarray_device_ptr(ctx.calib_nds)
+        ctx.calib_base = calib_base
+        if yuv:
+            # yuv420（packed NV12）：先 D2D 提取 Y 平面（luma_nv12 与宿主
+            # _nv12_luma_full 逐位一致），histogram/analyze 都只消费灰度 Y。
+            if len(calib_shape) != 3:
+                return False, 0
+            ctx.src_h = calib_shape[1] * 2 // 3
+            ctx.src_w = calib_shape[2]
+            ctx.calib_gray = analyzer.extract_luma(
+                calib_base, calib_n, ctx.src_h, ctx.src_w,
+                limited=ex._color_range != 1)
+        else:
+            if len(calib_shape) != 4 or calib_shape[-1] != 1:
+                # 灰度帧非 4D 单通道（部分 decord fork 输出 (B,H,W)）：GPU
+                # 分段不支持，回退宿主。直接 _run_pipelined_host（防递归）。
+                return False, 0
+            ctx.src_h, ctx.src_w = calib_shape[1], calib_shape[2]
+            ctx.calib_gray = calib_base
+        ctx.fnb = ctx.src_h * ctx.src_w
+        ctx.prev_holder = ctx.calib_nds      # 保住前一 decord NDArray（防解码池复用）
+        ctx.prev_ptr = calib_base            # 灰色模式：上一批/校准末帧 device 指针
+    else:
+        # ── CPU 解码（P1-3）：校准批 asnumpy → 宿主灰度 → H2D ──
+        ctx.calib_nds = vr.get_batch(frames[:calib_n], roi=roi)
+        crops = ctx.calib_nds.asnumpy()
+        if yuv:
+            if crops.ndim != 3:
+                return False, 0
+            ctx.src_h = crops.shape[1] * 2 // 3
+            ctx.src_w = crops.shape[2]
+        else:
+            if crops.ndim != 4 or crops.shape[-1] != 1:
+                return False, 0
+            ctx.src_h, ctx.src_w = crops.shape[1], crops.shape[2]
+        ctx.fnb = ctx.src_h * ctx.src_w
+        g = np.ascontiguousarray(ex._batch_luma(crops))
+        if g.shape != (calib_n, ctx.src_h, ctx.src_w):
+            return False, 0
+        ctx.pool = _DevBatchPool(config.GPU_PIPELINE_DECODE_BATCH * ctx.fnb)
+        ctx.calib_owner = ctx.pool.acquire(crops)
+        cudart.cudaMemcpyAsync(
+            ctx.calib_owner.ptr, g.ctypes.data, calib_n * ctx.fnb,
+            cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
+            analyzer._stream)
+
+    # 逐帧直方图校准：与单流水线"前 50 帧 Otsu 取中位数"语义逐位一致
+    # （含退化双值帧的阈值行为），D2H 仅 B×1KB 标量表，校准帧不落 RAM。
+    # 注意必须用 _otsu_from_hist（输入是直方图行）；_otsu 接收的是
+    # 灰度图像并在内部做直方图——传错曾产生"直方图的直方图"垃圾阈值。
+    calib_gray_dev = (ctx.calib_gray if on_gpu else ctx.calib_owner.ptr)
+    _hist_mat = analyzer.histograms_perframe(
+        calib_gray_dev, calib_n, ctx.src_h, ctx.src_w)
+    th = otsu_median_threshold(
+        [_otsu_from_hist(_hist_mat[k]) for k in range(calib_n)])
+    ex._bin_thresh = th
+    return True, th
+
+
+def _gpu_fallback_to_host(ex, ctx: "_GpuRunCtx", vr, ocr_session,
+                          _ocr_engines):
+    """GPU→宿主回退（C10）：reader 直接复用（get_batch 随机访问、
+    无消费状态，免去二次打开/解码器悬挂）。"""
+    if ocr_session is not None:
+        try:
+            ocr_session.finish()
+        except BaseException:
+            pass
+    _gpu_release_partial(ctx)
+    ex._degraded.append('GPU 管线形状不符，回退宿主管线')
+    return ex._run_pipelined_host(_ocr_engines, vr)
+
+
+def _gpu_frame_stream_nvdec(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
+                            yuv: bool, roi: tuple, th: int):
+    """NVDEC 设备批直通帧流：yield (frame_idx, dev, sharp, cluster)。
+
+    dev 元组 gray=(nds,yptr,H,W) / yuv=(nds,nv12ptr,rows,W)；sharp/cluster
+    由 analyze_batch（win3 分数）产出。prev 缓冲经 ctx 跨批衔接
+    （prev_holder 保活 decord NDArray，防解码池复用）。
+    """
+    from cuda.bindings import runtime as cudart
+    DECODE_BATCH = config.GPU_PIPELINE_DECODE_BATCH
+    _d2d = cudart.cudaMemcpyKind.cudaMemcpyDeviceToDevice
+    limited = ex._color_range != 1
+    analyzer = ctx.analyzer
+
+    def _fill_prev(prev_buf, base, B, frame_nbytes, prev_single):
+        for k in range(B):
+            src = (prev_single if k == 0
+                   else base + (k - 1) * frame_nbytes)
+            cudart.cudaMemcpyAsync(
+                prev_buf + k * frame_nbytes, src, frame_nbytes,
+                _d2d, analyzer._stream)
+
+    def _analyze_batch(gray_base, prev_single, B, H, W):
+        fnb = H * W
+        prev_buf = analyzer._ensure_prev(
+            max(B, DECODE_BATCH) * fnb)
+        _fill_prev(prev_buf, gray_base, B, fnb, prev_single)
+        return analyzer.analyze_batch(
+            gray_base, prev_buf, B, H, W, th), fnb
+
+    # ── 校准帧整批分析（yuv 已在外部提取 Y → calib_gray）──
+    B = ctx.calib_n
+    sums, fnb = _analyze_batch(ctx.calib_gray, ctx.calib_gray, B,
+                               ctx.src_h, ctx.src_w)
+    rows = ctx.src_h + (ctx.src_h + 1) // 2
+    for k in range(B):
+        cur = ctx.calib_base + k * (rows * ctx.src_w if yuv else fnb)
+        yield (frames[k], (ctx.calib_nds, cur,
+                           (rows if yuv else ctx.src_h), ctx.src_w),
+               float(sums[k, 0]), float(sums[k, 1]))
+        ctx.prev_holder = ctx.calib_nds
+        ctx.prev_ptr = cur
+    # yuv：末帧 Y 存入单帧缓冲（extract_luma 复用主缓冲会覆盖，
+    # 下一批开始前必须已有独立副本）。注：_ensure_prev 首次按
+    # 64*fnb 分配且批尺寸恒定 → prev_front 指针后续稳定不重分配。
+    prev_front = None
+    have_prev_front = False
+    if yuv:
+        prev_front = analyzer._ensure_prev(fnb)
+        cudart.cudaMemcpyAsync(
+            prev_front, ctx.calib_gray + (ctx.calib_n - 1) * fnb, fnb,
+            _d2d, analyzer._stream)
+        have_prev_front = True
+
+    # chunk 粒度流水发射（decord get_batch_stream）：后台预取
+    # 下一批，解码完成即交付 —— 消费（extract_luma/analyze）与
+    # 解码重叠。GPU_PIPELINE_STREAM 默认关（实测零收益，C-10）。
+    _use_stream = (config.env_bool(config.GPU_PIPELINE_STREAM_ENV,
+                                   default=False)
+                   and hasattr(vr, 'get_batch_stream'))
+
+    def _batch_iter():
+        if _use_stream:
+            for s0, nds in vr.get_batch_stream(
+                    frames[ctx.calib_n:], roi=roi, batch=DECODE_BATCH):
+                yield s0, nds
+        else:
+            for bstart in range(ctx.calib_n, len(frames), DECODE_BATCH):
+                bend = min(bstart + DECODE_BATCH, len(frames))
+                yield bstart, vr.get_batch(
+                    frames[bstart:bend], roi=roi)
+
+    for bstart, nds in _batch_iter():
+        bend = bstart + int(nds.shape[0])
+        base, shape = _ndarray_device_ptr(nds)
+        B = int(bend - bstart)
+        if yuv:
+            if len(shape) != 3:
+                raise RuntimeError(
+                    "GPU yuv 分段仅支持 decord yuv420 输出")
+            H = shape[1] * 2 // 3
+            W = shape[2]
+            rows = H + (H + 1) // 2
+            # extract 覆盖 _luma 主缓冲 → 先取上一批末帧副本
+            gray_base = analyzer.extract_luma(
+                base, B, H, W, limited)
+            prev_s = prev_front if have_prev_front else gray_base
+        else:
+            if len(shape) != 4 or shape[-1] != 1:
+                raise RuntimeError(
+                    "GPU 分段仅支持 decord gray 输出")
+            H, W = shape[1], shape[2]
+            rows = H
+            gray_base = base
+            prev_s = ctx.prev_ptr
+        sums, fnb = _analyze_batch(gray_base, prev_s, B, H, W)
+        if yuv and have_prev_front:
+            cudart.cudaMemcpyAsync(
+                prev_front, gray_base + (B - 1) * fnb, fnb,
+                _d2d, analyzer._stream)
+            have_prev_front = True
+        # stream 模式 bstart 即首帧号；seq 模式 bstart 是
+        # frames 下标 → 统一转帧号
+        f0 = (bstart if _use_stream else frames[bstart])
+        for k in range(B):
+            cur = base + k * (rows * W if yuv else fnb)
+            yield (f0 + k, (nds, cur, rows, W),
+                   float(sums[k, 0]), float(sums[k, 1]))
+            ctx.prev_holder = nds
+            ctx.prev_ptr = cur
+        if yuv:
+            have_prev_front = True
+
+
+def _gpu_frame_stream_cpu(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
+                          yuv: bool, roi: tuple, th: int):
+    """CPU 解码（P1-3）帧流：get_batch → 宿主灰度 → H2D → analyze。
+
+    每批缓冲从池取（引用归零归还）；上一批末帧作本批 analyze
+    的 prev（fill_prev 读取期间由 prev_owner 保活）。analyze
+    同步返回后本批帧指针即可交付（H2D/kernel 均已完成）。
+    """
+    from cuda.bindings import runtime as cudart
+    DECODE_BATCH = config.GPU_PIPELINE_DECODE_BATCH
+    _d2d = cudart.cudaMemcpyKind.cudaMemcpyDeviceToDevice
+    _h2d = cudart.cudaMemcpyKind.cudaMemcpyHostToDevice
+    fnb = ctx.fnb
+    analyzer = ctx.analyzer
+    calib_n = ctx.calib_n
+    src_h, src_w = ctx.src_h, ctx.src_w
+    prev_buf = analyzer._ensure_prev(
+        max(calib_n, DECODE_BATCH) * fnb)
+    # ── 校准帧整批分析（校准批已在外部 H2D → calib_owner）──
+    for k in range(calib_n):
+        src = (ctx.calib_owner.ptr if k == 0
+               else ctx.calib_owner.ptr + (k - 1) * fnb)
+        cudart.cudaMemcpyAsync(
+            prev_buf + k * fnb, src, fnb, _d2d, analyzer._stream)
+    sums = analyzer.analyze_batch(
+        ctx.calib_owner.ptr, prev_buf, calib_n, src_h, src_w, th)
+    for k in range(calib_n):
+        yield (frames[k],
+               (_CpuFrameRef(ctx.calib_owner, k),
+                ctx.calib_owner.ptr + k * fnb, src_h, src_w),
+               float(sums[k, 0]), float(sums[k, 1]))
+    prev_owner = ctx.calib_owner   # 上一批缓冲（fill_prev 读取期间保活）
+    prev_ptr = ctx.calib_owner.ptr + (calib_n - 1) * fnb
+    for bstart in range(calib_n, len(frames), DECODE_BATCH):
+        bend = min(bstart + DECODE_BATCH, len(frames))
+        B = bend - bstart
+        nds = vr.get_batch(frames[bstart:bend], roi=roi)
+        crops = nds.asnumpy()
+        if yuv:
+            if crops.ndim != 3:
+                raise RuntimeError(
+                    "GPU yuv 分段仅支持 decord yuv420 输出")
+        else:
+            if crops.ndim != 4 or crops.shape[-1] != 1:
+                raise RuntimeError(
+                    "GPU 分段仅支持 decord gray 输出")
+        g = np.ascontiguousarray(ex._batch_luma(crops))
+        if g.shape != (B, src_h, src_w):
+            raise RuntimeError(
+                f"GPU(CPU解码) 灰度形状不符: {g.shape} != "
+                f"{(B, src_h, src_w)}")
+        owner = ctx.pool.acquire(crops)
+        cudart.cudaMemcpyAsync(
+            owner.ptr, g.ctypes.data, B * fnb, _h2d,
+            analyzer._stream)
+        base = owner.ptr
+        prev_buf = analyzer._ensure_prev(
+            max(B, DECODE_BATCH) * fnb)
+        for k in range(B):
+            src = prev_ptr if k == 0 else base + (k - 1) * fnb
+            cudart.cudaMemcpyAsync(
+                prev_buf + k * fnb, src, fnb, _d2d,
+                analyzer._stream)
+        sums = analyzer.analyze_batch(
+            base, prev_buf, B, src_h, src_w, th)
+        for k in range(B):
+            yield (frames[bstart + k],
+                   (_CpuFrameRef(owner, k),
+                    base + k * fnb, src_h, src_w),
+                   float(sums[k, 0]), float(sums[k, 1]))
+        prev_owner = owner
+        prev_ptr = base + (B - 1) * fnb
+
+
 class _GpuPipelineMixin:
     # ═══════════════ GPU 全驻留管线（NVDEC） ═══════════════
 
@@ -286,42 +611,19 @@ class _GpuPipelineMixin:
         on_gpu = (self._backend == 'decord/GPU'
                   or (self._backend == 'decord/hybrid' and self._ocr_on_gpu()))
 
+        ctx = _GpuRunCtx()
+
         def _cleanup_partial() -> None:
-            """收尾尚未进入主消费循环的资源。"""
-            nonlocal ocr_session, analyzer, pool, _y_pool, calib_owner
-            nonlocal calib_nds, calib_base, prev_holder, prev_ptr
+            """收尾尚未进入主消费循环的资源（会话 + 设备侧，见
+            _gpu_release_partial）。"""
+            nonlocal ocr_session
             if ocr_session is not None:
                 try:
-                    ocr_session["finish"]()
+                    ocr_session.finish()
                 except BaseException:
                     pass
                 ocr_session = None
-            calib_owner = None
-            calib_nds = None
-            calib_base = 0
-            prev_holder = None
-            prev_ptr = 0
-            for _p in (_y_pool, pool):
-                if _p is not None:
-                    try:
-                        _p.release_all()
-                    except BaseException:
-                        pass
-            _y_pool = None
-            pool = None
-            if analyzer is not None:
-                try:
-                    analyzer.release()
-                except Exception:
-                    pass
-                analyzer = None
-
-        def _fallback_to_host():
-            """GPU→宿主回退（C10）：reader 直接复用（get_batch 随机访问、
-            无消费状态，免去二次打开/解码器悬挂）。"""
-            _cleanup_partial()
-            self._degraded.append('GPU 管线形状不符，回退宿主管线')
-            return self._run_pipelined_host(_ocr_engines, vr)
+            _gpu_release_partial(ctx)
         if self._fps is None:
             _fps = _read_fps_from_vr(vr)
             self._fps = _fps if _fps else config.DEFAULT_FPS_FALLBACK
@@ -366,92 +668,18 @@ class _GpuPipelineMixin:
             except Exception:
                 pass
             raise
-        q = ocr_session["q"]
-        results = ocr_session["results"]
-        ocr_err = ocr_session["err"]
-        ocr_wall = ocr_session["wall"]
-        _put_ocr = ocr_session["put"]
+        results = ocr_session.results
+        ocr_err = ocr_session.err
+        ocr_wall = ocr_session.wall
+        _put_ocr = ocr_session.put
 
-        calib_n = 0
-        roi_kw = None
-        calib_nds = None
-        calib_base = 0
-        calib_gray = 0
-        src_h = src_w = fnb = 0
-        prev_holder = None
-        prev_ptr = 0
-        th = 0
+        yuv = self._yuv_output
         yuv = self._yuv_output
 
-        def _prepare_gpu_calibration() -> bool:
-            nonlocal analyzer, pool, calib_owner
-            nonlocal calib_n, roi_kw, calib_nds, calib_base, calib_gray
-            nonlocal src_h, src_w, fnb, prev_holder, prev_ptr, th
-            analyzer = GpuFrameAnalyzer()
-            calib_n = min(config.SEG_CALIB_FRAMES, len(frames))
-            roi_kw = (x1, y1, x2 + 1, y2 + 1)
-            if on_gpu:
-                # ── NVDEC：decord 设备批直通（校准批同样不落 RAM）──
-                calib_nds = vr.get_batch(frames[:calib_n], roi=roi_kw)
-                calib_base, calib_shape = _ndarray_device_ptr(calib_nds)
-                if yuv:
-                    # yuv420（packed NV12）：先 D2D 提取 Y 平面（luma_nv12 与宿主
-                    # _nv12_luma_full 逐位一致），histogram/analyze 都只消费灰度 Y。
-                    if len(calib_shape) != 3:
-                        return False
-                    src_h = calib_shape[1] * 2 // 3
-                    src_w = calib_shape[2]
-                    calib_gray = analyzer.extract_luma(
-                        calib_base, calib_n, src_h, src_w,
-                        limited=self._color_range != 1)
-                else:
-                    if len(calib_shape) != 4 or calib_shape[-1] != 1:
-                        # 灰度帧非 4D 单通道（部分 decord fork 输出 (B,H,W)）：GPU
-                        # 分段不支持，回退宿主。直接 _run_pipelined_host（防递归）。
-                        return False
-                    src_h, src_w = calib_shape[1], calib_shape[2]
-                    calib_gray = calib_base
-                fnb = src_h * src_w
-                prev_holder = calib_nds      # 保住前一 decord NDArray（防解码池复用）
-                prev_ptr = calib_base        # 灰色模式：上一批/校准末帧 device 指针
-            else:
-                # ── CPU 解码（P1-3）：校准批 asnumpy → 宿主灰度 → H2D ──
-                calib_nds = vr.get_batch(frames[:calib_n], roi=roi_kw)
-                crops = calib_nds.asnumpy()
-                if yuv:
-                    if crops.ndim != 3:
-                        return False
-                    src_h = crops.shape[1] * 2 // 3
-                    src_w = crops.shape[2]
-                else:
-                    if crops.ndim != 4 or crops.shape[-1] != 1:
-                        return False
-                    src_h, src_w = crops.shape[1], crops.shape[2]
-                fnb = src_h * src_w
-                g = np.ascontiguousarray(self._batch_luma(crops))
-                if g.shape != (calib_n, src_h, src_w):
-                    return False
-                pool = _DevBatchPool(config.GPU_PIPELINE_DECODE_BATCH * fnb)
-                calib_owner = pool.acquire(crops)
-                cudart.cudaMemcpyAsync(
-                    calib_owner.ptr, g.ctypes.data, calib_n * fnb,
-                    cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
-                    analyzer._stream)
-
-            # 逐帧直方图校准：与单流水线"前 50 帧 Otsu 取中位数"语义逐位一致
-            # （含退化双值帧的阈值行为），D2H 仅 B×1KB 标量表，校准帧不落 RAM。
-            # 注意必须用 _otsu_from_hist（输入是直方图行）；_otsu 接收的是
-            # 灰度图像并在内部做直方图——传错曾产生"直方图的直方图"垃圾阈值。
-            calib_gray_dev = (calib_gray if on_gpu else calib_owner.ptr)
-            _hist_mat = analyzer.histograms_perframe(
-                calib_gray_dev, calib_n, src_h, src_w)
-            th = otsu_median_threshold(
-                [_otsu_from_hist(_hist_mat[k]) for k in range(calib_n)])
-            self._bin_thresh = th
-            return True
-
         try:
-            _calib_ok = _prepare_gpu_calibration()
+            _calib_ok, _th = _gpu_prepare_calibration(
+                self, ctx, vr, frames, on_gpu=on_gpu, yuv=yuv,
+                roi=(x1, y1, x2 + 1, y2 + 1))
         except BaseException:
             _cleanup_partial()
             try:
@@ -460,187 +688,18 @@ class _GpuPipelineMixin:
                 pass
             raise
         if not _calib_ok:
-            return _fallback_to_host()
+            return _gpu_fallback_to_host(self, ctx, vr, ocr_session,
+                                         _ocr_engines)
 
         self._gpu_pipeline_mode = True
-
         if on_gpu:
-            def frame_stream():
-                nonlocal prev_holder, prev_ptr
-                from cuda.bindings import runtime as cudart
-                DECODE_BATCH = config.GPU_PIPELINE_DECODE_BATCH
-                _d2d = cudart.cudaMemcpyKind.cudaMemcpyDeviceToDevice
-                limited = self._color_range != 1
-
-                def _fill_prev(prev_buf, base, B, frame_nbytes, prev_single):
-                    for k in range(B):
-                        src = (prev_single if k == 0
-                               else base + (k - 1) * frame_nbytes)
-                        cudart.cudaMemcpyAsync(
-                            prev_buf + k * frame_nbytes, src, frame_nbytes,
-                            _d2d, analyzer._stream)
-
-                def _analyze_batch(gray_base, prev_single, B, H, W):
-                    fnb = H * W
-                    prev_buf = analyzer._ensure_prev(
-                        max(B, DECODE_BATCH) * fnb)
-                    _fill_prev(prev_buf, gray_base, B, fnb, prev_single)
-                    return analyzer.analyze_batch(
-                        gray_base, prev_buf, B, H, W, th), fnb
-
-                # ── 校准帧整批分析（yuv 已在外部提取 Y → calib_gray）──
-                B = calib_n
-                sums, fnb = _analyze_batch(calib_gray, calib_gray, B,
-                                           src_h, src_w)
-                rows = src_h + (src_h + 1) // 2
-                for k in range(B):
-                    cur = calib_base + k * (rows * src_w if yuv else fnb)
-                    yield (frames[k], (calib_nds, cur,
-                                       (rows if yuv else src_h), src_w),
-                           float(sums[k, 0]), float(sums[k, 1]))
-                    prev_holder = calib_nds
-                    prev_ptr = cur
-                # yuv：末帧 Y 存入单帧缓冲（extract_luma 复用主缓冲会覆盖，
-                # 下一批开始前必须已有独立副本）。注：_ensure_prev 首次按
-                # 64*fnb 分配且批尺寸恒定 → prev_front 指针后续稳定不重分配。
-                prev_front = None
-                have_prev_front = False
-                if yuv:
-                    prev_front = analyzer._ensure_prev(fnb)
-                    cudart.cudaMemcpyAsync(
-                        prev_front, calib_gray + (calib_n - 1) * fnb, fnb,
-                        _d2d, analyzer._stream)
-                    have_prev_front = True
-
-                # chunk 粒度流水发射（decord get_batch_stream）：后台预取
-                # 下一批，解码完成即交付 —— 消费（extract_luma/analyze）与
-                # 解码重叠。GPU_PIPELINE_STREAM=0 可关（回退同步 get_batch）。
-                _use_stream = (_os.environ.get('GPU_PIPELINE_STREAM', '0') == '1'
-                               and hasattr(vr, 'get_batch_stream'))
-
-                def _batch_iter():
-                    if _use_stream:
-                        for s0, nds in vr.get_batch_stream(
-                                frames[calib_n:], roi=(x1, y1, x2 + 1, y2 + 1),
-                                batch=DECODE_BATCH):
-                            yield s0, nds
-                    else:
-                        for bstart in range(calib_n, len(frames), DECODE_BATCH):
-                            bend = min(bstart + DECODE_BATCH, len(frames))
-                            yield bstart, vr.get_batch(
-                                frames[bstart:bend],
-                                roi=(x1, y1, x2 + 1, y2 + 1))
-
-                for bstart, nds in _batch_iter():
-                    bend = bstart + int(nds.shape[0])
-                    base, shape = _ndarray_device_ptr(nds)
-                    B = int(bend - bstart)
-                    if yuv:
-                        if len(shape) != 3:
-                            raise RuntimeError(
-                                "GPU yuv 分段仅支持 decord yuv420 输出")
-                        H = shape[1] * 2 // 3
-                        W = shape[2]
-                        rows = H + (H + 1) // 2
-                        # extract 覆盖 _luma 主缓冲 → 先取上一批末帧副本
-                        gray_base = analyzer.extract_luma(
-                            base, B, H, W, limited)
-                        prev_s = prev_front if have_prev_front else gray_base
-                    else:
-                        if len(shape) != 4 or shape[-1] != 1:
-                            raise RuntimeError(
-                                "GPU 分段仅支持 decord gray 输出")
-                        H, W = shape[1], shape[2]
-                        rows = H
-                        gray_base = base
-                        prev_s = prev_ptr
-                    sums, fnb = _analyze_batch(gray_base, prev_s, B, H, W)
-                    if yuv and have_prev_front:
-                        cudart.cudaMemcpyAsync(
-                            prev_front, gray_base + (B - 1) * fnb, fnb,
-                            _d2d, analyzer._stream)
-                        have_prev_front = True
-                    # stream 模式 bstart 即首帧号；seq 模式 bstart 是
-                    # frames 下标 → 统一转帧号
-                    f0 = (bstart if _use_stream else frames[bstart])
-                    for k in range(B):
-                        cur = base + k * (rows * W if yuv else fnb)
-                        yield (f0 + k, (nds, cur, rows, W),
-                               float(sums[k, 0]), float(sums[k, 1]))
-                        prev_holder = nds
-                        prev_ptr = cur
-                    if yuv:
-                        have_prev_front = True
+            frame_stream = _gpu_frame_stream_nvdec(
+                self, ctx, vr, frames, yuv=yuv,
+                roi=(x1, y1, x2 + 1, y2 + 1), th=_th)
         else:
-            def frame_stream():
-                """CPU 解码（P1-3）：get_batch → 宿主灰度 → H2D → analyze。
-
-                每批缓冲从池取（引用归零归还）；上一批末帧作本批 analyze
-                的 prev（fill_prev 读取期间由 prev_owner 保活）。analyze
-                同步返回后本批帧指针即可交付（H2D/kernel 均已完成）。
-                """
-                from cuda.bindings import runtime as cudart
-                DECODE_BATCH = config.GPU_PIPELINE_DECODE_BATCH
-                _d2d = cudart.cudaMemcpyKind.cudaMemcpyDeviceToDevice
-                _h2d = cudart.cudaMemcpyKind.cudaMemcpyHostToDevice
-                _fnb = fnb
-                prev_buf = analyzer._ensure_prev(
-                    max(calib_n, DECODE_BATCH) * _fnb)
-                # ── 校准帧整批分析（校准批已在外部 H2D → calib_owner）──
-                for k in range(calib_n):
-                    src = (calib_owner.ptr if k == 0
-                           else calib_owner.ptr + (k - 1) * _fnb)
-                    cudart.cudaMemcpyAsync(
-                        prev_buf + k * _fnb, src, _fnb, _d2d, analyzer._stream)
-                sums = analyzer.analyze_batch(
-                    calib_owner.ptr, prev_buf, calib_n, src_h, src_w, th)
-                for k in range(calib_n):
-                    yield (frames[k],
-                           (_CpuFrameRef(calib_owner, k),
-                            calib_owner.ptr + k * _fnb, src_h, src_w),
-                           float(sums[k, 0]), float(sums[k, 1]))
-                prev_owner = calib_owner   # 上一批缓冲（fill_prev 读取期间保活）
-                prev_ptr = calib_owner.ptr + (calib_n - 1) * _fnb
-                for bstart in range(calib_n, len(frames), DECODE_BATCH):
-                    bend = min(bstart + DECODE_BATCH, len(frames))
-                    B = bend - bstart
-                    nds = vr.get_batch(
-                        frames[bstart:bend], roi=(x1, y1, x2 + 1, y2 + 1))
-                    crops = nds.asnumpy()
-                    if yuv:
-                        if crops.ndim != 3:
-                            raise RuntimeError(
-                                "GPU yuv 分段仅支持 decord yuv420 输出")
-                    else:
-                        if crops.ndim != 4 or crops.shape[-1] != 1:
-                            raise RuntimeError(
-                                "GPU 分段仅支持 decord gray 输出")
-                    g = np.ascontiguousarray(self._batch_luma(crops))
-                    if g.shape != (B, src_h, src_w):
-                        raise RuntimeError(
-                            f"GPU(CPU解码) 灰度形状不符: {g.shape} != "
-                            f"{(B, src_h, src_w)}")
-                    owner = pool.acquire(crops)
-                    cudart.cudaMemcpyAsync(
-                        owner.ptr, g.ctypes.data, B * _fnb, _h2d,
-                        analyzer._stream)
-                    base = owner.ptr
-                    prev_buf = analyzer._ensure_prev(
-                        max(B, DECODE_BATCH) * _fnb)
-                    for k in range(B):
-                        src = prev_ptr if k == 0 else base + (k - 1) * _fnb
-                        cudart.cudaMemcpyAsync(
-                            prev_buf + k * _fnb, src, _fnb, _d2d,
-                            analyzer._stream)
-                    sums = analyzer.analyze_batch(
-                        base, prev_buf, B, src_h, src_w, th)
-                    for k in range(B):
-                        yield (frames[bstart + k],
-                               (_CpuFrameRef(owner, k),
-                                base + k * _fnb, src_h, src_w),
-                               float(sums[k, 0]), float(sums[k, 1]))
-                    prev_owner = owner
-                    prev_ptr = base + (B - 1) * _fnb
+            frame_stream = _gpu_frame_stream_cpu(
+                self, ctx, vr, frames, yuv=yuv,
+                roi=(x1, y1, x2 + 1, y2 + 1), th=_th)
 
         # 生产者线程：解码 + GPU analyze 与主线程分段/OCR 重叠
         producer_q: Queue = Queue(maxsize=max(8, self._buffer_size))
@@ -659,7 +718,7 @@ class _GpuPipelineMixin:
 
         def _producer() -> None:
             try:
-                for item in frame_stream():
+                for item in frame_stream:   # 模块生成器（0.11.0 拆分后为对象非函数）
                     if not _put_q(item):
                         return
             except Exception as e:  # noqa: BLE001
@@ -678,8 +737,9 @@ class _GpuPipelineMixin:
         # D2H）与 OCR 回退路径（ONNX/无 TRT/引擎未就绪）。merge_similar
         # 判定在 GPU（sim_pair 整数精确）；yuv 的 Y 平面按需从保留的 NV12
         # 提取（luma_into → 池帧，~10KB D2D/次）。
-        raw_ready_ref = ocr_session["raw_ready"]
-        _y_pool = (_YFramePool(src_h * src_w) if (yuv and on_gpu) else None)
+        raw_ready_ref = ocr_session.raw_ready
+        ctx.y_pool = (_YFramePool(ctx.src_h * ctx.src_w)
+                      if (yuv and on_gpu) else None)
         _limited = self._color_range != 1
 
         def _d2h_rep(dev, *, prefer_device=False):
@@ -722,13 +782,13 @@ class _GpuPipelineMixin:
             #  test/test2 在门槛下与不裁持平，见 config 中的实测表。）
             if not self._ocr_autocrop:
                 return None
-            if src_w <= 8 or sharp < 3.0:
+            if ctx.src_w <= 8 or sharp < 3.0:
                 return None
-            rng = analyzer.content_range(int(gray_ptr), src_h, src_w,
-                                         self._bin_thresh)
+            rng = ctx.analyzer.content_range(int(gray_ptr), ctx.src_h,
+                                             ctx.src_w, self._bin_thresh)
             if rng is None:
                 return None
-            return self._content_range_to_crop(rng[0], rng[1], src_w)
+            return self._content_range_to_crop(rng[0], rng[1], ctx.src_w)
 
         def _similar_device(a_dev, b_dev) -> bool:
             """merge_similar 判定：GPU sim_pair（整数精确，与宿主 float32
@@ -742,22 +802,22 @@ class _GpuPipelineMixin:
             ya = yb = None
             if yuv and on_gpu:
                 # 仅 NVDEC yuv 需要 Y 提取；CPU 解码分支设备侧恒为灰度。
-                ya = _y_pool.acquire()
-                yb = _y_pool.acquire()
-                analyzer.luma_into(int(a_dev[1]), int(ya.ptr), src_h,
-                                   src_w, _limited)
-                analyzer.luma_into(int(b_dev[1]), int(yb.ptr), src_h,
-                                   src_w, _limited)
+                ya = ctx.y_pool.acquire()
+                yb = ctx.y_pool.acquire()
+                ctx.analyzer.luma_into(int(a_dev[1]), int(ya.ptr), ctx.src_h,
+                                       ctx.src_w, _limited)
+                ctx.analyzer.luma_into(int(b_dev[1]), int(yb.ptr), ctx.src_h,
+                                       ctx.src_w, _limited)
                 ap, bp = ya.ptr, yb.ptr
             else:
                 ap, bp = int(a_dev[1]), int(b_dev[1])
             try:
-                mad, chg = analyzer.compare_pair(
-                    ap, bp, src_h, src_w, self._bin_thresh, use_bin)
+                mad, chg = ctx.analyzer.compare_pair(
+                    ap, bp, ctx.src_h, ctx.src_w, self._bin_thresh, use_bin)
             finally:
                 # 池帧引用释放（GC 归还）
                 ya = yb = None
-            n = src_h * src_w
+            n = ctx.src_h * ctx.src_w
             mean = 255.0 * mad / n if use_bin else mad / n
             return similar_decision(mean, chg,
                                     self._merge_similar_threshold,
@@ -772,19 +832,19 @@ class _GpuPipelineMixin:
                 # 零拷贝：gray/CPU 解码直接帧指针；NVDEC yuv 提取 Y 到池帧
                 #（owner=池帧，OCR worker 用毕 GC 归还）。
                 if yuv and on_gpu:
-                    yf = _y_pool.acquire()
-                    analyzer.luma_into(int(r_dev[1]), int(yf.ptr), src_h,
-                                       src_w, _limited)
-                    dev_ocr = (yf, yf.ptr, src_h, src_w)
+                    yf = ctx.y_pool.acquire()
+                    ctx.analyzer.luma_into(int(r_dev[1]), int(yf.ptr),
+                                           ctx.src_h, ctx.src_w, _limited)
+                    dev_ocr = (yf, yf.ptr, ctx.src_h, ctx.src_w)
                 else:
                     dev_ocr = r_dev
                 # P0-4 GPU 直通：rep 帧宽度自适应裁切（col_ink + 宿主同一
                 # 余量规则）；未裁切时 (0, src_w) 与旧全宽语义逐位一致。
-                xoff, cropw = 0, src_w
+                xoff, cropw = 0, ctx.src_w
                 rng = _autocrop_device(dev_ocr[1], r_sharp)
                 if rng is not None:
                     xoff, cropw = rng
-                dev_ocr = (dev_ocr[0], dev_ocr[1], src_h, src_w,
+                dev_ocr = (dev_ocr[0], dev_ocr[1], ctx.src_h, ctx.src_w,
                            xoff, cropw)
             else:
                 # 回退（ONNX/无 TRT/引擎未就绪）：代表帧 D2H → 宿主预处理，
@@ -858,7 +918,7 @@ class _GpuPipelineMixin:
             _t_consume_end = time.perf_counter()
             self.timing['decode'] = _t_consume_end - t0
             try:
-                ocr_session["finish"]()
+                ocr_session.finish()
             except BaseException:
                 pass
             self.timing['ocr_tail'] = time.perf_counter() - _t_consume_end
@@ -868,16 +928,7 @@ class _GpuPipelineMixin:
                 pass
             # C5：释放本次 extract 的临时设备缓冲（分析器/池）。OCR 引擎
             # 缓冲归进程级引擎池管理（_start_ocr_session），不在此释放。
-            for _p in (_y_pool, pool):
-                if _p is not None:
-                    try:
-                        _p.release_all()
-                    except BaseException:
-                        pass
-            try:
-                analyzer.release()
-            except BaseException:
-                pass
+            _gpu_release_partial(ctx)
         if ocr_err:
             raise RuntimeError(f"OCR worker 失败: {ocr_err[0]!r}") from ocr_err[0]
         self.timing['ocr'] = ocr_wall[0]
