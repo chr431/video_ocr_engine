@@ -1,0 +1,63 @@
+# S0 解码器契约清单——引擎对 decord fork 的全部隐式假设（机器可读）
+# 来源：v2 ARCHITECTURE.md §17.1（10 项能力假设）+ §17.2（联调代价实测）。
+# 用途：S5（解码器内联）的**验收表**——每一条 current_guard: none 的假设，
+# 内联后必须变成显式校验（D-1 缓冲契约 / D-2 能力查询），否则 S5 不许过。
+
+fork_baseline: "0.8.2 (chr431, GitHub release wheel, 非 PyPI)"
+
+assumptions:
+  - id: DC-01
+    capability: ROI-first 解码（VideoReader 构造期 SetRoi 一次，get_batch 不再传 roi）
+    engine_usage: "extractor._open_vr → roi_kw；实测每次传 roi 慢 9%（2487→2264 fps）"
+    current_guard: "_ensure_roi_capable_decoder 探测 _CAPI_VideoReaderSetRoi 存在性后硬拒绝"
+    v2_contract: "FrameSource.roi_format() + 启动期一次校验 ROI 生效（S5-D1）"
+  - id: DC-02
+    capability: next_roi 顺序流（stride==1 宿主校准路径）
+    engine_usage: _host_pipeline._host_calibrate
+    current_guard: none
+    v2_contract: "端口方法显式声明能力；缺失时走 batch(frames) 等价路径并记 degradations"
+  - id: DC-03
+    capability: "hybrid / hybrid_gpu 设备上下文（fork ≥0.7.15；hybrid_gpu 输出驻留显存）"
+    engine_usage: "decode_backend=hybrid；hybrid_gpu 直进零拷贝 GPU 管线"
+    current_guard: "_decord_has_hybrid_preroute() 版本号比较（≥0.8.3；换 dll 不改版本号即失效）"
+    v2_contract: "ctx.capabilities() 能力查询取代版本号门控（S5-D2）"
+  - id: DC-04
+    capability: yuv420 packed NV12 输出（默认 rep_crop_format 路径）
+    engine_usage: keep_crops / rep_crop_format=yuv
+    current_guard: none
+    v2_contract: "FrameBuffer(format=...) 显式声明 + dtype/shape/stride 启动期全查（S5-D1）"
+  - id: DC-05
+    capability: gray 单通道输出
+    engine_usage: 内部链恒为单通道
+    current_guard: none
+    v2_contract: 同 DC-04
+  - id: DC-06
+    capability: 等差步长快速路径（fork ≥0.7.12；sample_stride>1）
+    engine_usage: sample_stride
+    current_guard: none
+    v2_contract: capabilities().stride_fast；缺失时逐索引 seek 并记 degradations
+  - id: DC-07
+    capability: get_batch_stream chunk 流水发射
+    engine_usage: "GPU_PIPELINE_STREAM=1（C-10 判零收益，opt-in）"
+    current_guard: env 开关自证
+    v2_contract: capabilities().batch_stream
+  - id: DC-08
+    capability: "get_color_range / get_codec"
+    engine_usage: "color_range 决定 Y 平面展开（limited/full）；codec 决定解码线程档位（hevc −27% / av1 −50%）"
+    current_guard: "_remember_color_range 吞掉失败并静默强制 color_range=0（P1-6 漏报）"
+    v2_contract: "端口属性 + 失败大声上抛进 degradations"
+  - id: DC-09
+    capability: 析构/生命周期语义（引擎持有 nds 引用保活设备缓冲）
+    engine_usage: "_gpu_pipeline.py:306,472 持引用防帧被回收（fork 已知析构 UAF 同类）"
+    current_guard: none（靠持有引用的约定）
+    v2_contract: "FrameBuffer(owner=...) 显式所有权（S5-D1）；B6 禁 __del__ 释放"
+  - id: DC-10
+    capability: 输出内存布局（base + k*src_h*src_w 的裸指针算术）
+    engine_usage: "_helpers.py:27-56 _ndarray_device_ptr：假设无 pitch padding、dtype=uint8"
+    current_guard: "none——布局契约只存在于引擎作者脑中（§17.2 原文）"
+    v2_contract: "S5-D1 核心项：每批携带 (base_ptr, dtype, shape, strides, format, color_range, owner) 并启动期全查，不匹配大声失败"
+
+s5_acceptance:
+  - "DC-01..DC-10 的 current_guard: none 项全部清零（显式校验或能力查询）"
+  - "无 hasattr 私有 C API 探测（DC-01/09 类）；无版本号门控（DC-03）"
+  - "3 编码 × {cpu,nvdec,hybrid} × {gray,yuv420} × stride∈{1,8} 金标逐位一致（§11 S5 门禁）"

@@ -1,0 +1,89 @@
+# S0 探针三分法底账（v2 ARCHITECTURE.md §8.6——"根治"的验收依据）
+# 规则自动归类（名称+docstring）+ 27 项人工指定（含 16 个 sweep/隔离/对照类）；
+# 复审可改 class，但每个文件必须有类——归不进任何类 = §8.6 设计失败。
+
+# v2 归宿：
+#   telemetry: RunReport + bench 接管，删除
+#   equivalence: 金标向量/真值门禁（§8.5/A5）接管，删除
+#   audit: v2 §8.2 审计器接管
+#   experiment: 保留为 tools，产出以 RunReport 格式落 registry
+#   tool: 非探针（常备/迁移工具），按 INDEX A/B/E 归宿处理
+
+probes:
+  - {name: _doc_section.py, class: tool, lines: 214, doc: 文档章节级检索引擎 —— 让 agent 只读需要的那一章，而不是整个文件。}
+  - {name: _fix_probe_paths.py, class: tool, lines: 416, doc: 一次性迁移：把 tools/ 探针里不可移植的路径改成可移植写法。}
+  - {name: _probe_autocrop_ab.py, class: equivalence, lines: 140, doc: OCR 输入宽度自适应裁切：端到端 A/B（墙钟 + 文本一致）。}
+  - {name: _probe_autocrop_truth.py, class: equivalence, lines: 152, doc: 用 ground truth 判定「宽度自适应裁切」对识别准确率的影响。}
+  - {name: _probe_batch_coldstart.py, class: telemetry, lines: 101, doc: 临时探针：批量场景的单视频墙钟分布与冷启动占比（prewarm 立项输入）。}
+  - {name: _probe_block_audit.py, class: audit, lines: 213, doc: 专项审计：「最大连通变化块」判据能否区分误合并与安全合并。}
+  - {name: _probe_ceiling.py, class: telemetry, lines: 134, doc: 临时探针：量化解码天花板与各路径的相位占比（分析用，非生产工具）。}
+  - {name: _probe_cluster_dtype.py, class: equivalence, lines: 105, doc: 临时探针：_cluster_win3 的 uint8 变体 —— 等价性与加速比微基准。}
+  - {name: _probe_cpu_onnx.py, class: telemetry, lines: 271, doc: CPU+ONNX（无 NVIDIA 显卡）路径：墙钟验证 + 线程预算调参。}
+  - {name: _probe_cr_roundtrip.py, class: equivalence, lines: 182, doc: 裸 CR 往返保真性探针 —— 判定 docs/PERFORMANCE.md 是否真的'只能二进制改'。}
+  - {name: _probe_crop_miscut.py, class: equivalence, lines: 233, doc: 检测'误裁'：被裁掉的列里是否真的有笔画。}
+  - {name: _probe_d1_prim_diff.py, class: equivalence, lines: 125, doc: D1 调查：gpu/host 两管线段数不一致（1083 vs 1042）的帧级原语对比。}
+  - {name: _probe_d1_trace.py, class: equivalence, lines: 114, doc: D1 调查第二刀：全程跑 gpu/host 两管线，记录状态机 trace 找首分歧帧。}
+  - {name: _probe_d1_trace2.py, class: equivalence, lines: 145, doc: D1 调查第三刀：记录两管线状态机逐帧 changed 决策，定位首分歧。}
+  - {name: _probe_decode_contention.py, class: experiment, lines: 195, doc: 隔离测量：并发解码的**相互拖慢**到底来自哪一层。}
+  - {name: _probe_det_crop_eval.py, class: experiment, lines: 412, doc: 实证探针：OCR 输入宽度自适应裁切 —— 启发式（墨迹列范围）vs PP-OCRv6 det。}
+  - {name: _probe_discipline_audit.py, class: audit, lines: 574, doc: 项目纪律审计 —— 把'靠自觉'的规矩变成'跑一下就知道'。}
+  - {name: _probe_domain_audit.py, class: audit, lines: 143, doc: 专项审计：合并判据的口径问题——原始灰度域 vs OCR 输入域。}
+  - {name: _probe_drop_nonref.py, class: experiment, lines: 417, doc: 真跳帧解码：整包丢弃非参考帧的可行性与收益（goal 1 决定性实验）。}
+  - {name: _probe_e2e_ab.py, class: telemetry, lines: 124, doc: 临时探针 E：端到端 A/B（解码线程数 / 后端矩阵）。}
+  - {name: _probe_ffmpeg.py, class: experiment, lines: 58, doc: 临时探针 C：用系统 ffmpeg 测量解码天花板（对照 decord）。}
+  - {name: _probe_final.py, class: telemetry, lines: 113, doc: 临时探针 H：收口测量 —— 全片对照 + 弱 CPU（绑核）敏感性。}
+  - {name: _probe_gpu_ctc.py, class: equivalence, lines: 134, doc: P0-2 验收探针：host 输入的 TRT 批走 GPU argmax 归约（GPU_CTC）。}
+  - {name: _probe_guard_clean.py, class: audit, lines: 184, doc: 干净重测：pad 下限守卫对窄 ROI 准确率的影响。}
+  - {name: _probe_hybrid_ab.py, class: telemetry, lines: 119, doc: 临时探针 F：hybrid 混合解码 × CPU 线程数 A/B。}
+  - {name: _probe_hybrid_axis.py, class: experiment, lines: 104, doc: hybrid 增益逐轴复现探针（联调深挖 F4：定位 decord 侧增益在引擎口径下死在哪一层）。}
+  - {name: _probe_hybrid_bitwise.py, class: equivalence, lines: 72, doc: K6：hybrid 输出逐位等价 + 深 prefetch 安全性检验。}
+  - {name: _probe_hybrid_cpu_profile.py, class: telemetry, lines: 130, doc: 直接测量 hybrid 运行期间的真实 CPU 占用（不靠反推）。}
+  - {name: _probe_hybrid_engine_loss.py, class: experiment, lines: 73, doc: H2/H3：hybrid 引擎内流失定位与修复验证（对照 2601fps 纯解码上限）。}
+  - {name: _probe_hybrid_sum_gap.py, class: experiment, lines: 81, doc: K1：hybrid 与两侧解码器速率之和的精确差值测量。}
+  - {name: _probe_hybrid_trace.py, class: telemetry, lines: 109, doc: K2：hybrid 调度轨迹剖析（DECORD_HYBRID_DEBUG=1 + 逐批耗时捕获）。}
+  - {name: _probe_index_audit.py, class: audit, lines: 277, doc: tools/INDEX.md 一致性审计 —— 索引里的每个数字都要跟磁盘对齐。}
+  - {name: _probe_lifecycle_repeat.py, class: telemetry, lines: 210, doc: 生命周期稳定性探针：同进程连续重复提取，检测退化 / 线程残留 / 结果漂移。}
+  - {name: _probe_mem_bw.py, class: experiment, lines: 647, doc: 内存带宽探针：把「TRT/ONNX 混配退化 = 内存吞吐量争用」这个**推断**变成测量值。}
+  - {name: _probe_merge_audit.py, class: audit, lines: 414, doc: 离线审计 v3：merge_similar 的合并空间、误合并 oracle 与候选判据。}
+  - {name: _probe_mp_scale.py, class: experiment, lines: 173, doc: 多进程流式带宽 worker：在**固定时间窗口**内持续施压，报告搬运的总字节数。}
+  - {name: _probe_nvdec_interference.py, class: experiment, lines: 141, doc: 隔离测量：NVDEC 解码对 CPU 软解吞吐的干扰（host CPU 争用）。}
+  - {name: _probe_onnx_dcd_sweep.py, class: experiment, lines: 80, doc: ONNX OCR 场景的解码线程数 sweep（DECODE_THREADS）。}
+  - {name: _probe_pad_variants.py, class: experiment, lines: 340, doc: 留白 / 缩放 / 裁切顺序 变体对照（离线，一次抽取 + 多次 OCR）。}
+  - {name: _probe_pad_width.py, class: experiment, lines: 194, doc: 重新评估 OCR 输入 pad 宽下限（`OCR_PAD_WIDTH_MIN` / `DEFAULT_FILL_WIDTH` = 224）。}
+  - {name: _probe_perf_baseline.py, class: equivalence, lines: 189, doc: 性能基线/对比驱动探针（多轮深度优化会话用，证据链工具）。}
+  - {name: _probe_perf_sweep.py, class: experiment, lines: 118, doc: 解码路径参数 sweep 探针（性能优化会话用）。}
+  - {name: _probe_perframe.py, class: experiment, lines: 123, doc: 临时探针 B：拆解'每帧固定开销'来源（分析用）。}
+  - {name: _probe_python_cost.py, class: experiment, lines: 130, doc: 临时探针 I：量化宿主路径'Python 层每帧开销'（C 重写决策输入）。}
+  - {name: _probe_r3_infer_split.py, class: telemetry, lines: 58, doc: R3 调查：hybrid vs nvdec 的 OCR worker infer 差异分解。}
+  - {name: _probe_roadmap_decode.py, class: telemetry, lines: 101, doc: 路线图轮 M1：三编码 × 解码后端 × CPU 线程档的顺序解码吞吐矩阵。}
+  - {name: _probe_roadmap_ocr.py, class: telemetry, lines: 191, doc: 路线图轮 M2：OCR rec 推理层微基准（ONNX-CPU / TRT）× 批大小扫描。}
+  - {name: _probe_roadmap_profile.py, class: telemetry, lines: 62, doc: 路线图轮 M4：ENGINE_PROFILE 分相打印驱动（单配置一次 extract）。}
+  - {name: _probe_roi_crop_ocr.py, class: equivalence, lines: 182, doc: ROI 宽度自适应裁切：OCR 侧收益与**文本一致性**的离线对照实验。}
+  - {name: _probe_roi_decode.py, class: experiment, lines: 105, doc: 隔离测量：CPU 软解下「打开时 SetRoi」vs「每次 get_batch 传 roi」的速率差。}
+  - {name: _probe_roi_segcost.py, class: telemetry, lines: 132, doc: 临时探针：Python 分段成本是否真正转化为墙钟（ROI 面积 A/B）。}
+  - {name: _probe_roi_whitespace.py, class: experiment, lines: 159, doc: 测量各视频 ROI 内的**留白量**（左/右/内容占比）。}
+  - {name: _probe_roi_width.py, class: experiment, lines: 171, doc: ROI 宽度自适应裁切的可行性量化（OCR 省计算）。}
+  - {name: _probe_round4_bw.py, class: experiment, lines: 102, doc: 第四轮配套：互补设计的 DRAM 消耗测量 + 瞬时带宽序列。}
+  - {name: _probe_round4_wall.py, class: experiment, lines: 119, doc: 第四轮：早期「完全互补双流水线」设计的争用测量（串行执行，避免互相污染）。}
+  - {name: _probe_seg_share.py, class: telemetry, lines: 154, doc: 临时探针：分段层在端到端墙钟中的真实占比（打桩计时，非推断）。}
+  - {name: _probe_skip_frame.py, class: experiment, lines: 168, doc: 真跳帧解码可行性探路（goal 1 决策输入）。}
+  - {name: _probe_slf_adjudicate.py, class: equivalence, lines: 142, doc: P0-6 test4 关≠开 帧的拼图生成（视觉裁定，临时探针）。}
+  - {name: _probe_slf_diff.py, class: equivalence, lines: 116, doc: P0-6 skip_loop_filter 的逐帧真值差异分析（临时探针）。}
+  - {name: _probe_slf_vis.py, class: equivalence, lines: 110, doc: P0-6 test4 三方分歧帧定位 + 抽帧清单（视觉裁定用，临时探针）。}
+  - {name: _probe_threads.py, class: experiment, lines: 72, doc: 临时探针 D：decord CPU 软解线程数扫描（对照 ffmpeg）。}
+  - {name: _probe_truth_env.py, class: telemetry, lines: 260, doc: 通用：按 env 组合切换行为，用真值判定「准确率 / 墙钟」的权衡。}
+  - {name: _probe_yuv_tax.py, class: telemetry, lines: 132, doc: yuv 输出税归因探针（DESIGN-REVIEW 后续：yuv vs gray 墙钟差的机理）。}
+  - {name: _run_with_switchinterval.py, class: tool, lines: 34, doc: 临时 runner：在指定 sys.setswitchinterval 下跑 bench_hybrid。}
+  - {name: _split_claude_md.py, class: tool, lines: 263, doc: 一次性工具：把 CLAUDE.md 拆成「注入核」+ docs/DECISIONS.md 历史档案。}
+  - {name: _split_perf_md.py, class: tool, lines: 194, doc: 把 docs/PERFORMANCE.md 按「活/归档」切出 docs/ARCHIVE.md。}
+  - {name: bench_hybrid.py, class: tool, lines: 171, doc: hybrid 解码 A/B 基准：纯 NVDEC / 纯 CPU / hybrid 同窗口墙钟对比。}
+  - {name: e2e_smoke.py, class: tool, lines: 368, doc: 引擎端到端冒烟验收 + 性能工具（真实视频，可作 CI 入口）。}
+  - {name: probe_decode_rates.py, class: tool, lines: 125, doc: 解码速率/seek 开销微基准探针（hybrid 问题定位用，临时工具）。}
+
+summary:
+  telemetry: 17
+  equivalence: 15
+  audit: 6
+  experiment: 23
+  tool: 8
+  total: 69

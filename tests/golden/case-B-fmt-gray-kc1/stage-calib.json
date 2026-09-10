@@ -1,0 +1,19 @@
+{
+ "bin_thresh": 116,
+ "degraded_reason": null,
+ "backend": "decord/GPU",
+ "ocr_backend": "tensorrt",
+ "codec": "h264",
+ "color_range": 0,
+ "meta_keys": [
+  "backend",
+  "codec",
+  "color_range",
+  "degraded_reason",
+  "engine_version",
+  "n_segments",
+  "ocr_backend",
+  "params",
+  "rep_crop_format"
+ ]
+}

@@ -1,0 +1,150 @@
+{
+ "environment": {
+  "commit": "7ba1c3a73915561753bfa21217eae05fd6ca4dea",
+  "note": "GPU 须空闲；3000 帧窗口；TRT + GPU_PIPELINE=1"
+ },
+ "window": [
+  0,
+  3000
+ ],
+ "rounds": 3,
+ "configs": {
+  "h264-gpu": {
+   "rounds": [
+    {
+     "wall": 3.614,
+     "n_segments": 1083,
+     "timing": {
+      "decode": 2.999,
+      "ocr_tail": 0.038,
+      "ocr": 3.365
+     }
+    },
+    {
+     "wall": 3.11,
+     "n_segments": 1083,
+     "timing": {
+      "decode": 2.962,
+      "ocr_tail": 0.038,
+      "ocr": 3.079
+     }
+    },
+    {
+     "wall": 3.104,
+     "n_segments": 1083,
+     "timing": {
+      "decode": 2.961,
+      "ocr_tail": 0.035,
+      "ocr": 3.074
+     }
+    }
+   ],
+   "median_wall_warm": 3.107,
+   "cold_wall": 3.614,
+   "spread_warm_pct": 0.19
+  },
+  "h264-cpu": {
+   "rounds": [
+    {
+     "wall": 1.123,
+     "n_segments": 1083,
+     "timing": {
+      "decode": 0.883,
+      "ocr_tail": 0.118,
+      "ocr": 1.062
+     }
+    },
+    {
+     "wall": 1.123,
+     "n_segments": 1083,
+     "timing": {
+      "decode": 0.915,
+      "ocr_tail": 0.078,
+      "ocr": 1.055
+     }
+    },
+    {
+     "wall": 1.138,
+     "n_segments": 1083,
+     "timing": {
+      "decode": 0.921,
+      "ocr_tail": 0.088,
+      "ocr": 1.07
+     }
+    }
+   ],
+   "median_wall_warm": 1.131,
+   "cold_wall": 1.123,
+   "spread_warm_pct": 1.33
+  },
+  "hevc-nvdec": {
+   "rounds": [
+    {
+     "wall": 1.545,
+     "n_segments": 1109,
+     "timing": {
+      "decode": 1.41,
+      "ocr_tail": 0.059,
+      "ocr": 1.515
+     }
+    },
+    {
+     "wall": 1.53,
+     "n_segments": 1109,
+     "timing": {
+      "decode": 1.412,
+      "ocr_tail": 0.053,
+      "ocr": 1.511
+     }
+    },
+    {
+     "wall": 1.527,
+     "n_segments": 1109,
+     "timing": {
+      "decode": 1.416,
+      "ocr_tail": 0.046,
+      "ocr": 1.508
+     }
+    }
+   ],
+   "median_wall_warm": 1.528,
+   "cold_wall": 1.545,
+   "spread_warm_pct": 0.2
+  },
+  "av1-nvdec": {
+   "rounds": [
+    {
+     "wall": 1.803,
+     "n_segments": 1109,
+     "timing": {
+      "decode": 1.675,
+      "ocr_tail": 0.046,
+      "ocr": 1.772
+     }
+    },
+    {
+     "wall": 1.815,
+     "n_segments": 1109,
+     "timing": {
+      "decode": 1.691,
+      "ocr_tail": 0.05,
+      "ocr": 1.793
+     }
+    },
+    {
+     "wall": 1.813,
+     "n_segments": 1109,
+     "timing": {
+      "decode": 1.69,
+      "ocr_tail": 0.049,
+      "ocr": 1.79
+     }
+    }
+   ],
+   "median_wall_warm": 1.814,
+   "cold_wall": 1.803,
+   "spread_warm_pct": 0.11
+  }
+ },
+ "noise_floor_pct": 1.33
+}

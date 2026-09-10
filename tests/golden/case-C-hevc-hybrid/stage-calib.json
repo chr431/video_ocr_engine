@@ -1,0 +1,19 @@
+{
+ "bin_thresh": 119,
+ "degraded_reason": null,
+ "backend": "decord/hybrid",
+ "ocr_backend": "tensorrt",
+ "codec": "hevc",
+ "color_range": 0,
+ "meta_keys": [
+  "backend",
+  "codec",
+  "color_range",
+  "degraded_reason",
+  "engine_version",
+  "n_segments",
+  "ocr_backend",
+  "params",
+  "rep_crop_format"
+ ]
+}
