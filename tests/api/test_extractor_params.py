@@ -5,7 +5,6 @@ import numpy as np
 import pytest
 
 from video_ocr_engine import FieldExtractor
-from video_ocr_engine.extractor import _gray_mean_abs_diff
 
 
 def _make(**kwargs):
@@ -105,16 +104,6 @@ def test_rep_crop_format_resolution_and_alias():
     assert _make(rep_crop_format="yuv", keep_crops=False)._yuv_output is False
     with pytest.raises(ValueError, match="rep_crop_format"):
         _make(rep_crop_format="rgb")
-
-
-def test_gray_mean_abs_diff():
-    a = np.zeros((4, 5), dtype=np.uint8)
-    b = a.copy()
-    assert _gray_mean_abs_diff(a, b) == 0.0
-    b[0, 0] = 10
-    assert _gray_mean_abs_diff(a, b) == pytest.approx(10.0 / 20)
-    assert _gray_mean_abs_diff(a, None) == float("inf")
-    assert _gray_mean_abs_diff(a, np.zeros((3, 5), dtype=np.uint8)) == float("inf")
 
 
 def test_segments_similar_requires_small_changed_area():

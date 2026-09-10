@@ -13,8 +13,8 @@ import numpy as np
 import engine_config as config
 from video_utils import nvdec_available, tensorrt_available
 from segmentation import (SegmentStateMachine, similar_decision,
-                          otsu_median_threshold)
-from ._helpers import (_ndarray_device_ptr, _otsu_from_hist,
+                          otsu_median_threshold, _otsu_from_hist)
+from ._helpers import (_ndarray_device_ptr,
                        _decode_progress_pct,
                        _read_fps_from_vr)
 
@@ -746,7 +746,6 @@ class _GpuPipelineMixin:
 
         ocr_session.autocropper = _DeferredAutocropper(self, ctx)
 
-        yuv = self._yuv_output
         yuv = self._yuv_output
 
         try:

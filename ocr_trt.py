@@ -343,13 +343,6 @@ class TrtEngine:
             SUBPROBE['n'] += 1
         return host_out
 
-    def execute_device(self, dev_input: int, shape: tuple,
-                       out_host: "np.ndarray | None" = None) -> np.ndarray:
-        """同步执行显存输入。"""
-        result = self.execute_device_async(dev_input, shape, out_host)
-        self.synchronize()
-        return result
-
     def execute_device_argmax(self, dev_input: int, shape: tuple):
         """显存全驻留：执行 TRT 并在 GPU 完成 vocab 维 argmax/max。
 
@@ -396,8 +389,3 @@ class TrtEngine:
         seq = idx_all.size // max(B, 1)
         return idx_all.reshape(B, seq), prob_all.reshape(B, seq)
 
-    def execute(self, x: np.ndarray, out_host: "np.ndarray | None" = None) -> np.ndarray:
-        """同步执行一批输入（batch ≤ max_batch），复用输入/输出 buffer。"""
-        result = self.execute_async(x, out_host)
-        self.synchronize()
-        return result

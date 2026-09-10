@@ -39,9 +39,9 @@ class FakeEx:
         return 'binary'
 
     def _segments_similar(self, a, b):
-        from video_utils import _text_sep_gray
-        a = _text_sep_gray(a, 'binary', th=self._bin_thresh)
-        b = _text_sep_gray(b, 'binary', th=self._bin_thresh)
+        from segmentation import _text_sep_binary   # S2：直连实现（壳已删）
+        a = _text_sep_binary(a, self._bin_thresh)
+        b = _text_sep_binary(b, self._bin_thresh)
         d = np.abs(a.astype(np.int16) - b.astype(np.int16))
         if float(d.mean()) > self._merge_similar_threshold:
             return False

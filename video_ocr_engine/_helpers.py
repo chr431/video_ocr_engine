@@ -1,10 +1,9 @@
 """引擎级独立工具函数（从 extractor.py 拆出，无类依赖）。
 
-_ocr_batch_size / _ndarray_device_ptr / _otsu_from_hist / _gray_mean_abs_diff。
-extractor 与各 mixin 直接引用；为保持外部兼容，extractor 仍 re-export。
+_ocr_batch_size / _ndarray_device_ptr / 进度映射 / _read_fps_from_vr。
+（S2：_otsu_from_hist/_otsu_median_threshold/_gray_mean_abs_diff 已删——
+前两者是转发壳，实现唯一出处 segmentation；后者全仓零产品调用点。）
 """
-import numpy as np
-
 import engine_config as config
 
 def _ocr_batch_size() -> int:
@@ -56,20 +55,6 @@ def _ndarray_device_ptr(nd):
     return int(t.data), shape
 
 
-def _otsu_from_hist(hist) -> int:
-    """从 256-bin 直方图算 Otsu 阈值（转发；统一实现见
-    segmentation._otsu_from_hist，GPU 校准直方图行经此调用）。"""
-    from segmentation import _otsu_from_hist as _impl
-    return _impl(hist)
-
-
-def _otsu_median_threshold(ths) -> int:
-    """校准阈值 = Otsu 中位数（转发；统一实现见
-    segmentation.otsu_median_threshold）。"""
-    from segmentation import otsu_median_threshold as _impl
-    return _impl(ths)
-
-
 def _read_fps_from_vr(vr):
     """从 decord reader 读平均帧率（get_avg_fps 优先，get_fps 兜底）。
 
@@ -86,12 +71,3 @@ def _read_fps_from_vr(vr):
         if v and v > 0:
             return v
     return None
-
-
-def _gray_mean_abs_diff(a, b) -> float:
-    """两帧分段灰度 ROI 的平均绝对差；形状不一致时视为不相似。"""
-    if a is None or b is None:
-        return float("inf")
-    if a.shape != b.shape:
-        return float("inf")
-    return float(np.mean(np.abs(a.astype(np.float32) - b.astype(np.float32))))

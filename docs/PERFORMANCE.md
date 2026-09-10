@@ -694,7 +694,7 @@ col-ink 每段同步（零成本）。
 GPU `col_ink` 三路同判据）的「有墨迹列范围」是启发式，换成 PP-OCRv6 det
 系列检测模型来定裁切区间，能否更准/更快？
 
-探针：`tools/_probe_det_crop_eval.py`（配套 `tools/tiny_det.onnx`，
+探针：`tools/_probe_det_crop_eval.py`（探针已删除，S2 清理）（配套 `tools/tiny_det.onnx`，
 PP-OCRv6_tiny_det ONNX 1.8MB，ModelScope RapidAI/RapidOCR）。Stage A =
 间隔对照 + 耗时；Stage B = monkeypatch 引擎裁切为 det 区间（同一
 `_content_range_to_crop` 余量/门槛数学）→ 段代表帧对真值（生产口径
@@ -757,7 +757,7 @@ paddle2onnx 转换链、三路裁切实现同步。GPU 全驻留路径还需新�
 问题：merge_similar（比较两段代表帧 binary：均值差 ≤3.0 且差异像素
 ≤1% 面积）能否更激进地合并，减少 OCR 调用且不误合并？
 
-探针：`tools/_probe_merge_audit.py`。方法学（三个关键修正，勿再犯）：
+探针：`tools/_probe_merge_audit.py`（探针已删除，S2 清理）。方法学（三个关键修正，勿再犯）：
 
 1. **真值 tol=1 标签不可用于合并审计**——它把 257→258 标「相同」
    （连续遥测相邻帧差 ≤1 是常态），必须用**严格字符串相等**。
@@ -817,7 +817,7 @@ tol=1 容差内（生产门禁按设计容忍末位抖动），**按引擎契约
 - OCR 开销的进一步压缩不在分段/合并层，应走推理层（更小模型/量化/跳过
   ——均为独立课题）。
 - 若未来出现「长时保持 + 高频噪声过切」的新内容形态，先跑
-  `_probe_merge_audit.py` 看 oracle 下限与漏合并数再动手。
+  `_probe_merge_audit.py`（探针已删除，S2 清理） 看 oracle 下限与漏合并数再动手。
 
 ### 14.1 误合并目视裁定与阈值可分性（2026-08-30 续：确认存在，但阈值收紧不可行）
 
@@ -862,7 +862,7 @@ bin_chg 11-19px（0.3-0.6% 面积）。机理：**7 段码管字体相邻数字�
 
 用户假设：真实内容变化 → 连通像素块；噪声/重渲染 → 分散小差块；用
 「最大连通块占比」替代总变化像素占比可分。探针
-`tools/_probe_block_audit.py`（8 连通 BFS），在已通过现行判据的窄区间
+`tools/_probe_block_audit.py`（探针已删除，S2 清理）（8 连通 BFS），在已通过现行判据的窄区间
 （mean≤3 & chg≤1%）内对全部实际合并对测最大连通块（mb）：
 
 | 类别                        | mb (px)          | 总 chg (px) |
@@ -901,7 +901,7 @@ force_aspect 压窄后的图。口径差异确实存在——裁切路径已为�
 已过缩放+gamma，数值分布完全不同」→ 逐图现算 Otsu），合并路径未跟进。
 另一面：二值化判据对墨迹内部灰度级差异全盲，而 rec 消费连续灰度。
 
-**换域实测**（`tools/_probe_domain_audit.py`，92 个实际合并对在 OCR
+**换域实测**（`tools/_probe_domain_audit.py`（探针已删除，S2 清理），92 个实际合并对在 OCR
 输入域重算判据）：
 
 | 判据域              | 误合并 19 对                | 安全 73 对             | 可分性                  |

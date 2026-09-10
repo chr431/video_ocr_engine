@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **69 个 `.py`**（12,336 行），其中 57 个是探针
+`tools/` 现有 **63 个 `.py`**（10,632 行），其中 51 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -53,9 +53,6 @@
 
 | 文件 | 行 | 被谁依赖 | 形式 |
 |---|---:|---|---|
-| `_probe_det_crop_eval.py` | 412 | `_probe_block_audit` / `_probe_domain_audit` / `_probe_merge_audit` | `from ... import` |
-| `_probe_merge_audit.py` | 414 | `_probe_block_audit` / `_probe_domain_audit` | `from ... import` |
-| `_probe_block_audit.py` | 213 | `_probe_domain_audit` | `from ... import` |
 | `_probe_mp_scale.py` | 173 | `_probe_mem_bw` | 子进程 worker（`SCALE` 常量） |
 | `_probe_roi_segcost.py` | 132 | `_probe_seg_share` | 代码引用 |
 
@@ -75,15 +72,11 @@
 
 | 文件 | 行 | 改于 |
 |---|---:|---|
-| `_probe_det_crop_eval.py` | 412 | 2026-08-30 |
 
 ### §14 分段合并收口
 
 | 文件 | 行 | 改于 |
 |---|---:|---|
-| `_probe_merge_audit.py` | 414 | 2026-08-30 |
-| `_probe_block_audit.py` | 213 | 2026-08-30 |
-| `_probe_domain_audit.py` | 143 | 2026-08-30 |
 
 ### §15 yuv 输出税（否定结果）
 
@@ -95,14 +88,13 @@
 
 | 文件 | 行 | 改于 | | 文件 | 行 | 改于 |
 |---|---:|---|---|---|---:|---|
-| `_probe_pad_variants.py` | 340 | 2026-08-29 | | `_probe_ffmpeg.py` | 54 | 2026-08-28 |
 | `_probe_drop_nonref.py` | 417 | 2026-08-29 | | `_probe_final.py` | 104 | 2026-08-28 |
+| `_probe_ffmpeg.py` | 58 | 2026-08-28 | | `_probe_gpu_ctc.py` | 126 | 2026-08-29 |
 | `_probe_crop_miscut.py` | 233 | 2026-08-30 | | `_probe_perframe.py` | 120 | 2026-08-28 |
 | `_probe_autocrop_truth.py` | 152 | 2026-08-29 | | `_probe_ceiling.py` | 131 | 2026-08-28 |
 | `_probe_autocrop_ab.py` | 140 | 2026-08-29 | | `_probe_e2e_ab.py` | 116 | 2026-08-28 |
 | `_probe_cpu_onnx.py` | 271 | 2026-08-29 | | `_probe_threads.py` | 64 | 2026-08-28 |
 | `_probe_pad_width.py` | 194 | 2026-08-29 | | `_probe_skip_frame.py` | 168 | 2026-08-29 |
-| `_probe_roi_crop_ocr.py` | 182 | 2026-08-29 | | `_probe_gpu_ctc.py` | 126 | 2026-08-29 |
 | `_probe_roi_width.py` | 171 | 2026-08-29 | | `_probe_guard_clean.py` | 177 | 2026-08-29 |
 | `_probe_roi_whitespace.py` | 159 | 2026-08-30 | | | | |
 

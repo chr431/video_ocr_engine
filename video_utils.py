@@ -163,27 +163,6 @@ def _np_resize(img: "np.ndarray", new_w: int, new_h: int) -> "np.ndarray":
     return out[..., 0] if one_ch else out
 
 
-def _preprocess_standard(crop: "np.ndarray", force_aspect: float = 0.0,
-                         gamma: "float | None" = None) -> "np.ndarray":
-    """标准预处理（转发）。统一实现见 segmentation.preprocess_standard
-    （0.11.0 起分段+预处理实现收敛到 segmentation.py，双管线共用）。"""
-    from segmentation import preprocess_standard
-    return preprocess_standard(crop, force_aspect=force_aspect, gamma=gamma)
-
-
-def _text_sep_gray(gray: "np.ndarray", mode: str = "binary",
-                   th: "int | None" = None) -> "np.ndarray":
-    """分离图（转发）。统一实现见 segmentation._text_sep_binary。
-
-    mode/th 为历史签名兼容：仅支持 binary；th 缺省 = 灰度均值
-    （merge_similar 判定恒显式传校准阈值，缺省分支仅剩独立调用方）。
-    """
-    from segmentation import _text_sep_binary
-    if th is None:
-        th = int(np.mean(gray.astype(np.float32)))
-    return _text_sep_binary(gray, th)
-
-
 def nvdec_available(video_path=None) -> bool:
     """轻量探测 NVDEC 解码是否可用（尝试用 GPU reader 打开视频）。
 

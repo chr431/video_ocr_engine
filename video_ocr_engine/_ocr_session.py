@@ -12,7 +12,7 @@ import sys
 import threading
 
 import engine_config as config
-from video_utils import _preprocess_standard
+from segmentation import preprocess_standard
 from ._helpers import _ocr_batch_size, _ocr_progress_pct
 
 logger = logging.getLogger(__name__)
@@ -308,11 +308,11 @@ class OcrSession:
                             # force_aspect>0：**先定比例、后裁**（顺序 ⑦）。
                             # 反序（先裁再定比例）会因内容宽高比被改变而
                             # 引入畸变，实测更差（test5 9 vs 0）。
-                            p = _preprocess_standard(
+                            p = preprocess_standard(
                                 c, force_aspect=ex._force_aspect)
                             p = ex._crop_after_aspect(p)
                         else:
-                            p = _preprocess_standard(
+                            p = preprocess_standard(
                                 ex._crop_to_content(c),
                                 force_aspect=ex._force_aspect)
                         prepped.append((i, p))

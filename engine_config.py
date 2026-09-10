@@ -184,17 +184,14 @@ DEFAULT_BUFFER_SIZE: int = 128          # 解码∥OCR 流水线队列缓冲（�
                                         # 解码线程 q.put 阻塞等待（GPU+CPU wall
                                         # -0.3s；256 无进一步收益）
 DEFAULT_DECODE_BACKEND: str = "auto"    # 解码后端 (auto / cpu / nvdec / hybrid)
-DECODE_BACKEND_KEYS: list[str] = ["auto", "cpu", "nvdec", "hybrid"]
-DECODE_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU",
-                                         "nvdec": "NVDEC",
-                                         "hybrid": "混合(CPU+NVDEC)"}
+# （S2 删除 DECODE_BACKEND_KEYS/LABELS 与 OCR_BACKEND_KEYS/LABELS——四个
+# "校验键集"全仓零引用，实际校验散在内联元组；B3 的构造期校验在 S3 落地时
+# 以 config/ 注册表为单一事实源重建，不再复活这四个常量。）
 # GPU 全驻留管线（_gpu_pipeline）解码批大小：64 为 GPU 分段实验最优（更大批
 # 减少 kernel/同步次数），与宿主 DECODE_BATCH_SIZE=16 刻意不同——两条路径
 # 独立调参，勿统一为一个常量。
 GPU_PIPELINE_DECODE_BATCH: int = 64
 DEFAULT_OCR_BACKEND: str = "auto"       # OCR 推理后端 (auto / cpu / tensorrt)
-OCR_BACKEND_KEYS: list[str] = ["auto", "cpu", "tensorrt"]
-OCR_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU", "tensorrt": "TensorRT"}
 DEFAULT_FORCE_ASPECT: float = 0.0       # 强制横向宽高比（0=不启用；>0 时宽度
                                         # 强制 = 48×此值，纠正扁宽字体）
 # **2026-08-29 回退：160 → 224**（与 OCR_PAD_WIDTH_MIN 同步，详见下方

@@ -472,7 +472,7 @@ def check_test_discipline() -> None:
     # S1：只认 pytest 会收集的 test_*.py——tests/ 下的 record.py 等是
     # __main__ 工具脚本（有 __main__ 守卫），不是无保护测试
     for rel in [r for r in ALL_PY if r.startswith(("tests" + os.sep, "tests/"))
-                and os.path.basename(rel).startswith("test_")]:
+                and os.path.basename(r).startswith("test_")]:
         src = read(rel)
         needs = bool(re.search(r"racelog_test|ground_truth|D:\\Videos|batch_test", src))
         if not needs:

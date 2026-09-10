@@ -186,23 +186,6 @@ def similar_decision(mean: float, changed_px: int, threshold: float,
     return changed_px <= max_changed
 
 
-def similar_binary(a: np.ndarray, b: np.ndarray, *, bin_thresh: int,
-                   threshold: float, max_changed: int) -> bool:
-    """相似段合并的宿主 numpy 实现（binary 分离图 + int16 精确差）。
-
-    分离模式恒 binary（contrast 模式已随 0.9.0 删除）。int16 精确差：避免
-    float32 双全帧临时数组（a/b 为 uint8 灰度或 float32 分离图）。与 GPU
-    sim_pair 的整数精确累加一致（阈值处仅 float32 末位舍入差异）。
-    """
-    a = _text_sep_binary(a, bin_thresh)
-    b = _text_sep_binary(b, bin_thresh)
-    if a is None or b is None or a.shape != b.shape:
-        return False
-    diff = np.abs(a.astype(np.int16) - b.astype(np.int16))
-    return similar_decision(float(diff.mean()), int(np.sum(diff > 10)),
-                            threshold, max_changed)
-
-
 def _text_sep_binary(gray: np.ndarray, th: int) -> np.ndarray:
     """从背景中分离字幕文字的灰度图（merge_similar 判定用）。
 

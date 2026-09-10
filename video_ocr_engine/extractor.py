@@ -30,8 +30,8 @@ import engine_config as config
 from segmentation import (
     _gray_seg, _gray_seg_batch,
     _gray_seg_yuv, _gray_seg_yuv_batch,
+    _text_sep_binary,
 )
-from video_utils import _text_sep_gray
 # 下列 re-export 为引擎内部结构（_helpers/_result_types/_host_pipeline 均
 # 属下划线私有命名，从 extractor 再导出仅为旧导入路径兼容，勿直接 import；
 # 公共入口是 video_ocr_engine.__init__ 的三件套）。
@@ -39,9 +39,9 @@ from ._result_types import (  # noqa: F401
     ExtractedSegment, ExtractionResult,
 )
 from ._helpers import (  # noqa: F401
-    _ocr_batch_size, _ndarray_device_ptr, _otsu_from_hist, _gray_mean_abs_diff,
+    _ocr_batch_size, _ndarray_device_ptr,
     _decode_progress_pct, _ocr_progress_pct,
-    _otsu_median_threshold, _read_fps_from_vr,
+    _read_fps_from_vr,
 )
 from ._host_pipeline import (  # noqa: F401
     _host_calibrate, _host_frame_stream, _host_segment_frames,
@@ -239,8 +239,10 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         """
         _text_mode = self._merge_effective_mode()
         if _text_mode == 'binary':
-            a = _text_sep_gray(a, 'binary', th=self._bin_thresh)
-            b = _text_sep_gray(b, 'binary', th=self._bin_thresh)
+            # S2：直连实现（原 _text_sep_gray 转发壳已删；mode 恒 binary，
+            # th 由调用方显式给出——壳的历史默认分支无活调用点）
+            a = _text_sep_binary(a, self._bin_thresh)
+            b = _text_sep_binary(b, self._bin_thresh)
         if a is None or b is None or a.shape != b.shape:
             return False
         # int16 精确差：避免 float32 双全帧临时数组（a/b 为 uint8 灰度或
