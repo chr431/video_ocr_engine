@@ -66,11 +66,13 @@ python tools/_doc_section.py docs/ARCHIVE.md 4.4b        # 支持 16 / 16.8 / 4.
 |---|---|
 | 解码 | `decord.VideoReader.get_batch`（**唯一入口**；decode_backend=hybrid 走 decord 原生混合解码 ctx） |
 | 分段 | `segmentation.py` |
-| 宿主管线 | `video_ocr_engine/_host_pipeline.py` |
-| GPU 管线 | `video_ocr_engine/_gpu_pipeline.py`（gray+NVDEC+TRT 时默认） |
+| 编排引擎 | `video_ocr_engine/pipeline/engine.py`（SegmentEngine 唯一入口） |
+| 宿主后端 | `video_ocr_engine/pipeline/host_backend.py` |
+| GPU 后端 | `video_ocr_engine/pipeline/gpu_backend.py`（gray+NVDEC+TRT 时默认；设备侧机制在 `video_ocr_engine/_gpu_pipeline.py`） |
+| OCR 会话 | `video_ocr_engine/pipeline/ocr_stage.py`（SessionSpec 契约） |
 | OCR 调度 / 引擎池 | `ocr_native.py`（`acquire_ocr_engine` / `checkin_ocr_engine`） |
 | TRT | `ocr_trt.py` + `video_ocr_engine/_gpu_kernels.py` |
-| 配置常量 | `engine_config.py`（`GPU_PIPELINE_DECODE_BATCH=64` 等） |
+| 配置常量 | `engine_config.py`（`GPU_PIPELINE_DECODE_BATCH=64` 等）；旋钮注册表 `video_ocr_engine/config/` |
 | 分相打桩 | `video_ocr_engine/extractor.py` 的 `_prof_end` |
 
 **现役并行维度只有一个**：`decode_backend="hybrid"` 的 CPU+NVDEC 双解码，
