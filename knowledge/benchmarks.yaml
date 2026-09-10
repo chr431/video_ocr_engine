@@ -55,6 +55,11 @@
   reduce_d2h_sync_to_async_h264cpu_pct: -5.19
   keep_crops_d2h_batched_h264gpu_pct: -2.45
   pi14_gpu_ctc_bitwise: pass
+- metric: s6_nv12_lut                 # S6-f′：宿主路径 Y 展开 LUT（逐位等价）
+  host_path_3000f_yuv_decode_luma_batch_s: 0.090 -> 0.052
+  phase_delta_pct: -42
+  wall_3000f_s: 1.168 -> 1.135
+  bitwise: pass                       # 256 值全枚举 + 批量/单帧/full-range
 - metric: s6_ocr_fill
   fill_pct: 40.2
   pad_cols: 224

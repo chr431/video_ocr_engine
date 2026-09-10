@@ -94,6 +94,21 @@ def environment() -> dict:
     env = {"commit": subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=str(ROOT),
         capture_output=True, text=True).stdout.strip()}
+    # S6（F-11）：**把 OCR 引擎产物指纹记进 manifest**。TRT 每次重建的
+    # tactic 选择不保证一致 → 同一 profile 的两次构建也会让置信度在第 4 位
+    # 漂移（文本/段结构不变）。不记指纹就无法区分"代码回归"与"引擎重建"。
+    try:
+        import hashlib
+        from video_ocr_engine.ocr.trt import TrtEngine
+        for cand in TrtEngine._engine_candidates("small"):
+            if cand.exists():
+                h = hashlib.sha256(cand.read_bytes()).hexdigest()[:16]
+                env["ocr_engine"] = "%s@%s" % (cand.name, h)
+                break
+        else:
+            env["ocr_engine"] = None
+    except Exception:  # noqa: BLE001 无 TRT/无引擎时只记 None，不阻塞录制
+        env["ocr_engine"] = None
     try:
         import decord
         env["decord"] = decord.__version__

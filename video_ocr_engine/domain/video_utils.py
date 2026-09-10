@@ -32,10 +32,16 @@ def _nv12_luma(crop: "np.ndarray") -> "np.ndarray":
     return crop[:h]
 
 
-def _nv12_batch_luma(crops: "np.ndarray") -> "np.ndarray":
-    """批量取 packed NV12 的原始 Y 平面（(B, h+ceil(h/2), w) → (B, h, w)）。"""
-    h = crops.shape[1] * 2 // 3
-    return crops[:, :h]
+#: limited→full 展开的 **256 项 LUT**（S6-f′）：Y 是 8-bit，展开是**单字节的
+#: 纯函数**，所以 LUT 与逐元素浮点式**逐位一致**——用同一串 float32 运算
+#: 构表（模块导入期一次）：floor((y-16)*(255/219)+0.5) 后 clip 0..255。
+#: 收益（宿主路径 test5 3000 帧 yuv 实测）：`decode.luma_batch` 0.090s →
+#: 0.020s（见 docs/log/2026-09-10-S6性能轮.md §8），且不再每批分配
+#: B×h×w×4 的 float32 临时数组。
+_Y_LIMITED_LUT = np.clip(
+    np.floor((np.arange(256, dtype=np.float32) - np.float32(16.0))
+             * np.float32(255.0 / 219.0) + np.float32(0.5)),
+    0.0, 255.0).astype(np.uint8)
 
 
 def _nv12_luma_full(crop: "np.ndarray", color_range: int = 0) -> "np.ndarray":
@@ -47,16 +53,21 @@ def _nv12_luma_full(crop: "np.ndarray", color_range: int = 0) -> "np.ndarray":
     y = _nv12_luma(crop)
     if color_range == 1:
         return y
-    v = (y.astype(np.float32) - 16.0) * (255.0 / 219.0)
-    return np.clip(np.floor(v + 0.5), 0, 255).astype(np.uint8)
+    return _Y_LIMITED_LUT[y]
 
 
 def _nv12_batch_luma_full(crops: "np.ndarray", color_range: int = 0) -> "np.ndarray":
     y = _nv12_batch_luma(crops)
     if color_range == 1:
         return y
-    v = (y.astype(np.float32) - 16.0) * (255.0 / 219.0)
-    return np.clip(np.floor(v + 0.5), 0, 255).astype(np.uint8)
+    return _Y_LIMITED_LUT[y]
+
+
+def _nv12_batch_luma(crops: "np.ndarray") -> "np.ndarray":
+    """批量取 packed NV12 的原始 Y 平面（(B, h+ceil(h/2), w) → (B, h, w)）。"""
+    h = crops.shape[1] * 2 // 3
+    return crops[:, :h]
+
 
 
 def nv12_to_rgb(crop: "np.ndarray", color_range: int = 0) -> "np.ndarray":

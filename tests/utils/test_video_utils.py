@@ -28,6 +28,33 @@ def test_luma_full_limited_and_full():
     assert np.array_equal(_nv12_luma_full(crop, 0), _gray_expected(y, 0))
 
 
+def test_luma_limited_lut_is_bitwise_exact():
+    """S6-f′：256 项 LUT 必须与逐元素 float32 公式**逐位一致**。
+
+    LUT 是性能优化（每批免去 float32 临时数组），但 correctness 完全依赖
+    "展开是单字节纯函数"这一事实——本测试把 256 个输入全枚举，任何构表
+    时的 dtype/舍入偏差都会当场红。
+    """
+    from video_ocr_engine.domain.video_utils import (
+        _Y_LIMITED_LUT, _nv12_batch_luma_full)
+    allv = np.arange(256, dtype=np.uint8)
+    v = (allv.astype(np.float32) - 16.0) * (255.0 / 219.0)
+    expect = np.clip(np.floor(v + 0.5), 0, 255).astype(np.uint8)
+    assert np.array_equal(_Y_LIMITED_LUT, expect)
+
+    # 批量路径（NV12 packed：前 h 行 = Y）与单帧路径共用同一张表
+    rng = np.random.default_rng(0)
+    crops = rng.integers(0, 256, (5, 48, 107), dtype=np.uint8)   # h=32
+    y = crops[:, :32]
+    want = np.clip(np.floor((y.astype(np.float32) - 16.0) * (255.0 / 219.0)
+                            + 0.5), 0, 255).astype(np.uint8)
+    assert np.array_equal(_nv12_batch_luma_full(crops, 0), want)
+    assert np.array_equal(_nv12_batch_luma_full(crops, 1), y)   # full-range 原样
+    single = rng.integers(0, 256, (51, 32), dtype=np.uint8)
+    assert np.array_equal(_nv12_luma_full(single, 0),
+                          _Y_LIMITED_LUT[single[:34]])
+
+
 def test_nv12_to_rgb_shape_even_and_odd():
     # 灰度 YUV（U=V=128）：R=G=B，形状为 (h, w, 3)
     for h, w in ((4, 6), (5, 7), (1, 1)):
