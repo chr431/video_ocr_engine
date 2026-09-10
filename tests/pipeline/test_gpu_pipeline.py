@@ -164,18 +164,18 @@ def test_gpu_pipeline_force_aspect_supported(gpu_ok):
 
 
 def test_merge_effective_mode_resolution(monkeypatch):
+    """S9-2(D6)：env 在**构造期**解析冻结；构造后改 env 不再生效
+    （v1 语义已废除，见 docs/MIGRATION.md）。"""
     ex = _make()
-    # 引擎默认 binary
-    assert ex._merge_effective_mode() == "binary"
-    # TEXT_SEP_MERGE 覆盖引擎默认（contrast 已于 0.9.0 删除 → 归一 binary）
-    monkeypatch.setenv("TEXT_SEP_MERGE", "contrast")
-    assert ex._merge_effective_mode() == "binary"
-    monkeypatch.setenv("TEXT_SEP_MERGE", "1")
-    assert ex._merge_effective_mode() == "binary"
-    monkeypatch.setenv("TEXT_SEP_MERGE", "2")
     assert ex._merge_effective_mode() == "binary"
     monkeypatch.setenv("TEXT_SEP_MERGE", "off")
-    assert ex._merge_effective_mode() == ""
+    assert ex._merge_effective_mode() == "binary"   # 冻结
+    monkeypatch.setenv("TEXT_SEP_MERGE", "contrast")
+    assert _make()._merge_effective_mode() == "binary"  # 构造前生效:归一
+    monkeypatch.setenv("TEXT_SEP_MERGE", "2")
+    assert _make()._merge_effective_mode() == "binary"
+    monkeypatch.setenv("TEXT_SEP_MERGE", "off")
+    assert _make()._merge_effective_mode() == ""
     monkeypatch.delenv("TEXT_SEP_MERGE")
     # 显式构造参数 merge_text_sep
     ex2 = _make(merge_text_sep="")

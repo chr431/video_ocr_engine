@@ -48,6 +48,13 @@ class SessionSpec:
     # 输出挂钩（worker 线程调用；可见性由 finish() join 建立——§9）
     on_backend_used: Callable = lambda v: None
     on_degraded: Callable = lambda msg: None
+    # S9-2(D6) 注入口（None=沿用各模块调用期 env 读取，直接用户不变；
+    # 引擎路径由 resolve 构造期冻结后注入）
+    gamma: float | None = None
+    ocr_batch: int = 0                 # 0 → 沿用 _ocr_batch_size() 的 env 读取
+    ocr_instances: bool | None = None
+    gpu_ctc: bool | None = None
+    pad_floor_env: int | None = None
 
 
 class OcrSession:
@@ -152,10 +159,12 @@ class OcrSession:
                 _t_eng = time.perf_counter()
                 ot = spec.num_threads_fn()
                 engine_type = spec.engine_type_fn()
+                _inst = (spec.ocr_instances if spec.ocr_instances is not None
+                         else config.env_bool(config.OCR_INSTANCES_ENV,
+                                              default=True))
                 ocr_instances = (engine_type == 'onnxruntime'
                                  and ot >= config.OCR_INSTANCES_MIN_THREADS
-                                 and config.env_bool(config.OCR_INSTANCES_ENV,
-                                                     default=True))
+                                 and _inst)
                 try:
                     # 进程级引擎池（B5/C5）：跨视频复用 TRT 上下文/设备
                     # 缓冲，免去每个 extract 重付反序列化+分配。
@@ -165,12 +174,18 @@ class OcrSession:
                             acquire_ocr_engine(
                                 spec.model, 'onnxruntime',
                                 fill_width=spec.fill_width,
-                                num_threads=half)
+                                num_threads=half,
+                                pad_floor_env=spec.pad_floor_env,
+                                gamma=spec.gamma,
+                                gpu_ctc=spec.gpu_ctc)
                             for _ in range(2)]
                     else:
                         engines = [acquire_ocr_engine(
                             spec.model, engine_type,
-                            fill_width=spec.fill_width, num_threads=ot)]
+                            fill_width=spec.fill_width, num_threads=ot,
+                            pad_floor_env=spec.pad_floor_env,
+                            gamma=spec.gamma,
+                            gpu_ctc=spec.gpu_ctc)]
                 except BaseException:
                     logger.debug("引擎半建状态回收", exc_info=True)
                     # 半建状态（如第二实例构建失败）：已取到的引擎归池
@@ -192,7 +207,7 @@ class OcrSession:
             self.raw_ready[0] = (len(engines) == 1
                                  and getattr(engines[0], '_trt', None)
                                  is not None)
-            B = _ocr_batch_size()
+            B = (spec.ocr_batch or _ocr_batch_size())
             # TRT 批对齐 max_batch（§8.1）：TRT 按 profile max_batch 切
             # 子批，末批 batch 维变化前必须 cudaStreamSynchronize（TRT
             # 不允许 in-flight 改 context 形状）——OCR_BATCH=16 在
@@ -342,12 +357,14 @@ class OcrSession:
                             # force_aspect>0：**先定比例、后裁**（顺序 ⑦）。
                             # 反序会因内容宽高比被改变而引入畸变。
                             p = preprocess_standard(
-                                c, force_aspect=spec.force_aspect)
+                                c, force_aspect=spec.force_aspect,
+                                gamma=spec.gamma)
                             p = spec.crop_after_aspect(p)
                         else:
                             p = preprocess_standard(
                                 spec.crop_to_content(c),
-                                force_aspect=spec.force_aspect)
+                                force_aspect=spec.force_aspect,
+                                gamma=spec.gamma)
                         prepped.append((i, p))
                     if spec.prof_end is not None:
                         spec.prof_end('ocr', 'preprocess', _t_p)

@@ -213,7 +213,9 @@ class SegmentStateMachine:
     def __init__(self, frames: list, *, C: float,
                  on_emit, on_similar,
                  on_cancel=None, on_progress=None,
-                 debug_tag: str | None = None):
+                 debug_tag: str | None = None,
+                 debug_bounds: "bool | None" = None):
+        self._debug_bounds = debug_bounds   # S9-2(D6):None=feed 期读 env(直连用户兼容)
         """on_emit(seg, rep_payload, frac) — 段闭合投递（frac = k/total）。
         on_similar(a_payload, b_payload) -> bool — 相邻发射段代表帧相似判定；
             仅在已有发射段时被调用（空段列表不调用，等价宿主原 `segs and` 短路）。
@@ -255,7 +257,8 @@ class SegmentStateMachine:
             if changed:
                 seg = self._frames[self._s:k]
                 if (self._debug_tag is not None
-                        and config.env_bool(config.DEBUG_BOUNDS_ENV)):
+                        and (self._debug_bounds if self._debug_bounds is not None
+                             else config.env_bool(config.DEBUG_BOUNDS_ENV))):
                     print(f'[{self._debug_tag}]{fi}:{score:.0f}', flush=True)
                 if self.segs and self._on_similar(self._last_rep_payload,
                                                   self._rep_payload):

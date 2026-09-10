@@ -43,7 +43,9 @@ def test_extractor_ast_no_app_imports():
     tree = ast.parse(src.read_text(encoding="utf-8"))
     imports: set[str] = set()
     for n in ast.walk(tree):
-        if isinstance(n, ast.ImportFrom) and n.module:
+        # S9-2:相对导入(包内子模块,如 .config)不是应用层依赖
+        if (isinstance(n, ast.ImportFrom) and n.module
+                and n.level == 0):
             imports.add(n.module.split(".")[0])
         elif isinstance(n, ast.Import):
             for a in n.names:

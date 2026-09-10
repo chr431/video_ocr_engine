@@ -184,7 +184,9 @@ extern "C" __global__ void prep_gray_raw(
 }
 '''
 
-    def __init__(self, stream: int | None = None) -> None:
+    def __init__(self, stream: int | None = None,
+                 gamma: float | None = None) -> None:
+        self._gamma = gamma   # S9-2(D6)：None=每批读 env(旧语义)；注入=构造期冻结
         _cc = _cuda_core()
         Buffer, Device, LaunchConfig, launch = (
             _cc.Buffer, _cc.Device, _cc.LaunchConfig, _cc.launch)
@@ -366,7 +368,8 @@ extern "C" __global__ void prep_gray_raw(
                 self._stream)
         out_nbytes = B * 3 * dst_h * dst_w * 4
         out_dev = self._ensure_out(out_nbytes)
-        gamma = config.env_float(config.OCR_GAMMA_ENV, float(config.OCR_GAMMA))
+        gamma = (self._gamma if self._gamma is not None else
+                 config.env_float(config.OCR_GAMMA_ENV, float(config.OCR_GAMMA)))
         shape = (B, 3, dst_h, dst_w)
         total = int(np.prod(shape))
         block = 256
@@ -465,7 +468,9 @@ extern "C" __global__ void argmax_last(
 }
 '''
 
-    def __init__(self, stream: int | None = None) -> None:
+    def __init__(self, stream: int | None = None,
+                 gamma: float | None = None) -> None:
+        self._gamma = gamma   # S9-2(D6)：None=每批读 env(旧语义)；注入=构造期冻结
         _cc = _cuda_core()
         Buffer, Device, LaunchConfig, launch = (
             _cc.Buffer, _cc.Device, _cc.LaunchConfig, _cc.launch)

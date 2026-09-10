@@ -43,6 +43,7 @@ from ._helpers import (  # noqa: F401
     _decode_progress_pct, _ocr_progress_pct,
     _read_fps_from_vr,
 )
+from .config import resolve
 from .pipeline.engine import SegmentEngine
 from .pipeline.gpu_backend import GpuRunSpec, run_gpu_pipeline
 from .pipeline.host_backend import HostRunSpec, run_host_pipeline
@@ -96,8 +97,29 @@ class FieldExtractor:
         self._ocr_backend_used = ""    # run 后填实际引擎（供 CSV 头输出）
         self._buffer_size = (buffer_size if buffer_size is not None
                              else config.DEFAULT_BUFFER_SIZE)
-        self._fill_width = (fill_width if fill_width is not None
-                            else config.DEFAULT_FILL_WIDTH)
+        # S9-2（D6/Q5）：配置构造期一次解析并冻结（resolve 为唯一 env
+        # 读取点；构造后改 env 不再生效——v1 README 曾承诺"仍生效"，
+        # 属有意行为变更，见 docs/MIGRATION.md）。优先级：显式参数 >
+        # env > 默认（Q5）；VOE_ENV_WINS=1 逃生门恢复 v1 语义（resolve
+        # 内发 DeprecationWarning，0.14.0 移除）。
+        self._rc = resolve(env=_os.environ)
+        _env_wins = _os.environ.get("VOE_ENV_WINS", "").strip().lower() in (
+            "1", "true", "yes", "on")
+        _pad_env = self._rc.ocr_pad_small
+        if _env_wins:
+            # v1 语义：env 恒先于参数（经 pad_floor_env 注入复刻）
+            self._fill_width = (fill_width if fill_width is not None
+                                else config.DEFAULT_FILL_WIDTH)
+            self._pad_floor_env = _pad_env
+        elif fill_width is not None:
+            self._fill_width = fill_width          # Q5：显式参数锁定
+            self._pad_floor_env = 0
+        else:
+            self._fill_width = config.DEFAULT_FILL_WIDTH
+            self._pad_floor_env = _pad_env          # 参数缺省 → env 抬升下限
+        self._merge_text_sep_resolved = (merge_text_sep if merge_text_sep is not None
+                                         else self._rc.segment_text_sep_merge)
+        self._merge_text_sep = self._merge_text_sep_resolved
         self._C = (C if C is not None else config.SEG_C)  # 分段聚类阈值
         self._sample_stride = max(1, int(sample_stride))
         self._keep_crops = bool(keep_crops)
@@ -119,9 +141,9 @@ class FieldExtractor:
             float(merge_similar_threshold)
             if merge_similar_threshold is not None
             else float(config.SEG_MERGE_SIMILAR_THRESHOLD))
-        self._merge_text_sep = (
-            merge_text_sep if merge_text_sep is not None
-            else config.DEFAULT_MERGE_TEXT_SEP)
+        # S9-2(D6)：merge_text_sep 构造期解析（参数 > env > 默认）；
+        # 早前 :120 的赋值是初值，此处为最终冻结值
+        self._merge_text_sep = self._merge_text_sep_resolved
         self._color_range = 0            # run 时从 decoder get_color_range 读取
         self._codec = ""                 # run 时从 decoder get_codec 探测
         self._backend = ""
@@ -139,7 +161,7 @@ class FieldExtractor:
         self._ocr_texts: list = []
         self._ocr_confs: list = []
         self._n_segments = 0
-        self._profile_enabled = config.env_bool(config.ENGINE_PROFILE_ENV)
+        self._profile_enabled = self._rc.diag_profile
         self.profile: dict = {}
         self._prof_lock = None
         if self._profile_enabled:
@@ -189,25 +211,21 @@ class FieldExtractor:
     #    构造后改 env 即生效；此前 autocrop 四项在构造期烘焙，语义不一致）──
     @property
     def _ocr_autocrop(self) -> bool:
-        return config.env_bool(config.OCR_ROI_AUTOCROP_ENV,
-                               default=config.OCR_ROI_AUTOCROP_DEFAULT)
+        return self._rc.ocr_roi_autocrop
 
     @property
     def _ocr_autocrop_margin_pct(self) -> int:
-        return config.env_int(config.OCR_ROI_AUTOCROP_MARGIN_ENV,
-                              config.OCR_ROI_AUTOCROP_MARGIN_PCT)
+        return self._rc.ocr_roi_autocrop_margin
 
     @property
     def _ocr_autocrop_min_gain(self) -> float:
         # 最小收益门槛：裁掉比例低于此值就整段不裁（紧凑 ROI 自动不裁，
         # 避免在几乎没留白的段上承担切笔画的风险）。见 config 中的实测表。
-        return max(0, config.env_int(config.OCR_ROI_AUTOCROP_MIN_GAIN_ENV,
-                                     config.OCR_ROI_AUTOCROP_MIN_GAIN_PCT)) / 100.0
+        return max(0, self._rc.ocr_roi_autocrop_min_gain) / 100.0
 
     @property
     def _ocr_reorder_window(self) -> int:
-        return max(1, config.env_int(config.OCR_REORDER_WINDOW_ENV,
-                                     config.OCR_REORDER_WINDOW_DEFAULT))
+        return max(1, self._rc.ocr_reorder_window)
 
     def _ensure_roi_capable_decoder(self) -> None:
         """构造期校验解码器支持 ROI-first 输出（DESIGN-REVIEW C8）。
@@ -232,9 +250,8 @@ class FieldExtractor:
         """merge_similar 使用的分离模式（env 钩子优先级与 _segments_similar
         一致）：'binary' | ''（原始灰度比较）。contrast 模式已移除
         （实验证实无净收益，0.9.0 清理；历史见 docs/PERFORMANCE.md）。"""
-        _m = _os.environ.get(
-            config.TEXT_SEP_MERGE_ENV, self._merge_text_sep or ''
-        ).strip().lower()
+        # S9-2(D6)：构造期解析（参数>env>默认），不再调用期读 env
+        _m = (self._merge_text_sep or '').strip().lower()
         if _m in ('2', 'binary'):
             return 'binary'
         if _m in ('off', ''):
@@ -281,9 +298,14 @@ class FieldExtractor:
         finish() join 建立，§9 契约）。一次 extract() 一个实例，
         宿主/GPU 两管线共用。
         """
+        from .pipeline.ocr_stage import OcrSession
+        return OcrSession(self._build_session_spec(), _ocr_engines)
+
+    def _build_session_spec(self):
+        """纯构建（无线程/无引擎）——S9-2 供会话与测试共用。"""
         s = self
-        from .pipeline.ocr_stage import OcrSession, SessionSpec
-        return OcrSession(SessionSpec(
+        from .pipeline.ocr_stage import SessionSpec
+        return SessionSpec(
             buffer_size=s._buffer_size,
             model=s._ocr_model,
             fill_width=s._fill_width,
@@ -301,7 +323,12 @@ class FieldExtractor:
             cancel=s._cancel,
             on_backend_used=lambda v: setattr(s, '_ocr_backend_used', v),
             on_degraded=s._degraded.append,
-        ), _ocr_engines)
+            gamma=s._rc.ocr_gamma,
+            ocr_batch=s._rc.ocr_batch,
+            ocr_instances=s._rc.ocr_instances,
+            gpu_ctc=s._rc.ocr_gpu_ctc,
+            pad_floor_env=s._pad_floor_env,
+        )
 
     def _set_bin_thresh(self, th: int) -> None:
         """校准阈值即时回写（F-4：合并判定在流式期间活读本值，
@@ -511,7 +538,7 @@ class FieldExtractor:
             # 旧 decord（无 hybrid ctx）回退项目层 HybridDecoder 壳（v3~v7）。
             try:
                 from decord import hybrid as _hy, hybrid_gpu as _hyg
-                _ct = config.env_int(config.HYBRID_CPU_THREADS_ENV, 0)
+                _ct = self._rc.decode_hybrid_cpu_threads
                 if _ct <= 0:
                     # 延续项目层 hybrid 的 CPU 线程分档（见下方 v5 注释的历史
                     # 依据）：核数 3/8，钳 [MIN, MAX]。av1 例外：fork 0.8.1
@@ -608,9 +635,11 @@ class FieldExtractor:
         # 经模块属性解析:tests/探针 patch _gpu_pipeline.nvdec_available
         # 等模块级名字(§10.4 patch 点),函数级导入保持该间接性
         _cuda = _gp._cuda_python_available
-        _env = _os.environ.get(config.GPU_PIPELINE_ENV)
-        if _env is not None:
-            if not config.env_bool(config.GPU_PIPELINE_ENV, default=False):
+        # S9-2(D6)：三态旋钮构造期冻结（未设 None=规则 / falsy 关 /
+        # truthy 强制 / 非法值=关——resolve 逐位复刻 v1 解析）
+        _val = self._rc.pipeline_gpu
+        if _val is not None:
+            if not _val:
                 return False
             forced = True
         else:
@@ -712,7 +741,7 @@ class FieldExtractor:
             DECODE_THREADS env 覆盖（>0 时直接返回，与 OCR_THREADS 对齐）：
             调参与 A/B 用；不设置时行为与上述分档一致。
             """
-        _ovr = config.env_int(config.DECODE_THREADS_ENV, 0)
+        _ovr = self._rc.decode_num_threads
         if _ovr > 0:
             return _ovr
         from video_ocr_engine.ocr.native import auto_ocr_thread_count
@@ -820,7 +849,7 @@ class FieldExtractor:
             差 → 保持全核。显式参数传入引擎，不污染全局 env。
             """
         from video_ocr_engine.ocr.native import auto_ocr_thread_count
-        _env = config.env_int(config.OCR_THREADS_ENV, 0)
+        _env = self._rc.ocr_threads
         if _env:
             return max(1, _env)
         cores = auto_ocr_thread_count()

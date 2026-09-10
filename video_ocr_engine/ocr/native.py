@@ -86,11 +86,18 @@ class OcrEngine:
                  engine_type: str = "onnxruntime",
                  progress_cb: "callable | None" = None,
                  fill_width: int = 0,
-                 num_threads: int | None = None) -> None:
+                 num_threads: int | None = None,
+                 pad_floor_env: "int | None" = None,
+                 gamma: "float | None" = None,
+                 gpu_ctc: "bool | None" = None) -> None:
+        # S9-2(D6):三个 env 旋钮可由上层一次性解析后注入;None=沿用
+        # 本模块的调用期 env 读取(直接构造 OcrEngine 的旧用法不变)
         self._variant = variant
         self._progress_cb = progress_cb
         self._fill_width = fill_width
         self._num_threads = num_threads
+        self._pad_floor_env = pad_floor_env
+        self._gamma = gamma
         self._lock = threading.Lock()
         size = variant.replace("v6_", "")
         models = _models_dir()
@@ -112,7 +119,8 @@ class OcrEngine:
         # （`call_gpu_raw`）两条路径都生效，语义等价、结果逐位一致
         # （见 docs/PERFORMANCE.md §16.2 P0-2）；GPU_CTC=0 显式关闭。
         self._gpu_ctc_mode = (engine_type == "tensorrt" and
-                              config.env_bool(config.GPU_CTC_ENV, default=True))
+                              (gpu_ctc if gpu_ctc is not None else
+                               config.env_bool(config.GPU_CTC_ENV, default=True)))
         if engine_type == "tensorrt":
             try:
                 self._trt = TrtEngine(models, size, progress_cb=self._progress_cb)
@@ -317,7 +325,8 @@ class OcrEngine:
         # fill_width=DEFAULT_FILL_WIDTH(224) → **OCR_PAD_SMALL 永远轮不到**，
         # README 里那个"OCR 输入 pad 宽下限覆盖"的旋钮其实是死的。
         # env 是"调参覆盖"语义，必须能盖过构造参数，故提到最前。
-        _env = config.env_int(config.OCR_PAD_SMALL_ENV, 0)
+        _env = (self._pad_floor_env if self._pad_floor_env is not None
+                else config.env_int(config.OCR_PAD_SMALL_ENV, 0))
         if _env > 0:
             _floor = _env
         elif self._fill_width > 0:
@@ -351,7 +360,8 @@ class OcrEngine:
         """创建 GpuPreprocessor 并与 TrtEngine 共享同一 CUDA stream。"""
         from video_ocr_engine.ocr.trt import GpuPreprocessor
         if self._gpu_pre is None:
-            self._gpu_pre = GpuPreprocessor(stream=self._trt._ensure_stream())
+            self._gpu_pre = GpuPreprocessor(stream=self._trt._ensure_stream(),
+                                        gamma=self._gamma)
         return self._gpu_pre
 
     def _call_trt_gpu(self, img_list: list, max_wh: float,
@@ -396,7 +406,8 @@ class OcrEngine:
         src_h = int(infos[0][1])
         src_w = int(infos[0][2])
         # 优先级同 __call__：env OCR_PAD_SMALL > fill_width > 模型下限。
-        _env = config.env_int(config.OCR_PAD_SMALL_ENV, 0)
+        _env = (self._pad_floor_env if self._pad_floor_env is not None
+                else config.env_int(config.OCR_PAD_SMALL_ENV, 0))
         if _env > 0:
             _floor = _env
         elif self._fill_width > 0:
@@ -485,9 +496,17 @@ _POOL_MAX_TOTAL = 16             # 限制所有 key 的空闲引擎总数
 def acquire_ocr_engine(variant: str = "v6_small",
                        engine_type: str = "onnxruntime", *,
                        fill_width: int = 0,
-                       num_threads: int | None = None) -> OcrEngine:
-    """从池取空闲引擎；无空闲则新建。构造 key 记录在引擎上供 checkin 归位。"""
-    key = (variant, engine_type, int(fill_width or 0), int(num_threads or 0))
+                       num_threads: int | None = None,
+                       pad_floor_env: "int | None" = None,
+                       gamma: "float | None" = None,
+                       gpu_ctc: "bool | None" = None) -> OcrEngine:
+    """从池取空闲引擎；无空闲则新建。构造 key 记录在引擎上供 checkin 归位。
+
+    S9-2：pad/gamma/gpu_ctc 为 D6 注入口（None=引擎内调用期读 env）。
+    仅当注入值非 None 时才参与池 key——同一解析结果的引擎共享池位
+    （PI-10 key 稳定性不变：引擎路径的注入值对同一实例恒定）。"""
+    key = (variant, engine_type, int(fill_width or 0), int(num_threads or 0),
+           int(pad_floor_env) if pad_floor_env is not None else -1)
     with _POOL_LOCK:
         idle = _ENGINE_POOL.get(key)
         if idle:
@@ -495,7 +514,8 @@ def acquire_ocr_engine(variant: str = "v6_small",
             _POOL_IDLE_ORDER.pop(id(eng), None)
             return eng
     eng = OcrEngine(variant, engine_type, fill_width=fill_width,
-                    num_threads=num_threads)
+                    num_threads=num_threads, pad_floor_env=pad_floor_env,
+                    gamma=gamma, gpu_ctc=gpu_ctc)
     eng._pool_key = key
     return eng
 
