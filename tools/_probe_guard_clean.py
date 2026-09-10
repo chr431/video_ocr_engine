@@ -44,7 +44,7 @@ mode = sys.argv[1]                      # off | guard | noguard
 if mode == 'noguard':
     # 绕过 pad 下限守卫：只保留"动态范围过小 / 内容满宽"的保守跳过
     import numpy as np
-    from video_ocr_engine._host_pipeline import _HostPipelineMixin
+    from video_ocr_engine.extractor import FieldExtractor as _HostPipelineMixin  # S3-3d:mixin 已并入
 
     def _crop(self, crop):
         g = crop[..., 0] if crop.ndim == 3 else crop

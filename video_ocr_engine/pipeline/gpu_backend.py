@@ -33,17 +33,13 @@ class _SpecView:
     """设备侧协作函数的 ex 适配视图（迁移期桥接）。
 
     _gpu_prepare_calibration / _gpu_frame_stream_* 只读 ex 的 4 个属性
-    （_color_range / _batch_luma / _bin_thresh / _prof_end）；fallback 需
-    _degraded / _run_pipelined_host。本视图把它们指向 spec 注入的回调——
-    设备函数零改动，S4 拆分时随迁消除。
+    （_color_range / _batch_luma / _bin_thresh / _prof_end）。本视图把它们
+    指向 spec 注入的回调——设备函数零改动，S4 拆分时随迁消除。
     """
 
-    def __init__(self, spec: GpuRunSpec, batch_luma: Callable,
-                 fallback: Callable) -> None:
+    def __init__(self, spec: GpuRunSpec, batch_luma: Callable) -> None:
         self._spec = spec
         self._batch_luma = batch_luma
-        self._fallback = fallback
-        self._gpu_pipeline_mode = True      # fallback 链读（B5 语义不变）
 
     @property
     def _color_range(self):
@@ -65,12 +61,6 @@ class _SpecView:
     def _prof_end(self, group, key, t0):
         if self._spec.prof_end is not None:
             self._spec.prof_end(group, key, t0)
-
-    def _degraded_append(self, msg):
-        self._spec.on_degraded(msg)
-
-    def _run_pipelined_host(self, engines=None, vr=None):
-        return self._fallback(engines, vr)
 
 
 @dataclass
@@ -100,8 +90,6 @@ class GpuRunSpec:
     open_vr: Callable
     start_ocr_session: Callable
     batch_luma: Callable               # (B,H,W[,C]) -> (B,h,w)（CPU 解码分支）
-    fallback_to_host: Callable         # (engines, vr) -> tuple（形状不符回退）
-    on_degraded: Callable = lambda msg: None
     progress: Callable = lambda m, p: None
     cancel: Callable = lambda: None
     prof_end: Callable | None = None
@@ -124,6 +112,7 @@ class GpuRunResult:
     n_segments: int = 0
     fell_back_to_host: bool = False
     fallback_engines: list | None = None    # 回退宿主时透传（避免二次 acquire）
+    fallback_vr: object = None              # C10：复用已打开的 reader
 
     def as_tuple(self) -> tuple:
         return (self.frames, self.segs, self.texts, self.confs, self.rep_frames)
@@ -209,7 +198,7 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
     yuv = spec.yuv_output
     limited = spec.color_range != 1
     # 设备侧协作函数的 ex 适配视图（迁移期桥接，S4 拆分时消除）
-    exv = _SpecView(spec, spec.batch_luma, spec.fallback_to_host)
+    exv = _SpecView(spec, spec.batch_luma)
 
     class _DeferredAutocropper:
         def __init__(self, ctx_ref, spec_ref, session_ref):
@@ -278,18 +267,17 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
             pass  # 清理路径：close 失败无需上抛
         raise
     if not _calib_ok:
-        # 形状不符等：回退宿主（ocr_session 尚未消费任何任务，整体移交）
+        # 形状不符等：回退宿主（C10 语义）——会话收尾（worker 归还引擎）、
+        # 释放设备侧临时缓冲，但 **reader 不 close**：宿主路径复用已打开的
+        # reader（get_batch 随机访问无消费状态，免二次打开/解码器悬挂）。
         res.fell_back_to_host = True
         res.fallback_engines = ocr_engines
+        res.fallback_vr = vr
         res.fps = spec.fps_box[0]
         try:
             ocr_session.finish()   # 空会话收尾：worker 归还引擎
         except BaseException:
             logger.debug("ocr_session.finish 清理忽略异常", exc_info=True)
-        try:
-            vr.close()
-        except Exception:
-            pass  # 清理路径：close 失败无需上抛
         _gpu_release_partial(ctx)
         return res
     res.bin_thresh = _th

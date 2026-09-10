@@ -43,18 +43,14 @@ from ._helpers import (  # noqa: F401
     _decode_progress_pct, _ocr_progress_pct,
     _read_fps_from_vr,
 )
-from ._host_pipeline import (  # noqa: F401
-    _HostPipelineMixin,
-)
-from ._gpu_pipeline import _GpuPipelineMixin
-from .pipeline.engine import SegmentEngine, _LegacyBackend
+from .pipeline.engine import SegmentEngine
 from .pipeline.gpu_backend import GpuRunSpec, run_gpu_pipeline
 from .pipeline.host_backend import HostRunSpec, run_host_pipeline
 
 logger = logging.getLogger(__name__)
 
 
-class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
+class FieldExtractor:
     """从视频固定区域提取文本的通用引擎（识别链：解码∥分段∥OCR）。
 
     构造参数：
@@ -244,6 +240,68 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         if _m in ('off', ''):
             return ''
         return 'binary'   # contrast/未知值 → 引擎默认 binary
+
+    # ═══════════════ OCR 输入宽度自适应裁切 ═══════════════
+    # 统一实现（含余量/最小收益门槛的实测依据 docstring）在
+    # segmentation.content_range_to_crop / crop_to_content / crop_after_aspect；
+    # GPU 直通（_autocrop_device）与宿主预处理共用同一余量数学。
+
+    def _content_range_to_crop(self, first: int, last: int, w: int):
+        """「有墨迹列范围」→ 裁切区间；实现见 segmentation.content_range_to_crop。"""
+        from segmentation import content_range_to_crop
+        return content_range_to_crop(
+            first, last, w,
+            margin_pct=self._ocr_autocrop_margin_pct,
+            min_gain=self._ocr_autocrop_min_gain)
+
+    def _crop_to_content(self, crop):
+        """按二值图裁掉两侧空白（fa=0 路径）；实现见
+        segmentation.crop_to_content（fa>0 走 _crop_after_aspect 顺序⑦）。"""
+        from segmentation import crop_to_content
+        return crop_to_content(
+            crop, self._bin_thresh,
+            autocrop=self._ocr_autocrop,
+            force_aspect=float(getattr(self, '_force_aspect', 0) or 0.0),
+            margin_pct=self._ocr_autocrop_margin_pct,
+            min_gain=self._ocr_autocrop_min_gain)
+
+    def _crop_after_aspect(self, img):
+        """已定比例图上再按内容列裁（fa>0 路径）；实现见
+        segmentation.crop_after_aspect（阈值现算 Otsu，不能用校准阈值）。"""
+        from segmentation import crop_after_aspect
+        return crop_after_aspect(
+            img, autocrop=self._ocr_autocrop,
+            margin_pct=self._ocr_autocrop_margin_pct,
+            min_gain=self._ocr_autocrop_min_gain)
+
+    def _start_ocr_session(self, _ocr_engines: list | None = None) -> "OcrSession":
+        """启动 OCR 消费会话（S3-3b：构建显式 SessionSpec）。
+
+        会话不再读本实例的私有属性；跨线程回写经输出挂钩（可见性由
+        finish() join 建立，§9 契约）。一次 extract() 一个实例，
+        宿主/GPU 两管线共用。
+        """
+        s = self
+        from .pipeline.ocr_stage import OcrSession, SessionSpec
+        return OcrSession(SessionSpec(
+            buffer_size=s._buffer_size,
+            model=s._ocr_model,
+            fill_width=s._fill_width,
+            force_aspect=float(getattr(s, '_force_aspect', 0) or 0.0),
+            reorder_window=s._ocr_reorder_window,
+            yuv_output=s._yuv_output,
+            color_range=s._color_range,
+            gpu_pipeline_mode=getattr(s, '_gpu_pipeline_mode', False),
+            num_threads_fn=s._ocr_num_threads,
+            engine_type_fn=s._ocr_engine_type,
+            crop_to_content=s._crop_to_content,
+            crop_after_aspect=s._crop_after_aspect,
+            prof_end=s._prof_end,
+            progress=s._progress,
+            cancel=s._cancel,
+            on_backend_used=lambda v: setattr(s, '_ocr_backend_used', v),
+            on_degraded=s._degraded.append,
+        ), _ocr_engines)
 
     def _set_bin_thresh(self, th: int) -> None:
         """校准阈值即时回写（F-4：合并判定在流式期间活读本值，
@@ -528,12 +586,57 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
             """
         return (self._ocr_backend or 'auto').lower() != 'cpu'
 
+    def _gpu_pipeline_enabled(self) -> bool:
+        """GPU 全驻留零拷贝管线：NVDEC 直通或 CPU 解码 + H2D（P1-3）。
+
+        默认（GPU_PIPELINE 未设置）启用条件（全部满足）：
+        - decode_backend ∈ {auto, nvdec, cpu, hybrid}：auto/nvdec 走 NVDEC
+          设备指针直通（NVDEC 打开失败时回退 CPU 解码分支）；cpu 显式
+          选择 CPU 软解 + H2D 进 GPU 分段/OCR（P1-3 解耦——CPU 解码的
+          墙钟收益与零拷贝 OCR 不再互斥）；hybrid 走 CPU 分支消费
+          HybridDecoder 交付的宿主数组（§8.3：双解码收益 + 零拷贝 OCR
+          叠加，原互斥门控已移除）。
+        - TensorRT 可用且 ocr_backend ≠ cpu —— 全程 raw 才有净收益
+          （GPU 分段+ONNX 实测无优势，默认走宿主管线，配置面更简）
+        - cuda-python（cuda.core / cuda.bindings）可导入
+        force_aspect 已支持（contrast 模式已随 0.9.0 删除，不再门控回退）。
+
+        env GPU_PIPELINE：'0' 显式关闭；'1' 强制尝试（跳过 TRT 要求，
+        允许 GPU 分段+ONNX 等实验组合）；不设置 = 上述默认规则。
+        """
+        from . import _gpu_pipeline as _gp
+        # 经模块属性解析:tests/探针 patch _gpu_pipeline.nvdec_available
+        # 等模块级名字(§10.4 patch 点),函数级导入保持该间接性
+        _cuda = _gp._cuda_python_available
+        _env = _os.environ.get(config.GPU_PIPELINE_ENV)
+        if _env is not None:
+            if not config.env_bool(config.GPU_PIPELINE_ENV, default=False):
+                return False
+            forced = True
+        else:
+            forced = False
+        backend = (self._decode_backend or 'auto').lower()
+        if backend not in ('auto', 'nvdec', 'cpu', 'hybrid'):
+            return False
+        if not _cuda():
+            return False
+        if not forced:
+            if (self._ocr_backend or 'auto').lower() == 'cpu':
+                return False
+            if not _gp.tensorrt_available():
+                return False
+        if backend == 'cpu':
+            # CPU 解码分支不依赖 NVDEC：跳过 nvdec 探测（避免无谓的
+            # GPU reader 试开；TRT 可用性已由上方门控确认）。
+            return True
+        return _gp.nvdec_available(str(self._video_path))
+
     def _run_pipelined_gpu(self, _ocr_engines: list | None = None):
         """GPU 全驻留管线门面（S3-3c）：构建显式 GpuRunSpec → 调用
         pipeline.gpu_backend.run_gpu_pipeline → 同步结果回实例。
 
         驱动主体已迁入 gpu_backend（B4 autocropper / B5 y_pool 构造注入）；
-        形状不符回退经 fallback_to_host 回调复用已打开的 reader（C10）。"""
+        形状不符回退时由门面把已打开的 reader 移交宿主路径（C10）。"""
         self._gpu_pipeline_mode = True   # 会话启动前置位（F-5）
         spec = GpuRunSpec(
             frame_start=self._frame_start, frame_end=self._frame_end,
@@ -552,9 +655,6 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
             open_vr=self._open_vr,
             start_ocr_session=self._start_ocr_session,
             batch_luma=self._batch_luma,
-            fallback_to_host=lambda engines, vr: self._run_pipelined_host(
-                engines, vr),
-            on_degraded=self._degraded.append,
             progress=self._progress, cancel=self._cancel,
             prof_end=self._prof_end,
             on_bin_thresh=self._set_bin_thresh,
@@ -562,7 +662,8 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         res = run_gpu_pipeline(spec, _ocr_engines)
         if res.fell_back_to_host:
             self._degraded.append('GPU 管线形状不符，回退宿主管线')
-            return self._run_pipelined_host(res.fallback_engines)
+            return self._run_pipelined_host(res.fallback_engines,
+                                            res.fallback_vr)
         self._fps = spec.fps_box[0]
         self._bin_thresh = res.bin_thresh
         self.timing.update(res.timing)
@@ -730,23 +831,13 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         return cores
 
     def _run_pipelined(self, _ocr_engines: list | None = None):
-        """入口分发：GPU 全驻留管线（_run_pipelined_gpu）或宿主管线。
+        """入口分发（S3-3d）：SegmentEngine 唯一编排。
 
-        _ocr_engines 两条路径都透传（B5：GPU 路径此前丢弃该参数）；
-        None = 从进程级 OCR 引擎池取（ocr_native.acquire_ocr_engine）。
-
-        S3-2：可经 VOE_V2_ENGINE=1 走 SegmentEngine 编排（当前引擎内
-        部仍委托本类的 legacy 双驱动器，双跑对账用；S3-3 迁移内部）。"""
-        if SegmentEngine.legacy_engine_requested():
-            return SegmentEngine(
-                _LegacyBackend(self, _ocr_engines)).run().as_tuple()
-        return self._run_pipelined_legacy(_ocr_engines)
-
-    def _run_pipelined_legacy(self, _ocr_engines: list | None = None):
-        """v1 双驱动器分派（S3-3 的迁移对象）。"""
-        if self._gpu_pipeline_enabled():
-            return self._run_pipelined_gpu(_ocr_engines)
-        return self._run_pipelined_host(_ocr_engines)
+        _ocr_engines 两条路径都透传（B5）；None = 从进程级 OCR 引擎池取
+        （ocr_native.acquire_ocr_engine）。引擎按 GPU 门控选择后端
+        （gpu_backend / host_backend）；过渡开关 VOE_V2_ENGINE 已随
+        用户裁决（实验钩子不承重）删除。"""
+        return SegmentEngine(self).run(_ocr_engines).as_tuple()
 
     def _run_pipelined_host(self, _ocr_engines: list | None = None,
                             _preopened_vr=None):

@@ -1,17 +1,15 @@
-"""SegmentEngine —— 唯一编排点（v2 §6.4 / D2）。
+"""SegmentEngine —— 唯一编排点（v2 §6.4 / D2；S3-3d 起为唯一入口）。
 
-S3-2 交付骨架与接缝：端口（FrameSource / SegmentBackend / OcrBackend）、
-RunOutcome 载体、以及**旧路径适配器**——engine.run() 目前委托给 v1 的
-宿主/GPU 双驱动器（_run_pipelined_host / _run_pipelined_gpu），行为零变化。
-S3-3 把驱动器内部逐步迁入 HostSegmentBackend / GpuSegmentBackend 后，
-本类成为真正的三段编排（calibrate → backend.run → ocr.drain）。
+职责：按门面状态选择后端（GPU 全驻留 / 宿主），产出 RunOutcome。
+S3-3d 用户裁决后不再保留 VOE_V2_ENGINE 过渡开关与 _LegacyBackend——
+引擎即唯一路径（实验钩子不承重）。端口（FrameSource / SegmentBackend /
+OcrBackend，decode/port.py 与 ocr/port.py）已定义，S4 起后端以
+SegmentBackend 实现类落地并吸收两驱动逐字节相同的 setup/teardown 段。
 
-emit 契约自 S3 起即为**批量签名**（v2 §6.3 r3 定稿）：初期实现可逐段
-转发，但接口不再中途变更。
+emit 契约为**批量签名**（v2 §6.3 r3 定稿）。
 """
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from typing import Callable, Protocol, Sequence
 
@@ -37,7 +35,7 @@ class RunOutcome:
     texts: list = field(default_factory=list)
     confs: list = field(default_factory=list)
     rep_frames: list = field(default_factory=list)
-    report: dict | None = None          # S3-3 起：RunReport（§8.6）
+    report: dict | None = None          # S4 起：RunReport（§8.6）
 
     def as_tuple(self) -> tuple:
         """与 v1 `_run_pipelined` 返回形状逐位兼容（迁移期）。"""
@@ -45,37 +43,16 @@ class RunOutcome:
                 self.rep_frames)
 
 
-class _LegacyBackend:
-    """S3-2 适配器：完整复用 v1 双驱动器（452+137 行），零行为变化。
-
-    S3-3 的迁移目标就是它的内部；迁移完成前 FieldExtractor 可经
-    VOE_V2_ENGINE=1 试运行新编排（当前=同一路径，双跑对账用）。
-    """
-
-    name = "legacy"
-
-    def __init__(self, ex, ocr_engines: list | None = None) -> None:
-        self._ex = ex
-        self._engines = ocr_engines
-
-    def run(self, src=None, cfg=None, emit=None, progress=None,
-            cancel=None) -> RunOutcome:
-        frames, segs, texts, confs, rep = self._ex._run_pipelined_legacy(
-            self._engines)
-        return RunOutcome(frames, segs, texts, confs, rep)
-
-
 class SegmentEngine:
-    """编排唯一出处。构造期注入 backend；run() 产出 RunOutcome。"""
+    """编排唯一出处：选择后端（GPU 门控通过 → gpu_backend，否则宿主）。"""
 
-    def __init__(self, backend: SegmentBackend) -> None:
-        self._backend = backend
+    def __init__(self, ex) -> None:
+        self._ex = ex
 
-    def run(self) -> RunOutcome:
-        return self._backend.run()
-
-    @staticmethod
-    def legacy_engine_requested() -> bool:
-        """VOE_V2_ENGINE=1 时走 SegmentEngine（当前与旧路径同源，双跑对账）。"""
-        return os.environ.get("VOE_V2_ENGINE", "").strip().lower() in (
-            "1", "true", "yes", "on")
+    def run(self, ocr_engines: list | None = None) -> RunOutcome:
+        ex = self._ex
+        if ex._gpu_pipeline_enabled():
+            outcome = ex._run_pipelined_gpu(ocr_engines)
+        else:
+            outcome = ex._run_pipelined_host(ocr_engines)
+        return RunOutcome(*outcome)

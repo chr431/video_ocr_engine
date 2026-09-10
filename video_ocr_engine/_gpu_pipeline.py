@@ -1,17 +1,19 @@
-"""GPU 全驻留零拷贝管线（_GpuPipelineMixin）：NVDEC 默认主路径。
+"""GPU 设备侧机制库（S3-3d 起不含编排）：池 / 帧流 / 校准 / 部分释放。
 
-从 extractor.py 拆出：_gpu_pipeline_enabled / _run_pipelined_gpu。GPU 预处理/
-归约/帧分析内核位于 video_ocr_engine._gpu_kernels（ocr_trt re-export）。
-FieldExtractor 组合本 mixin 获得这两个方法。
+S3-3c 编排驱动已迁 pipeline.gpu_backend；_gpu_pipeline_enabled 已并入
+FieldExtractor；_gpu_fallback_to_host 已删（回退语义在 gpu_backend 与
+门面交接）。本模块保留：_GpuRunCtx / _YFramePool / _DevBatchPool /
+_gpu_fill_prev / _gpu_prepare_calibration / _gpu_frame_stream_{nvdec,cpu} /
+_gpu_release_partial（S4 拆分对象）。GPU 预处理/归约/帧分析内核位于
+video_ocr_engine._gpu_kernels（ocr_trt re-export）。
 """
 import logging
-import os as _os
 import time
 
 import numpy as np
 
 import engine_config as config
-from video_utils import nvdec_available, tensorrt_available
+from video_utils import nvdec_available, tensorrt_available  # noqa: F401 —— §10.4 monkeypatch 点（经 extractor._gpu_pipeline_enabled 使用）
 from segmentation import otsu_median_threshold, _otsu_from_hist
 from ._helpers import _ndarray_device_ptr
 
@@ -348,20 +350,6 @@ def _gpu_prepare_calibration(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
     return True, th
 
 
-def _gpu_fallback_to_host(ex, ctx: "_GpuRunCtx", vr, ocr_session,
-                          _ocr_engines):
-    """GPU→宿主回退（C10）：reader 直接复用（get_batch 随机访问、
-    无消费状态，免去二次打开/解码器悬挂）。"""
-    if ocr_session is not None:
-        try:
-            ocr_session.finish()
-        except BaseException:
-            logger.debug("ocr_session.finish 清理忽略异常", exc_info=True)
-            pass
-    _gpu_release_partial(ctx)
-    ex._degraded.append('GPU 管线形状不符，回退宿主管线')
-    return ex._run_pipelined_host(_ocr_engines, vr)
-
 
 def _gpu_frame_stream_nvdec(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
                             yuv: bool, roi: tuple, th: int):
@@ -539,48 +527,3 @@ def _gpu_frame_stream_cpu(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
                    float(sums[k, 0]), float(sums[k, 1]))
         prev_owner = owner
         prev_ptr = base + (B - 1) * fnb
-
-
-class _GpuPipelineMixin:
-    # ═══════════════ GPU 全驻留管线（NVDEC） ═══════════════
-
-    def _gpu_pipeline_enabled(self) -> bool:
-        """GPU 全驻留零拷贝管线：NVDEC 直通或 CPU 解码 + H2D（P1-3）。
-
-        默认（GPU_PIPELINE 未设置）启用条件（全部满足）：
-        - decode_backend ∈ {auto, nvdec, cpu, hybrid}：auto/nvdec 走 NVDEC
-          设备指针直通（NVDEC 打开失败时回退 CPU 解码分支）；cpu 显式
-          选择 CPU 软解 + H2D 进 GPU 分段/OCR（P1-3 解耦——CPU 解码的
-          墙钟收益与零拷贝 OCR 不再互斥）；hybrid 走 CPU 分支消费
-          HybridDecoder 交付的宿主数组（§8.3：双解码收益 + 零拷贝 OCR
-          叠加，原互斥门控已移除）。
-        - TensorRT 可用且 ocr_backend ≠ cpu —— 全程 raw 才有净收益
-          （GPU 分段+ONNX 实测无优势，默认走宿主管线，配置面更简）
-        - cuda-python（cuda.core / cuda.bindings）可导入
-        force_aspect 已支持（contrast 模式已随 0.9.0 删除，不再门控回退）。
-
-        env GPU_PIPELINE：'0' 显式关闭；'1' 强制尝试（跳过 TRT 要求，
-        允许 GPU 分段+ONNX 等实验组合）；不设置 = 上述默认规则。
-        """
-        _env = _os.environ.get(config.GPU_PIPELINE_ENV)
-        if _env is not None:
-            if not config.env_bool(config.GPU_PIPELINE_ENV, default=False):
-                return False
-            forced = True
-        else:
-            forced = False
-        backend = (self._decode_backend or 'auto').lower()
-        if backend not in ('auto', 'nvdec', 'cpu', 'hybrid'):
-            return False
-        if not _cuda_python_available():
-            return False
-        if not forced:
-            if (self._ocr_backend or 'auto').lower() == 'cpu':
-                return False
-            if not tensorrt_available():
-                return False
-        if backend == 'cpu':
-            # CPU 解码分支不依赖 NVDEC：跳过 nvdec 探测（避免无谓的
-            # GPU reader 试开；TRT 可用性已由上方门控确认）。
-            return True
-        return nvdec_available(str(self._video_path))
