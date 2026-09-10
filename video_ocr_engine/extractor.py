@@ -44,11 +44,11 @@ from ._helpers import (  # noqa: F401
     _read_fps_from_vr,
 )
 from ._host_pipeline import (  # noqa: F401
-    _host_calibrate, _host_frame_stream, _host_segment_frames,
     _HostPipelineMixin,
 )
 from ._gpu_pipeline import _GpuPipelineMixin
 from .pipeline.engine import SegmentEngine, _LegacyBackend
+from .pipeline.host_backend import HostRunSpec, run_host_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -243,6 +243,11 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         if _m in ('off', ''):
             return ''
         return 'binary'   # contrast/未知值 → 引擎默认 binary
+
+    def _set_bin_thresh(self, th: int) -> None:
+        """校准阈值即时回写（F-4：合并判定在流式期间活读本值，
+        回写延迟到 run 结束会使宿主路径段数漂移 1042 vs 1083 类复发）。"""
+        self._bin_thresh = th
 
     def _segments_similar(self, a, b) -> bool:
         """相似段判定：平均绝对差小 且 显著变化像素占比也小。
@@ -700,142 +705,40 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
 
     def _run_pipelined_host(self, _ocr_engines: list | None = None,
                             _preopened_vr=None):
-        """宿主管线：解码线程增量分段，OCR 线程批处理已闭合段的代表帧。
-        _ocr_engines：内部复用 OCR 引擎时传入；None 走进程级引擎池。
-        _preopened_vr：GPU 管线形状不符回退时传入已打开的 reader（C10，
-        仅普通 reader——hybrid 的分片消费状态不可复用，由调用方保证）。
+        """宿主管线门面（S3-3a）：构建显式 HostRunSpec → 调用
+        pipeline.host_backend.run_host_pipeline → 同步结果回实例。
 
-            解码是 I/O 瓶颈（CPU 占用低），段边界（win3）在解码循环内增量计算，
-            段一闭合就把代表帧（最清晰）交给 OCR 工作线程 —— 解码∥OCR 重叠摊薄
-            总墙钟。代表帧选择为段内灰度 std 最大帧，OCR 批 _ocr_batch_size()。
-
-            返回 (frames, segs, ocr_texts, ocr_confs, rep_frames)；
-            self.crops = {rep_frame: crop}（仅代表帧，供 review 预览，
-            比存全帧省内存）。分段/代表帧选择语义由模块级共享状态机
-            _host_segment_frames 承担。
-            """
+        驱动主体与三个协作函数已迁入 host_backend（算法代码只读 spec
+        声明字段，P0-1 的宿主侧私有属性穿透至此消除）。
+        """
         self._gpu_pipeline_mode = False
-        _t_open = time.perf_counter()
-        vr = _preopened_vr
-        if vr is None:
-            vr = self._open_vr()
-        if self._fps is None:
-            _fps = _read_fps_from_vr(vr)
-            self._fps = _fps if _fps else config.DEFAULT_FPS_FALLBACK
-        total = len(vr)
-        if (self._frame_end or 0) > total:
-            # 超界 end 静默截断曾是默认语义（A4）：至少让用户能发现参数错误
-            logger.warning('frame_end=%s 超出视频总帧数 %d，按片尾截断',
-                           self._frame_end, total)
-        end = min(self._frame_end or total, total)
-        frames = list(range(self._frame_start, end, self._sample_stride))
-        if not frames:
-            try:
-                vr.close()
-            except Exception:
-                pass
-            raise ValueError(
-                f"帧区间为空: frame_start={self._frame_start}, "
-                f"frame_end={end}, total={total}")
-        # 混合解码（hybrid_begin）：采样帧序列就绪后才生成关键帧分片并
-        # 启动双解码生产者竞争。
-        hybrid = hasattr(vr, 'hybrid_begin')
-        try:
-            if self._frame_start > 0 and not hybrid:
-                # hybrid 的分片定位由生产者在片首完成（其 seek_accurate 已显式
-                # 报错，DESIGN-REVIEW B4）——跳过外部 seek。
-                vr.seek_accurate(self._frame_start)
-            if hybrid:
-                vr.hybrid_begin(frames)
-        except BaseException:
-            logger.debug("hybrid_begin 失败进入回退清理", exc_info=True)
-            try:
-                vr.close()
-            except Exception:
-                pass
-            raise
-        self._prof_end('producer', 'open_and_fps', _t_open)
-        # OCR 会话（引擎初始化/模型加载）提前到校准前启动：worker 线程内
-        # 构建引擎，与校准（_host_calibrate，前 50 帧解码+Otsu）并行重叠，
-        # 引擎就绪前 _emit_ocr 自动走 host 回退，语义不变。
-        try:
-            ocr_session = self._start_ocr_session(_ocr_engines)
-        except BaseException:
-            logger.debug("OCR 会话启动失败进入清理", exc_info=True)
-            try:
-                vr.close()
-            except Exception:
-                pass
-            raise
-        results = ocr_session.results
-        ocr_err = ocr_session.err
-        ocr_wall = ocr_session.wall
-        _put_ocr = ocr_session.put
-        try:
-            _t_cal = time.perf_counter()
-            # 宿主校准统一走 _host_calibrate（stride>1 用 get_batch 等差快速路径、
-            # stride==1 用 next_roi 顺序流——校准帧号与后续流水线帧号一致）。
-            # with_dev=True：保留 GPU 单通道帧的 DLPack 指针供 GPU raw OCR 直通。
-            # 混合解码（HybridDecoder）交付的是 asnumpy() 宿主数组（_Batch 无
-            # to_dlpack），不存在可为 raw OCR 直通的 GPU 指针 —— 4D 单通道
-            # gray 时强采 _ndarray_device_ptr 会 AttributeError 崩溃，必须跳过。
-            _with_dev = not hybrid
-            calib, th = _host_calibrate(self, vr, frames, with_dev=_with_dev)
-            self._bin_thresh = th
-            self._prof_end('producer', 'calib_total', _t_cal)
-        except BaseException:
-            logger.debug("校准相位异常进入清理", exc_info=True)
-            try:
-                ocr_session.finish()
-            except BaseException:
-                logger.debug("ocr_session.finish 清理忽略异常", exc_info=True)
-                pass
-            try:
-                vr.close()
-            except Exception:
-                pass
-            raise
-
-        segs: list = []
-        rep_crops: dict = {}
-        seg_idx = 0
-
-        def _emit_ocr(seg, r_frame, r_crop, r_dev, _r_gray, frac) -> None:
-            nonlocal seg_idx
-            _t_push = time.perf_counter()
-            _put_ocr((seg_idx, r_frame, r_crop, r_dev, frac))
-            self._prof_end('producer', 'q_put_block', _t_push)
-            if self._keep_crops:
-                rep_crops[r_frame] = r_crop
-            seg_idx += 1
-
-        t0 = time.perf_counter()
-        try:
-            _host_segment_frames(
-                self, frames,
-                _host_frame_stream(self, frames, vr, calib, th,
-                                   with_dev=_with_dev),
-                debug_tag='HB',
-                progress_prefix=f'[{self._backend}] 解码+分段',
-                emit=_emit_ocr, segs=segs)
-        finally:
-            _t_consume_end = time.perf_counter()
-            self.timing['decode'] = _t_consume_end - t0
-            self._prof_end('producer', 'consumer_total', t0)
-            ocr_session.finish()
-            self.timing['ocr_tail'] = time.perf_counter() - _t_consume_end
-            try:
-                vr.close()   # hybrid 探针/资源释放：显式停止生产者线程
-            except Exception:
-                pass
-        if ocr_err:
-            # C4：补"OCR worker 失败"上下文并保留原始异常链
-            raise RuntimeError(f"OCR worker 失败: {ocr_err[0]!r}") from ocr_err[0]
-        self.timing['ocr'] = ocr_wall[0]
-        self._n_segments = len(segs)
-        self.crops = rep_crops
-        del vr
-        self._ocr_texts = [results[i][0] for i in range(seg_idx)]
-        self._ocr_confs = [results[i][1] for i in range(seg_idx)]
-        return (frames, segs, self._ocr_texts, self._ocr_confs,
-                [results[i][2] for i in range(seg_idx)])
+        spec = HostRunSpec(
+            frame_start=self._frame_start, frame_end=self._frame_end,
+            sample_stride=self._sample_stride, roi=tuple(self._roi),
+            C=self._C, merge_similar=self._merge_similar,
+            keep_crops=self._keep_crops, yuv_output=self._yuv_output,
+            segments_similar=self._segments_similar,
+            crop_luma=self._crop_luma, batch_luma=self._batch_luma,
+            batch_luma_out=self._batch_luma_out,
+            crop_is_expected=self._crop_is_expected,
+            open_vr=self._open_vr,
+            start_ocr_session=self._start_ocr_session,
+            backend_label=lambda: self._backend,
+            progress=self._progress, cancel=self._cancel,
+            prof_end=self._prof_end,
+            on_bin_thresh=self._set_bin_thresh,
+            fps_box=[self._fps])
+        if _preopened_vr is not None:
+            res = run_host_pipeline(spec, _ocr_engines,
+                                    preopened_vr=_preopened_vr)
+        else:
+            res = run_host_pipeline(spec, _ocr_engines)
+        # 同步回实例（B2：fps 缓存经 box 读写；其余为本次 run 的输出）
+        self._fps = spec.fps_box[0]
+        self._bin_thresh = res.bin_thresh
+        self.timing.update(res.timing)
+        self._n_segments = res.n_segments
+        self.crops = res.crops
+        self._ocr_texts = res.texts
+        self._ocr_confs = res.confs
+        return res.as_tuple()

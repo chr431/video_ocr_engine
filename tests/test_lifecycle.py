@@ -132,35 +132,28 @@ class _VR:
 
 
 def test_host_calibration_failure_finishes_session_and_closes_reader():
-    """校准抛异常时，OCR 会话应被 finish、reader 应被 close。"""
-    from video_ocr_engine import FieldExtractor
-    from video_ocr_engine._host_pipeline import _host_calibrate
+    """校准抛异常时，OCR 会话应被 finish、reader 应被 close。
+
+    S3-3a 起：驱动只吃显式 HostRunSpec——不再需要 `__new__` 绕过
+    `__init__` 手工补 12 个私有属性（P1-7"类契约是隐式的"的直接证据）。
+    """
+    from video_ocr_engine.pipeline.host_backend import (
+        HostRunSpec, run_host_pipeline)
 
     vr = _VR()
     session = _Session()
-
-    ex = FieldExtractor.__new__(FieldExtractor)
-    ex._gpu_pipeline_mode = False
-    ex._fps = None
-    ex._frame_start = 0
-    ex._frame_end = None
-    ex._sample_stride = 1
-    ex._color_range = 0
-    ex._codec = ""
-    ex._backend = "decord/CPU"
-    ex._degraded = []
-    ex._roi = (0, 0, 10, 5)
-    ex.timing = {}
-    ex._prof_end = lambda *a, **k: None
-    ex._open_vr = lambda: vr
-    ex._start_ocr_session = lambda _o=None: session
-    ex._crop_is_expected = lambda *a, **k: True
-    ex._crop_luma = lambda c: np.zeros((6, 11), dtype=np.uint8)
-    ex._merge_effective_mode = lambda: ""
-    ex._merge_text_sep = ""
-    # next_roi 抛错 → _host_calibrate 抛错
-    with pytest.raises(RuntimeError):
-        FieldExtractor._run_pipelined_host(ex)
+    spec = HostRunSpec(
+        frame_start=0, frame_end=None, sample_stride=1, roi=(0, 0, 10, 5),
+        C=5.0, merge_similar=False, keep_crops=False, yuv_output=False,
+        segments_similar=lambda a, b: False,
+        crop_luma=lambda c: np.zeros((6, 11), dtype=np.uint8),
+        batch_luma=lambda c: c, batch_luma_out=lambda c, out: out,
+        crop_is_expected=lambda c, h, w: True,
+        open_vr=lambda: vr,
+        start_ocr_session=lambda _engines=None: session)
+    # next_roi 抛错 → 校准抛错 → 清理路径
+    with pytest.raises(RuntimeError, match="calib boom"):
+        run_host_pipeline(spec)
     assert session.finished is True, "校准异常应 finish OCR 会话"
     assert vr.closed is True, "校准异常应 close reader"
 
