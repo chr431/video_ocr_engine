@@ -172,6 +172,19 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
             raise ValueError(
                 f"frame_end 必须大于 frame_start（或为 0/None 表示到末尾）: "
                 f"start={self._frame_start}, end={self._frame_end}")
+        # B3（Q8 裁决，S3）：未知后端构造期硬失败。v1 语义是静默兜底——
+        # decode_backend 未知值静默走 CPU、ocr_backend 未知值当 tensorrt
+        # （P0-3：排查陷阱）；合法集与 _open_vr/_ocr_engine_type 的判定一致
+        _dec = (self._decode_backend or 'auto').lower()
+        if _dec not in ('auto', 'cpu', 'nvdec', 'hybrid'):
+            raise ValueError(
+                f"decode_backend 必须为 auto/cpu/nvdec/hybrid，"
+                f"收到 {self._decode_backend!r}")
+        _ocr = (self._ocr_backend or 'auto').lower()
+        if _ocr not in ('auto', 'cpu', 'tensorrt'):
+            raise ValueError(
+                f"ocr_backend 必须为 auto/cpu/tensorrt，"
+                f"收到 {self._ocr_backend!r}")
 
 
     # ── env 旋钮统一调用期读取（A6：与 OCR_PAD_SMALL/OCR_GAMMA 等同时机，
@@ -264,6 +277,21 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
           - frames / fps / timing / meta
         识别层不解析文本含义（速度/数值由上层应用处理）。fps 强制自测。
         """
+        # B1（Q8 裁决，S3）：每次 extract 全量重置运行态——v1 只在 __init__
+        # 赋值，同实例第二次 extract 会带上一次的降级原因/计时/剖面
+        # （README 却声称"每次全量重跑并覆盖实例状态"）。
+        # 不重置：_fps（B2：同实例同视频，文档化缓存）。
+        self._degraded = []
+        self.timing = {}
+        self.crops = {}
+        self.profile = {}
+        self._frames = []
+        self._ocr_texts = []
+        self._ocr_confs = []
+        self._n_segments = 0
+        self._backend = ""
+        self._ocr_backend_used = ""
+        self._bin_thresh = 0
         frames, segs, texts, confs, rep_frames = self._run_pipelined()
         self._frames = frames
         segments = [

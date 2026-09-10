@@ -20,3 +20,13 @@
 - `extractor.py:283-296` 组装的 meta 恰为 9 键：backend / ocr_backend /
   codec / n_segments / engine_version / color_range / rep_crop_format /
   degraded_reason / params。已在 v2 ARCHITECTURE.md 附录 D 记勘误 D-15。
+
+## F-3 · B3 修复当场抓获 S0 矩阵自身的一个真实踩坑（2026-09-10 S3-1）
+
+- S0 录制矩阵曾写 `ocr_backend="onnx"`——v1 语义把它静默当 **tensorrt** 跑
+  （P0-3 列举的陷阱类别），导致 6 个"onnx"用例实为 TRT 重复、ONNX 零覆盖。
+- B3（构造期校验）落地后 `--verify` 立即失败并暴露此错。矩阵已改为
+  `ocr_backend="cpu"` 并重录：**真 ONNX 与 TRT 在 test5 上文本 sha 逐位相同、
+  段结构相同、置信度差在第 4 位小数**（0.99463 vs 0.99455）——OCR 后端
+  文本级等价首次获得金标背书。
+

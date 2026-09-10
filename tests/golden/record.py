@@ -49,7 +49,7 @@ MATRIX = []
 # A：test5 上 decode × pipeline × ocr 全网格（12）
 for dec in ("cpu", "nvdec", "hybrid"):
     for pipe in (0, 1):
-        for ocr in ("onnx", "tensorrt"):
+        for ocr in ("cpu", "tensorrt"):  # S3-1 勘误:"onnx"非合法值,v1 静默当 TRT(B3 活案例)
             MATRIX.append(_mk("A-%s-p%d-%s" % (dec, pipe, ocr), "test5",
                               decode_backend=dec, ocr_backend=ocr,
                               env={"GPU_PIPELINE": str(pipe)}))
