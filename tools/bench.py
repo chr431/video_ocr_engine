@@ -44,13 +44,16 @@ CONFIGS = {
 
 
 def _round(cfg_name: str, window: int, telemetry: str, keep_crops: bool,
-           ocr_backend: str, rep_format: str = "") -> dict:
+           ocr_backend: str, rep_format: str = "",
+           buffer_size: int | None = None) -> dict:
     from video_ocr_engine import FieldExtractor
     cfg = CONFIGS[cfg_name]
     vid = cfg["video"]
     kw = {}
     if rep_format:
         kw["rep_crop_format"] = rep_format
+    if buffer_size:
+        kw["buffer_size"] = buffer_size
     ex = FieldExtractor(VIDS[vid], ROI["test5" if vid == "test5" else "test6"],
                         frame_start=0, frame_end=window,
                         decode_backend=cfg["decode_backend"],
@@ -89,7 +92,7 @@ def cmd_run(args) -> int:
         rounds = []
         for i in range(args.rounds):
             rec = _round(name, args.window, args.telemetry, args.keep_crops,
-                         args.ocr_backend, args.rep_format)
+                         args.ocr_backend, args.rep_format, args.buffer_size)
             rec["round"] = i + 1
             rounds.append(rec)
             print("  %-12s round %d  %.4fs  %d 段" % (
@@ -401,6 +404,7 @@ def main() -> int:
     r.add_argument("--ocr-backend", default="tensorrt")
     r.add_argument("--keep-crops", action="store_true")
     r.add_argument("--rep-format", default="", help="yuv|gray（默认按引擎规则）")
+    r.add_argument("--buffer-size", type=int, default=0, help="生产者队列深度")
     r.add_argument("--label", required=True)
     r.set_defaults(func=cmd_run)
     d = sub.add_parser("diff", help="两个 label 的逐指标对比（D10 双档）")

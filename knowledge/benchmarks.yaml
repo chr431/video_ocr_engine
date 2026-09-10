@@ -93,4 +93,9 @@
   shipped_12_to_16_hevc_pct: -12.72
   fork_12_to_16_h264_pct: -3.91
   new_default: cores//2 clamped [8,16]
+- metric: hybrid_engine_loss_refuted    # 引擎侧损耗的两条否定结果（别重复试）
+  buffer_size_128_to_512_h264_pct: 0.51
+  buffer_size_128_to_512_hevc_pct: 2.00
+  gpu_pipeline_stream_0_to_1_h264_pct: 0.71
+  verdict: 队列/预取均无收益；剩余候选=CPU 争用（待线程时间线剖析）
 
