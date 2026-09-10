@@ -1,0 +1,391 @@
+"""TensorRT 引擎构建 / 缓存 / 执行（OcrEngine 的 GPU 后端）。
+
+与 ONNX 路径共享 OCR 预处理与 CTC 后处理；本模块只负责 TRT 特有逻辑：
+引擎候选查找（模型目录 → 程序目录缓存）→ 反序列化校验 → 本地构建缓存
+→ CUDA 显存执行。GPU 预处理/归约/帧分析内核类已拆至
+video_ocr_engine._gpu_kernels（本模块 re-export 保持兼容）。
+"""
+from __future__ import annotations
+
+import logging
+import time
+from pathlib import Path
+
+import numpy as np
+
+from video_ocr_engine.config import constants as config
+# 下划线私有模块的内部类，re-export 仅为旧导入路径兼容，勿直接 import。
+from video_ocr_engine._gpu_kernels import (  # noqa: F401
+    GpuPreprocessor, GpuOutputReducer, GpuFrameAnalyzer,
+)
+
+log = logging.getLogger(__name__)
+
+# 子相位探针（TRT_SUBPROBE=1 开启）：累计 HtoD 提交 / kernel enqueue /
+# DtoH 提交 / stream 同步等待的耗时与批数，用于定位共存负载下 TRT 批延迟
+# 的膨胀点（提交调用变慢 = 宿主被饥饿；同步等待变长 = GPU 侧/排队问题）。
+SUBPROBE_ON = config.env_bool(config.TRT_SUBPROBE_ENV)
+SUBPROBE: dict = {"htod": 0.0, "enqueue": 0.0, "dtoh": 0.0, "sync": 0.0,
+                  "n": 0}
+def _sp_tick(key: str, t0: float) -> None:
+    if SUBPROBE_ON:
+        SUBPROBE[key] += time.perf_counter() - t0
+
+
+# 模型资产目录解析统一走 engine_config.models_dir（0.11.0 收敛）；
+# 保留旧名兼容既有导入。TRT 引擎缓存候选目录基于同一解析结果。
+_models_dir = config.models_dir
+
+
+class TrtEngine:
+    """反序列化 TRT 引擎 + 执行上下文 + 输入/输出显存缓冲复用。"""
+
+    def __init__(self, models: Path, size: str,
+                 progress_cb=None) -> None:
+        from video_ocr_engine.gpu.context import ensure_gpu_initialized
+        # tensorrt_bindings.find_lib() 只搜 os.environ["PATH"]：
+        # 首次使用前注册 CUDA/TensorRT DLL 目录（幂等）。
+        ensure_gpu_initialized()
+        # cuda.core 导入 ~220ms/进程，藏进反序列化背后（R4，2026-09-10）。
+        try:
+            from video_ocr_engine._gpu_kernels import prewarm_cuda_core
+            prewarm_cuda_core()
+        except Exception:  # noqa: BLE001 预热失败只是失去重叠，无正确性影响
+            pass
+
+        self._progress_cb = progress_cb
+        self.engine_path: Path | None = None
+
+        # 逐个候选尝试加载：已存在的引擎可能是 TRT 版本/GPU 架构不匹配的
+        # 陈旧产物。加载失败 → 删除（可写目录），尝试下一个候选；
+        # 全部失败才进入重建（构建到本目录缓存，可写）。
+        for cand in self._engine_candidates(size):
+            if not cand.exists():
+                continue
+            try:
+                self._load(cand)
+                self.engine_path = cand
+                log.info("TensorRT 引擎已加载: %s", self.engine_path)
+                break
+            except Exception as e:
+                log.warning("TensorRT 引擎 %s 加载失败 (%s)，删除并尝试下一个候选",
+                            cand.name, e)
+                try:
+                    cand.unlink(missing_ok=True)
+                except OSError:
+                    pass  # 只读目录（打包 EXE 内）删不掉，保留无害
+
+        if self.engine_path is None:
+            self.engine_path = self._engine_candidates(size)[1]  # 本目录缓存（可写）
+            if self._progress_cb:
+                self._progress_cb("TensorRT 引擎不存在，开始本地构建（首次运行，约 2 分钟）...")
+            log.info("TensorRT 引擎不存在，开始本地构建（首次运行，约几分钟）...")
+            self._build(models, size, self.engine_path)
+            log.info("TensorRT 引擎已构建: %s", self.engine_path)
+            if self._progress_cb:
+                self._progress_cb("TensorRT 引擎构建完成")
+            self._load(self.engine_path)
+
+        # 输入/输出 device buffer 状态（host 侧不再保留中间 staging 数组）
+        self._dev_in: int | None = None
+        self._dev_out: int | None = None
+        self._out_nbytes = 0
+        self._stream = None  # CUDA stream：异步 HtoD/execute/DtoH 流水线用
+        self._owns_stream = True
+        # 输出 DtoH 目标：复用一块『最大尺寸』np.float32 连续缓冲，避免每
+        # 子批/每批重新分配（生产路径批 16 输出 ~12.6MB，分配 + 拷贝是
+        # 稳定开销；缓冲按需增长，不主动释放）。
+        self._out_host: "np.ndarray | None" = None
+
+    def release(self) -> None:
+        """释放设备缓冲、归约器及本对象拥有的 stream；重复调用安全。"""
+        from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
+        stream = getattr(self, "_stream", None)
+        if stream is not None:
+            try:
+                self.synchronize()
+            except Exception:
+                pass
+        reducer = getattr(self, "_reducer", None)
+        if reducer is not None:
+            try:
+                reducer.release()
+            except Exception:
+                pass
+            self._reducer = None
+        for attr in ("_dev_in", "_dev_out"):
+            ptr = getattr(self, attr, None)
+            if ptr:
+                try:
+                    cudart.cudaFree(ptr)
+                except Exception:
+                    pass
+            setattr(self, attr, None)
+        self._out_nbytes = 0
+        self._out_host = None
+        if stream is not None and getattr(self, "_owns_stream", False):
+            try:
+                cudart.cudaStreamDestroy(stream)
+            except Exception:
+                pass
+        self._stream = None
+        self._owns_stream = False
+
+    @staticmethod
+    def _engine_candidates(size: str) -> list[Path]:
+        """engine 查找顺序：模型目录（本机构建）→ 本目录缓存。
+
+        - [0] 模型目录（打包只读，通常不存在）
+        - [1] 本目录缓存（可写，构建目标 —— 免安装设计，不写 %LOCALAPPDATA%）
+        """
+        name = (f"multi_PP-OCRv6_rec_{size}_{config.TRT_ENGINE_SM}"
+                f"_fp32_tf32unset.engine")
+        cands = [_models_dir() / "models" / name]
+        cands.append(config.app_data_dir() / "ocr_engines" / name)
+        return cands
+
+    def _load(self, engine_path: Path) -> None:
+        """反序列化引擎并读取 profile 元数据；失败抛异常（由调用方决定重建/回退）。
+
+        反序列化失败场景：TRT 版本升级后旧产物（序列化版本号不匹配）、
+        GPU 架构不匹配（如 sm89 引擎换到 sm80 卡）。
+        """
+        import tensorrt as trt
+        logger = trt.Logger(trt.Logger.WARNING)  # type: ignore[attr-defined]
+        with open(engine_path, "rb") as f, trt.Runtime(logger) as rt:  # type: ignore[attr-defined]
+            self.engine = rt.deserialize_cuda_engine(f.read())
+        self.context = self.engine.create_execution_context()  # type: ignore[attr-defined]
+        in_name = self.engine.get_tensor_name(0)
+        out_name = self.engine.get_tensor_name(1)
+        prof_in = self.engine.get_tensor_profile_shape(in_name, 0)
+        self.in_name = in_name
+        self.out_name = out_name
+        self.max_batch = int(prof_in[2][0])  # profile 的 batch 上限（如 6）
+        self.max_in_shape = tuple(int(v) for v in prof_in[2])
+        self._last_in_shape: tuple | None = None
+        self._out_shape: tuple | None = None
+
+    def _build(self, models: Path, size: str, engine_path: Path) -> None:
+        """从 ONNX 构建 TRT 引擎（沿用 rapidocr 的 rec profile 配置）。"""
+        import tensorrt as trt
+        logger = trt.Logger(trt.Logger.WARNING)  # type: ignore[attr-defined]
+        builder = trt.Builder(logger)  # type: ignore[attr-defined]
+        # TRT 11 移除了 EXPLICIT_BATCH（隐式 batch 自 10 起已删，显式为默认），
+        # getattr 回退保持 10/11 双兼容；TRT 11 下 flags=0 语义即显式 batch。
+        try:
+            flags = 1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)  # type: ignore[attr-defined]
+        except AttributeError:
+            flags = 0
+        network = builder.create_network(flags)
+        parser = trt.OnnxParser(network, logger)  # type: ignore[attr-defined]
+        onnx_path = models / f"PP-OCRv6_rec_{size}.onnx"
+        with open(onnx_path, "rb") as f:
+            if not parser.parse(f.read()):
+                raise RuntimeError(f"ONNX 解析失败: {onnx_path}")
+        builder_config = builder.create_builder_config()
+        builder_config.set_memory_pool_limit(
+            trt.MemoryPoolType.WORKSPACE,  # type: ignore[attr-defined]
+            config.TRT_WORKSPACE_BYTES)
+        profile = builder.create_optimization_profile()
+        opt_b = config.TRT_PROFILE_BATCH
+        h = config.OCR_TARGET_H
+        profile.set_shape(
+            network.get_input(0).name,
+            min=(1, 3, h, config.TRT_PROFILE_MIN_W),
+            opt=(opt_b, 3, h, config.TRT_PROFILE_OPT_W),
+            max=(opt_b, 3, h, config.TRT_PROFILE_MAX_W))
+        builder_config.add_optimization_profile(profile)
+        serialized = builder.build_serialized_network(network, builder_config)
+        if serialized is None:
+            raise RuntimeError("TRT engine 构建失败")
+        engine_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(engine_path, "wb") as f:
+            f.write(serialized)
+
+    def _prepare_shape(self, shape: tuple) -> tuple:
+        """更新 TRT context 输入 shape（幂等），返回输出 shape。"""
+        if self._last_in_shape != shape:
+            self.context.set_input_shape(self.in_name, shape)
+            self._last_in_shape = shape
+            self._out_shape = tuple(self.context.get_tensor_shape(self.out_name))
+        return self._out_shape
+
+    def _ensure_stream(self) -> int:
+        """创建专用 CUDA stream（TRT async 必须用非默认流）。
+
+        高优先级流曾试过（2026-09-10）：hybrid 解码与 TRT 并发的 infer
+        膨胀不受流优先级影响（瓶颈在 fork 池互斥/DMA 带宽，非 SM 调度），
+        e2e 无可测收益，已回退普通流。
+        """
+        if self._stream is None:
+            from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
+            _err, self._stream = cudart.cudaStreamCreate()
+            self._owns_stream = True
+        return self._stream
+
+    def synchronize(self) -> None:
+        """等待当前 CUDA stream 上的所有 async 操作完成。"""
+        if self._stream is None:
+            return
+        from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
+        _t_sp = time.perf_counter() if SUBPROBE_ON else 0.0
+        cudart.cudaStreamSynchronize(self._stream)
+        _sp_tick('sync', _t_sp)
+
+    def execute_async(self, x: np.ndarray,
+                      out_host: "np.ndarray | None" = None) -> np.ndarray:
+        """异步执行一批输入（batch ≤ max_batch），不等待完成。
+
+        调用方必须在读取 out_host/host_out 前调用 synchronize()。
+        out_host 提供时直接把 DtoH 结果写入该 float32 连续数组，避免每次
+        额外分配 host_out 并在 _infer_locked 中再 concatenate。
+        """
+        from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
+        stream = self._ensure_stream()
+        out_shape = self._prepare_shape(x.shape)
+        # 输入 device buffer：按 max profile 形状预分配并复用。
+        # 直接以当前批的 numpy 内存作为 HtoD 源，去掉旧 host_in staging 拷贝：
+        # 预处理结果本来就是 host float32 连续数组，无需再平铺进一块固定 host buffer。
+        if not x.flags.c_contiguous:
+            x = np.ascontiguousarray(x)
+        if self._dev_in is None:
+            size_in = int(np.prod(self.max_in_shape)) * 4
+            _, self._dev_in = cudart.cudaMalloc(size_in)
+        dev_in = self._dev_in
+        _t_sp = time.perf_counter() if SUBPROBE_ON else 0.0
+        cudart.cudaMemcpyAsync(
+            dev_in, x.ctypes.data, x.nbytes,
+            cudart.cudaMemcpyKind.cudaMemcpyHostToDevice, stream)
+        _sp_tick('htod', _t_sp)
+        # 输出 device buffer 按需增长复用（cudaMalloc 每次 ~ms，避免每片分配）
+        out_nbytes = int(np.prod(out_shape)) * 4
+        if self._dev_out is None or out_nbytes > self._out_nbytes:
+            if self._dev_out is not None:
+                cudart.cudaFree(self._dev_out)
+            _, self._dev_out = cudart.cudaMalloc(out_nbytes)
+            self._out_nbytes = out_nbytes
+        dev_out = self._dev_out
+        # execute_async_v3 需要显式设置输入/输出 tensor 地址
+        _t_sp = time.perf_counter() if SUBPROBE_ON else 0.0
+        self.context.set_tensor_address(self.in_name, dev_in)
+        self.context.set_tensor_address(self.out_name, dev_out)
+        self.context.execute_async_v3(stream)
+        _sp_tick('enqueue', _t_sp)
+        if out_host is not None:
+            if (not out_host.flags.c_contiguous
+                    or out_host.dtype != np.float32
+                    or out_host.nbytes < out_nbytes):
+                raise ValueError("out_host 必须是足够大的 float32 连续数组")
+            _t_sp = time.perf_counter() if SUBPROBE_ON else 0.0
+            cudart.cudaMemcpyAsync(
+                out_host.ctypes.data, dev_out, out_nbytes,
+                cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, stream)
+            if SUBPROBE_ON:
+                SUBPROBE['n'] += 1
+            return out_host
+        # 复用内部输出缓冲：只返回前 out_nbytes 对应的视图，避免逐批分配
+        if self._out_host is None or self._out_host.nbytes < out_nbytes:
+            self._out_host = np.empty(out_shape, dtype=np.float32)
+        host_out = self._out_host.reshape(out_shape)
+        _t_sp = time.perf_counter() if SUBPROBE_ON else 0.0
+        cudart.cudaMemcpyAsync(
+            host_out.ctypes.data, dev_out, out_nbytes,
+            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, stream)
+        if SUBPROBE_ON:
+            SUBPROBE['n'] += 1
+        return host_out
+
+    def execute_device_async(self, dev_input: int, shape: tuple,
+                             out_host: "np.ndarray | None" = None) -> np.ndarray:
+        """异步执行已位于显存的输入（GPU 预处理结果），省去 HtoD。
+
+        dev_input 必须是当前 stream 上有效的 device 指针；调用方须在读取
+        out_host 前 synchronize()。
+        """
+        from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
+        stream = self._ensure_stream()
+        out_shape = self._prepare_shape(shape)
+        out_nbytes = int(np.prod(out_shape)) * 4
+        if self._dev_out is None or out_nbytes > self._out_nbytes:
+            if self._dev_out is not None:
+                cudart.cudaFree(self._dev_out)
+            _, self._dev_out = cudart.cudaMalloc(out_nbytes)
+            self._out_nbytes = out_nbytes
+        dev_out = self._dev_out
+        _t_sp = time.perf_counter() if SUBPROBE_ON else 0.0
+        self.context.set_tensor_address(self.in_name, dev_input)
+        self.context.set_tensor_address(self.out_name, dev_out)
+        self.context.execute_async_v3(stream)
+        _sp_tick('enqueue', _t_sp)
+        if out_host is not None:
+            if (not out_host.flags.c_contiguous or out_host.dtype != np.float32
+                    or out_host.nbytes < out_nbytes):
+                raise ValueError("out_host 必须是足够大的 float32 连续数组")
+            _t_sp = time.perf_counter() if SUBPROBE_ON else 0.0
+            cudart.cudaMemcpyAsync(
+                out_host.ctypes.data, dev_out, out_nbytes,
+                cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, stream)
+            _sp_tick('dtoh', _t_sp)
+            if SUBPROBE_ON:
+                SUBPROBE['n'] += 1
+            return out_host
+        # 复用内部输出缓冲（见 execute_async 注释）
+        if self._out_host is None or self._out_host.nbytes < out_nbytes:
+            self._out_host = np.empty(tuple(int(v) for v in out_shape),
+                                      dtype=np.float32)
+        host_out = self._out_host.reshape(tuple(int(v) for v in out_shape))
+        _t_sp = time.perf_counter() if SUBPROBE_ON else 0.0
+        cudart.cudaMemcpyAsync(
+            host_out.ctypes.data, dev_out, out_nbytes,
+            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, stream)
+        _sp_tick('dtoh', _t_sp)
+        if SUBPROBE_ON:
+            SUBPROBE['n'] += 1
+        return host_out
+
+    def execute_device_argmax(self, dev_input: int, shape: tuple):
+        """显存全驻留：执行 TRT 并在 GPU 完成 vocab 维 argmax/max。
+
+        输入超过 profile max_batch 时按子批循环（与 _infer_trt_device 一致）。
+        返回 (idx int32[B,S], prob f32[B,S])——输出不落 RAM，DtoH 仅
+        B*S*8 字节。需要 GPU_CTC=1 的调用方（call_gpu_raw）使用。
+        """
+        from cuda.bindings import runtime as cudart
+        stream = self._ensure_stream()
+        elem_floats = int(np.prod(shape[1:], dtype=np.int64))
+        B = int(shape[0])
+        reducer = getattr(self, "_reducer", None)
+        if reducer is None:
+            reducer = GpuOutputReducer(stream=stream)
+            self._reducer = reducer
+        idx_parts = []
+        prob_parts = []
+        for i in range(0, B, self.max_batch):
+            nb = min(self.max_batch, B - i)
+            if i > 0 and nb < self.max_batch:
+                # 末批 batch 维与前批不同：先同步再改 context shape
+                # （TRT 不支持 in-flight 修改 context 形状；且若按前批
+                # batch 维执行，末批会越界读输入/写出多余行）。
+                self.synchronize()
+            sub_shape = (nb,) + tuple(shape[1:])
+            out_shape = self._prepare_shape(sub_shape)
+            out_nbytes = int(np.prod(out_shape)) * 4
+            if self._dev_out is None or out_nbytes > self._out_nbytes:
+                if self._dev_out is not None:
+                    cudart.cudaFree(self._dev_out)
+                _, self._dev_out = cudart.cudaMalloc(out_nbytes)
+                self._out_nbytes = out_nbytes
+            self.context.set_tensor_address(
+                self.in_name, dev_input + i * elem_floats * 4)
+            self.context.set_tensor_address(self.out_name, self._dev_out)
+            self.context.execute_async_v3(stream)
+            idx, prob = reducer.reduce(self._dev_out, out_shape)
+            idx_parts.append(idx)
+            prob_parts.append(prob)
+        idx_all = np.concatenate(idx_parts) if len(idx_parts) > 1 \
+            else idx_parts[0]
+        prob_all = np.concatenate(prob_parts) if len(prob_parts) > 1 \
+            else prob_parts[0]
+        seq = idx_all.size // max(B, 1)
+        return idx_all.reshape(B, seq), prob_all.reshape(B, seq)
+

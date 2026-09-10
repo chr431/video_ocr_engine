@@ -11,7 +11,7 @@ import threading
 
 import numpy as np
 
-import engine_config as config
+from video_ocr_engine.config import constants as config
 
 # NVRTC 编译缓存（DESIGN-REVIEW B5）：编译产物（Program/Module）进程级共享
 # ——无状态、线程安全（kernel launch 只读）；Buffer/stream 等可变状态仍归

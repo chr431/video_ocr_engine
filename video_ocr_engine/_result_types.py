@@ -48,7 +48,7 @@ class ExtractionResult:
         fmt = meta.get('rep_crop_format') or 'yuv'
         color_range = int(meta.get('color_range') or 0)
         if fmt == 'yuv' and c.ndim == 2:
-            from video_utils import nv12_to_rgb
+            from video_ocr_engine.domain.video_utils import nv12_to_rgb
             return nv12_to_rgb(c, color_range)
         g = c[..., 0] if c.ndim == 3 else c
         return np.repeat(g[..., None], 3, axis=-1)

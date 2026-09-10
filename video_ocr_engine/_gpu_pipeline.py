@@ -12,9 +12,9 @@ import time
 
 import numpy as np
 
-import engine_config as config
-from video_utils import nvdec_available, tensorrt_available  # noqa: F401 —— §10.4 monkeypatch 点（经 extractor._gpu_pipeline_enabled 使用）
-from segmentation import otsu_median_threshold, _otsu_from_hist
+from video_ocr_engine.config import constants as config
+from video_ocr_engine.domain.video_utils import nvdec_available, tensorrt_available  # noqa: F401 —— §10.4 monkeypatch 点（经 extractor._gpu_pipeline_enabled 使用）
+from video_ocr_engine.domain.segmentation import otsu_median_threshold, _otsu_from_hist
 from ._helpers import _ndarray_device_ptr
 
 logger = logging.getLogger(__name__)
@@ -289,7 +289,7 @@ def _gpu_prepare_calibration(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
     False = 帧形状不符（GPU 分段不支持），调用方回退宿主管线。
     """
     from cuda.bindings import runtime as cudart
-    from ocr_trt import GpuFrameAnalyzer
+    from video_ocr_engine.ocr.trt import GpuFrameAnalyzer
     ctx.analyzer = analyzer = GpuFrameAnalyzer()
     calib_n = ctx.calib_n = min(config.SEG_CALIB_FRAMES, len(frames))
     if on_gpu:

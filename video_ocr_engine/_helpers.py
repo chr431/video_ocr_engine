@@ -4,7 +4,7 @@ _ocr_batch_size / _ndarray_device_ptr / 进度映射 / _read_fps_from_vr。
 （S2：_otsu_from_hist/_otsu_median_threshold/_gray_mean_abs_diff 已删——
 前两者是转发壳，实现唯一出处 segmentation；后者全仓零产品调用点。）
 """
-import engine_config as config
+from video_ocr_engine.config import constants as config
 
 def _ocr_batch_size() -> int:
     return max(1, config.env_int(config.OCR_BATCH_ENV, config.OCR_BATCH_SIZE))

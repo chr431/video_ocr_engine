@@ -19,8 +19,8 @@ from typing import Callable
 
 import numpy as np
 
-import engine_config as config
-from segmentation import SegmentStateMachine, _otsu, otsu_median_threshold
+from video_ocr_engine.config import constants as config
+from video_ocr_engine.domain.segmentation import SegmentStateMachine, _otsu, otsu_median_threshold
 
 logger = logging.getLogger(__name__)
 

@@ -26,8 +26,8 @@ from pathlib import Path
 
 import numpy as np
 
-import engine_config as config
-from segmentation import (
+from video_ocr_engine.config import constants as config
+from video_ocr_engine.domain.segmentation import (
     _gray_seg, _gray_seg_batch,
     _gray_seg_yuv, _gray_seg_yuv_batch,
     _text_sep_binary,
@@ -248,7 +248,7 @@ class FieldExtractor:
 
     def _content_range_to_crop(self, first: int, last: int, w: int):
         """「有墨迹列范围」→ 裁切区间；实现见 segmentation.content_range_to_crop。"""
-        from segmentation import content_range_to_crop
+        from video_ocr_engine.domain.segmentation import content_range_to_crop
         return content_range_to_crop(
             first, last, w,
             margin_pct=self._ocr_autocrop_margin_pct,
@@ -257,7 +257,7 @@ class FieldExtractor:
     def _crop_to_content(self, crop):
         """按二值图裁掉两侧空白（fa=0 路径）；实现见
         segmentation.crop_to_content（fa>0 走 _crop_after_aspect 顺序⑦）。"""
-        from segmentation import crop_to_content
+        from video_ocr_engine.domain.segmentation import crop_to_content
         return crop_to_content(
             crop, self._bin_thresh,
             autocrop=self._ocr_autocrop,
@@ -268,7 +268,7 @@ class FieldExtractor:
     def _crop_after_aspect(self, img):
         """已定比例图上再按内容列裁（fa>0 路径）；实现见
         segmentation.crop_after_aspect（阈值现算 Otsu，不能用校准阈值）。"""
-        from segmentation import crop_after_aspect
+        from video_ocr_engine.domain.segmentation import crop_after_aspect
         return crop_after_aspect(
             img, autocrop=self._ocr_autocrop,
             margin_pct=self._ocr_autocrop_margin_pct,
@@ -328,7 +328,7 @@ class FieldExtractor:
         # 整数精确累加一致（阈值处仅 float32 末位舍入差异，文档已承认）。
         # 两阈值判定统一走 segmentation.similar_decision（GPU 共用）。
         diff = np.abs(a.astype(np.int16) - b.astype(np.int16))
-        from segmentation import similar_decision
+        from video_ocr_engine.domain.segmentation import similar_decision
         return similar_decision(float(diff.mean()), int(np.sum(diff > 10)),
                                 self._merge_similar_threshold,
                                 self._merge_max_changed_pixels)
@@ -715,7 +715,7 @@ class FieldExtractor:
         _ovr = config.env_int(config.DECODE_THREADS_ENV, 0)
         if _ovr > 0:
             return _ovr
-        from ocr_native import auto_ocr_thread_count
+        from video_ocr_engine.ocr.native import auto_ocr_thread_count
         cores = auto_ocr_thread_count()
         logical = _os.cpu_count() or cores
         if codec == 'av1':
@@ -794,9 +794,9 @@ class FieldExtractor:
                         out: np.ndarray) -> np.ndarray:
         """批量灰度写入预分配 out（省每批临时数组分配；形状恒定才可复用）。"""
         if self._yuv_output:
-            from segmentation import _nv12_batch_luma_full_out
+            from video_ocr_engine.domain.segmentation import _nv12_batch_luma_full_out
             return _nv12_batch_luma_full_out(crops, self._color_range, out)
-        from segmentation import _gray_batch_out
+        from video_ocr_engine.domain.segmentation import _gray_batch_out
         return _gray_batch_out(crops, out)
 
     def _crop_is_expected(self, c: np.ndarray, roi_h: int, roi_w: int) -> bool:
@@ -819,7 +819,7 @@ class FieldExtractor:
             8 核 ocrT=4 17.8s vs 20.7s），分核更优；核数多时（16）分核反而
             差 → 保持全核。显式参数传入引擎，不污染全局 env。
             """
-        from ocr_native import auto_ocr_thread_count
+        from video_ocr_engine.ocr.native import auto_ocr_thread_count
         _env = config.env_int(config.OCR_THREADS_ENV, 0)
         if _env:
             return max(1, _env)

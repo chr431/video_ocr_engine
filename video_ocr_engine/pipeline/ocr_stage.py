@@ -15,8 +15,8 @@ import threading
 from dataclasses import dataclass
 from typing import Callable
 
-import engine_config as config
-from segmentation import preprocess_standard
+from video_ocr_engine.config import constants as config
+from video_ocr_engine.domain.segmentation import preprocess_standard
 from .._helpers import _ocr_batch_size, _ocr_progress_pct
 
 logger = logging.getLogger(__name__)
@@ -134,7 +134,7 @@ class OcrSession:
     def _worker(self) -> None:
         import time
         from queue import Full, Queue
-        from ocr_native import acquire_ocr_engine, checkin_ocr_engine
+        from video_ocr_engine.ocr.native import acquire_ocr_engine, checkin_ocr_engine
         self._bump_priority()
         spec = self._spec
         t0 = time.perf_counter()
@@ -335,7 +335,7 @@ class OcrSession:
                     for i in host_sel:
                         c = b_crops[i]
                         if spec.yuv_output:
-                            from video_utils import _nv12_luma_full
+                            from video_ocr_engine.domain.video_utils import _nv12_luma_full
                             c = _nv12_luma_full(
                                 c, spec.color_range)[..., None]
                         if spec.force_aspect and spec.force_aspect > 0:

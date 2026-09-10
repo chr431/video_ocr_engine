@@ -70,9 +70,9 @@ python tools/_doc_section.py docs/log/ARCHIVE.md 4.4b        # 支持 16 / 16.8 
 | 宿主后端 | `video_ocr_engine/pipeline/host_backend.py` |
 | GPU 后端 | `video_ocr_engine/pipeline/gpu_backend.py`（gray+NVDEC+TRT 时默认；设备侧机制在 `video_ocr_engine/_gpu_pipeline.py`） |
 | OCR 会话 | `video_ocr_engine/pipeline/ocr_stage.py`（SessionSpec 契约） |
-| OCR 调度 / 引擎池 | `ocr_native.py`（`acquire_ocr_engine` / `checkin_ocr_engine`） |
-| TRT | `ocr_trt.py` + `video_ocr_engine/_gpu_kernels.py` |
-| 配置常量 | `engine_config.py`（`GPU_PIPELINE_DECODE_BATCH=64` 等）；旋钮注册表 `video_ocr_engine/config/` |
+| OCR 调度 / 引擎池 | `video_ocr_engine/ocr/native.py`（根 `ocr_native.py` 为兼容 shim） |
+| TRT | `video_ocr_engine/ocr/trt.py` + `video_ocr_engine/_gpu_kernels.py` |
+| 配置常量 | `video_ocr_engine/config/constants.py`（根 `engine_config.py` 为兼容 shim）；旋钮注册表 `video_ocr_engine/config/` |
 | 分相打桩 | `video_ocr_engine/extractor.py` 的 `_prof_end` |
 
 **现役并行维度只有一个**：`decode_backend="hybrid"` 的 CPU+NVDEC 双解码，

@@ -21,7 +21,7 @@ from typing import Callable
 
 import numpy as np
 
-from segmentation import SegmentStateMachine, similar_decision
+from video_ocr_engine.domain.segmentation import SegmentStateMachine, similar_decision
 
 logger = logging.getLogger(__name__)
 

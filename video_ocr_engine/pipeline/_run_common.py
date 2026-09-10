@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 
-import engine_config as config
+from video_ocr_engine.config import constants as config
 from .._helpers import _read_fps_from_vr
 
 logger = logging.getLogger(__name__)

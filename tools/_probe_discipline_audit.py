@@ -378,11 +378,12 @@ def check_filename_corruption() -> None:
 
 
 def check_version() -> None:
-    """[7] 版本号一致性：engine_config.__version__ ↔ 最新 git tag。"""
-    src = read("engine_config.py")
+    """[7] 版本号一致性：config/constants.__version__ ↔ 最新 git tag。"""
+    # S9：根模块已迁包（根处仅 shim）——从新址读
+    src = read("video_ocr_engine/config/constants.py")
     m = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', src, re.M)
     if not m:
-        fail("engine_config.py 里找不到 __version__")
+        fail("config/constants.py 里找不到 __version__")
         return
     ver = m.group(1)
     try:
