@@ -6,7 +6,7 @@ import pytest
 from video_ocr_engine import FieldExtractor
 # GPU 门控方法在 _gpu_pipeline mixin 模块；模拟可用性需 patch 该模块的
 # nvdec_available / tensorrt_available（split 后不再位于 extractor 命名空间）。
-from video_ocr_engine import _gpu_pipeline as _gpu
+from video_ocr_engine.gpu import device as _gpu
 
 
 def _make(**kwargs):

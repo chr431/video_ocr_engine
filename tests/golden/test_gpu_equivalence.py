@@ -20,7 +20,7 @@ def _gpu_available() -> bool:
     if not os.path.exists(VID):
         return False
     try:
-        import video_ocr_engine._gpu_pipeline as gp  # noqa: F401
+        import video_ocr_engine.gpu.device as gp  # noqa: F401
         from decord import gpu  # noqa: F401
         return True
     except Exception:

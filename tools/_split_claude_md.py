@@ -77,7 +77,7 @@ CORE = r'''# CLAUDE.md — 开发记录与约定（注入核）
 | 解码 | `decord.VideoReader.get_batch` / `hybrid_decode.HybridDecoder.get_batch`（**唯一入口**） |
 | 分段 | `segmentation.py` |
 | 宿主管线 | `video_ocr_engine/_host_pipeline.py` |
-| GPU 管线 | `video_ocr_engine/_gpu_pipeline.py`（gray+NVDEC+TRT 时默认） |
+| GPU 管线 | `video_ocr_engine/gpu/device.py`（gray+NVDEC+TRT 时默认） |
 | OCR 调度 / 引擎池 | `ocr_native.py`（`acquire_ocr_engine` / `checkin_ocr_engine`） |
 | TRT | `ocr_trt.py` + `video_ocr_engine/_gpu_kernels.py` |
 | 配置常量 | `engine_config.py`（`GPU_PIPELINE_DECODE_BATCH=64` 等） |

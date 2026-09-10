@@ -125,7 +125,7 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
     autocropper，B4）→ 校准（失败或形状不符可回退宿主）→ 生产者线程
     （解码+GPU analyze 与主线程分段/OCR 重叠）→ 消费循环 → 清理。
     """
-    from .._gpu_pipeline import (   # 迁移期：设备侧仍驻留原模块（S4 拆分）
+    from ..gpu.device import (   # S9-5：设备侧机制迁 gpu/device.py
         _GpuRunCtx, _YFramePool, _gpu_frame_stream_cpu,
         _gpu_frame_stream_nvdec, _gpu_prepare_calibration,
         _gpu_release_partial)

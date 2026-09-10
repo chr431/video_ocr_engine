@@ -6,10 +6,10 @@
   "tools/_probe_mem_bw.py": 3,
   "tools/e2e_smoke.py": 1,
   "video_ocr_engine/_gpu_kernels.py": 9,
-  "video_ocr_engine/_gpu_pipeline.py": 19,
   "video_ocr_engine/extractor.py": 6,
   "video_ocr_engine/gpu/context.py": 3,
   "video_ocr_engine/ocr/native.py": 4,
-  "video_ocr_engine/ocr/trt.py": 5
+  "video_ocr_engine/ocr/trt.py": 5,
+  "video_ocr_engine/gpu/device.py": 19
  }
 }

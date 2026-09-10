@@ -78,7 +78,7 @@ def main() -> None:
     prev_buf = an._ensure_prev(B * H * W)
     # fill prev：prev 帧序列 = 第 k-1 帧（首批 prev=本帧自身，与两管线校准
     # 语义一致——此处仅对比原语，首批从第 1 帧起有意义的 diff）
-    from video_ocr_engine._gpu_pipeline import _gpu_fill_prev
+    from video_ocr_engine.gpu.device import _gpu_fill_prev
     _gpu_fill_prev(an, prev_buf, ptr, B, H * W, ptr)
     sums = an.analyze_batch(ptr, prev_buf, B, H, W, float(th))
     sharp_gpu = np.asarray(sums)[:, 0].astype(np.float64)

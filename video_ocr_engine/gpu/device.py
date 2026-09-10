@@ -1,11 +1,13 @@
-"""GPU 设备侧机制库（S3-3d 起不含编排）：池 / 帧流 / 校准 / 部分释放。
+"""GPU 设备侧机制（S9-5 自 _gpu_pipeline.py 迁入）：池 / 帧流 / 校准 / 释放。
 
-S3-3c 编排驱动已迁 pipeline.gpu_backend；_gpu_pipeline_enabled 已并入
-FieldExtractor；_gpu_fallback_to_host 已删（回退语义在 gpu_backend 与
-门面交接）。本模块保留：_GpuRunCtx / _YFramePool / _DevBatchPool /
-_gpu_fill_prev / _gpu_prepare_calibration / _gpu_frame_stream_{nvdec,cpu} /
-_gpu_release_partial（S4 拆分对象）。GPU 预处理/归约/帧分析内核位于
-video_ocr_engine._gpu_kernels（ocr_trt re-export）。
+缓冲区（_YFrame/_YFramePool/_DevBatch/_DevBatchPool/_CpuFrameRef）、
+运行上下文（_GpuRunCtx）、校准（_gpu_prepare_calibration）、帧流
+（_gpu_frame_stream_nvdec/cpu）、释放（_gpu_release_partial）与
+cuda-python 可用性探测。编排在 pipeline/gpu_backend.py；引用类型在
+gpu/frame_ref.py。
+
+§10.4 patch 点：nvdec_available / tensorrt_available（经本模块属性解析，
+tests/pipeline/test_gpu_pipeline.py patch 面）。
 """
 import logging
 import time
@@ -15,8 +17,8 @@ import numpy as np
 from video_ocr_engine.config import constants as config
 from video_ocr_engine.domain.video_utils import nvdec_available, tensorrt_available  # noqa: F401 —— §10.4 monkeypatch 点（经 extractor._gpu_pipeline_enabled 使用）
 from video_ocr_engine.domain.segmentation import otsu_median_threshold, _otsu_from_hist
-from .gpu.frame_ref import DeviceRef
-from ._helpers import _ndarray_device_ptr
+from .frame_ref import DeviceRef
+from .._helpers import _ndarray_device_ptr
 
 logger = logging.getLogger(__name__)
 

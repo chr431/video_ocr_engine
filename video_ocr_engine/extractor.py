@@ -13,7 +13,8 @@
                       _host_segment_frames / _HostPipelineMixin）
   _helpers.py       — 无类依赖的独立工具函数
   _result_types.py  — ExtractedSegment / ExtractionResult
-  _gpu_pipeline.py  — _GpuPipelineMixin（GPU 全驻留管线）
+  gpu/              — 设备侧（context=DLL 注册 / device=池+帧流+校准 /
+                      frame_ref=DeviceRef）
 双流水线并行已被移除（2026-08 清理）；CPU+NVDEC 双解码（decode_backend=
 "hybrid"）由 decord fork 原生实现（≥v0.7.15 的 hybrid/hybrid_gpu ctx），
 引擎只透传解码参数；项目层 hybrid_decode.py 已删除，勿再引用。
@@ -631,8 +632,8 @@ class FieldExtractor:
         env GPU_PIPELINE：'0' 显式关闭；'1' 强制尝试（跳过 TRT 要求，
         允许 GPU 分段+ONNX 等实验组合）；不设置 = 上述默认规则。
         """
-        from . import _gpu_pipeline as _gp
-        # 经模块属性解析:tests/探针 patch _gpu_pipeline.nvdec_available
+        from .gpu import device as _gp
+        # 经模块属性解析:tests/探针 patch gpu.device.nvdec_available
         # 等模块级名字(§10.4 patch 点),函数级导入保持该间接性
         _cuda = _gp._cuda_python_available
         # S9-2(D6)：三态旋钮构造期冻结（未设 None=规则 / falsy 关 /
