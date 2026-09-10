@@ -699,15 +699,16 @@ class _GpuPipelineMixin:
                 self._ctx = ctx_ref
 
             def process(self, devs):
-                """5 元组列表 → 6 元组列表：yuv 先批量提取 Y（池帧），
-                再批量 col_ink 得裁切区间（宿主同一余量规则）。"""
+                """5 元组列表 → 6 元组列表：NVDEC+yuv 先批量提取 Y（池帧），
+                再批量 col_ink 得裁切区间。CPU 解码分支设备侧恒为灰度
+                （y_pool 为 None），直接进入 col_ink。"""
                 an = self._ctx.analyzer
                 if an is None:
                     return [(d[0], d[1], d[2], d[3], 0, d[3])
                             for d in devs]
                 crop_devs = []
                 yfs = []
-                if self._ex._yuv_output:
+                if self._ctx.y_pool is not None:
                     for d in devs:
                         yf = self._ctx.y_pool.acquire()
                         yfs.append(yf)
