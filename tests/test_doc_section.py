@@ -23,8 +23,11 @@ TOOL = ROOT / "tools" / "_doc_section.py"
 
 
 def run(*args: str) -> subprocess.CompletedProcess:
+    # encoding 必须显式：子进程输出为 UTF-8，Windows 中文区域下 text=True
+    # 默认按 GBK 解码会 UnicodeDecodeError → stdout=None（P1-8 的 9 个红测试根因）
     return subprocess.run([sys.executable, str(TOOL), *args],
-                          cwd=str(ROOT), capture_output=True, text=True)
+                          cwd=str(ROOT), capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
 
 
 def test_toc_lists_sections_with_token_counts() -> None:
