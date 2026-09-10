@@ -15,6 +15,7 @@ import numpy as np
 from video_ocr_engine.config import constants as config
 from video_ocr_engine.domain.video_utils import nvdec_available, tensorrt_available  # noqa: F401 —— §10.4 monkeypatch 点（经 extractor._gpu_pipeline_enabled 使用）
 from video_ocr_engine.domain.segmentation import otsu_median_threshold, _otsu_from_hist
+from .gpu.frame_ref import DeviceRef
 from ._helpers import _ndarray_device_ptr
 
 logger = logging.getLogger(__name__)
@@ -392,8 +393,9 @@ def _gpu_frame_stream_nvdec(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
     rows = ctx.src_h + (ctx.src_h + 1) // 2
     for k in range(B):
         cur = ctx.calib_base + k * (rows * ctx.src_w if yuv else fnb)
-        yield (frames[k], (ctx.calib_nds, cur,
-                           (rows if yuv else ctx.src_h), ctx.src_w),
+        yield (frames[k],
+               DeviceRef(ptr=cur, h=(rows if yuv else ctx.src_h),
+                         w=ctx.src_w, owner=ctx.calib_nds),
                float(sums[k, 0]), float(sums[k, 1]))
         ctx.prev_holder = ctx.calib_nds
         ctx.prev_ptr = cur
@@ -466,7 +468,7 @@ def _gpu_frame_stream_nvdec(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
         f0 = (bstart if _use_stream else frames[bstart])
         for k in range(B):
             cur = base + k * (rows * W if yuv else fnb)
-            yield (f0 + k, (nds, cur, rows, W),
+            yield (f0 + k, DeviceRef(ptr=cur, h=rows, w=W, owner=nds),
                    float(sums[k, 0]), float(sums[k, 1]))
             ctx.prev_holder = nds
             ctx.prev_ptr = cur
@@ -499,8 +501,8 @@ def _gpu_frame_stream_cpu(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
         ctx.calib_owner.ptr, prev_buf, calib_n, src_h, src_w, th)
     for k in range(calib_n):
         yield (frames[k],
-               (_CpuFrameRef(ctx.calib_owner, k),
-                ctx.calib_owner.ptr + k * fnb, src_h, src_w),
+               DeviceRef(ptr=ctx.calib_owner.ptr + k * fnb, h=src_h,
+                         w=src_w, owner=_CpuFrameRef(ctx.calib_owner, k)),
                float(sums[k, 0]), float(sums[k, 1]))
     prev_owner = ctx.calib_owner   # 上一批缓冲（fill_prev 读取期间保活）
     prev_ptr = ctx.calib_owner.ptr + (calib_n - 1) * fnb
@@ -534,8 +536,8 @@ def _gpu_frame_stream_cpu(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
             base, prev_buf, B, src_h, src_w, th)
         for k in range(B):
             yield (frames[bstart + k],
-                   (_CpuFrameRef(owner, k),
-                    base + k * fnb, src_h, src_w),
+                   DeviceRef(ptr=base + k * fnb, h=src_h, w=src_w,
+                             owner=_CpuFrameRef(owner, k)),
                    float(sums[k, 0]), float(sums[k, 1]))
         prev_owner = owner
         prev_ptr = base + (B - 1) * fnb

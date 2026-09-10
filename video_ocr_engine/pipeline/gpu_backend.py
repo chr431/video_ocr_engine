@@ -22,6 +22,7 @@ from typing import Callable
 import numpy as np
 
 from video_ocr_engine.domain.segmentation import SegmentStateMachine, similar_decision
+from ..gpu.frame_ref import DeviceRef
 
 logger = logging.getLogger(__name__)
 
@@ -201,7 +202,7 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
             直接进入 col_ink。"""
             an = self._ctx.analyzer
             if an is None:
-                return [(d[0], d[1], d[2], d[3], 0, d[3]) for d in devs]
+                return [d.with_crop(0, d.w) for d in devs]
             crop_devs = []
             yfs = []
             if self._ctx.y_pool is not None:
@@ -210,18 +211,18 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
                     yfs.append(yf)
                     crop_devs.append(yf.ptr)
                 an.luma_into_batch(
-                    [d[1] for d in devs], crop_devs,
+                    [d.ptr for d in devs], crop_devs,
                     self._ctx.src_h, self._ctx.src_w,
                     self._spec.color_range != 1, stream=an._stream_c)
             else:
-                crop_devs = [d[1] for d in devs]
+                crop_devs = [d.ptr for d in devs]
             rows = an.content_range_batch(
                 crop_devs, self._ctx.src_h, self._ctx.src_w,
                 self._spec.bin_thresh_ref[0], stream=an._stream_c)
             outs = []
             for d, yf, r in zip(devs, yfs or [None] * len(devs), rows):
-                owner = yf if yf is not None else d[0]
-                ptr = yf.ptr if yf is not None else d[1]
+                owner = yf if yf is not None else d.owner
+                ptr = yf.ptr if yf is not None else d.ptr
                 if int(r[0]) <= int(r[1]):
                     rng = self._spec.content_range_to_crop(
                         int(r[0]), int(r[1]), self._ctx.src_w)
@@ -229,7 +230,8 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
                                    else (0, self._ctx.src_w))
                 else:
                     xoff, cropw = 0, self._ctx.src_w
-                outs.append((owner, ptr, d[2], d[3], xoff, cropw))
+                outs.append(DeviceRef(ptr=ptr, h=d.h, w=d.w, owner=owner,
+                                      x_off=xoff, crop_w=cropw))
             return outs
 
     def _cleanup_partial():
@@ -324,15 +326,15 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
 
     def _d2h_rep(dev, *, prefer_device=False):
         """代表帧 → 宿主：NVDEC = D2H；CPU 解码默认宿主切片直取。"""
-        hc = getattr(dev[0], 'host_crop', None)
+        hc = getattr(dev.owner, 'host_crop', None)
         if hc is not None and not prefer_device:
             h = hc()
             if h is not None:
                 return np.array(h)
-        arr = np.empty((dev[2], dev[3]), dtype=np.uint8)
+        arr = np.empty((dev.h, dev.w), dtype=np.uint8)
         # 消费流上异步 D2H + 同步消费流：不走 NULL 流（避免耦合生产者）。
         cudart.cudaMemcpyAsync(
-            arr.ctypes.data, int(dev[1]), dev[2] * dev[3],
+            arr.ctypes.data, int(dev.ptr), dev.h * dev.w,
             cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost,
             ctx.analyzer._stream_c)
         cudart.cudaStreamSynchronize(ctx.analyzer._stream_c)
@@ -361,15 +363,15 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
         if yuv and on_gpu:
             ya = ctx.y_pool.acquire()
             yb = ctx.y_pool.acquire()
-            ctx.analyzer.luma_into(int(a_dev[1]), int(ya.ptr), ctx.src_h,
+            ctx.analyzer.luma_into(int(a_dev.ptr), int(ya.ptr), ctx.src_h,
                                    ctx.src_w, limited,
                                    stream=ctx.analyzer._stream_c)
-            ctx.analyzer.luma_into(int(b_dev[1]), int(yb.ptr), ctx.src_h,
+            ctx.analyzer.luma_into(int(b_dev.ptr), int(yb.ptr), ctx.src_h,
                                    ctx.src_w, limited,
                                    stream=ctx.analyzer._stream_c)
             ap, bp = ya.ptr, yb.ptr
         else:
-            ap, bp = int(a_dev[1]), int(b_dev[1])
+            ap, bp = int(a_dev.ptr), int(b_dev.ptr)
         try:
             mad, chg = ctx.analyzer.compare_pair(
                 ap, bp, ctx.src_h, ctx.src_w, spec.bin_thresh_ref[0],
@@ -396,30 +398,32 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
             if getattr(ocr_session, 'autocropper', None) is not None:
                 # 零拷贝 + 双推迟：emit 只剩构元+入队。
                 if (spec.ocr_autocrop and ctx.src_w > 8 and r_sharp >= 3.0):
-                    dev_ocr = (r_dev[0], r_dev[1], ctx.src_h,
-                               ctx.src_w, r_sharp)
+                    dev_ocr = DeviceRef(ptr=r_dev.ptr, h=ctx.src_h,
+                                        w=ctx.src_w, owner=r_dev.owner,
+                                        sharp=r_sharp)      # 延后裁切标记
                 else:
-                    dev_ocr = (r_dev[0], r_dev[1], ctx.src_h,
-                               ctx.src_w, 0, ctx.src_w)
+                    dev_ocr = DeviceRef(ptr=r_dev.ptr, h=ctx.src_h,
+                                        w=ctx.src_w, owner=r_dev.owner,
+                                        x_off=0, crop_w=ctx.src_w)
             else:
                 if yuv and on_gpu:
                     yf = ctx.y_pool.acquire()
-                    ctx.analyzer.luma_into(int(r_dev[1]), int(yf.ptr),
+                    ctx.analyzer.luma_into(int(r_dev.ptr), int(yf.ptr),
                                            ctx.src_h, ctx.src_w, limited,
                                            stream=ctx.analyzer._stream_c)
                     cudart.cudaStreamSynchronize(ctx.analyzer._stream_c)
-                    base = (yf, yf.ptr, ctx.src_h, ctx.src_w)
+                    base = DeviceRef(ptr=yf.ptr, h=ctx.src_h, w=ctx.src_w,
+                                     owner=yf)
                 else:
                     base = r_dev
                 xoff, cropw = 0, ctx.src_w
                 _t_ac = time.perf_counter()
-                rng = _autocrop_device(base[1], r_sharp)
+                rng = _autocrop_device(base.ptr, r_sharp)
                 if rng is not None:
                     xoff, cropw = rng
                 if spec.prof_end is not None:
                     spec.prof_end('producer', 'emit_autocrop', _t_ac)
-                dev_ocr = (base[0], base[1], ctx.src_h, ctx.src_w,
-                           xoff, cropw)
+                dev_ocr = base.with_crop(xoff, cropw)
         else:
             crop_h = _d2h_rep(r_dev)
         if spec.keep_crops:
@@ -432,10 +436,11 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
             if spec.prof_end is not None:
                 spec.prof_end('producer', 'emit_d2h', _t_d2h)
         if dev_ocr is not None and not yuv:
-            drop_host = getattr(dev_ocr[0], 'drop_host', None)
+            drop_host = getattr(dev_ocr.owner, 'drop_host', None)
             if drop_host is not None:
                 drop_host()
-        _put_ocr((idx, r_frame, crop_h, dev_ocr, frac))
+        from .ocr_stage import SegmentTask
+        _put_ocr(SegmentTask(idx, r_frame, crop_h, dev_ocr, frac))
         if spec.prof_end is not None:
             spec.prof_end('producer', 'emit_put', _t_push)
 

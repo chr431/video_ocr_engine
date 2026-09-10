@@ -392,7 +392,7 @@ class OcrEngine:
         """TRT：直接消费 GPU 灰度帧（decord NDArray / 引擎 H2D 批），
         跳过 D2H 代表帧拷贝。
 
-        infos: [(dev_ptr, src_h, src_w, owner), ...]；也接受 6 元组
+        infos: [DeviceRef, ...]（S9-3：取代 4/6 元组；裁切区间见 .span）
         (dev_ptr, src_h, src_w, owner, x_off, crop_w) —— 该帧只把源列区间
         [x_off, x_off+crop_w) 参与 OCR（P0-4 宽度自适应裁切的 GPU 直通，
         区间来自 GPU col_ink + 宿主同一余量规则）。
@@ -403,8 +403,8 @@ class OcrEngine:
         不落 RAM（DtoH 仅 B*seq*8 字节），宿主 CTC 直接吃小数组。
         """
         self._get_gpu_pre()
-        src_h = int(infos[0][1])
-        src_w = int(infos[0][2])
+        src_h = int(infos[0].h)
+        src_w = int(infos[0].w)
         # 优先级同 __call__：env OCR_PAD_SMALL > fill_width > 模型下限。
         _env = (self._pad_floor_env if self._pad_floor_env is not None
                 else config.env_int(config.OCR_PAD_SMALL_ENV, 0))
@@ -419,8 +419,7 @@ class OcrEngine:
             _ratio = float(force_aspect)
         else:
             # pad 宽按批内最大「裁后内容宽」计（未裁项即 src_w）
-            _ratio = max(float(int(t[5]) if len(t) >= 6 else src_w)
-                         for t in infos) / float(src_h)
+            _ratio = max(float(t.span[1]) for t in infos) / float(src_h)
         max_wh = max(_floor / config.OCR_TARGET_H, _ratio)
         out_width = int(config.OCR_TARGET_H * max_wh)
         dev_ptr, shape = self._gpu_pre.process_gray_raw(

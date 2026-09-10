@@ -25,7 +25,16 @@ dependencies = [
 dev = ["pytest>=8"]
 
 [tool.setuptools]
-packages = ["video_ocr_engine"]
+# S9-3：显式列入全部子包——此前仅列顶层包，S9-1 的 config/ domain/
+# ocr/ gpu/ pipeline/ 搬迁后不会进 wheel（缺包安装即 import 失败）
+packages = [
+    "video_ocr_engine",
+    "video_ocr_engine.config",
+    "video_ocr_engine.domain",
+    "video_ocr_engine.gpu",
+    "video_ocr_engine.ocr",
+    "video_ocr_engine.pipeline",
+]
 py-modules = [
     "engine_config",
     "gpu_setup",
@@ -36,7 +45,7 @@ py-modules = [
 ]
 
 [tool.setuptools.dynamic]
-version = {attr = "engine_config.__version__"}
+version = {attr = "video_ocr_engine.config.constants.__version__"}
 
 [tool.setuptools.data-files]
 # 模型资产随包分发：安装后 _models_dir() 由 ocr_native.__file__ 解析到

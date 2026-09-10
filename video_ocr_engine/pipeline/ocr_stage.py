@@ -13,6 +13,7 @@ import logging
 import sys
 import threading
 from dataclasses import dataclass
+from typing import NamedTuple
 from typing import Callable
 
 from video_ocr_engine.config import constants as config
@@ -20,6 +21,38 @@ from video_ocr_engine.domain.segmentation import preprocess_standard
 from .._helpers import _ocr_batch_size, _ocr_progress_pct
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SegmentTask:
+    """段任务（队列项，D3）：emit → OCR 会话的唯一载荷。"""
+    idx: int
+    rep: object              # 代表帧号
+    crop: object             # 宿主 crop（raw 路径为 None）
+    dev: object              # DeviceRef（宿主回退路径为 None）
+    frac: float
+
+
+@dataclass
+class InferBatch:
+    """infer 批任务（D3）：宽/窄两条路径的显式载荷。
+
+    raw 路径：procs=None、infos/force_aspect 就位（设备指针直通）；
+    宿主路径：procs 就位、infos=None。
+    """
+    idxs: list
+    reps: list
+    procs: "list | None"
+    fracs: list
+    force_aspect: "float | None" = None
+    infos: "list | None" = None
+
+
+class OcrResult(NamedTuple):
+    """单段 OCR 结果（text, conf, rep_frame）——NamedTuple 保留索引访问。"""
+    text: "str | None"
+    conf: float
+    rep: object
 
 
 @dataclass
@@ -248,17 +281,17 @@ class OcrSession:
                         item = infer_q.get()
                         if item is None:
                             return
-                        idxs, reps, procs, fracs, raw_infos = item
                         _t_i = time.perf_counter()
-                        if raw_infos is not None:
+                        if item.infos is not None:
                             res = eng.call_gpu_raw(
-                                raw_infos[1], force_aspect=raw_infos[0])
+                                item.infos, force_aspect=item.force_aspect)
                         else:
-                            res = eng(procs)
+                            res = eng(item.procs)
                         if spec.prof_end is not None:
                             spec.prof_end('ocr', 'infer', _t_i)
                         _t_c = time.perf_counter()
-                        for idx, rep, r, frac in zip(idxs, reps, res, fracs):
+                        for idx, rep, r, frac in zip(
+                                item.idxs, item.reps, res, item.fracs):
                             if hasattr(r, 'txts'):
                                 raw_text = (str(r.txts[0])
                                             if r.txts and r.txts[0] else None)
@@ -267,7 +300,8 @@ class OcrSession:
                                             if scores else 0.0)
                             else:
                                 raw_text, ocr_conf = (None, 0.0)
-                            self.results[idx] = (raw_text, ocr_conf, rep)
+                            self.results[idx] = OcrResult(
+                                raw_text, ocr_conf, rep)
                             _report_ocr_progress(idx, frac)
                         if spec.prof_end is not None:
                             spec.prof_end('ocr', 'ctc_decode', _t_c)
@@ -300,7 +334,7 @@ class OcrSession:
                     # 提取 + 一次 col_ink_batch 裁切区间，整批一次 sync，
                     # 再按「裁后内容宽」分组。单帧判定内核与宿主
                     # crop_to_content 同判据，逐位一致。
-                    deferred = [i for i in raw_sel if len(b_devs[i]) == 5]
+                    deferred = [i for i in raw_sel if b_devs[i].deferred]
                     if deferred and self.autocropper is not None:
                         for i, dev6 in zip(
                                 deferred,
@@ -310,34 +344,26 @@ class OcrSession:
                     elif deferred:
                         # autocropper 缺席兜底：全宽（与未裁语义一致）
                         for i in deferred:
-                            o, p, h, w, _sharp = b_devs[i]
-                            b_devs[i] = (o, p, h, w, 0, w)
+                            b_devs[i] = b_devs[i].with_crop(0, b_devs[i].w)
                     # 跨批按「裁后内容宽」分组（与宿主裁切路径同一策略）：
                     # 顺序分批时每批几乎必有满宽成员 → pad 宽被顶回全宽，
                     # 裁切收益归零；把宽度相近的段分到同一批才真的降下来。
                     # 6 元组 dev = (owner, ptr, h, w, x_off, crop_w)。
                     if spec.reorder_window > 1:
-                        raw_sel.sort(
-                            key=lambda i: (b_devs[i][5]
-                                           if len(b_devs[i]) >= 6
-                                           else b_devs[i][3]))
+                        raw_sel.sort(key=lambda i: b_devs[i].span[1])
                     # raw 任务交给 infer 线程异步执行；载荷 = (force_aspect,
                     # infos)。按批大小拆子批：pad 宽 = 子批内最大内容宽。
                     for s in range(0, len(raw_sel), chunk):
                         chk = raw_sel[s:s + chunk]
-                        infos = []
-                        for i in chk:
-                            d = b_devs[i]
-                            if len(d) >= 6:
-                                infos.append((d[1], d[2], d[3], d[0],
-                                              int(d[4]), int(d[5])))
-                            else:
-                                infos.append((d[1], d[2], d[3], d[0]))
-                        if not _put_infer((
+                        # S9-3：DeviceRef 直接作为 kernel 面载荷
+                        # （取代 4/6 元组——裁切区间经 .span 显式化）
+                        infos = [b_devs[i] for i in chk]
+                        if not _put_infer(InferBatch(
                                 [b_idx[i] for i in chk],
                                 [b_reps[i] for i in chk], None,
                                 [b_fracs[i] for i in chk],
-                                (float(spec.force_aspect), infos))):
+                                force_aspect=float(spec.force_aspect),
+                                infos=infos)):
                             return
                 host_sel = [
                     i for i in range(len(b_crops))
@@ -375,11 +401,11 @@ class OcrSession:
                         prepped.sort(key=lambda t: t[1].shape[1])
                     for s in range(0, len(prepped), chunk):
                         chk = prepped[s:s + chunk]
-                        if not _put_infer((
+                        if not _put_infer(InferBatch(
                                 [b_idx[t[0]] for t in chk],
                                 [b_reps[t[0]] for t in chk],
                                 [t[1] for t in chk],
-                                [b_fracs[t[0]] for t in chk], None)):
+                                [b_fracs[t[0]] for t in chk])):
                             return
                 b_idx.clear()
                 b_reps.clear()
@@ -396,12 +422,11 @@ class OcrSession:
                     break
                 if self.err:
                     break
-                idx, rep, crop, dev, frac = item
-                b_idx.append(idx)
-                b_reps.append(rep)
-                b_crops.append(crop)
-                b_devs.append(dev)
-                b_fracs.append(frac)
+                b_idx.append(item.idx)
+                b_reps.append(item.rep)
+                b_crops.append(item.crop)
+                b_devs.append(item.dev)
+                b_fracs.append(item.frac)
                 # 攒够"重排窗口"再 flush：窗口 = 1 批时与旧行为一致。
                 if len(b_idx) >= max(chunk, spec.reorder_window):
                     flush()

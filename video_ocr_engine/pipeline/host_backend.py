@@ -20,6 +20,7 @@ from typing import Callable
 import numpy as np
 
 from video_ocr_engine.config import constants as config
+from ..gpu.frame_ref import DeviceRef
 from video_ocr_engine.domain.segmentation import SegmentStateMachine, _otsu, otsu_median_threshold
 
 logger = logging.getLogger(__name__)
@@ -108,7 +109,8 @@ def _calibrate(spec: HostRunSpec, vr, frames, *, with_dev: bool):
             dev_info = None
             if dev_c == 1 and len(shape) == 4:
                 src_h, src_w = shape[1], shape[2]
-                dev_info = (nds, base + k * src_h * src_w, src_h, src_w)
+                dev_info = DeviceRef(ptr=base + k * src_h * src_w,
+                                     h=src_h, w=src_w, owner=nds)
             calib.append((frames[k], c, g, float(g.std()), dev_info))
     else:
         for k in range(calib_n):
@@ -120,7 +122,8 @@ def _calibrate(spec: HostRunSpec, vr, frames, *, with_dev: bool):
             dev_info = None
             if with_dev and len(nd.shape) == 3 and nd.shape[-1] == 1:
                 base, shape = _ndarray_device_ptr(nd)
-                dev_info = (nd, base, shape[0], shape[1])
+                dev_info = DeviceRef(ptr=base, h=shape[0], w=shape[1],
+                                     owner=nd)
             calib.append((frames[k], c, g, float(g.std()), dev_info))
     return calib, otsu_median_threshold(
         [_otsu(g) for _fi, _c, g, _s, _dev in calib])
@@ -176,7 +179,8 @@ def _frame_stream(spec: HostRunSpec, frames, vr, calib, th, *, with_dev: bool):
         for k, gi in enumerate(range(bstart, bend)):
             d = None
             if dev_base:
-                d = (nds, dev_base + k * src_h * src_w, src_h, src_w)
+                d = DeviceRef(ptr=dev_base + k * src_h * src_w,
+                              h=src_h, w=src_w, owner=nds)
             # gray 必须拷贝：payload 灰度会作为代表帧逃逸出批作用域，
             # 而 g_buf 跨批复用——不拷贝则 merge_similar 在后续批读到
             # 被覆写的帧（2026-09-10 D1 调查：test5 host 45/1089 合并
@@ -292,7 +296,8 @@ def run_host_pipeline(spec: HostRunSpec, ocr_engines=None,
     def _emit_ocr(seg, r_frame, r_crop, r_dev, _r_gray, frac) -> None:
         nonlocal seg_idx
         _t_push = time.perf_counter()
-        _put_ocr((seg_idx, r_frame, r_crop, r_dev, frac))
+        from .ocr_stage import SegmentTask
+        _put_ocr(SegmentTask(seg_idx, r_frame, r_crop, r_dev, frac))
         _prof(spec, 'producer', 'q_put_block', _t_push)
         if spec.keep_crops:
             rep_crops[r_frame] = r_crop

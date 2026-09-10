@@ -304,10 +304,9 @@ extern "C" __global__ void prep_gray_raw(
                          force_aspect: float = 0.0):
         """处理 GPU 灰度帧：D2D 聚批 → GPU resize+gamma+normalize+pad。
 
-        infos: [(dev_ptr, src_h, src_w, owner), ...]，frame 已位于显存；
-        也接受 6 元组 (dev_ptr, src_h, src_w, owner, x_off, crop_w) ——
-        该帧只把源列区间 [x_off, x_off+crop_w) 参与缩放（P0-4 宽度自适应
-        裁切的 GPU 直通；区间由 GPU col_ink + 宿主余量规则给出）。
+        infos: [DeviceRef, ...]（S9-3 取代 4/6 元组；见 gpu/frame_ref.py）
+        ——DeviceRef.span 给出参与缩放的源列区间（未裁切 = 全宽；
+        P0-4 宽度自适应裁切的 GPU 直通，区间由 GPU col_ink + 宿主余量规则）。
         force_aspect > 0：强制 OCR 输入宽 = OCR_TARGET_H × force_aspect
         （内容整体拉伸到该宽度，与宿主 _preprocess_standard 的 force_aspect
         语义一致；边界吸附用 round），此时忽略逐项裁切区间（与宿主
@@ -317,8 +316,8 @@ extern "C" __global__ void prep_gray_raw(
         import numpy as np
         from cuda.bindings import runtime as cudart
         B = len(infos)
-        src_h = int(infos[0][1])
-        src_w = int(infos[0][2])
+        src_h = int(infos[0].h)
+        src_w = int(infos[0].w)
         dst_h = int(config.OCR_TARGET_H)
         xoffs = np.zeros(B, dtype=np.int32)
         crop_ws = np.full(B, src_w, dtype=np.int32)
@@ -337,19 +336,13 @@ extern "C" __global__ void prep_gray_raw(
             # 与"整幅先缩到 forced_w 再裁"逐点一致。
             forced_w = max(1, int(round(dst_h * force_aspect)))
             for i, t in enumerate(infos):
-                if len(t) >= 6:
-                    xo, cwid = int(t[4]), int(t[5])
-                else:
-                    xo, cwid = 0, src_w
+                xo, cwid = t.span
                 xoffs[i] = xo
                 crop_ws[i] = cwid
                 content_ws[i] = max(1, int(cwid * forced_w / src_w))
         else:
             for i, t in enumerate(infos):
-                if len(t) >= 6:
-                    xo, cwid = int(t[4]), int(t[5])
-                else:
-                    xo, cwid = 0, src_w
+                xo, cwid = t.span
                 xoffs[i] = xo
                 crop_ws[i] = cwid
                 # 与宿主 _preprocess_standard 的 new_w 同式（int 截断），
@@ -363,7 +356,7 @@ extern "C" __global__ void prep_gray_raw(
         for i, t in enumerate(infos):
             cudart.cudaMemcpyAsync(
                 raw_dev + i * src_h * src_w,
-                int(t[0]), src_h * src_w,
+                int(t.ptr), src_h * src_w,
                 cudart.cudaMemcpyKind.cudaMemcpyDeviceToDevice,
                 self._stream)
         out_nbytes = B * 3 * dst_h * dst_w * 4
