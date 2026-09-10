@@ -69,8 +69,8 @@ for _dir, _subs, _files in os.walk(os.path.join(ROOT, "tests")):
         if f.endswith(".py"):
             ALL_PY.append(os.path.relpath(os.path.join(_dir, f), ROOT))
 
-DOCS = ["README.md", "AGENTS.md", "docs/PERFORMANCE.md", "docs/ARCHIVE.md",
-        "docs/DECISIONS.md", "docs/DEPENDENCIES.md", "tools/INDEX.md"]
+DOCS = ["README.md", "AGENTS.md", "docs/log/PERFORMANCE.md", "docs/log/ARCHIVE.md",
+        "docs/log/DECISIONS.md", "docs/DEPENDENCIES.md", "tools/INDEX.md"]
 
 CLAUDE_MD_MAX_BYTES = 12 * 1024
 
@@ -357,7 +357,7 @@ def check_filename_corruption() -> None:
     HIST = re.compile(r"已删除|不存在|已移除|已废弃|历史|当时|原\s|建议|曾|废弃|遗留|归档|没有")
     # ARCHIVE.md / DECISIONS.md 整体就是历史档案，里面的路径指的是"当时那个文件"，
     # 后来被删/被移是常态 —— 不做存在性要求。只有现役文档必须指得通。
-    LIVE_DOCS = ["README.md", "AGENTS.md", "docs/PERFORMANCE.md", "tools/INDEX.md"]
+    LIVE_DOCS = ["README.md", "AGENTS.md", "tools/INDEX.md"]  # 历史(docs/log 大档案)不做活性检查
     ghost = []
     for rel in LIVE_DOCS:
         p = rp(rel)

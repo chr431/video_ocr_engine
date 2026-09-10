@@ -1,4 +1,4 @@
-"""一次性工具：把 CLAUDE.md 拆成「注入核」+ docs/DECISIONS.md 历史档案。
+"""一次性工具：把 CLAUDE.md 拆成「注入核」+ docs/log/DECISIONS.md 历史档案。
 
 设计要点
 --------
@@ -6,7 +6,7 @@
    **不是二进制模式**。CLAUDE.md 有 955 个 CRLF 行尾、0 个行中裸 CR，
    所以这里保真压力不大，但仍统一用 newline='' 避免 os.linesep 干扰。
 2. 切分点固定在 `## 通用约定` 这一行：其上的「文件头 + 状态块」被整份重写，
-   其下 L32–L956 原文**逐字不动**迁到 docs/DECISIONS.md。
+   其下 L32–L956 原文**逐字不动**迁到 docs/log/DECISIONS.md。
 3. 迁出的原文保持 `###` 层级不变（不重编编号、不改标题），只在首尾加档案头尾。
 
 用法
@@ -34,7 +34,7 @@ SPLIT_MARK = "\n## 通用约定\n"
 CORE = r'''# CLAUDE.md — 开发记录与约定（注入核）
 
 > 本文件在每个会话开头被注入，**只放"现在必须知道的"**。
-> **硬上限 12 KB** — 超了就把内容迁到 `docs/DECISIONS.md`，这里只留指针。
+> **硬上限 12 KB** — 超了就把内容迁到 `docs/log/DECISIONS.md`，这里只留指针。
 
 ## 文档地图（6 份，别再新增）
 
@@ -42,12 +42,12 @@ CORE = r'''# CLAUDE.md — 开发记录与约定（注入核）
 |---|---|---|
 | `README.md` | 用户向 API / 用法 | 写调用代码时 |
 | `CLAUDE.md`（本文件） | 维护者向**注入核**：铁律 + 现役架构 + 结论指针 | 自动注入 |
-| `docs/PERFORMANCE.md` | 现役性能实测（§1–§15, §17, §19–§21） | 动性能相关代码前 |
-| `docs/DECISIONS.md` | 每轮决策过程、已删除功能、设计审查结论 | 想问"为什么这么做"时 |
-| `docs/ARCHIVE.md` | 归档（PERF §4 / §8 / §16 / §18），**编号保留勿重编** | 只看"为什么不做" |
+| `docs/log/PERFORMANCE.md` | 现役性能实测（§1–§15, §17, §19–§21） | 动性能相关代码前 |
+| `docs/log/DECISIONS.md` | 每轮决策过程、已删除功能、设计审查结论 | 想问"为什么这么做"时 |
+| `docs/log/ARCHIVE.md` | 归档（PERF §4 / §8 / §16 / §18），**编号保留勿重编** | 只看"为什么不做" |
 | `docs/DEPENDENCIES.md` | 依赖版本与已知问题 | 装环境 / 报 bug 时 |
 
-⚠️ **现役规则以本文件为准**。`docs/DECISIONS.md` 是迁出的原文存档，
+⚠️ **现役规则以本文件为准**。`docs/log/DECISIONS.md` 是迁出的原文存档，
 两者冲突时以本文件为真相（避免"两套真相"，见设计审查 D6）。
 
 ## 铁律（先量后做）
@@ -114,7 +114,7 @@ CORE = r'''# CLAUDE.md — 开发记录与约定（注入核）
 | **裁切余量 10% 优于 0%**；裁切即使省不到算力也能提准确率（旧"守卫"前提是错的） | DECISIONS「第四轮」 |
 | **`auto` 后端在 h264 多核不是最优**（CPU+TRT 快约 2×），但静态判据不可靠、判错代价成倍 → 保持现状 | DECISIONS 设计审查 A2 |
 
-## 编辑护栏（docs/PERFORMANCE.md）
+## 编辑护栏（docs/log/PERFORMANCE.md）
 
 该文件含 **934 个裸 `\r`**，其中 **916 个是行中间残留**、18 个是真 CRLF 行尾。
 
@@ -224,7 +224,7 @@ def main() -> int:
           % (len(orig), len(core), 100.0 * (len(core) - len(orig)) / len(orig)))
     print("              %7d B → %7d B（UTF-8）"
           % (len(orig.encode("utf-8")), len(core.encode("utf-8"))))
-    print("docs/DECISIONS.md  %7d 字符 / %7d B（UTF-8）"
+    print("docs/log/DECISIONS.md  %7d 字符 / %7d B（UTF-8）"
           % (len(dec), len(dec.encode("utf-8"))))
     print()
     n_sec = body.count("\n### ") + body.count("\n## ")

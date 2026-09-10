@@ -1,4 +1,4 @@
-"""裸 CR 往返保真性探针 —— 判定 docs/PERFORMANCE.md 是否真的"只能二进制改"。
+"""裸 CR 往返保真性探针 —— 判定 docs/log/PERFORMANCE.md 是否真的"只能二进制改"。
 
 调查动机
 --------
@@ -17,7 +17,7 @@ newline='' 与 newline='\\n' 都不翻译。所以"必须用二进制"可能是�
 
 用法
 ----
-    python tools/_probe_cr_roundtrip.py                 # 默认测 docs/PERFORMANCE.md
+    python tools/_probe_cr_roundtrip.py                 # 默认测 docs/log/PERFORMANCE.md
     python tools/_probe_cr_roundtrip.py --file AGENTS.md
 """
 

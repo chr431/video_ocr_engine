@@ -1,0 +1,134 @@
+# 旋钮注册表镜像（渲染产物；事实源 config/knobs.py）
+
+- name: decode.num_threads
+  env: DECODE_THREADS
+  type: int
+  default: 0
+  rationale: ec:96-130
+  note: 0=自动分档（codec×stride 公式在消费端）
+
+- name: decode.hybrid_cpu_threads
+  env: HYBRID_CPU_THREADS
+  type: int
+  default: 0
+  rationale: ec:87-95
+  note: 0=自动 clamp [HYBRID_CPU_THREADS_AUTO_MIN, MAX]=[8,16]
+
+- name: ocr.threads
+  env: OCR_THREADS
+  type: int
+  default: 0
+  rationale: ec:68
+  note: 0=全部物理核（消费端派生）
+
+- name: ocr.batch
+  env: OCR_BATCH
+  type: int
+  default: 16
+  rationale: ec:366
+  note: v1 默认取 OCR_BATCH_SIZE=16
+
+- name: ocr.gamma
+  env: OCR_GAMMA
+  type: float
+  default: 2.0
+  rationale: ec:216-219
+  note: 
+
+- name: ocr.pad_small
+  env: OCR_PAD_SMALL
+  type: int
+  default: 0
+  rationale: ec:235-266
+  note: 0=不生效；>fill_width 时抬升 pad 下限
+
+- name: ocr.roi_autocrop
+  env: OCR_ROI_AUTOCROP
+  type: bool
+  default: True
+  rationale: ec:271-311
+  note: 
+
+- name: ocr.roi_autocrop_margin
+  env: OCR_ROI_AUTOCROP_MARGIN
+  type: int
+  default: 10
+  rationale: ec:312-336
+  note: 
+
+- name: ocr.roi_autocrop_min_gain
+  env: OCR_ROI_AUTOCROP_MIN_GAIN
+  type: int
+  default: 10
+  rationale: ec:359
+  note: 
+
+- name: ocr.reorder_window
+  env: OCR_REORDER_WINDOW
+  type: int
+  default: 64
+  rationale: ec:360
+  note: v1 消费端 max(1,·)；0 也抬到 1
+
+- name: ocr.instances
+  env: OCR_INSTANCES
+  type: bool
+  default: True
+  rationale: ec:77
+  note: 仅 ONNX 双实例路径
+
+- name: ocr.gpu_ctc
+  env: GPU_CTC
+  type: bool
+  default: True
+  rationale: ec:83
+  note: 仅 TRT 输出归约
+
+- name: segment.text_sep_merge
+  env: TEXT_SEP_MERGE
+  type: str
+  default: 'binary'
+  rationale: ec:229
+  note: v1 裸 get 非布尔；未知值消费端回落 binary（B3 将改构造期校验）
+
+- name: pipeline.gpu
+  env: GPU_PIPELINE
+  type: bool|none
+  default: None
+  rationale: ec:81
+  note: 三态：未设 None=规则 / falsy 关 / truthy 强制 / 非法=关（非 None）
+
+- name: pipeline.gpu_stream
+  env: GPU_PIPELINE_STREAM
+  type: bool
+  default: False
+  rationale: ec:82
+  note: C-10 判零收益，opt-in
+
+- name: diag.profile
+  env: ENGINE_PROFILE
+  type: bool
+  default: False
+  rationale: ec:84
+  note: v1 读于构造期；v2 统一构造期一次（§10.2）
+
+- name: diag.subprobe
+  env: TRT_SUBPROBE
+  type: bool
+  default: False
+  rationale: ec:85
+  note: v1 读于 import 期；v2 统一构造期一次（§10.2）
+
+- name: diag.bounds_debug
+  env: DEBUG_BOUNDS
+  type: bool
+  default: False
+  rationale: ec:86
+  note: 
+
+- name: diag.telemetry
+  env: VOE_TELEMETRY
+  type: str
+  default: 'std'
+  rationale: v2:8.6-r5
+  note: off/std/full；off=NullMetrics 一键关闭（PI-15）

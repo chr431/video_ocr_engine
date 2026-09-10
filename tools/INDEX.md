@@ -142,17 +142,17 @@
 
 | 文件 | 行 | 说明 |
 |---|---:|---|
-| `_split_claude_md.py` | 263 | 2026-08-31 把 AGENTS.md 拆成注入核 + `docs/DECISIONS.md`。**已完成，可删** |
-| `_split_perf_md.py` | 194 | 2026-08-31 按「活/归档」把 PERFORMANCE.md 切出 `docs/ARCHIVE.md`。**已完成，可删** |
+| `_split_claude_md.py` | 263 | 2026-08-31 把 AGENTS.md 拆成注入核 + `docs/log/DECISIONS.md`。**已完成，可删** |
+| `_split_perf_md.py` | 194 | 2026-08-31 按「活/归档」把 PERFORMANCE.md 切出 `docs/log/ARCHIVE.md`。**已完成，可删** |
 | `_fix_probe_paths.py` | 416 | 2026-08-31 把探针里写死的路径改成 `__file__` 推导 / 环境变量。**已完成，可删** |
 
 ## 清理判据（想删探针时按这个顺序）
 
 1. `grep -rn "<文件名>" README.md AGENTS.md docs/ tools/` —— 有命中就不删。
-2. 命中只在 `docs/ARCHIVE.md` / PERF §16 归档章 → 该结论已归档，可随档一起删，
+2. 命中只在 `docs/log/ARCHIVE.md` / PERF §16 归档章 → 该结论已归档，可随档一起删，
    但要确认 §16 的校正表没把它标成"仍有效"。
 3. 零命中 → 归入「孤儿」，走上面 D 节的逐个案判断。
-4. 删之前把结论数字抄进 `docs/PERFORMANCE.md` 对应章节 —— **探针可以删，
+4. 删之前把结论数字抄进 `docs/log/PERFORMANCE.md` 对应章节 —— **探针可以删，
    数字不能丢**。
 
 ## 数据文件

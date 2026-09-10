@@ -1,0 +1,21 @@
+# 权威性能数字（S0 基线，2026-09-10；机器：7945HX + RTX 4060 Laptop 8GB，
+# driver 610.88，decord fork 0.8.2，TRT sm89；3000 帧窗口热轮中位）
+# 事实源增量走 tests/golden/bench_baseline.json（原始记录）；
+# 本表为人工确认的权威口径。
+- metric: e2e_wall_3000
+  h264-gpu-nvdec-trt: 3.107
+  h264-cpu-cpu-trt: 1.131
+  hevc-nvdec-trt: 1.528
+  av1-nvdec-trt: 1.814
+  noise_floor_warm_pct: 1.3
+- metric: decode_ceiling_fps
+  h264_nvdec: 1013
+  h264_cpu: 3300
+  hevc_nvdec: 2127
+  av1_nvdec: 1780
+- metric: host_gpu_equivalence
+  window: [0, 2000]
+  segments: bitwise
+  texts: bitwise
+  conf_median_delta: 0.0
+  conf_worst_delta: 0.00454

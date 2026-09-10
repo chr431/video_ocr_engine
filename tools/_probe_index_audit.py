@@ -39,8 +39,8 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
 
 INDEX = os.path.join(HERE, "INDEX.md")
-DOCS = ["README.md", "AGENTS.md", "docs/PERFORMANCE.md", "docs/DECISIONS.md",
-        "docs/DEPENDENCIES.md", "docs/ARCHIVE.md"]
+DOCS = ["README.md", "AGENTS.md", "docs/log/PERFORMANCE.md", "docs/log/DECISIONS.md",
+        "docs/DEPENDENCIES.md", "docs/log/ARCHIVE.md"]
 
 
 def read_bytes(p: str) -> bytes:

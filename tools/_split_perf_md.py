@@ -1,4 +1,4 @@
-"""把 docs/PERFORMANCE.md 按「活/归档」切出 docs/ARCHIVE.md。
+"""把 docs/log/PERFORMANCE.md 按「活/归档」切出 docs/log/ARCHIVE.md。
 
 背景
 ----
@@ -16,7 +16,7 @@ PERFORMANCE.md 长到 223 KB / 3451 行，其中 **54% 是归档内容**：
 --------
 1. **编号一律不重编**。保留章节里有 **32 处**引用指向 §4/§8/§16/§18
    （§16 独占 23 处）。逐个改引用风险大且噪声大，改用**统一跨文件约定**：
-   在 PERFORMANCE.md 顶部声明"§4/§8/§16/§18 见 docs/ARCHIVE.md"，
+   在 PERFORMANCE.md 顶部声明"§4/§8/§16/§18 见 docs/log/ARCHIVE.md"，
    并在每个章节原位留指针块。正文里那 32 处引用**一字不改**。
 2. **纯文本操作**。文件已于 2026-08-31 清除全部 934 个裸 CR（提交 3086a92），
    现在是纯 LF，普通文本模式 100% 安全，不需要二进制读-改-写。
@@ -27,7 +27,7 @@ PERFORMANCE.md 长到 223 KB / 3451 行，其中 **54% 是归档内容**：
     python tools/_split_perf_md.py            # 预演（只打印，不写盘）
     python tools/_split_perf_md.py --apply    # 实际执行
 
-幂等：若 docs/ARCHIVE.md 已存在且 PERFORMANCE.md 里已是指针块，直接退出。
+幂等：若 docs/log/ARCHIVE.md 已存在且 PERFORMANCE.md 里已是指针块，直接退出。
 """
 
 from __future__ import annotations
@@ -46,13 +46,13 @@ ARCH = os.path.join(ROOT, "docs", "ARCHIVE.md")
 
 MOVE = ("4", "8", "16", "18")
 
-ARCH_HEADER = """# 历史归档（从 docs/PERFORMANCE.md 迁出）
+ARCH_HEADER = """# 历史归档（从 docs/log/PERFORMANCE.md 迁出）
 
-本文件是 `docs/PERFORMANCE.md` 的**归档部分**，2026-08-31 按「活/归档」切分
+本文件是 `docs/log/PERFORMANCE.md` 的**归档部分**，2026-08-31 按「活/归档」切分
 时迁出（切分脚本：`tools/_split_perf_md.py`）。
 
 > ⚠️ **编号一律保留，不要重编号。**
-> `docs/PERFORMANCE.md` 的现役章节里有 **32 处**引用指向本文件的 §4 / §8 /
+> `docs/log/PERFORMANCE.md` 的现役章节里有 **32 处**引用指向本文件的 §4 / §8 /
 > §16 / §18（§16 独占 23 处）。改号会让这些引用全部失效。
 
 | 章节 | 性质 | 怎么用 |
@@ -63,7 +63,7 @@ ARCH_HEADER = """# 历史归档（从 docs/PERFORMANCE.md 迁出）
 | **§18** 历史实验档案 | 已删除功能（dual pipeline 等） | 只看"为什么不做" |
 
 **本文件的数值多数已过期**，用于理解"当时为什么这么做"。查"现在是什么样"
-请看 `docs/PERFORMANCE.md`。
+请看 `docs/log/PERFORMANCE.md`。
 
 ---
 
@@ -73,9 +73,9 @@ ARCH_HEADER = """# 历史归档（从 docs/PERFORMANCE.md 迁出）
 def pointer(num: str, title: str) -> str:
     return (
         f"## {num}. {title}\n\n"
-        f"> 📦 **本章已迁至 [`docs/ARCHIVE.md`](ARCHIVE.md) §{num}**"
+        f"> 📦 **本章已迁至 [`docs/log/ARCHIVE.md`](ARCHIVE.md) §{num}**"
         f"（2026-08-31 按「活/归档」切分）。\n"
-        f"> **编号保留，勿重编** —— `docs/PERFORMANCE.md` 中凡提及"
+        f"> **编号保留，勿重编** —— `docs/log/PERFORMANCE.md` 中凡提及"
         f" §4 / §8 / §16 / §18 的，一律指该文件的对应章节。\n"
     )
 
@@ -132,7 +132,7 @@ def main() -> int:
     # 在原 preamble 的章节表后面补一条跨文件约定
     note = (
         "> 📦 **§4 / §8 / §16 / §18 已于 2026-08-31 迁至 "
-        "[`docs/ARCHIVE.md`](ARCHIVE.md)**（按「活/归档」切分，编号保留）。\n"
+        "[`docs/log/ARCHIVE.md`](ARCHIVE.md)**（按「活/归档」切分，编号保留）。\n"
         "> 本文件中凡提及这四个章节号的，**一律指 ARCHIVE.md 的对应章节**；\n"
         "> 原位留有指针块，共 32 处引用未作改动。"
     )
@@ -185,7 +185,7 @@ def main() -> int:
         f.write(arch_text)
     with open(PERF, "w", encoding="utf-8", newline="") as f:
         f.write(perf_text)
-    print("\n已写出：docs/ARCHIVE.md、docs/PERFORMANCE.md")
+    print("\n已写出：docs/log/ARCHIVE.md、docs/log/PERFORMANCE.md")
     return 0
 
 

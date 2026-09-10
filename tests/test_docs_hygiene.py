@@ -2,7 +2,7 @@
 
 为什么需要
 ----------
-1. **裸 `\\r` 地雷**：`docs/PERFORMANCE.md` 历史上攒了 934 个裸 CR，
+1. **裸 `\\r` 地雷**：`docs/log/PERFORMANCE.md` 历史上攒了 934 个裸 CR，
    它们把文件变成"二进制"（git diff 只输出 `Binary files differ`，没法 review），
    还让 CommonMark 在 934 处渲染错误。2026-08-31 一次性清除（提交 3086a92）。
    这类残留是**静默**回来的：某次跨编辑器复制就可能重新引入，没人会在
@@ -23,11 +23,11 @@ import pytest
 
 from _paths import ROOT
 
-# 硬上限：AGENTS.md 在每个会话开头被注入，超过就必须迁内容到 docs/DECISIONS.md
+# 硬上限：AGENTS.md 在每个会话开头被注入，超过就必须迁内容到 docs/log/DECISIONS.md
 CLAUDE_MD_MAX_BYTES = 12 * 1024
 
-DOCS = ["README.md", "AGENTS.md", "docs/PERFORMANCE.md", "docs/DECISIONS.md",
-        "docs/DEPENDENCIES.md", "docs/ARCHIVE.md", "tools/INDEX.md",
+DOCS = ["README.md", "AGENTS.md", "docs/log/PERFORMANCE.md", "docs/log/DECISIONS.md",
+        "docs/DEPENDENCIES.md", "docs/log/ARCHIVE.md", "tools/INDEX.md",
         "docs/CONCLUSIONS.md", "docs/log/README.md"]
 
 
@@ -61,7 +61,7 @@ def test_no_bare_cr(rel: str) -> None:
 def test_claude_md_within_injection_budget() -> None:
     """AGENTS.md 必须在注入预算内 —— 它是每个会话开头全量注入的。
 
-    超了就把内容迁到 `docs/DECISIONS.md`，这里只留指针。
+    超了就把内容迁到 `docs/log/DECISIONS.md`，这里只留指针。
     """
     p = _existing("AGENTS.md")
     if p is None:
@@ -71,7 +71,7 @@ def test_claude_md_within_injection_budget() -> None:
         f"AGENTS.md 已 {size} 字节，超过注入预算 {CLAUDE_MD_MAX_BYTES} 字节"
         f"（硬上限 12 KB）。\n"
         f"它在每个会话开头被全量注入，涨上去等于每个会话都付 token。\n"
-        f"处理：把历史/过程性章节迁到 docs/DECISIONS.md，本文件只留指针。"
+        f"处理：把历史/过程性章节迁到 docs/log/DECISIONS.md，本文件只留指针。"
     )
 
 
@@ -104,9 +104,6 @@ CONCLUSIONS_MD_MAX_BYTES = 12 * 1024  # L1 索引的体积上限（现约 6.6KB�
 # （基线 = 2026-09-08 文档分层改造时点的计数。）
 XIANYI_BASELINE = {
     "README.md": 3,
-    "docs/PERFORMANCE.md": 22,
-    "docs/DECISIONS.md": 10,
-    "docs/ARCHIVE.md": 35,
     "tools/INDEX.md": 1,
 }
 
@@ -152,8 +149,11 @@ def test_xianyi_outside_l1_not_growing() -> None:
             f"新的现役/规范性表述请写入 docs/CONCLUSIONS.md（一行一条，带状态）。"
         )
     log_dir = ROOT / "docs" / "log"
+    _DEMOTED = {"PERFORMANCE.md", "ARCHIVE.md", "DECISIONS.md"}  # S2:冻结历史
     if log_dir.is_dir():
         for p in sorted(log_dir.glob("*.md")):
+            if p.name in _DEMOTED:
+                continue
             n = p.read_text(encoding="utf-8").count("现役")
             assert n == 0, (
                 f"docs/log/{p.name} 含 {n} 处「现役」——叙事目录禁止规范性语句，"
@@ -180,9 +180,11 @@ def test_no_dangling_file_refs() -> None:
 
     files = list(DANGLING_CHECK_FILES)
     log_dir = ROOT / "docs" / "log"
+    _DEMOTED = {"PERFORMANCE.md", "ARCHIVE.md", "DECISIONS.md"}  # S2:历史档案
     if log_dir.is_dir():
         files.extend(str(p.relative_to(ROOT)).replace("\\", "/")
-                     for p in sorted(log_dir.glob("*.md")))
+                     for p in sorted(log_dir.glob("*.md"))
+                     if p.name not in _DEMOTED)
 
     missing = []
     for rel in files:

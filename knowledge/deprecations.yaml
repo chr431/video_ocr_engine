@@ -1,0 +1,19 @@
+# 弃用表（v2 §10.3：机器可检的到期删除表；warning 站点随实现落地）
+- name: OCR_PAD_SMALL
+  kind: env
+  replaced_by: "FieldExtractor(fill_width=...)"
+  deprecated_in: "0.12.0"
+  remove_in: "0.14.0"
+  reason: "v1 env 盖过显式参数是排查陷阱（Q5 裁决：显式参数 > env > 默认；VOE_ENV_WINS 逃生门同期移除）"
+- name: VOE_ENV_WINS
+  kind: env
+  replaced_by: "(无——v2 语义本身)"
+  deprecated_in: "0.12.0"
+  remove_in: "0.14.0"
+  reason: "Q5 优先级反转的过渡逃生门"
+- name: NVDEC rep_frame 网格外帧号
+  kind: behavior
+  replaced_by: "采样网格帧号（f0 + k×stride 语义修正）"
+  deprecated_in: "pending"
+  remove_in: "pending"
+  reason: "F-6 顺带发现（B8 候选）：stride>1 时 rep_frame 落网格外；金标已冻结现行为，修复须走 §10.2 行为变更流程并重录向量"

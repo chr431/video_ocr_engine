@@ -1,7 +1,7 @@
 # AGENTS.md — 开发记录与约定（注入核）
 
 > 本文件在每个会话开头被注入，**只放"现在必须知道的"**。
-> **硬上限 12 KB** — 超了就把内容迁到 `docs/DECISIONS.md`，这里只留指针。
+> **硬上限 12 KB** — 超了就把内容迁到 `docs/log/DECISIONS.md`，这里只留指针。
 
 ## 文档地图（7 份，别再新增）
 
@@ -10,12 +10,12 @@
 | `README.md` | 用户向 API / 用法 | 写调用代码时 |
 | `AGENTS.md`（本文件） | 维护者向**注入核**：铁律 + 现役架构 + 结论指针 | 自动注入 |
 | `docs/CONCLUSIONS.md` | **L1 结论索引**（状态/前提/复评触发），唯一允许规范性结论处 | 动手前查结论、出结论写这里 |
-| `docs/PERFORMANCE.md` | 性能实验史（**已冻结增长**，新叙事进 `docs/log/`） | 需要实测细节/证据链时 |
-| `docs/DECISIONS.md` | 每轮决策过程、已删除功能、设计审查结论 | 想问"为什么这么做"时 |
-| `docs/ARCHIVE.md` | 归档（PERF §4 / §8 / §16 / §18），**编号保留勿重编** | 只看"为什么不做" |
+| `docs/log/PERFORMANCE.md` | 性能实验史（**已冻结增长**，新叙事进 `docs/log/`） | 需要实测细节/证据链时 |
+| `docs/log/DECISIONS.md` | 每轮决策过程、已删除功能、设计审查结论 | 想问"为什么这么做"时 |
+| `docs/log/ARCHIVE.md` | 归档（PERF §4 / §8 / §16 / §18），**编号保留勿重编** | 只看"为什么不做" |
 | `docs/DEPENDENCIES.md` | 依赖版本与已知问题 | 装环境 / 报 bug 时 |
 
-⚠️ **现役规则以本文件为准**。`docs/DECISIONS.md` 是迁出的原文存档，
+⚠️ **现役规则以本文件为准**。`docs/log/DECISIONS.md` 是迁出的原文存档，
 两者冲突时以本文件为真相（避免"两套真相"，见设计审查 D6）。结论的
 **当前状态**（active / superseded / dead）以 `docs/CONCLUSIONS.md` 为准。
 
@@ -28,9 +28,9 @@ token 浪费点。查结论先读 `docs/CONCLUSIONS.md`（≈3k，预算受测�
 
 ```bash
 python tools/_doc_section.py --find <关键词>        # 跨文档按标题定位，≈357 tokens
-python tools/_doc_section.py --toc docs/PERFORMANCE.md   # 目录+token数，≈838 tokens
-python tools/_doc_section.py docs/PERFORMANCE.md 21      # 只读 §21
-python tools/_doc_section.py docs/ARCHIVE.md 4.4b        # 支持 16 / 16.8 / 4.4b
+python tools/_doc_section.py --toc docs/log/PERFORMANCE.md   # 目录+token数，≈838 tokens
+python tools/_doc_section.py docs/log/PERFORMANCE.md 21      # 只读 §21
+python tools/_doc_section.py docs/log/ARCHIVE.md 4.4b        # 支持 16 / 16.8 / 4.4b
 ```
 
 典型路径：`--toc`(838) + 读单章(≈2,000) ≈ **2,800 tokens**，比整文件读
@@ -107,7 +107,7 @@ python tools/_doc_section.py docs/ARCHIVE.md 4.4b        # 支持 16 / 16.8 / 4.
 - **racelog_test 全部视频测量/验证一律 `sample_stride=1`**（2026-09-10 重申，
   防漏信息）；stride>1 仅用于字幕场景（字幕更新频率慢，如批量剧集字幕提取）
 
-## 编辑护栏（docs/PERFORMANCE.md）
+## 编辑护栏（docs/log/PERFORMANCE.md）
 
 ✅ **2026-08-31 已清除全部 934 个裸 `\r`**（提交 `fd2a76a`），现为**纯 LF 文件**，
 裸 CR = **0**。**任何工具都安全** —— 文本模式（含默认 `newline=None`）、Edit 工具、

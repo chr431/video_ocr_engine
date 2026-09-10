@@ -32,7 +32,7 @@ def run(*args: str) -> subprocess.CompletedProcess:
 
 def test_toc_lists_sections_with_token_counts() -> None:
     """`--toc` 必须列出章节并带 token 数。"""
-    r = run("--toc", "docs/PERFORMANCE.md")
+    r = run("--toc", "docs/log/PERFORMANCE.md")
     assert r.returncode == 0, r.stderr
     assert "tokens" in r.stdout
     # 至少列出 PERFORMANCE.md 的 21 个 `## ` 章节
@@ -63,29 +63,29 @@ def test_find_no_match_is_explicit() -> None:
 
 def test_read_section_by_number() -> None:
     """按章节号读，输出里得带上来源标注和正文。"""
-    r = run("docs/PERFORMANCE.md", "5")
+    r = run("docs/log/PERFORMANCE.md", "5")
     assert r.returncode == 0, r.stderr
-    assert "docs/PERFORMANCE.md" in r.stdout        # 来源标注
+    assert "docs/log/PERFORMANCE.md" in r.stdout        # 来源标注
     assert "## 5." in r.stdout
 
 
 def test_read_section_by_alphanumeric_number() -> None:
     """`4.4b` 这种带字母的子章节号要能读（不能只支持纯数字）。"""
-    r = run("docs/ARCHIVE.md", "4.4b")
+    r = run("docs/log/ARCHIVE.md", "4.4b")
     assert r.returncode == 0, r.stderr
     assert "4.4b" in r.stdout
 
 
 def test_read_section_by_title_keyword() -> None:
     """按标题关键词读。"""
-    r = run("docs/DECISIONS.md", "设计审查结论")
+    r = run("docs/log/DECISIONS.md", "设计审查结论")
     assert r.returncode == 0, r.stderr
     assert "设计审查" in r.stdout
 
 
 def test_unknown_section_is_explicit() -> None:
     """章节号不存在要提示看目录，而不是空输出。"""
-    r = run("docs/PERFORMANCE.md", "999")
+    r = run("docs/log/PERFORMANCE.md", "999")
     assert "找不到" in r.stdout
     assert "--toc" in r.stdout
 
@@ -96,8 +96,8 @@ def test_toc_is_cheap_compared_to_full_file() -> None:
     实测：PERFORMANCE.md 全文 42,470 tokens，目录输出约 838 tokens（2%）。
     这里放宽到 15%，防止目录被塞进正文后悄悄膨胀。
     """
-    toc = run("--toc", "docs/PERFORMANCE.md").stdout
-    full = (ROOT / "docs" / "PERFORMANCE.md").read_text(encoding="utf-8")
+    toc = run("--toc", "docs/log/PERFORMANCE.md").stdout
+    full = (ROOT / "docs" / "log" / "PERFORMANCE.md").read_text(encoding="utf-8")
     assert len(toc) < len(full) * 0.15, (
         "目录输出 %d 字符，已达全文 %d 字符的 %.0f%%（应 <15%%）—— "
         "目录膨胀会让「先看目录再读单章」失去意义"

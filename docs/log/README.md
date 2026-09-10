@@ -1,7 +1,7 @@
 # docs/log/ —— 实验叙事目录（L3，冷）
 
 自 2026-09-08 起，**新一轮实验的过程叙事写在这里**（一轮一个文件，
-命名 `YYYY-MM-DD-主题.md`），`docs/PERFORMANCE.md` 冻结增长（只修错、
+命名 `YYYY-MM-DD-主题.md`），`docs/log/PERFORMANCE.md` 冻结增长（只修错、
 不追加新章节）。
 
 规则（由 `tests/test_docs_hygiene.py` 部分守护）：

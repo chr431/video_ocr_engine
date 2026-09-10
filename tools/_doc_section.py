@@ -6,9 +6,9 @@
 
 | 文件 | 整文件 tokens | 章节数 | 单章均值 | 目录 tokens |
 |---|---:|---:|---:|---:|
-| docs/PERFORMANCE.md | 42,470 | 21 | 1,988 | 2,622 |
-| docs/ARCHIVE.md     | 46,253 | 14 | 3,256 |   524 |
-| docs/DECISIONS.md   | 29,332 | 26 | 1,073 |   928 |
+| docs/log/PERFORMANCE.md | 42,470 | 21 | 1,988 | 2,622 |
+| docs/log/ARCHIVE.md     | 46,253 | 14 | 3,256 |   524 |
+| docs/log/DECISIONS.md   | 29,332 | 26 | 1,073 |   928 |
 
 对比一下量级：**AGENTS.md 每会话注入才 3,636 tokens**，而误读一次
 ARCHIVE.md 就是 46,253 —— 相当于 **12.7 倍的注入成本**。
@@ -21,16 +21,16 @@ ARCHIVE.md 就是 46,253 —— 相当于 **12.7 倍的注入成本**。
 ----
     # 1) 看目录（带 token 数，好判断值不值得读）
     python tools/_doc_section.py --toc                     # 全部文档
-    python tools/_doc_section.py --toc docs/PERFORMANCE.md # 单份
+    python tools/_doc_section.py --toc docs/log/PERFORMANCE.md # 单份
 
     # 2) 按标题关键词定位（不知道在哪个文件/哪一章时用）
     python tools/_doc_section.py --find NVDEC
     python tools/_doc_section.py --find 带宽 --max-tokens 3000
 
     # 3) 读指定章节
-    python tools/_doc_section.py docs/PERFORMANCE.md 21
-    python tools/_doc_section.py docs/DECISIONS.md 设计审查结论
-    python tools/_doc_section.py docs/ARCHIVE.md 16.8      # 支持子章节号
+    python tools/_doc_section.py docs/log/PERFORMANCE.md 21
+    python tools/_doc_section.py docs/log/DECISIONS.md 设计审查结论
+    python tools/_doc_section.py docs/log/ARCHIVE.md 16.8      # 支持子章节号
 
 输出都带 token 计数，方便判断这一章够不够便宜。
 
@@ -52,14 +52,14 @@ sys.stdout.reconfigure(encoding="utf-8")
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
-DOCS = ["docs/PERFORMANCE.md", "docs/ARCHIVE.md", "docs/DECISIONS.md",
+DOCS = ["docs/log/PERFORMANCE.md", "docs/log/ARCHIVE.md", "docs/log/DECISIONS.md",
         "README.md", "AGENTS.md", "docs/DEPENDENCIES.md"]
 
 # 每份文档按哪个标题层级切分（DECISIONS.md 主体是 ###，不是 ##）
 LEVEL = {
-    "docs/PERFORMANCE.md": 2,
-    "docs/ARCHIVE.md": 3,
-    "docs/DECISIONS.md": 3,
+    "docs/log/PERFORMANCE.md": 2,
+    "docs/log/ARCHIVE.md": 3,
+    "docs/log/DECISIONS.md": 3,
     "README.md": 2,
     "AGENTS.md": 2,
     "docs/DEPENDENCIES.md": 2,

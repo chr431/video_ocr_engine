@@ -103,8 +103,8 @@ OCR 在 GPU（TRT）时走 `hybrid_gpu` 上下文，输出帧驻留显存、直�
 OCR 在 CPU 时输出宿主帧。打开失败自动降级（`meta.degraded_reason` 有记录）。
 
 > **迁移记录**：原项目层实现（hybrid_decode.py，已于 2026-09-06 删除）由 decord
-> 原生实现取代（commit `fd3bcda`）；决策/历史见 `docs/DECISIONS.md` 与
-> `docs/PERFORMANCE.md` §24，结论状态见 `docs/CONCLUSIONS.md` C-05/C-06。
+> 原生实现取代（commit `fd3bcda`）；决策/历史见 `docs/log/DECISIONS.md` 与
+> `docs/log/PERFORMANCE.md` §24，结论状态见 `docs/CONCLUSIONS.md` C-05/C-06。
 
 `result` 为 `ExtractionResult`：
 
@@ -159,7 +159,7 @@ seg/text 与顺序完全一致）：
 | 2×CPU+TRT | ~1.4× | 靠核富余；少核机收益递减 |
 | 2×NVDEC+TRT | **~1.0–1.2×** | 单 NVDEC 硬件单元，双会话互相争抢，基本等于串行 |
 
-> **实测修订**（证据与消元过程见 `docs/PERFORMANCE.md` §19/§21）：「IO 竞争」
+> **实测修订**（证据与消元过程见 `docs/log/PERFORMANCE.md` §19/§21）：「IO 竞争」
 > 与「内存带宽」均已证伪——并发退化真因是**单一 NVDEC 硬件单元串行化**；
 > 加速比按聚合吞吐口径看（互补配对 1.83–1.87×，双 NVDEC 仅 1.01–1.20×）。
 > 支配变量是对端往 GPU 提交工作的速率；编码决定一切（h264 上 CPU 软解比
@@ -176,7 +176,7 @@ threads = [threading.Thread(target=extract, args=(video, backend)) for ...]
 NVDEC 优先（刻意决策，见 `docs/CONCLUSIONS.md` C-07/C-08），指望 auto
 自动配成 CPU 解码是无效的。跑完后用 `FieldExtractor._backend` 核验实际
 后端。少核（≤8 核）机器收益递减，建议先小规模试测。详见
-`docs/ARCHIVE.md` §16.8.2 的实测表。
+`docs/log/ARCHIVE.md` §16.8.2 的实测表。
 
 ## 识别链
 
@@ -211,7 +211,7 @@ Otsu 校准、merge_similar 判定（GPU `sim_pair`；contrast 模式在边界�
   （对端 ~100GB/s 流拷贝下退化 ×1.36 vs 宿主 ×1.70）
 - 整集 stride=8 场景两路径同受 NVDEC 跳帧解码供给率限制，速度持平
 - 默认只放行"全程 raw"（NVDEC+TRT）；GPU 分段 + ONNX OCR 实测无净收益
-  （见 `docs/PERFORMANCE.md` §9）→ 无 TRT / `ocr_backend="cpu"` 走宿主
+  （见 `docs/log/PERFORMANCE.md` §9）→ 无 TRT / `ocr_backend="cpu"` 走宿主
 - env `GPU_PIPELINE=0` 显式关闭；`=1` 强制启用（含 GPU 分段+ONNX 实验组合）；
   `decode_backend="hybrid"` + TRT 走 decord 原生 `hybrid_gpu`，帧全程驻留
   显存、直接进零拷贝管线的设备指针通路
@@ -225,7 +225,7 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 ## 环境变量钩子
 
 > 构造参数已覆盖绝大多数用法；环境变量仅在**批量调优/诊断**时使用。
-> 未设置 = 引擎默认值（已按实测调优，见 `docs/PERFORMANCE.md`"已锁定参数"）。
+> 未设置 = 引擎默认值（已按实测调优，见 `docs/log/PERFORMANCE.md`"已锁定参数"）。
 
 **优先级**：同一旋钮多入口时按 **env > 构造参数 > `engine_config` 常量** 生效
 （例：构造 `fill_width=320` 会被残留的 `OCR_PAD_SMALL` 静默盖过——排查调参时
@@ -248,12 +248,12 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 | `OCR_PAD_SMALL` | OCR 输入 pad 宽度下限覆盖（未设置时由构造参数 `fill_width` 决定，默认 224；此 env 优先级**高于**构造参数，调这个就能改 pad 下限） |
 | `OCR_GAMMA` | OCR 预处理 gamma（默认 2.0） |
 | `OCR_ROI_AUTOCROP` | `0` 关闭 OCR 输入宽度自适应裁切（默认开；按二值图内容列裁掉两侧空白，生产门禁 5 视频原始误读 **148 → 124**；真值口径四片均值 +0.82pp，**该 pp 值测于 pad 160 时代，pad 已回退 224，勿直接引用**） |
-| `OCR_ROI_AUTOCROP_MARGIN` | 裁切时内容两侧保留的余量（占 ROI 宽 %，默认 10；**调小会插入多余空格且准确率下降**，见 `docs/ARCHIVE.md` §16.2 P0-4） |
+| `OCR_ROI_AUTOCROP_MARGIN` | 裁切时内容两侧保留的余量（占 ROI 宽 %，默认 10；**调小会插入多余空格且准确率下降**，见 `docs/log/ARCHIVE.md` §16.2 P0-4） |
 | `OCR_REORDER_WINDOW` | OCR 重排窗口段数（默认 64；按宽度分组才能让 pad 宽真的降下来） |
 | `DECORD_SKIP_LOOP_FILTER` | **显式 opt-in**（2026-08-30 起，默认**不设置**——import 不再改写进程级 env）：设为 `all` 开启 CPU 软解关去块滤波，须在打开解码器前设置。收益：HEVC **-8.3%~-14.3% 墙钟**、h264 -0.6%~-4.2%、AV1 无效（-0.2%）；NVDEC 不受影响。六片真值 + test4 逐帧**视觉裁定**确认对 OCR 无负面影响（5 片 +0.00~+0.08pp；test4 账面 −0.19pp 系真值伪影——显示为三位补零 `020`、真值剥零，视觉裁定按显示忠实度关滤波反而略优）。注意：显示为 2 位数字时输出会带前导零（`020`，更忠实于显示），下游字符串匹配需注意；rep_crop 预览有块状伪影。需 decord fork ≥v0.7.13 |
 | `DECODE_THREADS` | CPU 软解 FFmpeg 帧线程数覆盖（默认按 OCR 落点 + 采样步长分档：OCR 在 GPU 取满逻辑核钳 8~32；OCR 在 CPU 时 stride>1 取逻辑核 3/4 钳 8~24、stride==1 取 1/3 钳 8~12） |
 | `TEXT_SEP_MERGE` | 相似段合并分离模式（binary/off；contrast 已于 0.9.0 删除） |
-| `HYBRID_CPU_THREADS` | 混合解码（decord 原生）中 CPU 软解线程数（默认 0 = **按核数自动**：逻辑核×3/4 钳 [8, 16]）。项目层时代的线程数 A/B 实测（方向性结论仍可参考）见 `docs/PERFORMANCE.md` §17.2 |
+| `HYBRID_CPU_THREADS` | 混合解码（decord 原生）中 CPU 软解线程数（默认 0 = **按核数自动**：逻辑核×3/4 钳 [8, 16]）。项目层时代的线程数 A/B 实测（方向性结论仍可参考）见 `docs/log/PERFORMANCE.md` §17.2 |
 
 ### 实验/诊断（排查问题时用）
 
@@ -267,7 +267,7 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 
 > 已删除钩子（0.9.0 清理轮；2026-09-06 hybrid 迁移轮删除的项目层
 > `HYBRID_*` 参数，仅 `HYBRID_CPU_THREADS` 保留见上表）的完整清单与历史
-> 结论见 `docs/DECISIONS.md`，结论状态见 `docs/CONCLUSIONS.md`。
+> 结论见 `docs/log/DECISIONS.md`，结论状态见 `docs/CONCLUSIONS.md`。
 
 内部实现（`engine_config` 常量、`_gpu_pipeline` 门控等）不在本表；如需深入，
 以 `engine_config.py` 为唯一事实源。
@@ -276,18 +276,18 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 
 - [现役结论索引](docs/CONCLUSIONS.md) —— **动手前先查**：每条结论带状态
   （active / superseded / dead）、前提条件与复评触发；新结论一行写这里。
-- [性能调优记录](docs/PERFORMANCE.md) —— 性能实验史与实测细节（**已冻结增长**，
+- [性能调优记录](docs/log/PERFORMANCE.md) —— 性能实验史与实测细节（**已冻结增长**，
   新叙事进 `docs/log/`）；需要证据链/原始数据时按节读，勿整读。
-- [历史归档](docs/ARCHIVE.md) —— §4 / §8 / §16 / §18（**编号保留**）：2026-08-29 路线图
+- [历史归档](docs/log/ARCHIVE.md) —— §4 / §8 / §16 / §18（**编号保留**）：2026-08-29 路线图
   快照（开头有校正表）、已删除功能档案。**纯历史，勿当现役依据**。
-- [开发决策档案](docs/DECISIONS.md) —— 每轮决策过程与设计审查结论（维护者向）。
+- [开发决策档案](docs/log/DECISIONS.md) —— 每轮决策过程与设计审查结论（维护者向）。
 - [依赖与运行环境](docs/DEPENDENCIES.md) —— decord fork / TensorRT / onnxruntime 版本与注意事项。
 - `AGENTS.md` —— 维护者向**注入核**：铁律 + 现役架构 + 结论指针。
   ⚠️ 该文件在每个会话开头被全量注入，**硬上限 12 KB**（由单测守护）。
 
 > 文档共七份（另有 `docs/log/` 实验叙事目录）。2026-09-08 起按
-> 「事实 / 结论 / 决策 / 历史」四层管理，见 `docs/DECISIONS.md`「文档分层管理」。
-> `docs/PERFORMANCE.md` 中凡提及 §4 / §8 / §16 / §18 的，均指 `docs/ARCHIVE.md`
+> 「事实 / 结论 / 决策 / 历史」四层管理，见 `docs/log/DECISIONS.md`「文档分层管理」。
+> `docs/log/PERFORMANCE.md` 中凡提及 §4 / §8 / §16 / §18 的，均指 `docs/log/ARCHIVE.md`
 > 的对应章节。工具脚本索引见 [`tools/INDEX.md`](tools/INDEX.md)。
 
 ## 测试

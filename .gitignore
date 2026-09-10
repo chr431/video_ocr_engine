@@ -44,3 +44,4 @@ tools/_merge_vis/
 # 其结论已沉淀进 docs/PERFORMANCE.md 与 docs/DECISIONS.md）
 PERFORMACE_REPORT.txt
 gpu_kernels/
+ocr_engines/*.engine

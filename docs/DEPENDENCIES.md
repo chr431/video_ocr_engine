@@ -35,7 +35,7 @@
   3b96c6f hybrid chunk 预路由 / 93a5ce1），本地提交 486d2f6 已 bump 版本号。
   本地开发 dll：`DECORD_LIBRARY_PATH=D:\Repo\decorduild-081fix`（与
   HEAD 同步，ninja 验新）。发布步骤见
-  `tools/_roadmap_20260910/release-notes-0.8.3-draft.md`。
+  `tools/_roadmap_20260910/release-notes-0.8.3-draft.md`（目录已删除）。
 - **h264 NVDEC 是本机硬件天花板，非软件问题**（2026-09-10 实测）：同内容
   三编码 NVDEC 982(h264)/2103(hevc)/1749(av1) fps；ffmpeg 自带 cuvid 同比
   （16.5x vs 38.7x）。h264 解码选峰值应走 CPU 软解/显式 hybrid。
