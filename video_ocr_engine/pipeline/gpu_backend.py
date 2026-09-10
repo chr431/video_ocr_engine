@@ -322,6 +322,7 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
 
     rep_crops: dict = {}
     seg_idx = 0
+    merge_hits = [0]          # PI-15：逐段计数器改局部累加（run 末一次上报）
     k = 0
     t0 = time.perf_counter()
     _MET = spec.metrics
@@ -375,7 +376,9 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
         for (_rf, _dev, _prefer), _arr in zip(pending_crops, arrs):
             rep_crops[_rf] = _arr
         if _MET.enabled:
+            # PI-15：逐段计数由调用点搬到这里（每窗一次），少 N 次 Python 上报
             _MET.counter('emit.keep_crops_batched', len(pending_crops))
+            _MET.counter('emit.keep_crops_d2h', len(pending_crops))
         if spec.prof_end is not None:
             spec.prof_end('producer', 'emit_d2h', _t_d2h)
         pending_crops.clear()
@@ -433,8 +436,8 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
         _dec = similar_decision(mean, chg,
                                 spec.merge_similar_threshold,
                                 spec.merge_max_changed_pixels)
-        if _MET.enabled:
-            _MET.counter('segment.merges', 1 if _dec else 0)
+        if _dec:
+            merge_hits[0] += 1        # PI-15：逐段计数改为局部累加，run 末一次上报
         return _dec
 
     def _emit_ocr(idx, r_frame, r_dev, frac, r_sharp) -> None:
@@ -487,8 +490,6 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
                     (r_frame, r_dev, dev_ocr is not None and not yuv))
                 if len(pending_crops) >= _KEEP_CROPS_WINDOW:
                     _resolve_keep_crops()
-                if _MET.enabled:
-                    _MET.counter('emit.keep_crops_d2h')
         if dev_ocr is not None and not yuv:
             drop_host = getattr(dev_ocr.owner, 'drop_host', None)
             if drop_host is not None:
@@ -502,8 +503,6 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
         nonlocal seg_idx
         _emit_ocr(seg_idx, rep[0], rep[1], frac, rep[2])
         seg_idx += 1
-        if _MET.enabled:
-            _MET.counter('segment.segments')
 
     machine = SegmentStateMachine(
         frames, C=spec.C,
@@ -566,6 +565,10 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
         _gpu_release_partial(ctx)
     if ocr_err:
         raise RuntimeError(f"OCR worker 失败: {ocr_err[0]!r}") from ocr_err[0]
+    if _MET.enabled:
+        # PI-15：逐段计数一律在此一次性上报（run 内不再逐段调 Python）
+        _MET.counter('segment.segments', seg_idx)
+        _MET.counter('segment.merges', merge_hits[0])
     res.timing['ocr'] = ocr_wall[0]
     res.frames = frames
     res.segs = segs

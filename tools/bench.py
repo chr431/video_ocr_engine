@@ -184,22 +184,55 @@ def cmd_diff(args) -> int:
 
 
 def cmd_telemetry_check(args) -> int:
-    """PI-15：三档互比（std vs off ≤ +0.1%、full vs off ≤ +1%）。"""
-    name = args.config
-    med = {}
-    for tier in ("off", "std", "full"):
-        walls = []
-        for i in range(args.rounds):
-            rec = _round(name, args.window, tier, False, args.ocr_backend)
-            walls.append(rec["wall"])
-            print("  %-5s round %d  %.4fs" % (tier, i + 1, rec["wall"]))
-        med[tier] = statistics.median(walls[1:] or walls)
+    """PI-15：三档互比（std vs off ≤ +0.1%、full vs off ≤ +1%）。
+
+    **必须交错**（S6 修正）：原实现"三档各自连跑 N 轮"把机器漂移记进了档位
+    差——同码两次实测可差 7.7%，而阈值只有 0.1%。现为每档独立子进程 +
+    off/std/full 逐轮交错 + 取各自热轮中位（与 `bench ab` 同一方法学）。
+    """
+    import os
+    run_id = time.strftime("%m%d-%H%M%S")
+    per_tier: dict = {t: [] for t in ("off", "std", "full")}
+    for i in range(args.rounds):
+        for tier in ("off", "std", "full"):
+            env = dict(os.environ)
+            env["VOE_TELEMETRY"] = tier
+            r = subprocess.run(
+                [sys.executable, str(Path(__file__).resolve()), "run",
+                 "--label", "pi15-%s#%d@%s" % (tier, i, run_id),
+                 "--config", args.config,
+                 "--rounds", str(args.inner_rounds), "--window", str(args.window),
+                 "--telemetry", tier, "--ocr-backend", args.ocr_backend],
+                env=env, capture_output=True, text=True, encoding="utf-8",
+                errors="replace")
+            if r.returncode != 0:
+                print(r.stdout[-2000:] + r.stderr[-2000:])
+                return 1
+            print("  [%d] %-5s %s" % (i, tier, [ln for ln in r.stdout.splitlines()
+                                                if "热轮中位" in ln]))
+            time.sleep(args.gap)      # 进程间留缝：连续起进程会让 TRT 的 CUDA
+            #                           初始化瞬态失败（cudaError 35，实测）
+    # 取各自的热轮（子进程内第 2 轮起）
+    rows = [json.loads(ln) for ln in
+            REGISTRY.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    for rec in rows:
+        lab = rec.get("label", "")
+        if not lab.endswith("@" + run_id):
+            continue                 # 只统计本次 invocation（防混入历史窗口）
+        for tier in per_tier:
+            if lab.startswith("pi15-%s#" % tier) and rec.get("round", 1) > 1:
+                per_tier[tier].append(rec["wall"])
+    med = {t: statistics.median(v) for t, v in per_tier.items() if v}
+    if len(med) < 3:
+        print("样本不足：%s" % med)
+        return 1
     base = med["off"]
     d_std = (med["std"] - base) / base * 100
     d_full = (med["full"] - base) / base * 100
-    print("\nPI-15：off %.4fs / std %.4fs (%+.3f%%，限 +0.1%%) / "
-          "full %.4fs (%+.3f%%，限 +1%%)" % (base, med["std"], d_std,
-                                             med["full"], d_full))
+    print("\nPI-15（交错 %d 轮 × 每档热轮 %d 次）：off %.4fs / std %.4fs "
+          "(%+.3f%%，限 +0.1%%) / full %.4fs (%+.3f%%，限 +1%%)"
+          % (args.rounds, args.inner_rounds, base, med["std"], d_std,
+             med["full"], d_full))
     ok = d_std <= 0.1 and d_full <= 1.0
     print("判定：%s" % ("通过" if ok else "失败（插桩密度或 off 档实现退化）"))
     return 0 if ok else 1
@@ -367,11 +400,16 @@ def main() -> int:
     d.add_argument("--warn", type=float, default=1.0)
     d.add_argument("--noise", type=float, default=1.3)
     d.set_defaults(func=cmd_diff)
-    t = sub.add_parser("telemetry-check", help="PI-15 三档互比门禁")
+    t = sub.add_parser("telemetry-check", help="PI-15 三档互比门禁（交错）")
     t.add_argument("--config", default="h264-gpu")
-    t.add_argument("--rounds", type=int, default=3)
+    t.add_argument("--rounds", type=int, default=3, help="交错轮数（每轮三档各一次）")
+    t.add_argument("--inner-rounds", type=int, default=2,
+                   help="每个子进程内轮数（>1 时取热轮，避开冷启动）")
     t.add_argument("--window", type=int, default=3000)
     t.add_argument("--ocr-backend", default="tensorrt")
+    t.add_argument("--cooldown", type=float, default=6.0)
+    t.add_argument("--gap", type=float, default=2.5,
+                   help="子进程之间的间隔（连续起进程会触发瞬时 CUDA 初始化失败）")
     t.set_defaults(func=cmd_telemetry_check)
     li = sub.add_parser("list", help="列已入库的 label")
     li.set_defaults(func=cmd_list)

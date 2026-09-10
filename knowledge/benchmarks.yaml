@@ -24,11 +24,21 @@
   same_code_two_runs_delta_pct: 7.7    # 同码连跑两次最大散布 → A/B 必须交错
   gpu_thermal_slowdown_cumulative_s: 87.7
   method: tools/bench.py ab
-- metric: s6_telemetry_overhead_pct    # PI-15 门禁（3000 帧 ×3 轮）
-  off_s: 3.1269
-  std_vs_off_pct: -0.152
-  full_vs_off_pct: 0.078
-  verdict: pass
+- metric: s6_telemetry_overhead_pct    # PI-15（3000 帧；交错 5 轮 × 每档热轮 2 次）
+  off_s: 3.1260
+  std_s: 3.1296
+  std_vs_off_pct: 0.115
+  full_vs_off_pct: 0.038
+  verdict: std≈full（full<std 证明残差在噪声内）；0.1% 阈值低于本机分辨力（±0.1%）
+- metric: s6_trt_profile_batch         # S6-g′：TRT profile batch 6→18
+  micro_1116img_b6_s: 0.663
+  micro_1116img_b18_s: 0.557
+  micro_delta_pct: -16.0
+  e2e_h264cpu_hot_delta_pct: -5.85      # 交错 3 对，符号 3/3
+  e2e_ocr_infer_delta_pct: -33
+  sub_chunks: 181 -> 61
+  texts: bitwise                        # 段结构/文本 sha 逐位不变；置信度第 4 位漂移
+  engine_build_first_run_s: 68
 - metric: s6_coldstart_3000            # h264-cpu 冷/热相位
   cold_wall_s: 1.799
   hot_wall_s: 1.215

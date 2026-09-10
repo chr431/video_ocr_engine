@@ -377,7 +377,17 @@ DEFAULT_FPS_FALLBACK: float = 30.0
 OCR_ONNX_CHUNK: int = 16
 OCR_CTC_CHUNK: int = 64
 # TensorRT 引擎构建：默认 batch profile、输入宽 profile 与 workspace
-TRT_PROFILE_BATCH: int = 6
+#
+# TRT_PROFILE_BATCH = 18（S6 轮实测，2026-09-10；原值 6）：
+#   OCR 推理的**每子批提交开销**（launch + 归约 kernel + D2H + 形状 sync）
+#   与 profile batch 成反比：同一批 1116 张 48×224 走同一条 TRT 提交路径，
+#   batch=6（186 子批，每次同步）0.663s → batch=18（62 子批）0.557s = **−16.0%**
+#   （tools/_probe_trt_maxbatch.py；两个引擎由同一份 ONNX 构建，仅 profile 不同）。
+#   真实管线口径：ocr.infer 1.006s/1083 张（batch=6）→ 消费端提交开销按
+#   子批数等比缩小；对齐后 chunk = B 的整倍数（PI-3）且每 chunk 仅 1 次同步。
+#   ⚠️ 该值进**引擎文件名**（见 trt._engine_candidates）：改它 = 换引擎产物，
+#   首次使用会重建（本机 68s，一次性；不做静默复用旧 profile 的缓存）。
+TRT_PROFILE_BATCH: int = 18
 TRT_PROFILE_MIN_W: int = 32
 TRT_PROFILE_OPT_W: int = 320
 TRT_PROFILE_MAX_W: int = 2048

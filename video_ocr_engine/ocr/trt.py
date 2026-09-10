@@ -68,12 +68,30 @@ class TrtEngine:
                 log.info("TensorRT 引擎已加载: %s", self.engine_path)
                 break
             except Exception as e:
-                log.warning("TensorRT 引擎 %s 加载失败 (%s)，删除并尝试下一个候选",
-                            cand.name, e)
-                try:
-                    cand.unlink(missing_ok=True)
-                except OSError:
-                    pass  # 只读目录（打包 EXE 内）删不掉，保留无害
+                # S6：**先重试（带退避）再决定**。加载失败有两类——
+                # ①产物真损坏 / 架构不匹配（TRT 版本升级、换卡）：重试无用；
+                # ②瞬时 CUDA 初始化失败：实测 `createInferRuntime ...
+                #    cudaError 35 (InsufficientDriver)`，出现在**独显刚从
+                #    省电态唤醒**时（本机 4060 Laptop 空闲数秒即复现），
+                #    退避重试即可成功。
+                # 旧行为是立刻 `unlink` 掉 24MB 构建成果 → 白付 68–72s 重建；
+                # 现在连续失败也**不删**（重建路径会覆盖同名文件），
+                # 只记警告。
+                last = e
+                for attempt in (1, 2, 3):
+                    time.sleep(1.5 * attempt)     # 退避等独显唤醒
+                    try:
+                        self._load(cand)
+                        self.engine_path = cand
+                        log.info("TensorRT 引擎已加载（第 %d 次重试成功）: %s",
+                                 attempt, self.engine_path)
+                        break
+                    except Exception as e2:
+                        last = e2
+                if self.engine_path is not None:
+                    break
+                log.warning("TensorRT 引擎 %s 连续加载失败 (%s)；保留文件，"
+                            "改走重建路径（同名覆盖）", cand.name, last)
 
         if self.engine_path is None:
             self.engine_path = self._engine_candidates(size)[1]  # 本目录缓存（可写）
@@ -137,12 +155,42 @@ class TrtEngine:
 
         - [0] 模型目录（打包只读，通常不存在）
         - [1] 本目录缓存（可写，构建目标 —— 免安装设计，不写 %LOCALAPPDATA%）
+
+        **S6：文件名带 batch profile 标记**（`_b{TRT_PROFILE_BATCH}`）——
+        profile 是引擎产物的一部分（batch 越大，每子批提交开销摊得越薄，
+        实测 batch 6→18 快 16%）。不带标记会让"改 profile"被旧缓存静默掩盖：
+        用户仍跑 batch=6 的旧引擎，改动只在少数新机器上生效（最难发现的一类
+        不一致）。代价是首次使用重建一次（本机 68s，一次性）。
         """
         name = (f"multi_PP-OCRv6_rec_{size}_{config.TRT_ENGINE_SM}"
-                f"_fp32_tf32unset.engine")
+                f"_fp32_tf32unset_b{int(config.TRT_PROFILE_BATCH)}.engine")
         cands = [_models_dir() / "models" / name]
         cands.append(config.app_data_dir() / "ocr_engines" / name)
         return cands
+
+    def _wait_cuda_ready(self, attempts: int = 4) -> None:
+        """TRT 之前的 CUDA 就绪等待（S6 实测的瞬态失败面）。
+
+        现象：短时间连续起进程（A/B 交错、批量驱动）时，`trt.Runtime(...)`
+        会以 `createInferRuntime ... cudaError 35 (InsufficientDriver)` 失败
+        ——前一个进程的 CUDA 上下文还在拆、独显刚从省电态唤醒时都能复现。
+        **TRT 会把这次失败记在进程状态里**：之后再建 Runtime 仍失败，直到
+        进程退出；而裸 cudart 调用（`cudaFree(0)` 触发上下文创建）可以正常
+        重试成功。所以在碰 TRT 之前先等 CUDA 就绪，把"驱动没准备好"和
+        "产物坏了"两件事分开——后者才该走重建。
+        """
+        try:
+            from cuda.bindings import runtime as cudart
+        except Exception:  # noqa: BLE001 无 cuda.bindings → 交给 TRT 自己报错
+            return
+        for i in range(attempts):
+            err = cudart.cudaFree(0)[0]
+            if int(err) == 0:
+                return
+            log.warning("CUDA 上下文未就绪（%s），%.1fs 后重试 %d/%d",
+                        err, 1.5 * (i + 1), i + 1, attempts)
+            time.sleep(1.5 * (i + 1))
+        log.warning("CUDA 上下文连续 %d 次未就绪；继续尝试 TRT 初始化", attempts)
 
     def _load(self, engine_path: Path) -> None:
         """反序列化引擎并读取 profile 元数据；失败抛异常（由调用方决定重建/回退）。
@@ -151,6 +199,7 @@ class TrtEngine:
         GPU 架构不匹配（如 sm89 引擎换到 sm80 卡）。
         """
         import tensorrt as trt
+        self._wait_cuda_ready()
         logger = trt.Logger(trt.Logger.WARNING)  # type: ignore[attr-defined]
         with open(engine_path, "rb") as f, trt.Runtime(logger) as rt:  # type: ignore[attr-defined]
             self.engine = rt.deserialize_cuda_engine(f.read())

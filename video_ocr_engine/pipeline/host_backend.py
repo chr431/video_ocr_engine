@@ -309,8 +309,6 @@ def run_host_pipeline(spec: HostRunSpec, ocr_engines=None,
         if spec.keep_crops:
             rep_crops[r_frame] = r_crop
         seg_idx += 1
-        if spec.metrics.enabled:
-            spec.metrics.counter('segment.segments')
 
     t0 = time.perf_counter()
     try:
@@ -331,6 +329,8 @@ def run_host_pipeline(spec: HostRunSpec, ocr_engines=None,
     if ocr_err:
         # C4：补"OCR worker 失败"上下文并保留原始异常链
         raise RuntimeError(f"OCR worker 失败: {ocr_err[0]!r}") from ocr_err[0]
+    if spec.metrics.enabled:
+        spec.metrics.counter('segment.segments', seg_idx)   # PI-15：run 末一次
     res.timing['ocr'] = ocr_wall[0]
     res.frames = frames
     res.segs = segs
