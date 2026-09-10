@@ -129,7 +129,13 @@ def _host_frame_stream(ex, frames, vr, calib, th, *, with_dev=False):
             d = None
             if dev_base:
                 d = (nds, dev_base + k * src_h * src_w, src_h, src_w)
-            yield (frames[gi], crops[k], g[k], float(sharp[k]), bs[k], d)
+            # gray 必须拷贝：payload 灰度会作为代表帧逃逸出批作用域，
+            # 而 g_buf 跨批复用——不拷贝则 merge_similar 在后续批读到
+            # 被覆写的帧（2026-09-10 D1 调查：test5 host 45/1089 合并
+            # 判定失真、段数 1042 vs GPU 正确值 1083；sharp/bs 为标量/
+            # 每批新数组不受影响）。拷贝 ~3.5KB/帧，量级可忽略。
+            yield (frames[gi], crops[k], g[k].copy(), float(sharp[k]),
+                   bs[k], d)
 
 
 def _host_segment_frames(ex, frames, stream, *, debug_tag, progress_prefix,

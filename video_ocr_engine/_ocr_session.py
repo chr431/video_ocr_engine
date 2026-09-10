@@ -7,6 +7,7 @@ raw_ready 判定分流。
 """
 from __future__ import annotations
 
+import sys
 import threading
 
 import engine_config as config
@@ -75,10 +76,31 @@ class OcrSession:
 
     # ── OCR worker（引擎取还 / 预处理分流 / 推理）────────────
 
+    @staticmethod
+    def _bump_priority() -> None:
+        """Windows：本线程提到 ABOVE_NORMAL（D2，2026-09-10）。
+
+        hybrid 的 CPU 软解线程（libavcodec 池，NORMAL）吃满物理核时会
+        饥饿本线程的 Python 调度：infer 相位随 HYBRID_CPU_THREADS 单调
+        膨胀（nvdec 1.01s → hybrid nt16 1.36s / 3000 帧，OCR 走 GPU 不
+        缺 CPU）。OCR 是临界路径，升一档让它在与解码线程争核时先行；
+        线程退出即失效，无跨会话影响。非 Windows 与失败路径静默。
+        """
+        if sys.platform != 'win32':
+            return
+        try:
+            import ctypes
+            k32 = ctypes.windll.kernel32
+            if not k32.SetThreadPriority(k32.GetCurrentThread(), 1):
+                pass  # 设置失败（句柄/权限）：维持 NORMAL，无正确性影响
+        except Exception:  # noqa: BLE001
+            pass  # ctypes 缺失/调用失败：维持 NORMAL，无正确性影响（见上 docstring）
+
     def _worker(self) -> None:
         import time
         from queue import Full, Queue
         from ocr_native import acquire_ocr_engine, checkin_ocr_engine
+        self._bump_priority()
         ex = self._ex
         t0 = time.perf_counter()
         engines: list = []
@@ -167,6 +189,7 @@ class OcrSession:
                                  _ocr_progress_pct(frac))
 
             def infer_worker(eng) -> None:
+                self._bump_priority()
                 try:
                     while True:
                         item = infer_q.get()

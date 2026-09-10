@@ -82,3 +82,40 @@ def test_gray_gray_buffer_reused():
     assert ex.luma_calls == 0
     assert ex.out_calls == 3
     assert all(s == (16, 12, 8) for s in ex.out_shapes)
+
+
+class _BatchMarkedEx(_StubEx):
+    """_batch_luma_out 按批号写标记值：批 i 的灰度全为 i。
+
+    用于验证 yield 出去的灰度是拷贝——若返回 g_buf 视图，后续批的
+    覆写会改写先前 yield 的帧（D1：merge_similar 拿到被覆写的帧）。"""
+
+
+def test_yielded_grays_survive_batch_advance():
+    """yield 的灰度跨批保持稳定（D1 修复回归，2026-09-10）。
+
+    复用缓冲只服务批内计算；逃逸进 payload 的代表帧灰度必须是
+    独立拷贝。修复前 host 侧 45/1089 合并判定失真（段数 1042 vs
+    GPU 正确值 1083）。
+    """
+    from video_ocr_engine import _host_pipeline as hp
+
+    class _MarkedEx(_StubEx):
+        def __init__(self):
+            super().__init__(yuv=False)
+            self.batch = -1
+
+        def _batch_luma_out(self, crops, out):
+            self.batch += 1
+            out[...] = self.batch
+            return out
+
+    crops = np.zeros((16, 12, 8), dtype=np.uint8)
+    ex = _MarkedEx()
+    out = list(_host_frame_stream(ex, list(range(40)), _FakeVr(crops), [], 100))
+    # 3 批标记 0/1/2；帧 0（批 0）在流耗尽后必须仍是 0，而不是被
+    # 批 2 覆写成的 2
+    assert out[0][2][0, 0] == 0, "帧 0 灰度被后续批覆写（别名未修复）"
+    assert out[15][2][0, 0] == 0
+    assert out[16][2][0, 0] == 1
+    assert out[39][2][0, 0] == 2
