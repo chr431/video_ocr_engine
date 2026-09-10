@@ -99,8 +99,9 @@ python tools/_doc_section.py docs/ARCHIVE.md 4.4b        # 支持 16 / 16.8 / 4.
   1.7~2.8×（C-04，显式选型依据），但弱 CPU 上可能反慢，且 CPU 解码必带争用/
   功耗代价，NVDEC 稳妥优先；批量互补仍需**显式** `decode_backend="cpu"`（C-07/C-08）
 - GPU 分段 + ONNX OCR 无净收益，门控只放行 NVDEC+TRT（PERF §9）
-- hybrid 已迁 **decord 原生**且 0.8.2 上**不再优于任一编码的最优单侧**（C-05）；
-  项目层实现已删除，勿再引用（PERF §24）
+- hybrid 已迁 **decord 原生**；本地预路由+池深修复（fork 3b96c6f，未发布）后
+  decode-only 近两侧理想和，**av1 上 hybrid 是引擎内最快路径**；h264/hevc
+  引擎内 ≈ 最优单侧 ±3-5%（消费端上限）；0.8.2 pip wheel 不含这些修复（C-05）
 - **racelog_test 全部视频测量/验证一律 `sample_stride=1`**（2026-09-10 重申，
   防漏信息）；stride>1 仅用于字幕场景（字幕更新频率慢，如批量剧集字幕提取）
 
