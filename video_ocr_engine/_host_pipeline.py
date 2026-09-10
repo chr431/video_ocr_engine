@@ -51,7 +51,31 @@ class _HostPipelineMixin:
             min_gain=self._ocr_autocrop_min_gain)
 
     def _start_ocr_session(self, _ocr_engines: list | None = None) -> "OcrSession":
-        """启动 OCR 消费会话（实现见 _ocr_session.OcrSession；
-        一次 extract() 一个实例，宿主/GPU 两管线共用）。"""
-        return OcrSession(self, _ocr_engines)
+        """启动 OCR 消费会话（S3-3b：构建显式 SessionSpec）。
+
+        会话不再读本实例的私有属性；跨线程回写经输出挂钩（可见性由
+        finish() join 建立，§9 契约）。一次 extract() 一个实例，
+        宿主/GPU 两管线共用。
+        """
+        s = self
+        from .pipeline.ocr_stage import SessionSpec
+        return OcrSession(SessionSpec(
+            buffer_size=s._buffer_size,
+            model=s._ocr_model,
+            fill_width=s._fill_width,
+            force_aspect=float(getattr(s, '_force_aspect', 0) or 0.0),
+            reorder_window=s._ocr_reorder_window,
+            yuv_output=s._yuv_output,
+            color_range=s._color_range,
+            gpu_pipeline_mode=getattr(s, '_gpu_pipeline_mode', False),
+            num_threads_fn=s._ocr_num_threads,
+            engine_type_fn=s._ocr_engine_type,
+            crop_to_content=s._crop_to_content,
+            crop_after_aspect=s._crop_after_aspect,
+            prof_end=s._prof_end,
+            progress=s._progress,
+            cancel=s._cancel,
+            on_backend_used=lambda v: setattr(s, '_ocr_backend_used', v),
+            on_degraded=s._degraded.append,
+        ), _ocr_engines)
 

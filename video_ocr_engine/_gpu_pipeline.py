@@ -615,6 +615,9 @@ class _GpuPipelineMixin:
         import threading
         from cuda.bindings import runtime as cudart
         from ocr_trt import GpuFrameAnalyzer
+        # F-4 同类：mode 标志必须在会话启动**前**置位——SessionSpec 构造期
+        # 冻结 gpu_pipeline_mode（旧代码靠会话 flush 时活读兜底）。
+        self._gpu_pipeline_mode = True
         # Cleanup handles are initialized before any calibration/setup can fail.
         ocr_session = None
         analyzer = None
@@ -764,7 +767,6 @@ class _GpuPipelineMixin:
             return _gpu_fallback_to_host(self, ctx, vr, ocr_session,
                                          _ocr_engines)
 
-        self._gpu_pipeline_mode = True
         if on_gpu:
             frame_stream = _gpu_frame_stream_nvdec(
                 self, ctx, vr, frames, yuv=yuv,
