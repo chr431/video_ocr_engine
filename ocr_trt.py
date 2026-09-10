@@ -46,6 +46,12 @@ class TrtEngine:
         # tensorrt_bindings.find_lib() 只搜 os.environ["PATH"]：
         # 首次使用前注册 CUDA/TensorRT DLL 目录（幂等）。
         ensure_gpu_initialized()
+        # cuda.core 导入 ~220ms/进程，藏进反序列化背后（R4，2026-09-10）。
+        try:
+            from video_ocr_engine._gpu_kernels import prewarm_cuda_core
+            prewarm_cuda_core()
+        except Exception:  # noqa: BLE001 预热失败只是失去重叠，无正确性影响
+            pass
 
         self._progress_cb = progress_cb
         self.engine_path: Path | None = None
@@ -205,7 +211,12 @@ class TrtEngine:
         return self._out_shape
 
     def _ensure_stream(self) -> int:
-        """创建专用 CUDA stream（TRT async 必须用非默认流）。"""
+        """创建专用 CUDA stream（TRT async 必须用非默认流）。
+
+        高优先级流曾试过（2026-09-10）：hybrid 解码与 TRT 并发的 infer
+        膨胀不受流优先级影响（瓶颈在 fork 池互斥/DMA 带宽，非 SM 调度），
+        e2e 无可测收益，已回退普通流。
+        """
         if self._stream is None:
             from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
             _err, self._stream = cudart.cudaStreamCreate()

@@ -1,0 +1,22 @@
+=== test5 gpu cpu (pip) ===
+wall=1.700s segs=1083 timing={'decode': 0.94, 'ocr_tail': 0.134, 'ocr': 1.502}
+  ocr.ctc_decode = 0.001
+  ocr.engine_init = 0.417
+  ocr.infer = 1.034
+  ocr.q_get_wait = 0.080
+  producer.consume_feed = 0.416
+  producer.emit_d2h = 0.008
+  producer.emit_put = 0.244
+  producer.open_and_fps = 0.041
+=== test6 gpu nvdec (pip) ===
+wall=2.301s segs=1109 timing={'decode': 1.68, 'ocr_tail': 0.059, 'ocr': 2.064}
+  ocr.ctc_decode = 0.001
+  ocr.engine_init = 0.343
+  ocr.infer = 1.006
+  ocr.preprocess = 0.001
+  ocr.q_get_wait = 1.495
+  producer.consume_feed = 0.365
+  producer.emit_d2h = 0.050
+  producer.emit_put = 0.065
+  producer.open_and_fps = 0.009
+  producer.stream_analyze = 0.008

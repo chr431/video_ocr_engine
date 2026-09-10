@@ -1,0 +1,174 @@
+=== VIDEO test nts=8,12,16,24 (pip wheel, fixed) ===
+[test hevc] dll=<pip-wheel> n=4000 block=64 runs=3
+  decord 0.8.2 @ C:\users\eric chen\appdata\local\programs\python\python313\Lib\site-packages\decord\__init__.py
+    RUN cpu nt=8: 802 fps
+    RUN cpu nt=8: 672 fps
+    RUN cpu nt=8: 671 fps
+  RESULT test cpu nt=8 med=672 all=[802, 672, 671]
+    RUN cpu nt=12: 704 fps
+    RUN cpu nt=12: 697 fps
+    RUN cpu nt=12: 703 fps
+  RESULT test cpu nt=12 med=703 all=[704, 697, 703]
+    RUN cpu nt=16: 1054 fps
+    RUN cpu nt=16: 1054 fps
+    RUN cpu nt=16: 1049 fps
+  RESULT test cpu nt=16 med=1054 all=[1054, 1054, 1049]
+    RUN cpu nt=24: 1216 fps
+    RUN cpu nt=24: 1219 fps
+    RUN cpu nt=24: 1215 fps
+  RESULT test cpu nt=24 med=1216 all=[1216, 1219, 1215]
+    RUN gpu nt=0: 2154 fps
+    RUN gpu nt=0: 2220 fps
+    RUN gpu nt=0: 2220 fps
+  RESULT test nvdec nt=0 med=2220 all=[2154, 2220, 2220]
+[test hevc] dll=<pip-wheel> n=4000 block=64 runs=3
+  decord 0.8.2 @ C:\users\eric chen\appdata\local\programs\python\python313\Lib\site-packages\decord\__init__.py
+D:\Repo\video_ocr_engine\tools\_probe_roadmap_decode.py:46: UserWarning: hybrid decoding contexts (decord.hybrid / decord.hybrid_gpu) are EXPERIMENTAL: scheduling, performance and memory bounds may change between releases without notice. Prefer decord.gpu() (NVDEC) or decord.cpu() for production use.
+  vr = VideoReader(path, ctx=hybrid_gpu(0), output_format="yuv420",
+    RUN hybrid nt=8: 1985 fps
+    RUN hybrid nt=8: 1935 fps
+    RUN hybrid nt=8: 2143 fps
+  RESULT test hybrid nt=8 med=1985 all=[1985, 1935, 2143]
+    RUN hybrid nt=12: 2344 fps
+    RUN hybrid nt=12: 2379 fps
+    [close 异常] OSError: exception: access violation reading 0x00000231C32CB568
+    RUN hybrid nt=12: 2342 fps
+  RESULT test hybrid nt=12 med=2344 all=[2344, 2379, 2342]
+    RUN hybrid nt=16: 1732 fps
+    RUN hybrid nt=16: 2252 fps
+    RUN hybrid nt=16: 2192 fps
+    [close 异常] OSError: exception: access violation reading 0x00000231C51511F8
+  RESULT test hybrid nt=16 med=2192 all=[1732, 2252, 2192]
+    RUN hybrid nt=24: 2079 fps
+    RUN hybrid nt=24: 1945 fps
+    RUN hybrid nt=24: 2380 fps
+  RESULT test hybrid nt=24 med=2079 all=[2079, 1945, 2380]
+=== VIDEO test nts=8,12,16,24 (fork dll) ===
+[test hevc] dll=D:\Repo\decord\build-081fix n=4000 block=64 runs=3
+  decord 0.8.2 @ C:\users\eric chen\appdata\local\programs\python\python313\Lib\site-packages\decord\__init__.py
+    RUN cpu nt=8: 772 fps
+    RUN cpu nt=8: 645 fps
+    RUN cpu nt=8: 661 fps
+  RESULT test cpu nt=8 med=661 all=[772, 645, 661]
+    RUN cpu nt=12: 689 fps
+    RUN cpu nt=12: 682 fps
+    RUN cpu nt=12: 683 fps
+  RESULT test cpu nt=12 med=683 all=[689, 682, 683]
+    RUN cpu nt=16: 1037 fps
+    RUN cpu nt=16: 1036 fps
+    RUN cpu nt=16: 1028 fps
+  RESULT test cpu nt=16 med=1036 all=[1037, 1036, 1028]
+    RUN cpu nt=24: 1197 fps
+    RUN cpu nt=24: 1195 fps
+    RUN cpu nt=24: 1191 fps
+  RESULT test cpu nt=24 med=1195 all=[1197, 1195, 1191]
+    RUN gpu nt=0: 2177 fps
+    RUN gpu nt=0: 2220 fps
+    RUN gpu nt=0: 2220 fps
+  RESULT test nvdec nt=0 med=2220 all=[2177, 2220, 2220]
+[test hevc] dll=D:\Repo\decord\build-081fix n=4000 block=64 runs=3
+  decord 0.8.2 @ C:\users\eric chen\appdata\local\programs\python\python313\Lib\site-packages\decord\__init__.py
+D:\Repo\video_ocr_engine\tools\_probe_roadmap_decode.py:46: UserWarning: hybrid decoding contexts (decord.hybrid / decord.hybrid_gpu) are EXPERIMENTAL: scheduling, performance and memory bounds may change between releases without notice. Prefer decord.gpu() (NVDEC) or decord.cpu() for production use.
+  vr = VideoReader(path, ctx=hybrid_gpu(0), output_format="yuv420",
+    RUN hybrid nt=8: 2867 fps
+    RUN hybrid nt=8: 2577 fps
+    RUN hybrid nt=8: 2800 fps
+  RESULT test hybrid nt=8 med=2800 all=[2867, 2577, 2800]
+    RUN hybrid nt=12: 2764 fps
+    RUN hybrid nt=12: 2777 fps
+    RUN hybrid nt=12: 2771 fps
+  RESULT test hybrid nt=12 med=2771 all=[2764, 2777, 2771]
+    RUN hybrid nt=16: 2980 fps
+    RUN hybrid nt=16: 2907 fps
+    RUN hybrid nt=16: 2886 fps
+  RESULT test hybrid nt=16 med=2907 all=[2980, 2907, 2886]
+    RUN hybrid nt=24: 2188 fps
+    RUN hybrid nt=24: 2478 fps
+    RUN hybrid nt=24: 2195 fps
+  RESULT test hybrid nt=24 med=2195 all=[2188, 2478, 2195]
+=== VIDEO test5 nts=8,12,16,24 (fork dll) ===
+[test5 h264] dll=D:\Repo\decord\build-081fix n=6000 block=64 runs=3
+  decord 0.8.2 @ C:\users\eric chen\appdata\local\programs\python\python313\Lib\site-packages\decord\__init__.py
+    RUN cpu nt=8: 1317 fps
+    RUN cpu nt=8: 1150 fps
+    RUN cpu nt=8: 1155 fps
+  RESULT test5 cpu nt=8 med=1155 all=[1317, 1150, 1155]
+    RUN cpu nt=12: 1848 fps
+    RUN cpu nt=12: 1846 fps
+    RUN cpu nt=12: 1852 fps
+  RESULT test5 cpu nt=12 med=1848 all=[1848, 1846, 1852]
+    RUN cpu nt=16: 2134 fps
+    RUN cpu nt=16: 2138 fps
+    RUN cpu nt=16: 2135 fps
+  RESULT test5 cpu nt=16 med=2135 all=[2134, 2138, 2135]
+    RUN cpu nt=24: 2841 fps
+    RUN cpu nt=24: 2831 fps
+    RUN cpu nt=24: 2616 fps
+  RESULT test5 cpu nt=24 med=2831 all=[2841, 2831, 2616]
+    RUN gpu nt=0: 985 fps
+    RUN gpu nt=0: 994 fps
+    RUN gpu nt=0: 994 fps
+  RESULT test5 nvdec nt=0 med=994 all=[985, 994, 994]
+[test5 h264] dll=D:\Repo\decord\build-081fix n=6000 block=64 runs=3
+  decord 0.8.2 @ C:\users\eric chen\appdata\local\programs\python\python313\Lib\site-packages\decord\__init__.py
+D:\Repo\video_ocr_engine\tools\_probe_roadmap_decode.py:46: UserWarning: hybrid decoding contexts (decord.hybrid / decord.hybrid_gpu) are EXPERIMENTAL: scheduling, performance and memory bounds may change between releases without notice. Prefer decord.gpu() (NVDEC) or decord.cpu() for production use.
+  vr = VideoReader(path, ctx=hybrid_gpu(0), output_format="yuv420",
+    RUN hybrid nt=8: 2005 fps
+    RUN hybrid nt=8: 1986 fps
+    RUN hybrid nt=8: 1980 fps
+  RESULT test5 hybrid nt=8 med=1986 all=[2005, 1986, 1980]
+    RUN hybrid nt=12: 2435 fps
+    RUN hybrid nt=12: 2412 fps
+    RUN hybrid nt=12: 2395 fps
+  RESULT test5 hybrid nt=12 med=2412 all=[2435, 2412, 2395]
+    RUN hybrid nt=16: 2693 fps
+    RUN hybrid nt=16: 2692 fps
+    RUN hybrid nt=16: 2540 fps
+  RESULT test5 hybrid nt=16 med=2692 all=[2693, 2692, 2540]
+    RUN hybrid nt=24: 2990 fps
+    RUN hybrid nt=24: 2834 fps
+    RUN hybrid nt=24: 2902 fps
+  RESULT test5 hybrid nt=24 med=2902 all=[2990, 2834, 2902]
+=== VIDEO test6 nts=12,18,24,32 (fork dll) ===
+[test6 av1] dll=D:\Repo\decord\build-081fix n=6000 block=64 runs=3
+  decord 0.8.2 @ C:\users\eric chen\appdata\local\programs\python\python313\Lib\site-packages\decord\__init__.py
+    RUN cpu nt=12: 714 fps
+    RUN cpu nt=12: 678 fps
+    RUN cpu nt=12: 677 fps
+  RESULT test6 cpu nt=12 med=678 all=[714, 678, 677]
+    RUN cpu nt=18: 679 fps
+    RUN cpu nt=18: 689 fps
+    RUN cpu nt=18: 693 fps
+  RESULT test6 cpu nt=18 med=689 all=[679, 689, 693]
+    RUN cpu nt=24: 1040 fps
+    RUN cpu nt=24: 1026 fps
+    RUN cpu nt=24: 1046 fps
+  RESULT test6 cpu nt=24 med=1040 all=[1040, 1026, 1046]
+    RUN cpu nt=32: 1062 fps
+    RUN cpu nt=32: 1036 fps
+    RUN cpu nt=32: 1064 fps
+  RESULT test6 cpu nt=32 med=1062 all=[1062, 1036, 1064]
+    RUN gpu nt=0: 1717 fps
+    RUN gpu nt=0: 1742 fps
+    RUN gpu nt=0: 1743 fps
+  RESULT test6 nvdec nt=0 med=1742 all=[1717, 1742, 1743]
+[test6 av1] dll=D:\Repo\decord\build-081fix n=6000 block=64 runs=3
+  decord 0.8.2 @ C:\users\eric chen\appdata\local\programs\python\python313\Lib\site-packages\decord\__init__.py
+D:\Repo\video_ocr_engine\tools\_probe_roadmap_decode.py:46: UserWarning: hybrid decoding contexts (decord.hybrid / decord.hybrid_gpu) are EXPERIMENTAL: scheduling, performance and memory bounds may change between releases without notice. Prefer decord.gpu() (NVDEC) or decord.cpu() for production use.
+  vr = VideoReader(path, ctx=hybrid_gpu(0), output_format="yuv420",
+    RUN hybrid nt=12: 2456 fps
+    RUN hybrid nt=12: 2092 fps
+    RUN hybrid nt=12: 2249 fps
+  RESULT test6 hybrid nt=12 med=2249 all=[2456, 2092, 2249]
+    RUN hybrid nt=18: 2325 fps
+    RUN hybrid nt=18: 2328 fps
+    RUN hybrid nt=18: 2335 fps
+  RESULT test6 hybrid nt=18 med=2328 all=[2325, 2328, 2335]
+    RUN hybrid nt=24: 2586 fps
+    RUN hybrid nt=24: 2548 fps
+    RUN hybrid nt=24: 2462 fps
+  RESULT test6 hybrid nt=24 med=2548 all=[2586, 2548, 2462]
+    RUN hybrid nt=32: 2352 fps
+    RUN hybrid nt=32: 2552 fps
+    RUN hybrid nt=32: 2396 fps
+  RESULT test6 hybrid nt=32 med=2396 all=[2352, 2552, 2396]

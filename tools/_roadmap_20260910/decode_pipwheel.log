@@ -1,0 +1,126 @@
+=== VIDEO test nts=8,12,16,24 (pip wheel) ===
+[test hevc] dll=<pip-wheel> n=6000 block=64 runs=3
+  decord 0.8.2 @ C:\users\eric chen\appdata\local\programs\python\python313\Lib\site-packages\decord\__init__.py
+Traceback (most recent call last):
+  File "D:\Repo\video_ocr_engine\tools\_probe_roadmap_decode.py", line 98, in <module>
+    main()
+    ~~~~^^
+  File "D:\Repo\video_ocr_engine\tools\_probe_roadmap_decode.py", line 90, in main
+    fps = [run_once(path, roi_hw, kind, nt, args.block, args.n)
+           ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Repo\video_ocr_engine\tools\_probe_roadmap_decode.py", line 51, in run_once
+    b = vr.get_batch(list(range(got, e)))
+  File "C:\users\eric chen\appdata\local\programs\python\python313\Lib\site-packages\decord\video_reader.py", line 329, in get_batch
+    indices = _nd.array(self._validate_indices(indices))
+                        ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "C:\users\eric chen\appdata\local\programs\python\python313\Lib\site-packages\decord\video_reader.py", line 281, in _validate_indices
+    raise IndexError('Out of bound indices: {}'.format(indices[indices >= self._num_frame]))
+IndexError: Out of bound indices: [4718 4719 4720 4721 4722 4723 4724 4725 4726 4727 4728 4729 4730 4731
+ 4732 4733 4734 4735]
+[test hevc] dll=<pip-wheel> n=6000 block=64 runs=3
+  decord 0.8.2 @ C:\users\eric chen\appdata\local\programs\python\python313\Lib\site-packages\decord\__init__.py
+D:\Repo\video_ocr_engine\tools\_probe_roadmap_decode.py:45: UserWarning: hybrid decoding contexts (decord.hybrid / decord.hybrid_gpu) are EXPERIMENTAL: scheduling, performance and memory bounds may change between releases without notice. Prefer decord.gpu() (NVDEC) or decord.cpu() for production use.
+  vr = VideoReader(path, ctx=hybrid_gpu(0), output_format="yuv420",
+Traceback (most recent call last):
+  File "D:\Repo\video_ocr_engine\tools\_probe_roadmap_decode.py", line 98, in <module>
+    main()
+    ~~~~^^
+  File "D:\Repo\video_ocr_engine\tools\_probe_roadmap_decode.py", line 90, in main
+    fps = [run_once(path, roi_hw, kind, nt, args.block, args.n)
+           ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Repo\video_ocr_engine\tools\_probe_roadmap_decode.py", line 51, in run_once
+    b = vr.get_batch(list(range(got, e)))
+  File "C:\users\eric chen\appdata\local\programs\python\python313\Lib\site-packages\decord\video_reader.py", line 329, in get_batch
+    indices = _nd.array(self._validate_indices(indices))
+                        ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "C:\users\eric chen\appdata\local\programs\python\python313\Lib\site-packages\decord\video_reader.py", line 281, in _validate_indices
+    raise IndexError('Out of bound indices: {}'.format(indices[indices >= self._num_frame]))
+IndexError: Out of bound indices: [4718 4719 4720 4721 4722 4723 4724 4725 4726 4727 4728 4729 4730 4731
+ 4732 4733 4734 4735]
+=== VIDEO test5 nts=8,12,16,24 (pip wheel) ===
+[test5 h264] dll=<pip-wheel> n=6000 block=64 runs=3
+  decord 0.8.2 @ C:\users\eric chen\appdata\local\programs\python\python313\Lib\site-packages\decord\__init__.py
+    RUN cpu nt=8: 1373 fps
+    RUN cpu nt=8: 1158 fps
+    RUN cpu nt=8: 1201 fps
+  RESULT test5 cpu nt=8 med=1201 all=[1373, 1158, 1201]
+    RUN cpu nt=12: 1871 fps
+    RUN cpu nt=12: 1869 fps
+    RUN cpu nt=12: 1883 fps
+  RESULT test5 cpu nt=12 med=1871 all=[1871, 1869, 1883]
+    RUN cpu nt=16: 2178 fps
+    RUN cpu nt=16: 2156 fps
+    RUN cpu nt=16: 2166 fps
+  RESULT test5 cpu nt=16 med=2166 all=[2178, 2156, 2166]
+    RUN cpu nt=24: 2979 fps
+    RUN cpu nt=24: 2984 fps
+    RUN cpu nt=24: 2974 fps
+  RESULT test5 cpu nt=24 med=2979 all=[2979, 2984, 2974]
+    RUN gpu nt=0: 986 fps
+    RUN gpu nt=0: 995 fps
+    RUN gpu nt=0: 995 fps
+  RESULT test5 nvdec nt=0 med=995 all=[986, 995, 995]
+[test5 h264] dll=<pip-wheel> n=6000 block=64 runs=3
+  decord 0.8.2 @ C:\users\eric chen\appdata\local\programs\python\python313\Lib\site-packages\decord\__init__.py
+D:\Repo\video_ocr_engine\tools\_probe_roadmap_decode.py:45: UserWarning: hybrid decoding contexts (decord.hybrid / decord.hybrid_gpu) are EXPERIMENTAL: scheduling, performance and memory bounds may change between releases without notice. Prefer decord.gpu() (NVDEC) or decord.cpu() for production use.
+  vr = VideoReader(path, ctx=hybrid_gpu(0), output_format="yuv420",
+    RUN hybrid nt=8: 2120 fps
+    RUN hybrid nt=8: 1880 fps
+    RUN hybrid nt=8: 2057 fps
+  RESULT test5 hybrid nt=8 med=2057 all=[2120, 1880, 2057]
+    RUN hybrid nt=12: 2331 fps
+    RUN hybrid nt=12: 2321 fps
+    RUN hybrid nt=12: 2343 fps
+    [close 异常] OSError: exception: access violation reading 0x000001AF1EEBB378
+  RESULT test5 hybrid nt=12 med=2331 all=[2331, 2321, 2343]
+    RUN hybrid nt=16: 2438 fps
+    RUN hybrid nt=16: 2800 fps
+    RUN hybrid nt=16: 2593 fps
+  RESULT test5 hybrid nt=16 med=2593 all=[2438, 2800, 2593]
+    RUN hybrid nt=24: 3211 fps
+    RUN hybrid nt=24: 3136 fps
+    RUN hybrid nt=24: 3089 fps
+  RESULT test5 hybrid nt=24 med=3136 all=[3211, 3136, 3089]
+=== VIDEO test6 nts=12,18,24,32 (pip wheel) ===
+[test6 av1] dll=<pip-wheel> n=6000 block=64 runs=3
+  decord 0.8.2 @ C:\users\eric chen\appdata\local\programs\python\python313\Lib\site-packages\decord\__init__.py
+    RUN cpu nt=12: 744 fps
+    RUN cpu nt=12: 693 fps
+    RUN cpu nt=12: 701 fps
+  RESULT test6 cpu nt=12 med=701 all=[744, 693, 701]
+    RUN cpu nt=18: 715 fps
+    RUN cpu nt=18: 721 fps
+    RUN cpu nt=18: 718 fps
+  RESULT test6 cpu nt=18 med=718 all=[715, 721, 718]
+    RUN cpu nt=24: 1107 fps
+    RUN cpu nt=24: 1105 fps
+    RUN cpu nt=24: 1103 fps
+  RESULT test6 cpu nt=24 med=1105 all=[1107, 1105, 1103]
+    RUN cpu nt=32: 1105 fps
+    RUN cpu nt=32: 1073 fps
+    RUN cpu nt=32: 1088 fps
+  RESULT test6 cpu nt=32 med=1088 all=[1105, 1073, 1088]
+    RUN gpu nt=0: 1723 fps
+    RUN gpu nt=0: 1747 fps
+    RUN gpu nt=0: 1746 fps
+  RESULT test6 nvdec nt=0 med=1746 all=[1723, 1747, 1746]
+[test6 av1] dll=<pip-wheel> n=6000 block=64 runs=3
+  decord 0.8.2 @ C:\users\eric chen\appdata\local\programs\python\python313\Lib\site-packages\decord\__init__.py
+D:\Repo\video_ocr_engine\tools\_probe_roadmap_decode.py:46: UserWarning: hybrid decoding contexts (decord.hybrid / decord.hybrid_gpu) are EXPERIMENTAL: scheduling, performance and memory bounds may change between releases without notice. Prefer decord.gpu() (NVDEC) or decord.cpu() for production use.
+  vr = VideoReader(path, ctx=hybrid_gpu(0), output_format="yuv420",
+    RUN hybrid nt=12: 1494 fps
+    RUN hybrid nt=12: 1255 fps
+    RUN hybrid nt=12: 1272 fps
+  RESULT test6 hybrid nt=12 med=1272 all=[1494, 1255, 1272]
+    RUN hybrid nt=18: 1295 fps
+    RUN hybrid nt=18: 1294 fps
+    RUN hybrid nt=18: 1287 fps
+  RESULT test6 hybrid nt=18 med=1294 all=[1295, 1294, 1287]
+    RUN hybrid nt=24: 1830 fps
+    RUN hybrid nt=24: 1950 fps
+    RUN hybrid nt=24: 1920 fps
+  RESULT test6 hybrid nt=24 med=1920 all=[1830, 1950, 1920]
+    RUN hybrid nt=32: 1842 fps
+    RUN hybrid nt=32: 1839 fps
+    RUN hybrid nt=32: 1832 fps
+  RESULT test6 hybrid nt=32 med=1839 all=[1842, 1839, 1832]

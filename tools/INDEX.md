@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **62 个 `.py`**（11,504 行），其中 50 个是探针
+`tools/` 现有 **66 个 `.py`**（11,930 行），其中 54 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -25,7 +25,7 @@
 
 | 文件 | 行 | 用途 | 引用 |
 |---|---:|---|---|
-| `e2e_smoke.py` | 354 | 端到端冒烟 / 真值验证（真实视频） | README「测试」节 |
+| `e2e_smoke.py` | 368 | 端到端冒烟 / 真值验证（真实视频） | README「测试」节 |
 | `bench_hybrid.py` | 171 | hybrid 解码基准 | PERF §4 |
 | `probe_decode_rates.py` | 125 | 各后端解码速率探测 | — |
 | `_probe_perf_baseline.py` | 189 | 多轮性能优化的**基线/对比驱动**：视频×后端×管线全矩阵，含预热、timing 分相、ENGINE_PROFILE、唯一文本 sha 门禁与 `--compare` | docs/log/2026-09-09-深度性能优化.md |
@@ -44,6 +44,10 @@
 | `_probe_decode_contention.py` | 195 | **五组完整对照**把拖慢源分层：A 单跑 / B ∥第二路 CPU 解码 / C ∥NVDEC / D ∥忙等 / E ∥带宽 hog。B(−42%)≈D(−40%)，而 C 仅 −4.2%、E 仅 −13.8% → 第二路 CPU 解码代价远大于 NVDEC（**注**：§22.9 已用 CPU profile 推翻"host CPU 算力饱和"这一解释，本探针的 A~F 组数据仍有效）
 | `_probe_hybrid_cpu_profile.py` | 130 | **直接测 CPU 占用**（不再反推）。实测 hybrid 进程只用 **2~3 核（峰值 10~12）**，纯 CPU 后端吃满 **17~21 核** → "算力争用"不成立，hybrid 是**空转**不是争用 | PERF §22.9 |
 | `_run_with_switchinterval.py` | 34 | 在指定 `sys.setswitchinterval` 下跑 bench_hybrid 的 runner。**证伪 GIL 争抢**：调小间隔反而更慢（2.887→3.077s）→ 瓶颈不是"等 GIL" | PERF §22.10 |
+| `_probe_roadmap_decode.py` | 101 | 路线图轮解码矩阵：三编码 × {cpu(nm sweep), nvdec, hybrid(sweep)} 顺序吞吐，双 dll 口径（pip wheel vs fork build-081fix）；ROI/批 64 口径与 `_probe_hybrid_sum_gap.py` 对齐 | 本轮路线图（2026-09-10） |
+| `_probe_roadmap_ocr.py` | 191 | 路线图轮 OCR rec 微基准：ONNX/TRT × 批大小扫描 + `_resize_norm` 单帧成本 + FP32/FP16×max_b 实验引擎构建（TRT 11 无 FP16 builder flag 的实证） | 本轮路线图（2026-09-10） |
+| `_probe_roadmap_profile.py` | 62 | 路线图轮 ENGINE_PROFILE 分相打印驱动（单配置一次 extract，输出 producer.*/ocr.* 全分相） | 本轮路线图（2026-09-10） |
+| `_probe_r3_infer_split.py` | 58 | R3 调查：hybrid vs nvdec 的 OCR worker infer 差异分解（ENGINE_PROFILE + TRT SUBPROBE 双跑） | 路线图执行轮（2026-09-10） |
 
 ## B. 库型 / worker 型（**被其他探针依赖，动不得**）
 

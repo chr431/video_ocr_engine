@@ -426,6 +426,14 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
                     # av1 分支的实测）。
                     if self._codec == 'av1':
                         _ct = self._decode_num_threads(codec='av1') or _ct
+                    elif self._decord_has_hybrid_preroute():
+                        # fork ≥0.8.3（chunk 预路由）下 decode-only nt16 比
+                        # nt12 高：hevc 2907 vs 2771、h264 2692 vs 2412
+                        # （2026-09-10 路线图轮，`_probe_roadmap_decode`）。
+                        # 0.8.2 同 nt 反向（hevc 2344→2192 回退），按版本门控。
+                        _ct = max(config.HYBRID_CPU_THREADS_AUTO_MIN,
+                                  min((_os.cpu_count() or 8) // 2,
+                                      config.HYBRID_CPU_THREADS_AUTO_MAX))
                     else:
                         _ct = max(config.HYBRID_CPU_THREADS_AUTO_MIN,
                                   min((_os.cpu_count() or 8) * 3 // 8,
@@ -441,6 +449,27 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
                 self._degraded.append(f'hybrid 打开失败，回退纯 GPU: {e}')
                 logger.warning('原生混合解码打开失败，回退纯 GPU: %s', e)
         return vr
+
+    def _decord_has_hybrid_preroute(self) -> bool:
+        """decord ≥0.8.3（hybrid chunk 预路由 + 池深修复）判定。
+
+        按 `decord.__version__` 门控（注意 DECORD_LIBRARY_PATH 开发态
+        换 dll 不改 Python 包版本号——此时判 False 走旧档位，可用
+        HYBRID_CPU_THREADS 显式覆盖）。
+        """
+        try:
+            import decord as _d
+            parts = []
+            for p in str(getattr(_d, '__version__', '')).split('.'):
+                digits = ''.join(ch for ch in p if ch.isdigit())
+                if not digits:
+                    break
+                parts.append(int(digits))
+                if len(parts) == 3:
+                    break
+            return tuple(parts) >= (0, 8, 3)
+        except Exception:  # noqa: BLE001 版本不可知 → 保守走旧档位
+            return False
 
     def _decord_format(self) -> str:
         """当前管线请求的 decord output_format。

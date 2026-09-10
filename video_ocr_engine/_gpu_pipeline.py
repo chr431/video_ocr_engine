@@ -425,8 +425,11 @@ def _gpu_frame_stream_nvdec(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
         else:
             for bstart in range(ctx.calib_n, len(frames), DECODE_BATCH):
                 bend = min(bstart + DECODE_BATCH, len(frames))
-                yield bstart, vr.get_batch(
-                    frames[bstart:bend], roi=roi)
+                # roi 不随批传：打开 reader 时 SetRoi 已生效；hybrid 原生
+                # 路径每次 get_batch 传 roi 会触发 fork 侧 SetRoi/池深重算
+                # （2026-09-10 实测 hybrid av1 2487→2264 fps，-9%；
+                # _probe_roi_decode 已证 CPU 路径两种传法等价）。
+                yield bstart, vr.get_batch(frames[bstart:bend])
 
     for bstart, nds in _batch_iter():
         bend = bstart + int(nds.shape[0])

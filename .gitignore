@@ -43,3 +43,4 @@ tools/_merge_vis/
 # 外部只读审查报告（本地生成的一次性分析输入，非项目文档；
 # 其结论已沉淀进 docs/PERFORMANCE.md 与 docs/DECISIONS.md）
 PERFORMACE_REPORT.txt
+gpu_kernels/

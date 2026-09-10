@@ -25,13 +25,30 @@ _KERNEL_MODULE_CACHE: dict = {}
 # cannot import name 'Device'`）——多线程批量 extract 首次校准时真实踩到
 # （2026-09-09 nvdec∥nvdec 并发探针）。锁内成功导入一次后，后续所有
 # `from cuda.core import ...` 都命中完整的 sys.modules，天然安全。
+#
+# 导入成本实测 ~220ms/进程（纯 Python 模块加载，非 NVRTC）。预热线程把
+# 这段开销藏进 TRT 反序列化（~370ms）背后：TrtEngine.__init__ 开头调
+# prewarm_cuda_core()，_cuda_core() 命中前先 join。R4 路线图轮（2026-09-10）。
 _CUDA_CORE_LOCK = threading.Lock()
 _CUDA_CORE = None
+_CUDA_CORE_PREWARM: threading.Thread | None = None
+
+
+def prewarm_cuda_core() -> None:
+    """后台启动 cuda.core 导入（幂等；不阻塞调用方）。"""
+    global _CUDA_CORE_PREWARM
+    if _CUDA_CORE is None and _CUDA_CORE_PREWARM is None:
+        _CUDA_CORE_PREWARM = threading.Thread(
+            target=_cuda_core, daemon=True)
+        _CUDA_CORE_PREWARM.start()
 
 
 def _cuda_core():
     global _CUDA_CORE
     if _CUDA_CORE is None:
+        _t = _CUDA_CORE_PREWARM
+        if _t is not None and _t is not threading.current_thread():
+            _t.join()  # 预热中：等它导入完（不重复付 import 成本）
         with _CUDA_CORE_LOCK:
             if _CUDA_CORE is None:
                 import cuda.core as _m
@@ -40,19 +57,51 @@ def _cuda_core():
 
 
 def _compile_module(src: str, name_expressions: tuple):
-    """按 (arch, src) 缓存编译 cubin 模块；返回共享 Module。"""
-    Device, Program, ProgramOptions = (
-        _cuda_core().Device, _cuda_core().Program, _cuda_core().ProgramOptions)
+    """按 (arch, src) 缓存编译 cubin 模块；返回共享 Module。
+
+    两级缓存：进程内 dict + 磁盘（app_data_dir/gpu_kernels，内容寻址
+    sha256(arch|name_expressions|src)）。NVRTC 编译每进程 ~300ms/模块
+    （GpuPreprocessor 实测 301ms），磁盘命中后 ObjectCode 加载仅几 ms；
+    缓存文件损坏/加载失败自动回退重编译，写失败静默（best-effort）。
+    """
+    _m = _cuda_core()
+    Device, ObjectCode, Program, ProgramOptions = (
+        _m.Device, _m.ObjectCode, _m.Program, _m.ProgramOptions)
     dev = Device()
     dev.set_current()
-    key = (getattr(dev, "arch", "?"), src)
+    key = (getattr(dev, "arch", "?"), src, name_expressions)
     mod = _KERNEL_MODULE_CACHE.get(key)
     if mod is None:
-        prog = Program(src, code_type="c++",
-                       options=ProgramOptions(std="c++11",
-                                              arch=f"sm_{dev.arch}"))
-        mod = prog.compile("cubin",
-                           name_expressions=list(name_expressions))
+        import hashlib
+        h = hashlib.sha256()
+        h.update(f"sm_{dev.arch}".encode())
+        for n in name_expressions:
+            h.update(f"|{n}".encode())
+        h.update(src.encode())
+        cache_dir = config.app_data_dir() / "gpu_kernels"
+        f = cache_dir / f"{h.hexdigest()}.cubin"
+        if f.is_file():
+            try:
+                mod = ObjectCode.from_cubin(str(f))
+            except Exception:  # noqa: BLE001 缓存损坏 → 走重编译
+                mod = None
+        if mod is None:
+            prog = Program(src, code_type="c++",
+                           options=ProgramOptions(std="c++11",
+                                                  arch=f"sm_{dev.arch}"))
+            mod = prog.compile("cubin",
+                               name_expressions=list(name_expressions))
+            try:
+                code = mod.code
+                if isinstance(code, str):
+                    from pathlib import Path as _P
+                    code = _P(code).read_bytes()
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                tmp = f.with_name(f.name + ".tmp")
+                tmp.write_bytes(code)
+                tmp.replace(f)
+            except OSError:
+                pass  # 缓存盘不可写：功能不受影响，仅失去跨进程复用
         _KERNEL_MODULE_CACHE[key] = mod
     return mod
 

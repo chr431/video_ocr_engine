@@ -30,6 +30,15 @@
 ## 已知问题与注意
 
 ### decord（自建 fork，pip wheel 安装）
+- **0.8.3（2026-09-10 本地预备，未发布）**：fork master 领先 0.8.2 四个提交
+  （73e5540 析构 UAF 修复 / d94d92e hybrid GPU 池深按 ROI 重算 /
+  3b96c6f hybrid chunk 预路由 / 93a5ce1），本地提交 486d2f6 已 bump 版本号。
+  本地开发 dll：`DECORD_LIBRARY_PATH=D:\Repo\decorduild-081fix`（与
+  HEAD 同步，ninja 验新）。发布步骤见
+  `tools/_roadmap_20260910/release-notes-0.8.3-draft.md`。
+- **h264 NVDEC 是本机硬件天花板，非软件问题**（2026-09-10 实测）：同内容
+  三编码 NVDEC 982(h264)/2103(hevc)/1749(av1) fps；ffmpeg 自带 cuvid 同比
+  （16.5x vs 38.7x）。h264 解码选峰值应走 CPU 软解/显式 hybrid。
 - **0.8.2 起改用 release wheel + pip 安装**（不再 editable 源码导入、不再
   手工部署 DLL）：wheel 自带 `decord.dll` 与 FFmpeg 63 运行库（包根目录），
   `pip install decord-0.8.2-cp313-cp313-win_amd64.whl` 即用；0.8.2 已含

@@ -78,15 +78,27 @@ def _text_match(a: str, b: str) -> bool:
 
 
 def parse_truth(path: Path):
-    """Race CSV：解析 '#' 头元数据 + (frame, text) 行。"""
+    """Race CSV：解析 '#' 头元数据 + (frame, text) 行。
+
+    roi 头（# roi=x1,y1,x2,y2, ...）必须按正则取四个整数——头部本身按
+    逗号分节，通用 kv 切分只会拿到第一个数（CLAUDE.md 已警告的坑，
+    2026-09-10 在 --roi-from-truth 实测踩中并修复）。
+    """
+    import re
     meta, rows = {}, []
     with open(path, encoding="utf-8-sig") as f:
         for line in f:
             line = line.rstrip("\n").rstrip("\r")
             if line.startswith("#"):
-                m = line[1:].strip().split("=")
+                m = re.search(
+                    r"roi\s*=\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)",
+                    line)
+                if m:
+                    meta["roi"] = tuple(int(g) for g in m.groups())
                 for kv in line.strip().lstrip("#").split(","):
                     kv = kv.strip()
+                    if kv.startswith("roi="):
+                        continue  # roi 由上方正则取四元组
                     if "=" in kv:
                         k, v = kv.split("=", 1)
                         try:
@@ -231,7 +243,9 @@ def main():
     if args.roi:
         roi = tuple(int(v) for v in args.roi.split(","))
     elif args.roi_from_truth and truth_meta.get("roi"):
-        roi = tuple(int(v) for v in str(truth_meta["roi"]).split(","))
+        _roi = truth_meta["roi"]
+        roi = tuple(_roi) if isinstance(_roi, (tuple, list)) else tuple(
+            int(v) for v in str(_roi).split(","))
     if len(roi or ()) != 4:
         print("需要 --roi 'x1,y1,x2,y2' 或 --roi-from-truth")
         return 2
