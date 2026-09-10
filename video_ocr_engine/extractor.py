@@ -373,10 +373,16 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
                 self._codec = str(vr.get_codec() or '').lower()
             except Exception:
                 self._codec = ''
-            if self._codec == 'av1':
-                nt = self._decode_num_threads(codec='av1')
-                if nt != self._decode_num_threads():
-                    vr = self._open_decord_reader(_cpu(0), roi_kw, num_threads=nt)
+            # codec 感知线程档位（2026-09-10 实测表，见 _decode_num_threads）：
+            # hevc/av1 在 FFmpeg9 下的帧线程扩展性与 h264 分化（hevc
+            # stride=1 到 32 线程仍在涨、av1 stride=8 最优 48），通用档位
+            # 按最常见 h264 设定，打开后读 codec、档位不同则重开一次
+            # （实测重开 ~20-30ms，hevc stride1 墙钟 -27%）。
+            nt = self._decode_num_threads()
+            nt_codec = self._decode_num_threads(codec=self._codec or None)
+            if nt_codec != nt:
+                vr = self._open_decord_reader(_cpu(0), roi_kw,
+                                              num_threads=nt_codec)
         else:
             try:
                 self._codec = str(vr.get_codec() or '').lower()
@@ -500,23 +506,31 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
             return _ovr
         from ocr_native import auto_ocr_thread_count
         cores = auto_ocr_thread_count()
+        logical = _os.cpu_count() or cores
         if codec == 'av1':
             # fork 0.8.1 (FFmpeg9) 复测：dav1d 帧线程扩展性大幅改善，
             # 旧结论（8/16/24/32 线程全 5.8~5.9s，FFmpeg8 口径且被 OCR
-            # 墙钟掩盖）已过时。顺序解码 16T 797fps → 24T 1164fps →
-            # 32T 1178fps（饱和）；seek+批读扫掠 24T 合计 2.84s，优于旧
-            # 构建 16T 的 3.16s。OCR-on-CPU 下同样大赚（e2e host_cpu av1
-            # 8T 6.26s → 24T 3.42s，-45%，ORT 争核远抵不过解码收益）
-            # → 不分 OCR 位置，逻辑核 3/4 钳 [8, 24]。
-            logical = _os.cpu_count() or cores
+            # 墙钟掩盖）已过时。顺序解码（stride=1）16T 797fps →
+            # 24T 1164fps → 32T 1178fps（饱和）→ ONNX 墙钟 24T 最优
+            # （3.958s，32T 持平）；stride=8 等差快速路径扩展到 48T
+            # （2.536s vs 24T 2.880s，48T 后饱和；2026-09-10 实测表）。
+            if self._sample_stride > 1:
+                return max(8, min(48, logical))
             return max(8, min(24, logical * 3 // 4))
+        if codec == 'hevc':
+            # FFmpeg9 hevc 软解扩展性同样大幅改善（2026-09-10 ONNX 墙钟
+            # 实测表，test.mp4 3000 帧窗口）：stride=1 8T 4.748 → 16T
+            # 3.763 → 24T 3.520 → 32T 3.110（48T 3.240 回落）；stride=8
+            # 16T 2.757 → 32T 2.289 → 48T 2.219（渐近）。旧通用档位
+            # （10/24）分别慢 27%/12%。
+            if self._sample_stride > 1:
+                return max(8, min(48, logical))
+            return max(8, min(32, logical))
         if self._ocr_on_gpu():
-            logical = _os.cpu_count() or cores
             return max(config.DECODE_THREADS_GPU_OCR_MIN,
                        min(config.DECODE_THREADS_GPU_OCR_MAX, logical))
         if cores <= config.CPU_CORES_SPLIT_THRESHOLD:
             return max(2, cores // 2)
-        logical = _os.cpu_count() or cores
         if self._sample_stride > 1:
             return max(8, min(config.DECODE_THREADS_CPU_OCR_MAX,
                               logical * 3 // 4))
