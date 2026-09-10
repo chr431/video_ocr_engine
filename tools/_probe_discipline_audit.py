@@ -4,7 +4,7 @@
 ----
 本项目已经踩过三次"规矩写在文档里但没人守"的坑：
 
-1. CLAUDE.md 长到 70 KB（≈15–21K tokens）才被发现 —— 它每个会话开头被注入。
+1. AGENTS.md 长到 70 KB（≈15–21K tokens）才被发现 —— 它每个会话开头被注入。
 2. "PERFORMANCE.md 只能用二进制编辑"传了几轮，实测是**伪规矩**，
    而真正的病灶（934 个裸 CR）一直没人拆。
 3. tools/INDEX.md 手写的数字不到一天就漂了（文件数、行数、依赖、孤儿集合）。
@@ -23,7 +23,7 @@
     [7]  版本号一致性（engine_config.__version__ ↔ 最新 git tag）
     [8]  文档里指向仓库内文件的引用是否悬空
     [9]  文档裸 CR（会让 git 判为二进制 + CommonMark 渲染错误）
-    [10] CLAUDE.md 注入预算（12 KB 硬上限）
+    [10] AGENTS.md 注入预算（12 KB 硬上限）
     [11] 未跟踪的产物文件（该进 .gitignore 或该提交）
     [12] 测试纪律：依赖真实视频/真值的测试必须有 skip 保护
 
@@ -69,7 +69,7 @@ for _dir, _subs, _files in os.walk(os.path.join(ROOT, "tests")):
         if f.endswith(".py"):
             ALL_PY.append(os.path.relpath(os.path.join(_dir, f), ROOT))
 
-DOCS = ["README.md", "CLAUDE.md", "docs/PERFORMANCE.md", "docs/ARCHIVE.md",
+DOCS = ["README.md", "AGENTS.md", "docs/PERFORMANCE.md", "docs/ARCHIVE.md",
         "docs/DECISIONS.md", "docs/DEPENDENCIES.md", "tools/INDEX.md"]
 
 CLAUDE_MD_MAX_BYTES = 12 * 1024
@@ -357,7 +357,7 @@ def check_filename_corruption() -> None:
     HIST = re.compile(r"已删除|不存在|已移除|已废弃|历史|当时|原\s|建议|曾|废弃|遗留|归档|没有")
     # ARCHIVE.md / DECISIONS.md 整体就是历史档案，里面的路径指的是"当时那个文件"，
     # 后来被删/被移是常态 —— 不做存在性要求。只有现役文档必须指得通。
-    LIVE_DOCS = ["README.md", "CLAUDE.md", "docs/PERFORMANCE.md", "tools/INDEX.md"]
+    LIVE_DOCS = ["README.md", "AGENTS.md", "docs/PERFORMANCE.md", "tools/INDEX.md"]
     ghost = []
     for rel in LIVE_DOCS:
         p = rp(rel)
@@ -439,14 +439,14 @@ def check_bare_cr() -> None:
 
 
 def check_claude_budget() -> None:
-    """[10] CLAUDE.md 注入预算。"""
-    p = rp("CLAUDE.md")
+    """[10] AGENTS.md 注入预算。"""
+    p = rp("AGENTS.md")
     if not os.path.isfile(p):
         return
     size = os.path.getsize(p)
-    print("    CLAUDE.md %d 字节 / 上限 %d" % (size, CLAUDE_MD_MAX_BYTES))
+    print("    AGENTS.md %d 字节 / 上限 %d" % (size, CLAUDE_MD_MAX_BYTES))
     if size > CLAUDE_MD_MAX_BYTES:
-        fail("CLAUDE.md %d 字节，超 12 KB 注入预算" % size)
+        fail("AGENTS.md %d 字节，超 12 KB 注入预算" % size)
 
 
 def check_untracked() -> None:
@@ -497,7 +497,7 @@ CHECKS = {
     7: ("版本号一致性", check_version),
     8: ("文档 md 链接悬空", check_doc_refs),
     9: ("文档裸 CR", check_bare_cr),
-    10: ("CLAUDE.md 注入预算", check_claude_budget),
+    10: ("AGENTS.md 注入预算", check_claude_budget),
     11: ("未跟踪文件", check_untracked),
     12: ("测试纪律（真实资源保护）", check_test_discipline),
 }

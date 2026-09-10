@@ -4,7 +4,7 @@
 ----
 `tools/INDEX.md` 是手写的索引，它声称的数字（文件数、行数、依赖关系、
 孤儿集合）会随探针增删而漂移。本脚本用实测核对这些数字，避免索引变成
-"看起来很全、其实是过期信息"的第二个 CLAUDE.md。
+"看起来很全、其实是过期信息"的第二个 AGENTS.md。
 
 检查项
 ------
@@ -39,7 +39,7 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
 
 INDEX = os.path.join(HERE, "INDEX.md")
-DOCS = ["README.md", "CLAUDE.md", "docs/PERFORMANCE.md", "docs/DECISIONS.md",
+DOCS = ["README.md", "AGENTS.md", "docs/PERFORMANCE.md", "docs/DECISIONS.md",
         "docs/DEPENDENCIES.md", "docs/ARCHIVE.md"]
 
 

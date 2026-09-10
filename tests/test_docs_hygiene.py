@@ -7,7 +7,7 @@
    还让 CommonMark 在 934 处渲染错误。2026-08-31 一次性清除（提交 3086a92）。
    这类残留是**静默**回来的：某次跨编辑器复制就可能重新引入，没人会在
    code review 里发现。
-2. **CLAUDE.md 注入预算**：本文件被部分 harness 在**每个会话开头全量注入**，
+2. **AGENTS.md 注入预算**：本文件被部分 harness 在**每个会话开头全量注入**，
    所以它有一个硬上限。历史教训是它会自己长到 70 KB（≈15–21K tokens），
    靠"自觉"是守不住的 —— 必须有测试拦。
 
@@ -23,10 +23,10 @@ import pytest
 
 from _paths import ROOT
 
-# 硬上限：CLAUDE.md 在每个会话开头被注入，超过就必须迁内容到 docs/DECISIONS.md
+# 硬上限：AGENTS.md 在每个会话开头被注入，超过就必须迁内容到 docs/DECISIONS.md
 CLAUDE_MD_MAX_BYTES = 12 * 1024
 
-DOCS = ["README.md", "CLAUDE.md", "docs/PERFORMANCE.md", "docs/DECISIONS.md",
+DOCS = ["README.md", "AGENTS.md", "docs/PERFORMANCE.md", "docs/DECISIONS.md",
         "docs/DEPENDENCIES.md", "docs/ARCHIVE.md", "tools/INDEX.md",
         "docs/CONCLUSIONS.md", "docs/log/README.md"]
 
@@ -59,16 +59,16 @@ def test_no_bare_cr(rel: str) -> None:
 
 
 def test_claude_md_within_injection_budget() -> None:
-    """CLAUDE.md 必须在注入预算内 —— 它是每个会话开头全量注入的。
+    """AGENTS.md 必须在注入预算内 —— 它是每个会话开头全量注入的。
 
     超了就把内容迁到 `docs/DECISIONS.md`，这里只留指针。
     """
-    p = _existing("CLAUDE.md")
+    p = _existing("AGENTS.md")
     if p is None:
-        pytest.skip("CLAUDE.md 不存在")
+        pytest.skip("AGENTS.md 不存在")
     size = p.stat().st_size
     assert size <= CLAUDE_MD_MAX_BYTES, (
-        f"CLAUDE.md 已 {size} 字节，超过注入预算 {CLAUDE_MD_MAX_BYTES} 字节"
+        f"AGENTS.md 已 {size} 字节，超过注入预算 {CLAUDE_MD_MAX_BYTES} 字节"
         f"（硬上限 12 KB）。\n"
         f"它在每个会话开头被全量注入，涨上去等于每个会话都付 token。\n"
         f"处理：把历史/过程性章节迁到 docs/DECISIONS.md，本文件只留指针。"
@@ -76,21 +76,21 @@ def test_claude_md_within_injection_budget() -> None:
 
 
 def test_doc_map_targets_exist() -> None:
-    """CLAUDE.md「文档地图」里列出的每个文件都必须真实存在。
+    """AGENTS.md「文档地图」里列出的每个文件都必须真实存在。
 
     防止文档地图指向尚未创建（或已被删/改名）的文件 —— 那会让新会话
     按图索骥扑空。
     """
-    p = _existing("CLAUDE.md")
+    p = _existing("AGENTS.md")
     if p is None:
-        pytest.skip("CLAUDE.md 不存在")
+        pytest.skip("AGENTS.md 不存在")
     text = p.read_text(encoding="utf-8")
     missing = []
     for rel in re.findall(r"`((?:docs|tools)/[A-Za-z0-9_.-]+\.md)`", text):
         if not (ROOT / rel).is_file():
             missing.append(rel)
     assert not missing, (
-        f"CLAUDE.md 文档地图指向了不存在的文件：{missing}\n"
+        f"AGENTS.md 文档地图指向了不存在的文件：{missing}\n"
         f"要么创建它，要么把地图里的那一行改掉。"
     )
 
@@ -99,7 +99,7 @@ def test_doc_map_targets_exist() -> None:
 
 CONCLUSIONS_MD_MAX_BYTES = 12 * 1024  # L1 索引的体积上限（现约 6.6KB）
 
-# "现役"字样只允许出现在 CLAUDE.md（注入核/总真相）与 docs/CONCLUSIONS.md
+# "现役"字样只允许出现在 AGENTS.md（注入核/总真相）与 docs/CONCLUSIONS.md
 # （L1 索引）。其余文档按「存量豁免、增量严格」：基线以下只许下降不许上涨。
 # （基线 = 2026-09-08 文档分层改造时点的计数。）
 XIANYI_BASELINE = {
@@ -112,7 +112,7 @@ XIANYI_BASELINE = {
 
 # 前瞻性文档：读者默认其中的文件引用可直接跟进去。历史档案
 # （PERFORMANCE/DECISIONS/ARCHIVE 正文）不检查——那里合法地引用已删除的文件。
-DANGLING_CHECK_FILES = ["README.md", "CLAUDE.md", "docs/CONCLUSIONS.md",
+DANGLING_CHECK_FILES = ["README.md", "AGENTS.md", "docs/CONCLUSIONS.md",
                         "docs/DEPENDENCIES.md", "tools/INDEX.md"]
 
 _FILE_REF = re.compile(r"`([^`\n]+?\.(?:py|md|json))`")
@@ -136,7 +136,7 @@ def test_conclusions_within_budget() -> None:
 
 
 def test_xianyi_outside_l1_not_growing() -> None:
-    """「现役」表述只许住 CLAUDE.md 与 docs/CONCLUSIONS.md。
+    """「现役」表述只许住 AGENTS.md 与 docs/CONCLUSIONS.md。
 
     历史文档里的存量按基线豁免，但**只许减不许增**——新增规范性表述
     必须写进 L1 索引，而不是散落在叙事里（hybrid 迁移清扫的教训）。

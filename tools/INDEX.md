@@ -37,8 +37,8 @@
 | `_probe_onnx_dcd_sweep.py` | 80 | ONNX OCR 场景解码线程数 sweep（DECODE_THREADS；h264/hevc/av1 × stride），产出 2026-09-10 新档位表 | docs/log/2026-09-10-ONNX解码线程档位.md |
 | `_probe_perf_sweep.py` | 118 | 解码参数 sweep（batch/stream/threads/hybthreads），monkey-patch 模块常量；用于 C-10 复确认与 batch=32 越界 bug 的暴露 | docs/log/2026-09-09-深度性能优化.md |
 | `_probe_index_audit.py` | 277 | 核对本索引的每个数字是否与磁盘一致 | 本文件（自检） |
-| `_probe_discipline_audit.py` | 596 | **项目纪律审计**（12 项：硬编码路径 / 异常吞噬 / 未用 import / 未门控 print / 版本号 / 文档引用 / 注入预算…） | CLAUDE.md「纪律与自动化守卫」 |
-| `_doc_section.py` | 214 | **文档章节级检索**：`--toc` 看目录 / `--find` 按标题定位 / 读单章。避免整文件读，实测省 84~96% tokens | CLAUDE.md「查文档前先定位」 |
+| `_probe_discipline_audit.py` | 596 | **项目纪律审计**（12 项：硬编码路径 / 异常吞噬 / 未用 import / 未门控 print / 版本号 / 文档引用 / 注入预算…） | AGENTS.md「纪律与自动化守卫」 |
+| `_doc_section.py` | 214 | **文档章节级检索**：`--toc` 看目录 / `--find` 按标题定位 / 读单章。避免整文件读，实测省 84~96% tokens | AGENTS.md「查文档前先定位」 |
 | `_probe_roi_decode.py` | 105 | **否定结果**：量化「打开时 SetRoi」vs「每次 get_batch 传 roi」对 CPU 软解速率的影响。实测两者无差异（1841 vs 1849 fps），但**不传 ROI = 520 fps**（3.6× 慢）→ ROI 本身是巨大优化，两种传法等价 | PERF §22.5 |
 | `_probe_nvdec_interference.py` | 141 | **推翻前一轮归因**：隔离测 NVDEC 对 CPU 软解的干扰，A 单跑 / B ∥NVDEC / C ∥忙等线程（对照）。实测 NVDEC 只造成 **−3.3%**，而等量纯抢核 **−41.9%** → 元凶是分段/OCR 流水线，不是 NVDEC | PERF §22.6 |
 | `_probe_decode_contention.py` | 195 | **五组完整对照**把拖慢源分层：A 单跑 / B ∥第二路 CPU 解码 / C ∥NVDEC / D ∥忙等 / E ∥带宽 hog。B(−42%)≈D(−40%)，而 C 仅 −4.2%、E 仅 −13.8% → 第二路 CPU 解码代价远大于 NVDEC（**注**：§22.9 已用 CPU profile 推翻"host CPU 算力饱和"这一解释，本探针的 A~F 组数据仍有效）
@@ -114,7 +114,7 @@
 | `_probe_mem_bw.py` | 647 | 2026-08-31 | §20 带宽、§21 |
 | `_probe_round4_wall.py` | 119 | 2026-08-31 | §21 墙钟矩阵 |
 | `_probe_round4_bw.py` | 102 | 2026-08-31 | §21 带宽矩阵 |
-| `_probe_cr_roundtrip.py` | 182 | 2026-08-31 | 裸 CR 保真性（CLAUDE.md 编辑护栏） |
+| `_probe_cr_roundtrip.py` | 182 | 2026-08-31 | 裸 CR 保真性（AGENTS.md 编辑护栏） |
 
 ### 2026-09-10 D1/D2 调查（gpu/host 段数分歧 · 线程优先级）
 
@@ -142,13 +142,13 @@
 
 | 文件 | 行 | 说明 |
 |---|---:|---|
-| `_split_claude_md.py` | 263 | 2026-08-31 把 CLAUDE.md 拆成注入核 + `docs/DECISIONS.md`。**已完成，可删** |
+| `_split_claude_md.py` | 263 | 2026-08-31 把 AGENTS.md 拆成注入核 + `docs/DECISIONS.md`。**已完成，可删** |
 | `_split_perf_md.py` | 194 | 2026-08-31 按「活/归档」把 PERFORMANCE.md 切出 `docs/ARCHIVE.md`。**已完成，可删** |
 | `_fix_probe_paths.py` | 416 | 2026-08-31 把探针里写死的路径改成 `__file__` 推导 / 环境变量。**已完成，可删** |
 
 ## 清理判据（想删探针时按这个顺序）
 
-1. `grep -rn "<文件名>" README.md CLAUDE.md docs/ tools/` —— 有命中就不删。
+1. `grep -rn "<文件名>" README.md AGENTS.md docs/ tools/` —— 有命中就不删。
 2. 命中只在 `docs/ARCHIVE.md` / PERF §16 归档章 → 该结论已归档，可随档一起删，
    但要确认 §16 的校正表没把它标成"仍有效"。
 3. 零命中 → 归入「孤儿」，走上面 D 节的逐个案判断。

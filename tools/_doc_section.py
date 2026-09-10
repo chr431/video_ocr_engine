@@ -10,10 +10,10 @@
 | docs/ARCHIVE.md     | 46,253 | 14 | 3,256 |   524 |
 | docs/DECISIONS.md   | 29,332 | 26 | 1,073 |   928 |
 
-对比一下量级：**CLAUDE.md 每会话注入才 3,636 tokens**，而误读一次
+对比一下量级：**AGENTS.md 每会话注入才 3,636 tokens**，而误读一次
 ARCHIVE.md 就是 46,253 —— 相当于 **12.7 倍的注入成本**。
 
-所以降低 agent token 消耗的最大杠杆**不是压缩 CLAUDE.md**，而是避免整文件
+所以降低 agent token 消耗的最大杠杆**不是压缩 AGENTS.md**，而是避免整文件
 读取：先看目录（几百 tokens）定位，再只读那一章（1~3K tokens），
 **省 85~96%**。
 
@@ -53,7 +53,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
 DOCS = ["docs/PERFORMANCE.md", "docs/ARCHIVE.md", "docs/DECISIONS.md",
-        "README.md", "CLAUDE.md", "docs/DEPENDENCIES.md"]
+        "README.md", "AGENTS.md", "docs/DEPENDENCIES.md"]
 
 # 每份文档按哪个标题层级切分（DECISIONS.md 主体是 ###，不是 ##）
 LEVEL = {
@@ -61,7 +61,7 @@ LEVEL = {
     "docs/ARCHIVE.md": 3,
     "docs/DECISIONS.md": 3,
     "README.md": 2,
-    "CLAUDE.md": 2,
+    "AGENTS.md": 2,
     "docs/DEPENDENCIES.md": 2,
 }
 

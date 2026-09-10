@@ -1,4 +1,4 @@
-# CLAUDE.md — 开发记录与约定（注入核）
+# AGENTS.md — 开发记录与约定（注入核）
 
 > 本文件在每个会话开头被注入，**只放"现在必须知道的"**。
 > **硬上限 12 KB** — 超了就把内容迁到 `docs/DECISIONS.md`，这里只留指针。
@@ -8,7 +8,7 @@
 | 文件 | 性质 | 什么时候读 |
 |---|---|---|
 | `README.md` | 用户向 API / 用法 | 写调用代码时 |
-| `CLAUDE.md`（本文件） | 维护者向**注入核**：铁律 + 现役架构 + 结论指针 | 自动注入 |
+| `AGENTS.md`（本文件） | 维护者向**注入核**：铁律 + 现役架构 + 结论指针 | 自动注入 |
 | `docs/CONCLUSIONS.md` | **L1 结论索引**（状态/前提/复评触发），唯一允许规范性结论处 | 动手前查结论、出结论写这里 |
 | `docs/PERFORMANCE.md` | 性能实验史（**已冻结增长**，新叙事进 `docs/log/`） | 需要实测细节/证据链时 |
 | `docs/DECISIONS.md` | 每轮决策过程、已删除功能、设计审查结论 | 想问"为什么这么做"时 |
@@ -144,7 +144,7 @@ python tools/_probe_index_audit.py               # tools/INDEX.md 数字一致�
 - **产品代码的 print 必须受 debug 开关保护**（`env_bool(DEBUG_BOUNDS_ENV)` /
   `self._probe`），否则走 `logging`。docstring 里的用法示例不算。
 - **未使用的 import**：有意 re-export 加 `# noqa: F401`，否则删掉。
-- **文档裸 CR = 0、CLAUDE.md ≤ 12 KB**：`tests/test_docs_hygiene.py` 守护。
+- **文档裸 CR = 0、AGENTS.md ≤ 12 KB**：`tests/test_docs_hygiene.py` 守护。
 
 ⚠️ **旧规矩双向都错，别再照着做**：
 - 「只能用二进制」—— 从来不是必需。文本模式显式 `newline=''` 或 `'\n'` 就

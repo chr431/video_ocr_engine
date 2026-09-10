@@ -18,7 +18,7 @@ newline='' 与 newline='\\n' 都不翻译。所以"必须用二进制"可能是�
 用法
 ----
     python tools/_probe_cr_roundtrip.py                 # 默认测 docs/PERFORMANCE.md
-    python tools/_probe_cr_roundtrip.py --file CLAUDE.md
+    python tools/_probe_cr_roundtrip.py --file AGENTS.md
 """
 
 from __future__ import annotations
