@@ -164,19 +164,15 @@ def write_case(case: dict, calib: dict, ocr: dict) -> None:
     d = GOLDEN / ("case-%s" % case["id"])
     d.mkdir(exist_ok=True)
     (d / "stage-calib.json").write_text(
-        json.dumps(calib, ensure_ascii=False, indent=1), encoding="utf-8", newline="
-")
+        json.dumps(calib, ensure_ascii=False, indent=1), encoding="utf-8", newline="\n")
     (d / "stage-ocr.json").write_text(
-        json.dumps(ocr, ensure_ascii=False, indent=1), encoding="utf-8", newline="
-")
+        json.dumps(ocr, ensure_ascii=False, indent=1), encoding="utf-8", newline="\n")
 
 
 def load_case(case: dict) -> tuple[dict, dict]:
     d = GOLDEN / ("case-%s" % case["id"])
-    return (json.loads((d / "stage-calib.json").read_text(encoding="utf-8", newline="
-")),
-            json.loads((d / "stage-ocr.json").read_text(encoding="utf-8", newline="
-")))
+    return (json.loads((d / "stage-calib.json").read_text(encoding="utf-8")),
+            json.loads((d / "stage-ocr.json").read_text(encoding="utf-8")))
 
 
 def verify_case(case: dict) -> list[str]:
@@ -218,8 +214,7 @@ def write_manifest(env: dict, vids_sha: dict) -> None:
             ensure_ascii=False))
         lines.append("    sha: [%s, %s]" % (hs[0], hs[1]))
     (GOLDEN / "manifest.yaml").write_text(
-        "\n".join(lines) + "\n", encoding="utf-8", newline="
-")
+        "\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
 
 def main() -> int:

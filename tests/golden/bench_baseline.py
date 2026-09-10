@@ -69,8 +69,7 @@ def main() -> int:
     print("噪声底（各配置热轮散布最大值）: %.1f%%  → D10 PR 硬失败阈值 5%% 的校准依据"
           % out["noise_floor_pct"])
     Path(__file__).parent.joinpath("bench_baseline.json").write_text(
-        json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8", newline="
-")
+        json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8", newline="\n")
     return 0
 
 
