@@ -224,18 +224,10 @@ def run_host_pipeline(spec: HostRunSpec, ocr_engines=None,
     vr = preopened_vr
     if vr is None:
         vr = spec.open_vr()
-    if spec.fps_box[0] is None:
-        from .._helpers import _read_fps_from_vr
-        _fps = _read_fps_from_vr(vr)
-        spec.fps_box[0] = _fps if _fps else config.DEFAULT_FPS_FALLBACK
-    res.fps = spec.fps_box[0]
+    from ._run_common import begin_reading, compute_frames, ensure_fps
+    res.fps = ensure_fps(spec, vr)
     total = len(vr)
-    if (spec.frame_end or 0) > total:
-        # 超界 end 静默截断曾是默认语义（A4）：至少让用户能发现参数错误
-        logger.warning('frame_end=%s 超出视频总帧数 %d，按片尾截断',
-                       spec.frame_end, total)
-    end = min(spec.frame_end or total, total)
-    frames = list(range(spec.frame_start, end, spec.sample_stride))
+    frames = compute_frames(spec, total)
     if not frames:
         try:
             vr.close()
@@ -243,21 +235,16 @@ def run_host_pipeline(spec: HostRunSpec, ocr_engines=None,
             pass  # 清理路径：close 失败无需上抛（资源由进程回收）
         raise ValueError(
             f"帧区间为空: frame_start={spec.frame_start}, "
-            f"frame_end={end}, total={total}")
-    hybrid = hasattr(vr, 'hybrid_begin')
+            f"frame_end={spec.frame_end}, total={total}")
+    hybrid = hasattr(vr, 'hybrid_begin')   # _with_dev 判定用
     try:
-        if spec.frame_start > 0 and not hybrid:
-            # hybrid 的分片定位由生产者在片首完成（其 seek_accurate 已显式
-            # 报错，DESIGN-REVIEW B4）——跳过外部 seek。
-            vr.seek_accurate(spec.frame_start)
-        if hybrid:
-            vr.hybrid_begin(frames)
+        begin_reading(vr, spec, frames)
     except BaseException:
         logger.debug("hybrid_begin 失败进入回退清理", exc_info=True)
         try:
             vr.close()
         except Exception:
-            pass  # 清理路径：close 失败无需上抛（资源由进程回收）
+            pass  # 清理路径：close 失败无需上抛
         raise
     _prof(spec, 'producer', 'open_and_fps', _t_open)
     # OCR 会话提前到校准前启动：worker 线程内构建引擎，与校准并行重叠；

@@ -54,8 +54,11 @@ class _YFrame:
         self.size = size
 
     def __del__(self):
+        # B6（S4）：析构在任意 GC 上下文/解释器关闭期运行——只做入列回收，
+        # 溢出（空闲列满）时告警并放弃该块（泄漏有界：≤ 池上限+在飞数，
+        # release_all 于 teardown 释放在列块；CUDA 释放只走显式路径）。
         try:
-            self.pool._release(self)
+            self.pool._recycle(self)
         except Exception:
             pass
 
@@ -82,15 +85,20 @@ class _YFramePool:
         _err, ptr = cudart.cudaMalloc(self._fnb)
         return _YFrame(self, int(ptr), self._fnb)
 
-    def _release(self, frame: _YFrame) -> None:
+    def _recycle(self, frame: _YFrame) -> None:
+        """入列回收（__del__ 安全路径：无任何 CUDA 调用）。"""
         if len(self._free) < self._MAX:
             self._free.append(frame)
             return
-        try:
-            from cuda.bindings import runtime as cudart
-            cudart.cudaFree(frame.ptr)
-        except Exception:
-            pass
+        # B6：溢出不在析构上下文里 cudaFree——告警并放弃（有界泄漏，
+        # 由 release_all/进程退出兜底）
+        logger.warning("_YFramePool 空闲列满，__del__ 放弃回收一块 %d B 显存"
+                       "（B6：CUDA 释放只走显式路径）", self._fnb)
+
+    def recycle(self, frame: "_YFrame") -> None:
+        """显式归还（S4）：先置空 pool 引用防 __del__ 双重入列，再入列。"""
+        frame.pool = None
+        self._recycle(frame)
 
     def release_all(self) -> None:
         """显式释放全部空闲缓冲（extract 结束调用；DESIGN-REVIEW C5：池
@@ -122,8 +130,9 @@ class _DevBatch:
         self.host = host
 
     def __del__(self):
+        # B6（S4）：同 _YFrame——只入列，溢出告警不 cudaFree
         try:
-            self.pool._release(self)
+            self.pool._recycle(self)
         except Exception:
             pass
 
@@ -176,16 +185,19 @@ class _DevBatchPool:
         _err, ptr = cudart.cudaMalloc(self._nbytes)
         return _DevBatch(self, int(ptr), self._nbytes, host)
 
-    def _release(self, b: _DevBatch) -> None:
+    def _recycle(self, b: _DevBatch) -> None:
+        """入列回收（__del__ 安全路径：无任何 CUDA 调用；B6/S4）。"""
         b.host = None
         if len(self._free) < self._MAX:
             self._free.append(b)
             return
-        try:
-            from cuda.bindings import runtime as cudart
-            cudart.cudaFree(b.ptr)
-        except Exception:
-            pass
+        logger.warning("_DevBatchPool 空闲列满，__del__ 放弃回收一块 %d B 显存"
+                       "（B6：CUDA 释放只走显式路径）", self._nbytes)
+
+    def recycle(self, b: "_DevBatch") -> None:
+        """显式归还（S4）：先置空 pool 引用防 __del__ 双重入列，再入列。"""
+        b.pool = None
+        self._recycle(b)
 
     def release_all(self) -> None:
         """显式释放全部空闲缓冲（同 _YFramePool.release_all，C5）。"""

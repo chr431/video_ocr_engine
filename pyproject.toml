@@ -48,3 +48,6 @@ version = {attr = "engine_config.__version__"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "gpu: 需要 GPU + decord fork + 真值视频（S4 双后端等价门禁）",
+]

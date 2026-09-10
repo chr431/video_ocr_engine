@@ -21,7 +21,6 @@ from typing import Callable
 
 import numpy as np
 
-import engine_config as config
 from segmentation import SegmentStateMachine, similar_decision
 
 logger = logging.getLogger(__name__)
@@ -129,7 +128,7 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
         _GpuRunCtx, _YFramePool, _gpu_frame_stream_cpu,
         _gpu_frame_stream_nvdec, _gpu_prepare_calibration,
         _gpu_release_partial)
-    from .._helpers import _decode_progress_pct, _read_fps_from_vr
+    from .._helpers import _decode_progress_pct
 
     res = GpuRunResult()
     # Cleanup handles are initialized before any calibration/setup can fail.
@@ -144,17 +143,12 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
     _label = spec.backend_label()
     on_gpu = (_label == 'decord/GPU'
               or (_label == 'decord/hybrid' and spec.ocr_on_gpu()))
-    if spec.fps_box[0] is None:
-        _fps = _read_fps_from_vr(vr)
-        spec.fps_box[0] = _fps if _fps else config.DEFAULT_FPS_FALLBACK
+    from ._run_common import begin_reading, compute_frames, ensure_fps
+    ensure_fps(spec, vr)
     res.fps = spec.fps_box[0]
     x1, y1, x2, y2 = spec.roi
     total = len(vr)
-    if (spec.frame_end or 0) > total:
-        logger.warning('frame_end=%s 超出视频总帧数 %d，按片尾截断',
-                       spec.frame_end, total)
-    end = min(spec.frame_end or total, total)
-    frames = list(range(spec.frame_start, end, spec.sample_stride))
+    frames = compute_frames(spec, total)
     if not frames:
         try:
             vr.close()
@@ -162,14 +156,9 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
             pass  # 清理路径：close 失败无需上抛（资源由进程回收）
         raise ValueError(
             f"帧区间为空: frame_start={spec.frame_start}, "
-            f"frame_end={end}, total={total}")
-    hybrid = hasattr(vr, 'hybrid_begin')
+            f"frame_end={spec.frame_end}, total={total}")
     try:
-        if spec.frame_start > 0 and not hybrid:
-            # hybrid 分片定位由生产者在片首完成——跳过外部 seek。
-            vr.seek_accurate(spec.frame_start)
-        if hybrid:
-            vr.hybrid_begin(frames)
+        begin_reading(vr, spec, frames)
     except BaseException:
         logger.debug("hybrid_begin 失败进入回退清理", exc_info=True)
         try:
@@ -386,7 +375,12 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
                 ap, bp, ctx.src_h, ctx.src_w, spec.bin_thresh_ref[0],
                 use_bin, stream=ctx.analyzer._stream_c)
         finally:
-            ya = yb = None   # 池帧引用释放（GC 归还；B6 后仅 host 侧引用计数）
+            # S4：合并判定的池帧显式归还（不再依赖 GC 时机；payload 携带的
+            # 池帧仍由 __del__ 入列回收——owner 生命周期跨线程，无法在此收口）
+            if ya is not None:
+                ctx.y_pool.recycle(ya)
+            if yb is not None:
+                ctx.y_pool.recycle(yb)
         n = ctx.src_h * ctx.src_w
         mean = 255.0 * mad / n if use_bin else mad / n
         return similar_decision(mean, chg,
