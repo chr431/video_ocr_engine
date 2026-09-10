@@ -68,10 +68,10 @@ def fix_index(lines_of: dict[str, int], bytes_of: dict[str, int]) -> None:
     src = "\n".join(out)
 
     n_file, n_line = len(lines_of), sum(lines_of.values())
-    n_byte = sum(bytes_of.values())
-    src = re.sub(r"\*\*\d+\s*个\s*`\.py`\*\*[^\n]*?[\d,]+\s*行[^\n]*?~?\d+\s*KB",
-                 "**%d 个 `.py`**（%s 行 / ~%d KB）"
-                 % (n_file, format(n_line, ","), n_byte // 1024), src, count=1)
+    # S1 修复：头部是全角括号「（12,314 行）」且无 KB 后缀——旧正则按 ASCII
+    # 括号+要求行尾 KB，永不匹配 → 头部合计从未被 --fix 校准过
+    src = re.sub(r"(\*\*\d+\s*个\s*`\.py`\*\*)（[\d,]+\s*行",
+                 r"\1（%s 行" % format(n_line, ","), src, count=1)
 
     m = re.search(r"## D\..*?(?=\n## E\.)", src, re.S)
     if m:

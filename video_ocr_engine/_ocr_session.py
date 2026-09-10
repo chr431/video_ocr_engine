@@ -7,12 +7,15 @@ raw_ready 判定分流。
 """
 from __future__ import annotations
 
+import logging
 import sys
 import threading
 
 import engine_config as config
 from video_utils import _preprocess_standard
 from ._helpers import _ocr_batch_size, _ocr_progress_pct
+
+logger = logging.getLogger(__name__)
 
 
 class OcrSession:
@@ -136,6 +139,7 @@ class OcrSession:
                             ex._ocr_model, engine_type,
                             fill_width=ex._fill_width, num_threads=ot)]
                 except BaseException:
+                    logger.debug("引擎半建状态回收", exc_info=True)
                     # 半建状态（如第二实例构建失败）：已取到的引擎归池
                     while engines:
                         try:

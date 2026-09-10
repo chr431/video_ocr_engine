@@ -54,18 +54,20 @@ sys.path.insert(0, ROOT)
 # 产品代码（不含 tools/ 探针与 tests/）
 PRODUCT = ["engine_config.py", "gpu_setup.py", "ocr_native.py",
            "ocr_trt.py", "segmentation.py", "video_utils.py"]
-PRODUCT += [os.path.join("video_ocr_engine", f)
-            for f in sorted(os.listdir(os.path.join(ROOT, "video_ocr_engine")))
-            if f.endswith(".py")]
+# 包与 tests 递归枚举（S1：config/ domain/ 子包入住后，顶层 listdir 会漏扫；
+# v2 §8.2 的终极方案是按 pyproject 推导，此处先解除"只扫顶层"的硬编码）
+for _dir, _subs, _files in os.walk(os.path.join(ROOT, "video_ocr_engine")):
+    _subs[:] = [s for s in _subs if s != "__pycache__"]
+    for f in sorted(_files):
+        if f.endswith(".py"):
+            PRODUCT.append(os.path.relpath(os.path.join(_dir, f), ROOT))
 ALL_PY = PRODUCT + [os.path.join("tools", f)
                     for f in sorted(os.listdir(HERE)) if f.endswith(".py")]
-ALL_PY += [os.path.join("tests", f)
-           for f in sorted(os.listdir(os.path.join(ROOT, "tests"))) if f.endswith(".py")]
-for sub in ("api", "decode", "pipeline", "segment", "utils"):
-    d = os.path.join(ROOT, "tests", sub)
-    if os.path.isdir(d):
-        ALL_PY += [os.path.join("tests", sub, f)
-                   for f in sorted(os.listdir(d)) if f.endswith(".py")]
+for _dir, _subs, _files in os.walk(os.path.join(ROOT, "tests")):
+    _subs[:] = [s for s in _subs if s != "__pycache__"]
+    for f in sorted(_files):
+        if f.endswith(".py"):
+            ALL_PY.append(os.path.relpath(os.path.join(_dir, f), ROOT))
 
 DOCS = ["README.md", "CLAUDE.md", "docs/PERFORMANCE.md", "docs/ARCHIVE.md",
         "docs/DECISIONS.md", "docs/DEPENDENCIES.md", "tools/INDEX.md"]
@@ -467,7 +469,10 @@ def check_untracked() -> None:
 def check_test_discipline() -> None:
     """[12] 依赖真实视频/真值的测试必须有 skip 保护。"""
     risky = []
-    for rel in [r for r in ALL_PY if r.startswith(("tests" + os.sep, "tests/"))]:
+    # S1：只认 pytest 会收集的 test_*.py——tests/ 下的 record.py 等是
+    # __main__ 工具脚本（有 __main__ 守卫），不是无保护测试
+    for rel in [r for r in ALL_PY if r.startswith(("tests" + os.sep, "tests/"))
+                and os.path.basename(rel).startswith("test_")]:
         src = read(rel)
         needs = bool(re.search(r"racelog_test|ground_truth|D:\\Videos|batch_test", src))
         if not needs:
@@ -534,11 +539,28 @@ def main() -> int:
     ap.add_argument("--strict", action="store_true", help="警告也当失败")
     ap.add_argument("--update-baseline", action="store_true",
                     help="把当前所有 except…pass 登记为存量豁免后退出")
+    ap.add_argument("--since",
+                    help="只检查自 <ref> 以来变更的 .py（编辑时钩子/快检，"
+                         "与 CI 共用本脚本同一份检查代码，v2 §8.7 L2）")
     args = ap.parse_args()
 
     if args.update_baseline:
         update_baseline()
         return 0
+
+    if args.since:
+        global ALL_PY, PRODUCT
+        out = subprocess.run(
+            ["git", "diff", "--name-only", args.since, "--", "*.py"],
+            cwd=ROOT, capture_output=True, text=True).stdout.split()
+        out += subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard", "--", "*.py"],
+            cwd=ROOT, capture_output=True, text=True).stdout.split()
+        changed = {p for p in out if p.endswith(".py")}
+        ALL_PY = [f for f in ALL_PY if f.replace(os.sep, "/") in changed]
+        PRODUCT = [f for f in PRODUCT if f.replace(os.sep, "/") in changed]
+        print("[--since %s] 快检 %d 个变更 .py（git 变更共 %d）"
+              % (args.since, len(ALL_PY), len(changed)))
 
     todo = [int(x) for x in args.only.split(",")] if args.only else sorted(CHECKS)
 

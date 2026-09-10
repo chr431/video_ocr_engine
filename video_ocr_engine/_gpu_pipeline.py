@@ -256,6 +256,7 @@ def _gpu_release_partial(ctx: _GpuRunCtx) -> None:
             try:
                 _p.release_all()
             except BaseException:
+                logger.debug("release_all 清理忽略异常", exc_info=True)
                 pass
     ctx.y_pool = None
     ctx.pool = None
@@ -358,6 +359,7 @@ def _gpu_fallback_to_host(ex, ctx: "_GpuRunCtx", vr, ocr_session,
         try:
             ocr_session.finish()
         except BaseException:
+            logger.debug("ocr_session.finish 清理忽略异常", exc_info=True)
             pass
     _gpu_release_partial(ctx)
     ex._degraded.append('GPU 管线形状不符，回退宿主管线')
@@ -639,6 +641,7 @@ class _GpuPipelineMixin:
                 try:
                     ocr_session.finish()
                 except BaseException:
+                    logger.debug("ocr_session.finish 清理忽略异常", exc_info=True)
                     pass
                 ocr_session = None
             _gpu_release_partial(ctx)
@@ -669,6 +672,7 @@ class _GpuPipelineMixin:
             if hybrid:
                 vr.hybrid_begin(frames)
         except BaseException:
+            logger.debug("hybrid_begin 失败进入回退清理", exc_info=True)
             try:
                 vr.close()
             except Exception:
@@ -681,6 +685,7 @@ class _GpuPipelineMixin:
         try:
             ocr_session = self._start_ocr_session(_ocr_engines)
         except BaseException:
+            logger.debug("OCR 会话启动失败进入清理", exc_info=True)
             try:
                 vr.close()
             except Exception:
@@ -749,6 +754,7 @@ class _GpuPipelineMixin:
                 self, ctx, vr, frames, on_gpu=on_gpu, yuv=yuv,
                 roi=(x1, y1, x2 + 1, y2 + 1))
         except BaseException:
+            logger.debug("GPU 管线异常触发 _cleanup_partial", exc_info=True)
             _cleanup_partial()
             try:
                 vr.close()
@@ -1013,12 +1019,14 @@ class _GpuPipelineMixin:
                 try:
                     producer.join(_PRODUCER_JOIN_TIMEOUT)
                 except BaseException:
+                    logger.debug("producer.join 清理忽略异常", exc_info=True)
                     pass
             _t_consume_end = time.perf_counter()
             self.timing['decode'] = _t_consume_end - t0
             try:
                 ocr_session.finish()
             except BaseException:
+                logger.debug("ocr_session.finish 清理忽略异常", exc_info=True)
                 pass
             self.timing['ocr_tail'] = time.perf_counter() - _t_consume_end
             try:

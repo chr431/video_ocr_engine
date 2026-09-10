@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import os as _os
 
-logger = logging.getLogger("video_ocr_engine.gpu_setup")
+logger = logging.getLogger(__name__)  # S1：与其他根模块一致（P1-6）
 
 # ═══════════════════ 内部状态 ═══════════════════
 _gpu_initialized: bool = False

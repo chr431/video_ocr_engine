@@ -24,6 +24,13 @@
 # 下游做字符串匹配需注意；rep_crop 预览在关滤波下有块状伪影。
 # 需要 decord fork ≥v0.7.13 的透传支持（旧版忽略该 env，行为不变）。
 
+import logging
+
+# 包根 NullHandler（S1，P1-6）：未配置日志的使用方不再经 lastResort 泄
+# WARNING 到 stderr。根模块（ocr_native 等）的 logger 名统一在 S3 模块
+# 迁移时并入本命名空间。
+logging.getLogger(__name__).addHandler(logging.NullHandler())
+
 from video_ocr_engine.extractor import (  # noqa: F401
     FieldExtractor, ExtractedSegment, ExtractionResult,
 )

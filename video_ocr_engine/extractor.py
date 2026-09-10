@@ -707,6 +707,7 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
             if hybrid:
                 vr.hybrid_begin(frames)
         except BaseException:
+            logger.debug("hybrid_begin 失败进入回退清理", exc_info=True)
             try:
                 vr.close()
             except Exception:
@@ -719,6 +720,7 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         try:
             ocr_session = self._start_ocr_session(_ocr_engines)
         except BaseException:
+            logger.debug("OCR 会话启动失败进入清理", exc_info=True)
             try:
                 vr.close()
             except Exception:
@@ -741,9 +743,11 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
             self._bin_thresh = th
             self._prof_end('producer', 'calib_total', _t_cal)
         except BaseException:
+            logger.debug("校准相位异常进入清理", exc_info=True)
             try:
                 ocr_session.finish()
             except BaseException:
+                logger.debug("ocr_session.finish 清理忽略异常", exc_info=True)
                 pass
             try:
                 vr.close()
