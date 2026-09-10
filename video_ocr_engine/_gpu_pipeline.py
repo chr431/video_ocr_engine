@@ -688,27 +688,52 @@ class _GpuPipelineMixin:
         ocr_wall = ocr_session.wall
         _put_ocr = ocr_session.put
 
-        # 批量 autocrop 注入（2026-09-10）：emit 只打 5 元组标记，flush 时
-        # 一次 col_ink_batch 处理整批段。消费端每段的 launch+sync 提交
-        # 开销在 hybrid 引擎口径下把解码供给从 ~2400fps 压到 ~2000fps
-        # （轻消费对照实测可恢复，见 tools/_probe_hybrid_engine_loss.py）。
+        # 批量预处理注入（2026-09-10）：emit 只打 5 元组标记，flush 时
+        # 一次批量 luma + 一次 col_ink_batch 处理整批段（共享消费流，
+        # 整批一次 sync）。消费端每段的 launch+sync 提交开销在 hybrid
+        # 引擎口径下把消费速度压到 ~2000fps（feed 实测 367µs/帧，其中
+        # emit ~170µs；轻消费对照可恢复 2423fps）。
         class _DeferredAutocropper:
             def __init__(self, ex_ref, ctx_ref):
                 self._ex = ex_ref
                 self._ctx = ctx_ref
 
-            def ranges_for(self, devs):
+            def process(self, devs):
+                """5 元组列表 → 6 元组列表：yuv 先批量提取 Y（池帧），
+                再批量 col_ink 得裁切区间（宿主同一余量规则）。"""
                 an = self._ctx.analyzer
                 if an is None:
-                    return [None] * len(devs)
+                    return [(d[0], d[1], d[2], d[3], 0, d[3])
+                            for d in devs]
+                crop_devs = []
+                yfs = []
+                if self._ex._yuv_output:
+                    for d in devs:
+                        yf = self._ctx.y_pool.acquire()
+                        yfs.append(yf)
+                        crop_devs.append(yf.ptr)
+                    an.luma_into_batch(
+                        [d[1] for d in devs], crop_devs,
+                        self._ctx.src_h, self._ctx.src_w,
+                        self._ex._color_range != 1, stream=an._stream_c)
+                else:
+                    crop_devs = [d[1] for d in devs]
                 rows = an.content_range_batch(
-                    [d[1] for d in devs], self._ctx.src_h, self._ctx.src_w,
+                    crop_devs, self._ctx.src_h, self._ctx.src_w,
                     self._ex._bin_thresh, stream=an._stream_c)
-                return [
-                    (self._ex._content_range_to_crop(int(r[0]), int(r[1]),
-                                                     self._ctx.src_w)
-                     if int(r[0]) <= int(r[1]) else None)
-                    for r in rows]
+                outs = []
+                for d, yf, r in zip(devs, yfs or [None] * len(devs), rows):
+                    owner = yf if yf is not None else d[0]
+                    ptr = yf.ptr if yf is not None else d[1]
+                    if int(r[0]) <= int(r[1]):
+                        rng = self._ex._content_range_to_crop(
+                            int(r[0]), int(r[1]), self._ctx.src_w)
+                        xoff, cropw = (rng if rng is not None
+                                       else (0, self._ctx.src_w))
+                    else:
+                        xoff, cropw = 0, self._ctx.src_w
+                    outs.append((owner, ptr, d[2], d[3], xoff, cropw))
+                return outs
 
         ocr_session.autocropper = _DeferredAutocropper(self, ctx)
 
@@ -878,39 +903,39 @@ class _GpuPipelineMixin:
             crop_h = None
             dev_ocr = None
             if _raw:
-                # 零拷贝：gray/CPU 解码直接帧指针；NVDEC yuv 提取 Y 到池帧
-                #（owner=池帧，OCR worker 用毕 GC 归还）。
-                if yuv and on_gpu:
-                    yf = ctx.y_pool.acquire()
-                    ctx.analyzer.luma_into(int(r_dev[1]), int(yf.ptr),
-                                           ctx.src_h, ctx.src_w, _limited,
-                                           stream=ctx.analyzer._stream_c)
-                    # 消费流同步：保证 y_pool 帧在 OCR worker（TRT 流）
-                    # 读取前就绪——autocrop 关闭时这里没有别的同步点兜底。
-                    cudart.cudaStreamSynchronize(ctx.analyzer._stream_c)
-                    dev_ocr = (yf, yf.ptr, ctx.src_h, ctx.src_w)
-                else:
-                    dev_ocr = r_dev
-                # P0-4 GPU 直通：rep 帧宽度自适应裁切（col_ink + 宿主同一
-                # 余量规则）；未裁切时 (0, src_w) 与旧全宽语义逐位一致。
-                # autocropper 注入时推迟到 OCR worker flush 批量执行
-                # （5 元组标记），否则沿用 emit 内逐段路径（兜底）。
                 if getattr(ocr_session, 'autocropper', None) is not None:
+                    # 零拷贝 + 双推迟（2026-09-10）：yuv 的 luma 提取与
+                    # autocrop 都推迟到 OCR worker flush 批量执行（5 元组
+                    # 标记，(owner, ptr, h, w, sharp)）——emit 只剩构元+
+                    # 入队，消费端每段的 launch+sync 提交开销归零。
                     if (self._ocr_autocrop and ctx.src_w > 8
                             and r_sharp >= 3.0):
-                        dev_ocr = (dev_ocr[0], dev_ocr[1], ctx.src_h,
+                        dev_ocr = (r_dev[0], r_dev[1], ctx.src_h,
                                    ctx.src_w, r_sharp)
                     else:
-                        dev_ocr = (dev_ocr[0], dev_ocr[1], ctx.src_h,
+                        dev_ocr = (r_dev[0], r_dev[1], ctx.src_h,
                                    ctx.src_w, 0, ctx.src_w)
                 else:
+                    # 兜底（autocropper 缺席）：emit 内逐段提取+裁切
+                    if yuv and on_gpu:
+                        yf = ctx.y_pool.acquire()
+                        ctx.analyzer.luma_into(int(r_dev[1]), int(yf.ptr),
+                                               ctx.src_h, ctx.src_w,
+                                               _limited,
+                                               stream=ctx.analyzer._stream_c)
+                        # 消费流同步：保证 y_pool 帧在 OCR worker（TRT 流）
+                        # 读取前就绪——autocrop 关闭时这里没有别的同步点兜底。
+                        cudart.cudaStreamSynchronize(ctx.analyzer._stream_c)
+                        base = (yf, yf.ptr, ctx.src_h, ctx.src_w)
+                    else:
+                        base = r_dev
                     xoff, cropw = 0, ctx.src_w
                     _t_ac = time.perf_counter()
-                    rng = _autocrop_device(dev_ocr[1], r_sharp)
+                    rng = _autocrop_device(base[1], r_sharp)
                     if rng is not None:
                         xoff, cropw = rng
                     self._prof_end('producer', 'emit_autocrop', _t_ac)
-                    dev_ocr = (dev_ocr[0], dev_ocr[1], ctx.src_h, ctx.src_w,
+                    dev_ocr = (base[0], base[1], ctx.src_h, ctx.src_w,
                                xoff, cropw)
             else:
                 # 回退（ONNX/无 TRT/引擎未就绪）：代表帧 D2H → 宿主预处理，
@@ -966,8 +991,10 @@ class _GpuPipelineMixin:
                         f"GPU 解码生产者失败: {producer_err[0]!r}"
                     ) from producer_err[0]
                 fi, dev, sharp, cluster = item
+                _t_feed = time.perf_counter()
                 machine.feed(k, fi, sharp, (fi, dev, sharp),
                              cluster=float(cluster))
+                self._prof_end('producer', 'consume_feed', _t_feed)
                 k += 1
             producer.join()
             if producer_err:

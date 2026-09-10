@@ -604,6 +604,34 @@ extern "C" __global__ void col_ink(
     }
 }
 
+extern "C" __global__ void luma_nv12_batch(
+    const long long* __restrict__ srcs,   // 各帧 packed NV12 基址（不要求连续）
+    const long long* __restrict__ dsts,   // 各帧灰度 Y 输出基址
+    int H, int W, int limited, int B) {
+    // 批量 luma_nv12：block = 一帧，逐位逻辑与 luma_nv12 一致（limited/
+    // tv: (y-16)*255/219 → floor(x+0.5) → clip）。供 OCR worker flush
+    // 批量提取 rep 帧 Y 平面——消费端每段一次 launch+sync（~100µs）
+    // 曾是 hybrid 引擎口径的消费瓶颈之一。
+    int b = blockIdx.x;
+    if (b >= B) return;
+    const unsigned char* src = (const unsigned char*)(size_t)srcs[b];
+    unsigned char* out = (unsigned char*)(size_t)dsts[b];
+    long long n = (long long)H * W;
+    for (long long i = threadIdx.x; i < n; i += blockDim.x) {
+        long long y = i / W;
+        int v = src[(size_t)y * W + (i % W)];
+        if (limited) {
+            float val = (float)(v - 16) * (255.0f / 219.0f);
+            float f = floorf(val + 0.5f);
+            if (f < 0.0f) f = 0.0f;
+            else if (f > 255.0f) f = 255.0f;
+            out[i] = (unsigned char)f;
+        } else {
+            out[i] = (unsigned char)v;
+        }
+    }
+}
+
 extern "C" __global__ void col_ink_batch(
     const long long* __restrict__ bases,
     int* __restrict__ ranges,   // (B, 2) [首列, 末列]
@@ -733,10 +761,11 @@ extern "C" __global__ void luma_nv12(
         self._mod = _compile_module(
             self._KERNEL,
             ("analyze_gray", "hist_gray_perframe", "luma_nv12",
-             "sim_pair", "col_ink", "col_ink_batch"))
+             "luma_nv12_batch", "sim_pair", "col_ink", "col_ink_batch"))
         self._kernel = self._mod.get_kernel("analyze_gray")
         self._kernel_hist_pf = self._mod.get_kernel("hist_gray_perframe")
         self._kernel_luma = self._mod.get_kernel("luma_nv12")
+        self._kernel_luma_b = self._mod.get_kernel("luma_nv12_batch")
         self._kernel_sim = self._mod.get_kernel("sim_pair")
         self._kernel_ink = self._mod.get_kernel("col_ink")
         self._kernel_ink_b = self._mod.get_kernel("col_ink_batch")
@@ -771,7 +800,7 @@ extern "C" __global__ void luma_nv12(
                     pass
         for attr in ("_prev_dev", "_histpf_dev", "_summary_dev",
                      "_luma_dev", "_range_dev", "_sim_dev",
-                     "_ptrb_dev", "_rangeb_dev"):
+                     "_ptrb_dev", "_rangeb_dev", "_luma_b_dev"):
             ptr = getattr(self, attr, None)
             if ptr:
                 try:
@@ -782,6 +811,7 @@ extern "C" __global__ void luma_nv12(
         self._prev_size = self._histpf_size = self._summary_size = 0
         self._luma_size = 0
         self._ptrb_size = self._rangeb_size = 0
+        self._luma_b_size = 0
         for attr in ("_stream", "_stream_c"):
             s = getattr(self, attr, None)
             if s is not None and getattr(self, "_owns_stream", False):
@@ -897,6 +927,34 @@ extern "C" __global__ void luma_nv12(
             cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, s)
         cudart.cudaStreamSynchronize(s)
         return out
+
+    def luma_into_batch(self, src_ptrs: list, dst_ptrs: list, H: int,
+                        W: int, limited: bool, stream=None) -> None:
+        """批量多帧 NV12 → 灰度 Y（帧基址不要求连续），逻辑与 luma_into
+        逐位一致。供 OCR worker flush 批量提取 rep 帧 Y 平面：每批一次
+        launch，与 content_range_batch 共用消费流 → 整批一次 sync。"""
+        import numpy as np
+        from cuda.bindings import runtime as cudart
+        from cuda.core import Buffer, LaunchConfig, launch
+        s = self._stream if stream is None else stream
+        B = len(src_ptrs)
+        arr = np.array([int(p) for p in src_ptrs] + [int(p) for p in dst_ptrs],
+                       dtype=np.int64)
+        nbytes = arr.nbytes
+        if getattr(self, "_luma_b_size", 0) < nbytes:
+            if getattr(self, "_luma_b_dev", None) is not None:
+                cudart.cudaFree(self._luma_b_dev)
+            _err, self._luma_b_dev = cudart.cudaMalloc(nbytes)
+            self._luma_b_size = nbytes
+        cudart.cudaMemcpyAsync(
+            self._luma_b_dev, arr.ctypes.data, nbytes,
+            cudart.cudaMemcpyKind.cudaMemcpyHostToDevice, s)
+        launch(s, LaunchConfig(grid=B, block=256),
+               self._kernel_luma_b,
+               Buffer.from_handle(self._luma_b_dev, nbytes),
+               Buffer.from_handle(self._luma_b_dev + B * 8, nbytes),
+               np.int32(H), np.int32(W),
+               np.int32(1 if limited else 0), np.int32(B))
 
     def luma_into(self, src_ptr: int, dst_ptr: int, H: int, W: int,
                   limited: bool, B: int = 1, stream=None) -> None:
