@@ -565,7 +565,7 @@ def main() -> int:
     todo = [int(x) for x in args.only.split(",")] if args.only else sorted(CHECKS)
 
     print("=" * 70)
-    print("项目纪律审计（%d 项）" % len(todo))
+    print("项目纪律审计（%d 项 + 扩展 9 项 = 21）" % len(todo))
     print("=" * 70)
     for k in todo:
         name, fn = CHECKS[k]
@@ -575,6 +575,21 @@ def main() -> int:
         except Exception as e:                      # 单项失败不应中断全量
             print("    检查本身异常：%r" % (e,))
             warn("第 %d 项检查抛异常：%r" % (k, e))
+
+    # S8：扩展审计（13..21，v2 §8.2 目标 21 项）——同一入口，钩子/CI 共用
+    from _audit_ext import CHECKS_EXT
+    for k, (name, fn) in sorted(CHECKS_EXT.items()):
+        print("\n[%2d] %s" % (k, name))
+        try:
+            r = fn()
+            if r is not None:
+                fail(r)
+                print("    ✗ %s" % r)
+            else:
+                print("    ✓")
+        except Exception as e:                      # noqa: BLE001
+            print("    检查本身异常：%r" % (e,))
+            warn("第 %d 项扩展检查抛异常：%r" % (k, e))
 
     print("\n" + "=" * 70)
     for w in warns:

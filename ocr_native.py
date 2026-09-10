@@ -22,8 +22,10 @@ import numpy as np
 import engine_config as config
 from ocr_trt import TrtEngine
 
-# ONNX CPU 性能优化：避免 OpenMP 线程忙等，降低 CPU 空转。
-os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
+# （S8/D7：原 import 期 os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
+# 已删——库 import 不得改写同进程其他 OpenMP 使用方的环境（P0-3：与
+# DECORD_SKIP_LOOP_FILTER 的 DESIGN-REVIEW D1 同一原则）。需要该优化的
+# 使用方自行在导入前设置 env。§10.2 行为变更，金标不受影响。）
 
 log = logging.getLogger(__name__)
 

@@ -133,3 +133,10 @@
 - id: C-33
   status: superseded
   replaced_by: C-08
+- id: C-34
+  conclusion: S7 复评（Q4）——重构后单视频仍受解码供给限制（h264-gpu 3.107s/3000 帧 ≈ NVDEC 1013fps 天花板,解码相位占主导）,ExtractionPool 互补配对的前提成立;但它是新增公共 API,实现待显式立项（触发条件②③未发生:无真实多视频批量场景诉求,S4.5/S5 未做故解码格局未变）
+  status: active
+  premises: 2026-09-10 S0 bench（本机 4060/8GB）;触发条件①已满足
+  revisit: 用户出现多视频批量场景 / S5 内联后解码格局变化 / 显式立项请求
+  evidence: tests/golden/bench_baseline.json;knowledge/benchmarks.yaml
+

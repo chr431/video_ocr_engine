@@ -1,0 +1,19 @@
+# 注入核规则（§8.7 L4 兜底层——每条声明执行机制；prose 须附"为何不能下移"）
+# 事实源；AGENTS.md 为渲染入口（S8 起由本表核对）。
+- rule: 数值不重排——重构不改任何算法数值/阈值语义，行为变更走 §10.2+金标重录
+  mechanism: prose
+  why: 算法意图无法机器执行；其守卫是金标 --verify（ci 层），本条只留方向性提醒
+- rule: 金标漂移即回退——tests/golden --verify 失败的提交不许合入
+  mechanism: ci
+- rule: 改动后跑三个门禁——pytest 全绿 + 双审计 0 + 金标 --verify 28/28
+  mechanism: hook
+- rule: 录金标/跑 A/B 用既有脚本（record.py / bench_baseline.py），不自写对照探针
+  mechanism: script
+- rule: 新增静默吞噬需行内注释豁免（audit 判据）；清理路径须 logger.debug
+  mechanism: ci
+- rule: 旋钮进 config/ 注册表（未注册名不得读取）；默认值依据带锚点
+  mechanism: ci
+- rule: 历史文档（docs/log 大档案）append-only——不注入、不做活性检查、不回写
+  mechanism: ci
+- rule: 测试不依赖真实视频/GPU 时必须可离线跑；依赖者带 skip 守卫或 -m gpu
+  mechanism: ci

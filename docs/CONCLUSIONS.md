@@ -23,6 +23,7 @@
 | C-16 | OCR 裁切余量 10% 优于 0%；裁切即使省不到算力也能提准确率（旧"守卫"前提是错的） | — | ROI 形态 / 分辨率大变 | DECISIONS「第四轮」 |
 | C-31 | decord 0.8.1 + FFmpeg9 升级：seek 本身未变慢（两构建同斜率 ~2.6ms/帧×关键帧距离）；此前"av1 seek 变慢"是 NT=4 探针口径假象 + FFmpeg9 dav1d 线程扩展性改善被引擎旧 av1 线程策略（cores//2=8T，FFmpeg8 时代口径）埋没。修复：av1 → 逻辑核 3/4 钳 [8,24]（不分 OCR 位置），CPU 后端 5.47→2.72s（−50%）、hybrid 1.90→1.80s、host_cpu e2e 6.26→3.42s（−45%）；release 初版 yuv 路径必挂（shim 误用 v1 cuMemcpy2D 导出 → 201），须含 cuMemcpy2D_v2 修复（fork 7ef70f5） | pip wheel 0.8.2（dll md5 6597eea6，已含修复，DLL 随包自带） | fork 再升级 / 驱动或 FFmpeg 再换代 | log 2026-09-08 decord-0.8.1；tools/_ab_decord081/；DEPENDENCIES decord 节 |
 | C-32 | 分段判定/状态机/裁切/预处理的实现唯一出处 = segmentation.py：宿主管线直接调用，GPU kernel 为其设备侧逐位镜像、判定阈值/余量/合并判据引用同一文件；不做插件抽象面（GPU 设备侧实现不可插拔，插件语义=降速到宿主管线，已回退） | 0.11.0；两侧行为由真值用例逐位守护 | 出现真实的 GPU 侧算法插件需求（需设备侧实现面，另立结论） | log 2026-09-09 引擎四方向；tests/ 全套 |
+| C-34 | S7 复评（Q4）——重构后单视频仍受解码供给限制（h264-gpu 3.107s/3000 帧 ≈ NVDEC 1013fps 天花板,解码相位占主导）,ExtractionPool 互补配对的前提成立;但它是新增公共 API,实现待显式立项（触发条件②③未发生:无真实多视频批量场景诉求,S4.5/S5 未做故解码格局未变） | 2026-09-10 S0 bench（本机 4060/8GB）;触发条件①已满足 | 用户出现多视频批量场景 / S5 内联后解码格局变化 / 显式立项请求 | tests/golden/bench_baseline.json;knowledge/benchmarks.yaml |
 
 ## 已取代（指针）
 
