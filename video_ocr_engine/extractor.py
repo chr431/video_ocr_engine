@@ -48,6 +48,7 @@ from ._host_pipeline import (  # noqa: F401
     _HostPipelineMixin,
 )
 from ._gpu_pipeline import _GpuPipelineMixin
+from .pipeline.engine import SegmentEngine, _LegacyBackend
 
 logger = logging.getLogger(__name__)
 
@@ -682,7 +683,17 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
         """入口分发：GPU 全驻留管线（_run_pipelined_gpu）或宿主管线。
 
         _ocr_engines 两条路径都透传（B5：GPU 路径此前丢弃该参数）；
-        None = 从进程级 OCR 引擎池取（ocr_native.acquire_ocr_engine）。"""
+        None = 从进程级 OCR 引擎池取（ocr_native.acquire_ocr_engine）。
+
+        S3-2：可经 VOE_V2_ENGINE=1 走 SegmentEngine 编排（当前引擎内
+        部仍委托本类的 legacy 双驱动器，双跑对账用；S3-3 迁移内部）。"""
+        if SegmentEngine.legacy_engine_requested():
+            return SegmentEngine(
+                _LegacyBackend(self, _ocr_engines)).run().as_tuple()
+        return self._run_pipelined_legacy(_ocr_engines)
+
+    def _run_pipelined_legacy(self, _ocr_engines: list | None = None):
+        """v1 双驱动器分派（S3-3 的迁移对象）。"""
         if self._gpu_pipeline_enabled():
             return self._run_pipelined_gpu(_ocr_engines)
         return self._run_pipelined_host(_ocr_engines)
