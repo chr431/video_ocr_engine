@@ -385,7 +385,8 @@ class FieldExtractor:
         self._backend = ""
         self._ocr_backend_used = ""
         self._bin_thresh = 0
-        frames, segs, texts, confs, rep_frames = self._run_pipelined()
+        _outcome = self._run_pipelined()   # S9-6：RunOutcome（裸 5 元组已退场）
+        frames, segs, texts, confs, rep_frames = _outcome.as_tuple()
         self._frames = frames
         segments = [
             ExtractedSegment(
@@ -867,7 +868,7 @@ class FieldExtractor:
         （ocr_native.acquire_ocr_engine）。引擎按 GPU 门控选择后端
         （gpu_backend / host_backend）；过渡开关 VOE_V2_ENGINE 已随
         用户裁决（实验钩子不承重）删除。"""
-        return SegmentEngine(self).run(_ocr_engines).as_tuple()
+        return SegmentEngine(self).run(_ocr_engines)
 
     def _run_pipelined_host(self, _ocr_engines: list | None = None,
                             _preopened_vr=None):

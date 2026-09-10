@@ -70,6 +70,9 @@
 | `FieldExtractor._run_pipelined_host/_gpu` | 仍在（门面：构建 Spec → 调 pipeline 后端）；驱动主体在 `pipeline/{host,gpu}_backend.py`（HostRunSpec/GpuRunSpec 显式契约） |
 | monkeypatch 点 `_gpu_pipeline.nvdec_available` 等 | **保留**（模块级名字未动） |
 | `TrtEngine.execute/execute_device`、`similar_binary`、4 个键集常量 | 死代码已删，不会复活（审计守卫） |
+| `video_ocr_engine._gpu_pipeline` | 迁 `video_ocr_engine/gpu/device.py`（S9-5）；`nvdec_available`/`tensorrt_available` patch 点随之移动 |
+| `video_ocr_engine._ocr_session` / `_host_pipeline` | shim/模块已删；实现见 `pipeline/ocr_stage.py` / `pipeline/host_backend.py` |
+| 队列/infer 载荷（5 元组） | `SegmentTask` / `InferBatch`（`pipeline/ocr_stage.py`，S9-3）；OCR 结果 `OcrResult` (NamedTuple) |
 
 ## 4. 新增面（可选使用）
 
@@ -85,4 +88,5 @@
 |---|---|
 | 0.12.0 | S0–S8：编排契约化、mixin 消灭、知识库、21 项审计 |
 | 0.13.0 | S9：模块入包 + shim、D6/Q5 激活（本指南 §1/§2.1/§2.2） |
+| 0.13.1 | S9 续：载荷类型化（DeviceRef/SegmentTask/InferBatch）、设备层迁 `gpu/`、打包修复（子包入 wheel） |
 | 0.14.0（计划） | 删除六根模块 shim、`VOE_ENV_WINS`；届时无新破坏 |

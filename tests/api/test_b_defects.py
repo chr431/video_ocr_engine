@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from video_ocr_engine import FieldExtractor
+from video_ocr_engine.pipeline import RunOutcome
 
 
 def _make(**kw):
@@ -46,7 +47,7 @@ def test_b1_second_extract_resets_run_state(monkeypatch):
 
     monkeypatch.setattr(
         FieldExtractor, "_run_pipelined",
-        lambda self: ([], [], [], [], []))
+        lambda self: RunOutcome())
     r = ex.extract()
     assert ex._degraded == []
     assert ex.timing == {}

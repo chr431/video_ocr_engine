@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from video_ocr_engine import FieldExtractor
+from video_ocr_engine.pipeline import RunOutcome
 
 
 def _make(**kwargs):
@@ -38,7 +39,8 @@ def test_extract_sets_frames_and_defaults_keep(monkeypatch):
 
     def fake_run(self):
         self.crops = {1: "crop1", 2: "crop2"}
-        return ([0, 1, 2], [[0, 1], [2]], ["a", "b"], [0.9, 0.8], [1, 2])
+        return RunOutcome([0, 1, 2], [[0, 1], [2]], ["a", "b"],
+                          [0.9, 0.8], [1, 2])
 
     monkeypatch.setattr(FieldExtractor, "_run_pipelined", fake_run)
     result = ex.extract()
@@ -55,7 +57,8 @@ def test_extract_keep_crops_false(monkeypatch):
 
     def fake_run(self):
         self.crops = {}
-        return ([0, 1, 2], [[0, 1], [2]], ["a", "b"], [0.9, 0.8], [1, 2])
+        return RunOutcome([0, 1, 2], [[0, 1], [2]], ["a", "b"],
+                          [0.9, 0.8], [1, 2])
 
     monkeypatch.setattr(FieldExtractor, "_run_pipelined", fake_run)
     result = ex.extract()
@@ -67,7 +70,8 @@ def test_extract_keep_frames_false(monkeypatch):
 
     def fake_run(self):
         self.crops = {1: "crop1", 2: "crop2"}
-        return ([0, 1, 2], [[0, 1], [2]], ["a", "b"], [0.9, 0.8], [1, 2])
+        return RunOutcome([0, 1, 2], [[0, 1], [2]], ["a", "b"],
+                          [0.9, 0.8], [1, 2])
 
     monkeypatch.setattr(FieldExtractor, "_run_pipelined", fake_run)
     result = ex.extract()
