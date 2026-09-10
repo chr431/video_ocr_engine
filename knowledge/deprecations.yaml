@@ -2,7 +2,7 @@
 - name: OCR_PAD_SMALL
   kind: env
   replaced_by: "FieldExtractor(fill_width=...)"
-  deprecated_in: "0.12.0"
+  deprecated_in: "0.13.0"
   remove_in: "0.14.0"
   reason: "v1 env 盖过显式参数是排查陷阱（Q5 裁决：显式参数 > env > 默认；VOE_ENV_WINS 逃生门同期移除）"
 - name: VOE_ENV_WINS
@@ -17,3 +17,15 @@
   deprecated_in: "pending"
   remove_in: "pending"
   reason: "F-6 顺带发现（B8 候选）：stride>1 时 rep_frame 落网格外；金标已冻结现行为，修复须走 §10.2 行为变更流程并重录向量"
+- name: 六根模块 shim（engine_config/segmentation/video_utils/ocr_native/ocr_trt/gpu_setup）
+  kind: import-path
+  replaced_by: "video_ocr_engine.{config.constants,domain.segmentation,domain.video_utils,ocr.native,ocr.trt,gpu.context}"
+  deprecated_in: "0.13.0"
+  remove_in: "0.14.0"
+  reason: "Q3 裁决;模块别名式 shim 保留全部符号与同一性;迁移表 docs/MIGRATION.md §1"
+- name: 调用期 env 语义（构造后改 env 仍生效）
+  kind: behavior
+  replaced_by: "构造期一次冻结（D6）;换配置=新建实例"
+  deprecated_in: "0.13.0"
+  remove_in: "0.14.0"
+  reason: "同批 OCR 内 gamma 变化的正确性风险;迁移指南 §2.1"
