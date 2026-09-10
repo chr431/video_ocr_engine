@@ -91,16 +91,28 @@ for seg in result.segments:
 
 `decode_backend="auto"` 的默认逻辑：**恒为 NVDEC 优先，不可用时回退 CPU**
 （刻意决策，2026-09-10 重申：弱 CPU 上 h264 软解可能慢于 NVDEC，且 CPU
-解码必然引入资源争用与整机功耗上升，NVDEC 稳妥优先，不按编码分流）。在
-强多核 CPU 且片源为 h264 时，可**显式**选 `decode_backend="cpu"` 换取更高
-软解吞吐（本机实测快 1.7~2.8×，见 `docs/CONCLUSIONS.md` C-04/C-08）；HEVC /
-AV1 保持 `auto` 或 `nvdec`（NVDEC 快 1.5~2.2×）。
+解码必然引入资源争用与整机功耗上升，NVDEC 稳妥优先，不按编码分流）。
+
+**按编码选后端**（本机 7945HX + RTX 4060，3000 帧实测热轮中位；换机需按
+`docs/CONCLUSIONS.md` C-04/C-05/C-08 的复评条件重测）：
+
+| 片源编码 | 最快 | 次优 | `auto`（NVDEC） | 相对最优 |
+|---|---|---|---|---|
+| **h264** | `decode_backend="cpu"` 0.99 s | `"hybrid"` 1.38 s | 3.11 s | **慢 3.1×** |
+| **hevc** | `auto`/`"nvdec"` 1.53 s | `"hybrid"` 1.58 s | 1.53 s | 已最优 |
+| **av1** | `"hybrid"` 1.37 s | `"nvdec"` 1.82 s | 1.82 s | **慢 33%** |
+
+即：h264 且 CPU 核多时**显式**选 `cpu`；av1 选 `hybrid`；hevc 保持默认。
+（`auto` 不自动分流，是上面那条刻意决策。）
 
 `decode_backend="hybrid"` 由 **decord fork 原生实现**（≥v0.7.15）：同一实例内
 NVDEC 与 CPU 软解并行解码，分片与负载调度在 decord 内部完成，引擎只透传解码
 参数（参数面与 `cpu` / `nvdec` 完全一致，含 `sample_stride`）。要求 NVDEC 可用；
 OCR 在 GPU（TRT）时走 `hybrid_gpu` 上下文，输出帧驻留显存、直通零拷贝管线；
 OCR 在 CPU 时输出宿主帧。打开失败自动降级（`meta.degraded_reason` 有记录）。
+CPU 分片线程档位默认 **核数//2 钳 [8,16]**（实测 12→16：h264 −6.5%、hevc −12.7%）；
+差距分解（解码器调度侧 23–33% 与引擎 CPU 争用 10–27%）见
+`docs/log/2026-09-11-hybrid差距分解.md`。
 
 > **迁移记录**：原项目层实现（hybrid_decode.py，已于 2026-09-06 删除）由 decord
 > 原生实现取代（commit `fd3bcda`）；决策/历史见 `docs/log/DECISIONS.md` 与

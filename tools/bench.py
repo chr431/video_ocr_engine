@@ -35,19 +35,27 @@ CONFIGS = {
     "av1-nvdec": dict(video="test6_av1", decode_backend="nvdec"),
     "h264-hybrid": dict(video="test5", decode_backend="hybrid"),
     "av1-hybrid": dict(video="test6_av1", decode_backend="hybrid"),
+    # S6 续（hybrid 诊断）：hevc 的 hybrid/CPU 侧此前没进矩阵，而解码器
+    # 层实测 hybrid_gpu(2311) > nvdec(2032) —— 引擎口径必须自己量。
+    "hevc-hybrid": dict(video="test6_hevc", decode_backend="hybrid"),
+    "hevc-cpu": dict(video="test6_hevc", decode_backend="cpu"),
+    "av1-cpu": dict(video="test6_av1", decode_backend="cpu"),
 }
 
 
 def _round(cfg_name: str, window: int, telemetry: str, keep_crops: bool,
-           ocr_backend: str) -> dict:
+           ocr_backend: str, rep_format: str = "") -> dict:
     from video_ocr_engine import FieldExtractor
     cfg = CONFIGS[cfg_name]
     vid = cfg["video"]
+    kw = {}
+    if rep_format:
+        kw["rep_crop_format"] = rep_format
     ex = FieldExtractor(VIDS[vid], ROI["test5" if vid == "test5" else "test6"],
                         frame_start=0, frame_end=window,
                         decode_backend=cfg["decode_backend"],
                         ocr_backend=ocr_backend, keep_crops=keep_crops,
-                        sample_stride=cfg.get("sample_stride", 1))
+                        sample_stride=cfg.get("sample_stride", 1), **kw)
     t0 = time.perf_counter()
     r = ex.extract()
     wall = time.perf_counter() - t0
@@ -81,7 +89,7 @@ def cmd_run(args) -> int:
         rounds = []
         for i in range(args.rounds):
             rec = _round(name, args.window, args.telemetry, args.keep_crops,
-                         args.ocr_backend)
+                         args.ocr_backend, args.rep_format)
             rec["round"] = i + 1
             rounds.append(rec)
             print("  %-12s round %d  %.4fs  %d 段" % (
@@ -289,8 +297,8 @@ def cmd_ab(args) -> int:
     pairs: list = []
     for i in range(args.repeat):
         row = {}
-        for tag, label, envspec in ((("A"), args.a, args.env_a),
-                                    (("B"), args.b, args.env_b)):
+        for tag, label, envspec, extra in (("A", args.a, args.env_a, args.args_a),
+                                           ("B", args.b, args.env_b, args.args_b)):
             lab = "%s#%d" % (label, i)
             env = dict(os.environ)
             for kv in filter(None, envspec.split(",")):
@@ -303,6 +311,7 @@ def cmd_ab(args) -> int:
                    "--ocr-backend", args.ocr_backend]
             if args.keep_crops:
                 cmd.append("--keep-crops")
+            cmd += [a for a in extra.split() if a]
             r = subprocess.run(cmd, env=env, capture_output=True, text=True,
                                encoding="utf-8", errors="replace")
             if r.returncode != 0:
@@ -391,6 +400,7 @@ def main() -> int:
     r.add_argument("--telemetry", default="std", choices=("off", "std", "full"))
     r.add_argument("--ocr-backend", default="tensorrt")
     r.add_argument("--keep-crops", action="store_true")
+    r.add_argument("--rep-format", default="", help="yuv|gray（默认按引擎规则）")
     r.add_argument("--label", required=True)
     r.set_defaults(func=cmd_run)
     d = sub.add_parser("diff", help="两个 label 的逐指标对比（D10 双档）")
@@ -430,6 +440,8 @@ def main() -> int:
     ab.add_argument("--telemetry", default="std")
     ab.add_argument("--ocr-backend", default="tensorrt")
     ab.add_argument("--keep-crops", action="store_true")
+    ab.add_argument("--args-a", default="", help="A 变体附加 CLI 参数（空格分隔）")
+    ab.add_argument("--args-b", default="", help="B 变体附加 CLI 参数")
     ab.add_argument("--hard", type=float, default=5.0)
     ab.add_argument("--cooldown", type=float, default=8.0,
                     help="每组之间的冷却秒数（对抗 GPU 热降）")

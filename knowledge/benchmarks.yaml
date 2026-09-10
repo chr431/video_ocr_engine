@@ -69,4 +69,28 @@
   rw1_vs_rw64_hot_pct: -5.05
   rw1_vs_rw256_hot_pct: -11.16
   adaptive_rule: roi_aspect <= floor/OCR_TARGET_H -> window=1
+# ── hybrid 差距分解（S6 续轮，2026-09-11；详见 docs/log/2026-09-11-hybrid差距分解.md）──
+- metric: hybrid_decode_capability      # 纯解码 fps（ROI/gray/批 64/3000 帧，fork dll）
+  h264: {cpu: 3573, nvdec: 983, hybrid_host: 3783, hybrid_gpu: 3052, ideal_parallel_sum: 4556}
+  hevc: {cpu: 754, nvdec: 2036, hybrid_host: 1833, hybrid_gpu: 2116, ideal_parallel_sum: 2790}
+  av1:  {cpu: 1112, nvdec: 1694, hybrid_host: 2686, hybrid_gpu: 2174, ideal_parallel_sum: 2806}
+- metric: hybrid_engine_gap_pct          # 引擎吃掉多少（L1 hybrid_gpu → L3 热轮墙钟）
+  h264: 18
+  hevc: 10-27
+  av1: 0
+- metric: hybrid_routing_3000            # 出厂 dll 实测最优路由（引擎热轮中位 s）
+  h264: {best: cpu, best_s: 0.994, hybrid_s: 1.384, nvdec_s: 3.107}
+  hevc: {best: nvdec, best_s: 1.528, hybrid_s: 1.577, cpu_s: 4.249}
+  av1:  {best: hybrid, best_s: 1.372, nvdec_s: 1.818, cpu_s: 2.898}
+  auto_policy: NVDEC 优先（C-08 用户决策，未改）
+- metric: fork_dll_unpublished_value   # DECORD_LIBRARY_PATH=build-081fix vs stock 0.8.2
+  h264_hybrid_engine_pct: -12.73
+  av1_hybrid_engine_pct: -11.19
+  h264_hybrid_gpu_decode_pct: 8.2
+  hevc_hybrid_gpu_decode_pct: -8.4      # fork 回退：发布前需复核 hevc
+- metric: hybrid_cpu_threads_policy     # 交错 A/B（3000 帧热轮）
+  shipped_12_to_16_h264_pct: -6.49
+  shipped_12_to_16_hevc_pct: -12.72
+  fork_12_to_16_h264_pct: -3.91
+  new_default: cores//2 clamped [8,16]
 

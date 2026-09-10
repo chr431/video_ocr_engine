@@ -31,11 +31,11 @@
   evidence: PERF §21 §22.1；log 2026-09-08
 
 - id: C-05
-  conclusion: hybrid = decord fork 原生（≥v0.7.15）：TRT 走 hybrid_gpu 显存直通、CPU OCR 走宿主帧。0.8.2 发布版任一编码不优于最优单侧；**本地预路由+池深修复（未发布）后 av1 上 hybrid 成为最快路径**（引擎口径 ≈ 最优单侧 ±3-5%，逐项数字见 evidence）
+  conclusion: hybrid = decord fork 原生：TRT 走 hybrid_gpu、CPU OCR 走宿主帧。**S6 后重测**：消费端不再是共享瓶颈（av1 hybrid 引擎损耗 0%、1.37s 快过 NVDEC 33%），剩余差距 = 解码器调度侧 23–33%（hybrid_gpu 仅达"两路吞吐相加"理想的 67–77%）+ h264/hevc 引擎 CPU 争用 10–27%
   status: active
-  premises: 本地 dll（fork 73e5540/d94d92e/3b96c6f，未推送/未发 wheel）；0.8.2 pip wheel 不含
-  revisit: fork 发布 wheel 后重测；单侧速率格局再变
-  evidence: log 2026-09-10-hybrid联调深挖 §K7/K8/P；tools/_probe_hybrid_sum_gap
+  premises: 本机 4060/16C32T；出厂 0.8.2 wheel（不含 fork 预路由/池深修复）
+  revisit: fork 发布 wheel / S5 内联立项 / 核数格局变化
+  evidence: log 2026-09-11-hybrid差距分解；benchmarks hybrid_*
 
 - id: C-06
   status: superseded

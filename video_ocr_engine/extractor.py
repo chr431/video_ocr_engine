@@ -655,25 +655,23 @@ class FieldExtractor:
                 from decord import hybrid as _hy, hybrid_gpu as _hyg
                 _ct = self._rc.decode_hybrid_cpu_threads
                 if _ct <= 0:
-                    # 延续项目层 hybrid 的 CPU 线程分档（见下方 v5 注释的历史
-                    # 依据）：核数 3/8，钳 [MIN, MAX]。av1 例外：fork 0.8.1
-                    # (FFmpeg9) 的 dav1d 帧线程扩展到 ~逻辑核 3/4 才饱和
-                    # （NT16 797fps → NT24 1164fps → NT32 1178fps），沿用手持
-                    # 策略会让 hybrid 的 CPU 分片喂不满（见 _decode_num_threads
-                    # av1 分支的实测）。
                     if self._codec == 'av1':
+                        # av1 例外（fork 0.8.1/FFmpeg9 dav1d 帧线程扩展性）：
+                        # NT16 797fps → NT24 1164 → NT32 1178，策略见
+                        # _decode_num_threads 的 av1 分支（本机 = 24）。
                         _ct = self._decode_num_threads(codec='av1') or _ct
-                    elif self._decord_has_hybrid_preroute():
-                        # fork ≥0.8.3（chunk 预路由）下 decode-only nt16 比
-                        # nt12 高：hevc 2907 vs 2771、h264 2692 vs 2412
-                        # （2026-09-10 路线图轮，`_probe_roadmap_decode`）。
-                        # 0.8.2 同 nt 反向（hevc 2344→2192 回退），按版本门控。
+                    else:
+                        # S6 续实测（引擎口径交错 A/B，3000 帧热轮）：**12 → 16
+                        # 螺纹更好**——h264-hybrid **−6.5%**（1.4797→1.3836）、
+                        # hevc-hybrid **−12.7%**（1.8070→1.5771），av1 不在本
+                        # 分支。旧档位"核数 3/8 = 12"来自项目层 hybrid 时代，
+                        # 已不适用；**新旧 dll 同向**（fork dll 下 h264 −3.9%），
+                        # 故取消原先按 `_decord_has_hybrid_preroute` 的版本门控
+                        # （两分支合并为 核数//2 钳 [MIN, MAX]）。
+                        # 复评触发：decord 再换代 / 核数格局变化（>32 核时
+                        # //2 会超 MAX=16，档位需重测）。
                         _ct = max(config.HYBRID_CPU_THREADS_AUTO_MIN,
                                   min((_os.cpu_count() or 8) // 2,
-                                      config.HYBRID_CPU_THREADS_AUTO_MAX))
-                    else:
-                        _ct = max(config.HYBRID_CPU_THREADS_AUTO_MIN,
-                                  min((_os.cpu_count() or 8) * 3 // 8,
                                       config.HYBRID_CPU_THREADS_AUTO_MAX))
                 _hctx = _hyg(0) if self._ocr_on_gpu() else _hy(0)
                 vr = self._open_decord_reader(_hctx, roi_kw, num_threads=_ct)
@@ -690,9 +688,11 @@ class FieldExtractor:
     def _decord_has_hybrid_preroute(self) -> bool:
         """decord ≥0.8.3（hybrid chunk 预路由 + 池深修复）判定。
 
-        按 `decord.__version__` 门控（注意 DECORD_LIBRARY_PATH 开发态
-        换 dll 不改 Python 包版本号——此时判 False 走旧档位，可用
-        HYBRID_CPU_THREADS 显式覆盖）。
+        **S6 续起不再是线程档位的判据**（两档合并为 核数//2，见 `_open_vr`
+        的 hybrid 分支注释：新旧 dll 上 16 螺纹都更好）。保留本方法供
+        **诊断/日志**用：`DECORD_LIBRARY_PATH` 开发态换 dll 不改 Python 包
+        版本号，故此判定对"实际加载的 dll"并不可靠——需要能力探测时应按
+        v2 §17.4 D-2 走 `ctx.capabilities()`（S5 内联落地时替换）。
         """
         try:
             import decord as _d
@@ -705,7 +705,7 @@ class FieldExtractor:
                 if len(parts) == 3:
                     break
             return tuple(parts) >= (0, 8, 3)
-        except Exception:  # noqa: BLE001 版本不可知 → 保守走旧档位
+        except Exception:  # noqa: BLE001 版本不可知 → 保守判 False
             return False
 
     def _decord_format(self) -> str:
