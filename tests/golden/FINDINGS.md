@@ -15,6 +15,22 @@
   `OCR_TARGET_H × ratio ≤ 引擎 max_input_w`，违反即 `ValueError`——对齐 B3
   的"未知值构造期失败"原则）；设备执行路径的引擎错误必须原样上抛。
 
+## F-6 · GPU 外提第三处时序耦合 + 顺带发现 v1 隐匿缺陷（2026-09-10 S3-3c）
+
+- **现象**：GPU 驱动迁入 `pipeline/gpu_backend.py` 后 27/28——仅 B-stride8
+  段结构相同但 289/339 个 rep_frame 漂移；spy 显示新旧 sharp/cluster 数值
+  **完全相同**、仅帧号序列不同（旧 401,402… 连续 / 新 408,416… 网格）。
+- **根因（F-6）**：旧代码在 `open_vr()` **之后**用 `self._backend` 判
+  `on_gpu`（NVDEC 设备直通 vs CPU 解码+H2D 分支）；迁移门面在 spec 构造期
+  （open 之前）求值——B1 重置后标签为空 → 恒走 CPU 分支。stride=1 时两条
+  流输出恰好逐位相同（故 27 例全过），stride>1 才暴露。
+- **修复**：`on_gpu` 判定移回 `run_gpu_pipeline` 内部、open 之后。
+- **顺带发现（v1 隐匿缺陷候选 B8）**：NVDEC 帧流主体批 yield `f0 + k`
+  （连续帧号），`sample_stride>1` 时 rep_frame 落在采样网格之外（如
+  stride8 下出现 401）。段边界取自 frames 列表故正确；仅代表帧号受影响。
+  金标已冻结该行为（S3 逐位一致原则）；修复属行为变更，留待 §10.2 流程
+  与 S5+ 裁决。
+
 ## F-5 · 会话契约化抓获第二处活读时序耦合（2026-09-10 S3-3b）
 
 - **现象**：OcrSession 改吃 SessionSpec 后，GPU 路径 `--verify` 崩于

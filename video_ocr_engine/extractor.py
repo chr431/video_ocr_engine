@@ -48,6 +48,7 @@ from ._host_pipeline import (  # noqa: F401
 )
 from ._gpu_pipeline import _GpuPipelineMixin
 from .pipeline.engine import SegmentEngine, _LegacyBackend
+from .pipeline.gpu_backend import GpuRunSpec, run_gpu_pipeline
 from .pipeline.host_backend import HostRunSpec, run_host_pipeline
 
 logger = logging.getLogger(__name__)
@@ -526,6 +527,50 @@ class FieldExtractor(_GpuPipelineMixin, _HostPipelineMixin):
             ONNX，此时解码线程偏多只是轻微过订阅，实测不劣化）。
             """
         return (self._ocr_backend or 'auto').lower() != 'cpu'
+
+    def _run_pipelined_gpu(self, _ocr_engines: list | None = None):
+        """GPU 全驻留管线门面（S3-3c）：构建显式 GpuRunSpec → 调用
+        pipeline.gpu_backend.run_gpu_pipeline → 同步结果回实例。
+
+        驱动主体已迁入 gpu_backend（B4 autocropper / B5 y_pool 构造注入）；
+        形状不符回退经 fallback_to_host 回调复用已打开的 reader（C10）。"""
+        self._gpu_pipeline_mode = True   # 会话启动前置位（F-5）
+        spec = GpuRunSpec(
+            frame_start=self._frame_start, frame_end=self._frame_end,
+            sample_stride=self._sample_stride, roi=tuple(self._roi),
+            buffer_size=self._buffer_size,
+            C=self._C, merge_similar=self._merge_similar,
+            merge_similar_threshold=self._merge_similar_threshold,
+            merge_max_changed_pixels=self._merge_max_changed_pixels,
+            keep_crops=self._keep_crops, yuv_output=self._yuv_output,
+            color_range=self._color_range, ocr_autocrop=self._ocr_autocrop,
+            bin_thresh_ref=[self._bin_thresh],
+            backend_label=lambda: self._backend,
+            ocr_on_gpu=self._ocr_on_gpu,
+            merge_effective_mode=self._merge_effective_mode,
+            content_range_to_crop=self._content_range_to_crop,
+            open_vr=self._open_vr,
+            start_ocr_session=self._start_ocr_session,
+            batch_luma=self._batch_luma,
+            fallback_to_host=lambda engines, vr: self._run_pipelined_host(
+                engines, vr),
+            on_degraded=self._degraded.append,
+            progress=self._progress, cancel=self._cancel,
+            prof_end=self._prof_end,
+            on_bin_thresh=self._set_bin_thresh,
+            fps_box=[self._fps])
+        res = run_gpu_pipeline(spec, _ocr_engines)
+        if res.fell_back_to_host:
+            self._degraded.append('GPU 管线形状不符，回退宿主管线')
+            return self._run_pipelined_host(res.fallback_engines)
+        self._fps = spec.fps_box[0]
+        self._bin_thresh = res.bin_thresh
+        self.timing.update(res.timing)
+        self._n_segments = res.n_segments
+        self.crops = res.crops
+        self._ocr_texts = res.texts
+        self._ocr_confs = res.confs
+        return res.as_tuple()
 
     def _decode_num_threads(self, codec: str | None=None) -> int | None:
         """CPU 软解的 decord FFmpeg 帧线程数（按 OCR 是否在 GPU 分档）。
