@@ -61,6 +61,7 @@ def cuda_bindings(monkeypatch):
     monkeypatch.setattr(cudart, "cudaStreamDestroy",
                         lambda s: rec["destroys"].append(s))
     monkeypatch.setattr(cudart, "cudaMemcpy", lambda *a, **k: None)
+    monkeypatch.setattr(cudart, "cudaMemcpyAsync", lambda *a, **k: None)
     return rec
 
 
@@ -76,6 +77,26 @@ def test_reducer_realloc_frees_old_prob_dev(cuda_bindings):
     red.reduce(0, (16, 4))
     assert 888 in cuda_bindings["freed"], \
         f"扩容应释放旧 _prob_dev，实际释放序列: {cuda_bindings['freed']}"
+
+
+def test_reducer_d2h_is_async_on_reducer_stream(cuda_bindings, monkeypatch):
+    """S6-c / PI-14：归约 D2H 必须走**异步 + 本流同步**，不得用阻塞 cudaMemcpy。
+
+    阻塞 cudaMemcpy 是隐式**设备级**同步，会连带排干生产者/分析流上在飞的
+    工作（decode∥analyze 重叠被破坏）。本测试用假 cudart 记录调用序列锁死
+    这一不变式：async 调用 ≥2 次、同流同步恰 1 次、阻塞拷贝 0 次。
+    """
+    from cuda.bindings import runtime as cudart
+    calls = {"async": [], "blocking": []}
+    monkeypatch.setattr(cudart, "cudaMemcpyAsync",
+                        lambda *a, **k: calls["async"].append(a))
+    monkeypatch.setattr(cudart, "cudaMemcpy",
+                        lambda *a, **k: calls["blocking"].append(a))
+    red = _make_reducer(stream=1001, owns=False)
+    red.reduce(0, (16, 4))
+    assert not calls["blocking"], "热路径不许出现阻塞 cudaMemcpy（PI-14）"
+    assert len(calls["async"]) == 2, "idx/prob 两次 D2H 都应异步"
+    assert cuda_bindings["syncs"] == [1001], "应收尾同步本流一次"
 
 
 def test_reducer_release_destroys_only_owned_stream(cuda_bindings):

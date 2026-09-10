@@ -21,5 +21,6 @@
 | `diag.subprobe` | `TRT_SUBPROBE` | bool | `False` | ec:85 |
 | `diag.bounds_debug` | `DEBUG_BOUNDS` | bool | `False` | ec:86 |
 | `diag.telemetry` | `VOE_TELEMETRY` | str | `std` | v2:8.6-r5 |
+| `diag.report_file` | `VOE_REPORT_FILE` | str | `` | v2:8.6-N3 |
 
 （语义备注与解析细节见 config/knobs.py 各 Knob 的 note 字段；v1 依据全文在 engine_config.py 注释，锚点 `ec:<行>`。）

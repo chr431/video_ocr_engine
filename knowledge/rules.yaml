@@ -7,8 +7,11 @@
   mechanism: ci
 - rule: 改动后跑三个门禁——pytest 全绿 + 双审计 0 + 金标 --verify 28/28
   mechanism: hook
-- rule: 录金标/跑 A/B 用既有脚本（record.py / bench_baseline.py），不自写对照探针
+- rule: 录金标/跑 A/B 用既有脚本（record.py / bench.py），不自写对照探针
   mechanism: script
+- rule: 性能 A/B 必须交错测量——同码连跑两次可差 7.7%（GPU 热降），顺序 A/B 会把漂移记到 B 头上
+  mechanism: script
+  # 执行体 = tools/bench.py ab（独立子进程 + 逐对符号一致性 + 冷却）
 - rule: 新增静默吞噬需行内注释豁免（audit 判据）；清理路径须 logger.debug
   mechanism: ci
 - rule: 旋钮进 config/ 注册表（未注册名不得读取）；默认值依据带锚点

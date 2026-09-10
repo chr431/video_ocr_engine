@@ -71,4 +71,16 @@ def test_session_spec_carries_frozen_rc(monkeypatch):
     spec = ex._build_session_spec()
     assert spec.gamma == 1.8
     assert spec.ocr_batch == 24
-    assert spec.reorder_window == 64
+    # S6-f：reorder_window 是**生效值**——本 ROI（101×51）的宽高比 1.98 够不到
+    # pad 下限比 224/48=4.67 → 按宽分组不可能改变 pad 宽 → 收敛到 1
+    assert spec.reorder_window == 1
+    assert ex._ocr_reorder_window == 64           # 旋钮本身仍解析为 64
+
+
+def test_reorder_window_kept_for_wide_roi(monkeypatch):
+    """判据是"ROI 上界宽高比"：宽 ROI（内容能超过下限）保留原窗口。"""
+    from video_ocr_engine.pipeline.ocr_stage import effective_reorder_window
+    # 407×25 字幕 ROI：16.3 > 4.67 → 分组有效，保留 64
+    assert effective_reorder_window(407, 25, 224, 0.0, 64) == 64
+    # force_aspect>0：输入被压到固定宽高比 → 分组无意义
+    assert effective_reorder_window(407, 25, 224, 1.5, 64) == 1

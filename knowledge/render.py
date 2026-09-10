@@ -123,5 +123,19 @@ def write() -> int:
     return 0
 
 
+def _utf8_stdout() -> None:
+    """GBK 控制台（cp936）下 ✓/✗ 会 UnicodeEncodeError 崩掉校验（实测 2026-09-10）。
+
+    仓库既有约定：中文/符号输出前 reconfigure 为 UTF-8（tools/_doc_section.py:50
+    同款）。测试以 encoding="utf-8" 解码子进程输出，因此这里必须是 UTF-8。
+    """
+    for s in (sys.stdout, sys.stderr):
+        try:
+            s.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError, OSError):
+            pass  # 非 TextIOWrapper（被重定向/包裹）时无需重配，按原编码输出
+
+
 if __name__ == "__main__":
+    _utf8_stdout()
     sys.exit(write() if "--write" in sys.argv else check())

@@ -1,7 +1,7 @@
-# 权威性能数字（S0 基线，2026-09-10；机器：7945HX + RTX 4060 Laptop 8GB，
-# driver 610.88，decord fork 0.8.2，TRT sm89；3000 帧窗口热轮中位）
-# 事实源增量走 tests/golden/bench_baseline.json（原始记录）；
-# 本表为人工确认的权威口径。
+# 权威性能数字（S0 基线 + S6 轮，2026-09-10；机器：7945HX + RTX 4060 Laptop
+# 8GB，driver 610.88，decord fork 0.8.2，TRT sm89；3000 帧窗口热轮中位）
+# 事实源：S0 = tests/golden/bench_baseline.json；S6 起 = bench/registry.jsonl
+# （append-only RunReport）。本表为人工确认的权威口径。
 - metric: e2e_wall_3000
   h264-gpu-nvdec-trt: 3.107
   h264-cpu-cpu-trt: 1.131
@@ -19,3 +19,39 @@
   texts: bitwise
   conf_median_delta: 0.0
   conf_worst_delta: 0.00454
+# ── S6 轮（交错 A/B：A/B/A/B 独立子进程 + 逐对符号一致性）──────────────
+- metric: s6_measurement_env
+  same_code_two_runs_delta_pct: 7.7    # 同码连跑两次最大散布 → A/B 必须交错
+  gpu_thermal_slowdown_cumulative_s: 87.7
+  method: tools/bench.py ab
+- metric: s6_telemetry_overhead_pct    # PI-15 门禁（3000 帧 ×3 轮）
+  off_s: 3.1269
+  std_vs_off_pct: -0.152
+  full_vs_off_pct: 0.078
+  verdict: pass
+- metric: s6_coldstart_3000            # h264-cpu 冷/热相位
+  cold_wall_s: 1.799
+  hot_wall_s: 1.215
+  cold_engine_init_s: 0.410
+  cold_calibrate_s: 0.501            # 含 NVRTC 首编 0.4s（cubin 缓存后 0.09s）
+  cuda_core_import_s: 0.224
+  trt_deserialize_s: 0.39
+- metric: s6_warmup_1500               # 显式预热（h264-cpu）
+  warmup_s: 0.500
+  first_extract_after_warmup_s: 0.798
+  engine_init_after_warmup_s: 0.00007
+  first_video_delta_pct: -33
+- metric: s6_consumer_submission       # 交错 A/B 冷启动（各 3 对）
+  reduce_d2h_sync_to_async_h264cpu_pct: -5.19
+  keep_crops_d2h_batched_h264gpu_pct: -2.45
+  pi14_gpu_ctc_bitwise: pass
+- metric: s6_ocr_fill
+  fill_pct: 40.2
+  pad_cols: 224
+  content_cols_avg: 90
+  pad_224_to_320_hot_pct: 3.66
+- metric: s6_reorder_window_3000       # 交错 A/B 4 对，符号 4/4 一致
+  rw1_vs_rw64_hot_pct: -5.05
+  rw1_vs_rw256_hot_pct: -11.16
+  adaptive_rule: roi_aspect <= floor/OCR_TARGET_H -> window=1
+

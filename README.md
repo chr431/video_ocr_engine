@@ -170,6 +170,25 @@ import threading
 threads = [threading.Thread(target=extract, args=(video, backend)) for ...]
 ```
 
+**显式预热**（可选）：冷启动的 OCR 引擎构建（TRT 反序列化 ~0.4s）可以提前：
+
+```python
+ex = FieldExtractor(...)
+ex.warmup()          # 把一次性成本挪到此刻（0.4–0.5s）
+ex.extract()         # 首个 extract 的 ocr.engine_init → ~0.0001s，首视频 −33%
+```
+
+预热**不改变总吞吐**（只是把成本提前），也不会自动触发；它服务"要连跑
+多个视频 / 需要稳定首帧延迟"的场景。批量循环前对**任意一个**实例调一次
+即可（引擎池按"模型/引擎类型/pad 下限/线程数"共享）。
+
+**运行报告**：`extract()` 返回的 `result.meta["report"]` 里带一份 RunReport
+（schema 版本化）：相位 span、全部计数器、PI 健康判定（热池 `engine_init`
+<0.1s、`syncs/chunk` ≤3）与环境指纹（commit 之外的 GPU/driver/TRT/decord
+版本）。默认档 `std` 开销在噪声内（实测 −0.15%）；`VOE_TELEMETRY=off` 一行
+关掉（`meta` 无 `report` 键、不组装报告）；`VOE_REPORT_FILE=<path>` 可把
+细档 JSON 落盘。A/B 用 `python tools/bench.py run/diff/ab`（报告口径，不写探针）。
+
 要点：实例完全独立（各自 OCR 会话/TRT 上下文共存正常）；GIL 无碍
 （GPU 管线消费线程极轻）。`decode_backend="cpu"` 与 `"auto"` 混搭即可
 构成互补对 —— 但**必须显式**给要走 CPU 的那条传 `"cpu"`：`"auto"` 恒为

@@ -17,6 +17,7 @@ from typing import NamedTuple
 from typing import Callable
 
 from video_ocr_engine.config import constants as config
+from video_ocr_engine.domain.metrics import NULL_METRICS
 from video_ocr_engine.domain.segmentation import preprocess_standard
 from .._helpers import _ocr_batch_size, _ocr_progress_pct
 
@@ -88,6 +89,98 @@ class SessionSpec:
     ocr_instances: bool | None = None
     gpu_ctc: bool | None = None
     pad_floor_env: int | None = None
+    # S6-0：注入的指标记录器（§8.6 N-2；off 档为 NullMetrics 单例）；
+    # 线程口径：worker 线程局部累积，drain 时由门面 snapshot 合并
+    metrics: object = NULL_METRICS
+
+
+def acquire_engines(spec: "SessionSpec") -> "tuple[list, str]":
+    """按 SessionSpec 取引擎集合（会话与显式预热**唯一出处**）。
+
+    返回 (engines, engine_type)。进程级引擎池（B5/C5）：跨视频复用 TRT
+    上下文/设备缓冲，免去每个 extract 重付反序列化+分配。失败时把半建
+    状态（如第二实例构建失败）已取到的引擎归池再上抛。
+    """
+    from video_ocr_engine.ocr.native import acquire_ocr_engine, checkin_ocr_engine
+    ot = spec.num_threads_fn()
+    engine_type = spec.engine_type_fn()
+    _inst = (spec.ocr_instances if spec.ocr_instances is not None
+             else config.env_bool(config.OCR_INSTANCES_ENV, default=True))
+    ocr_instances = (engine_type == 'onnxruntime'
+                     and ot >= config.OCR_INSTANCES_MIN_THREADS
+                     and _inst)
+    engines: list = []
+    try:
+        if ocr_instances:
+            half = max(2, ot // 2)
+            engines = [
+                acquire_ocr_engine(
+                    spec.model, 'onnxruntime',
+                    fill_width=spec.fill_width,
+                    num_threads=half,
+                    pad_floor_env=spec.pad_floor_env,
+                    gamma=spec.gamma,
+                    gpu_ctc=spec.gpu_ctc)
+                for _ in range(2)]
+        else:
+            engines = [acquire_ocr_engine(
+                spec.model, engine_type,
+                fill_width=spec.fill_width, num_threads=ot,
+                pad_floor_env=spec.pad_floor_env,
+                gamma=spec.gamma,
+                gpu_ctc=spec.gpu_ctc)]
+    except BaseException:
+        logger.debug("引擎半建状态回收", exc_info=True)
+        while engines:
+            try:
+                checkin_ocr_engine(engines.pop())
+            except Exception:
+                pass  # 归池失败无更好的回收路径（原存量语义）
+        raise
+    return engines, engine_type
+
+
+def warmup_engines(spec: "SessionSpec") -> int:
+    """S6-e 显式预热（v2 §7.5 P-b）：按**与 extract 完全相同**的池 key 取还
+    全部引擎，把冷启动的 TRT 反序列化/建上下文（0.35–0.44s）挪到调用方选定
+    的时机（批量循环之前）。
+
+    只对知情调用方生效——不改变 `extract()` 内部行为（C-24 判死的是"自动
+    prewarm"：总吞吐不变，只是把成本搬了个位置；本函数的价值是把一次性成本
+    从"首个视频的关键路径"移到"调用方显式选择的时刻"）。PI-10 的 key 稳定性
+    由此函数与 `acquire_engines` 同源保证。返回预热引擎数。
+    """
+    from video_ocr_engine.ocr.native import checkin_ocr_engine
+    engines, _ = acquire_engines(spec)
+    n = len(engines)
+    for eng in engines:
+        try:
+            checkin_ocr_engine(eng)
+        except Exception:
+            pass  # 归池失败：引擎仍可用，仅失去复用（best-effort 预热）
+    return n
+
+
+def effective_reorder_window(roi_w: int, roi_h: int, floor_px: int,
+                             force_aspect: float, window: int) -> int:
+    """S6-f：把"按宽分组"的等待窗口收敛到**它真能起作用**的场合。
+
+    分组（跨批按"裁后内容宽"排序）只可能在 **pad 宽由内容宽决定**时改变
+    子批的 pad 宽（R5 记录的 −23.9% 场景：宽 ROI 字幕）。当 pad 恒由下限
+    `floor_px / OCR_TARGET_H` 决定时——即 ROI 自身的最大宽高比都够不到下限
+    比——任何分组都不可能改变 pad 宽，等待窗口剩下的只有代价：**推迟首次
+    flush、拉长关键路径**（实测 `OCR_REORDER_WINDOW` 64 vs 1：热轮 +5.05%，
+    符号 4/4 一致；同一内容 pad 恒 224×48，填充率 40.2%）。
+
+    这是**可证明**的判据（用 ROI 的上界宽高比），不是内容猜测：
+      ROI 内任何裁切后的内容宽高比 ≤ roi_w / roi_h。
+    """
+    if window <= 1:
+        return 1
+    if force_aspect and force_aspect > 0:
+        return 1          # 输入被压到固定宽高比：分组同样不可能改变 pad
+    floor_ratio = float(floor_px) / max(1, config.OCR_TARGET_H)
+    return 1 if (float(roi_w) / max(1, roi_h)) <= floor_ratio else window
 
 
 class OcrSession:
@@ -190,44 +283,7 @@ class OcrSession:
                     else engines[0].backend_name)
             else:
                 _t_eng = time.perf_counter()
-                ot = spec.num_threads_fn()
-                engine_type = spec.engine_type_fn()
-                _inst = (spec.ocr_instances if spec.ocr_instances is not None
-                         else config.env_bool(config.OCR_INSTANCES_ENV,
-                                              default=True))
-                ocr_instances = (engine_type == 'onnxruntime'
-                                 and ot >= config.OCR_INSTANCES_MIN_THREADS
-                                 and _inst)
-                try:
-                    # 进程级引擎池（B5/C5）：跨视频复用 TRT 上下文/设备
-                    # 缓冲，免去每个 extract 重付反序列化+分配。
-                    if ocr_instances:
-                        half = max(2, ot // 2)
-                        engines = [
-                            acquire_ocr_engine(
-                                spec.model, 'onnxruntime',
-                                fill_width=spec.fill_width,
-                                num_threads=half,
-                                pad_floor_env=spec.pad_floor_env,
-                                gamma=spec.gamma,
-                                gpu_ctc=spec.gpu_ctc)
-                            for _ in range(2)]
-                    else:
-                        engines = [acquire_ocr_engine(
-                            spec.model, engine_type,
-                            fill_width=spec.fill_width, num_threads=ot,
-                            pad_floor_env=spec.pad_floor_env,
-                            gamma=spec.gamma,
-                            gpu_ctc=spec.gpu_ctc)]
-                except BaseException:
-                    logger.debug("引擎半建状态回收", exc_info=True)
-                    # 半建状态（如第二实例构建失败）：已取到的引擎归池
-                    while engines:
-                        try:
-                            checkin_ocr_engine(engines.pop())
-                        except Exception:
-                            pass  # 归池失败无更好的回收路径（原存量语义）
-                    raise
+                engines, engine_type = acquire_engines(spec)
                 spec.on_backend_used(engines[0].backend_name)
                 if (engine_type == 'tensorrt'
                         and engines[0].backend_name != 'tensorrt'):
@@ -235,6 +291,18 @@ class OcrSession:
                     spec.on_degraded('TRT 引擎不可用，回退 ONNX')
                 if spec.prof_end is not None:
                     spec.prof_end('ocr', 'engine_init', _t_eng)
+            # S6-0（§8.6 N-2）：引擎只在本次会话内被独占使用，指标记录器随
+            # checkout 注入（池归还后下一次 checkout 会重新覆盖；PI-10 的
+            # 热池判定由 acquire 打的 _pool_hit 标记给出）。外部注入引擎
+            # （_ocr_engines 非空）同样接入。
+            _m = spec.metrics
+            if _m is not None and _m.enabled:
+                if getattr(engines[0], '_pool_hit', False):
+                    _m.counter('ocr.engine_reuse')
+                for _e in engines:
+                    _e._metrics = _m
+                    if getattr(_e, '_trt', None) is not None:
+                        _e._trt._metrics = _m
             # 引擎就绪 → 供 GPU 管线 emit 决策（raw 直通需单 TRT 引擎；
             # 置位后该会话内代表帧可全程留显存，仅输出/回退时 D2H）。
             self.raw_ready[0] = (len(engines) == 1
@@ -315,6 +383,11 @@ class OcrSession:
                 t.start()
             b_idx, b_reps, b_crops, b_devs, b_fracs = ([], [], [], [], [])
 
+            def _count_chunks(n: int) -> None:
+                """S6-0：chunk 计数（PI-3 的分母；细档另记 per-chunk span）。"""
+                if _m is not None and _m.enabled:
+                    _m.counter('ocr.chunks', n)
+
             def flush() -> None:
                 if not b_idx:
                     return
@@ -353,6 +426,7 @@ class OcrSession:
                         raw_sel.sort(key=lambda i: b_devs[i].span[1])
                     # raw 任务交给 infer 线程异步执行；载荷 = (force_aspect,
                     # infos)。按批大小拆子批：pad 宽 = 子批内最大内容宽。
+                    _count_chunks(-(-len(raw_sel) // chunk))
                     for s in range(0, len(raw_sel), chunk):
                         chk = raw_sel[s:s + chunk]
                         # S9-3：DeviceRef 直接作为 kernel 面载荷
@@ -399,6 +473,7 @@ class OcrSession:
                     # 同一批才真的降下来（-23.9%）。
                     if spec.reorder_window > 1:
                         prepped.sort(key=lambda t: t[1].shape[1])
+                    _count_chunks(-(-len(prepped) // chunk))
                     for s in range(0, len(prepped), chunk):
                         chk = prepped[s:s + chunk]
                         if not _put_infer(InferBatch(

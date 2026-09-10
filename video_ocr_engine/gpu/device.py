@@ -432,7 +432,12 @@ def _gpu_frame_stream_nvdec(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
                 # 路径每次 get_batch 传 roi 会触发 fork 侧 SetRoi/池深重算
                 # （2026-09-10 实测 hybrid av1 2487→2264 fps，-9%；
                 # _probe_roi_decode 已证 CPU 路径两种传法等价）。
-                yield bstart, vr.get_batch(frames[bstart:bend])
+                _t_dec = time.perf_counter()
+                nds = vr.get_batch(frames[bstart:bend])
+                # S6-d：解码 vs analyze 的相位划分（双缓冲 A/B 的判据；
+                # 两者都在生产者线程内串行，重叠空间 = min(两者)）
+                ex._prof_end('producer', 'decode_batch', _t_dec)
+                yield bstart, nds
 
     for bstart, nds in _batch_iter():
         bend = bstart + int(nds.shape[0])

@@ -51,6 +51,16 @@ class SegmentEngine:
 
     def run(self, ocr_engines: list | None = None) -> RunOutcome:
         ex = self._ex
+        # S6-0（§8.6 N-2）：编排顶层 span——唯一编排点正是"量一次、处处可读"
+        # 成立的前提（v1 结构上做不到）。
+        metrics = getattr(ex, "_metrics", None)
+        if metrics is None or not metrics.enabled:
+            return self._run_backend(ex, ocr_engines)
+        with metrics.span("pipeline.run"):
+            return self._run_backend(ex, ocr_engines)
+
+    @staticmethod
+    def _run_backend(ex, ocr_engines: list | None) -> RunOutcome:
         if ex._gpu_pipeline_enabled():
             outcome = ex._run_pipelined_gpu(ocr_engines)
         else:

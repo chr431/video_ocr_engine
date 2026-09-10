@@ -19,11 +19,12 @@ def test_env_contract_covers_all_v1_knobs():
     v1_names = {getattr(config, n) for n in dir(config) if n.endswith("_ENV")}
     assert len(v1_names) == 18
     assert set(ENV_NAMES) >= v1_names          # v1 全部迁入，一个不丢
-    assert set(ENV_NAMES) - v1_names == {"VOE_TELEMETRY"}  # r5 新增仅此一个
+    # v2 新增仅两个：r5 telemetry 三档 + S6-0 报告 sidecar（§8.6 N-3）
+    assert set(ENV_NAMES) - v1_names == {"VOE_TELEMETRY", "VOE_REPORT_FILE"}
 
 
 def test_knob_registry_shape():
-    assert len(KNOBS.knobs) == 19              # 18 v1 + telemetry
+    assert len(KNOBS.knobs) == 20              # 18 v1 + telemetry + report_file
     for k in KNOBS.knobs:
         assert k.rationale_id, k.name          # 每个旋钮有依据锚点（D5）
 

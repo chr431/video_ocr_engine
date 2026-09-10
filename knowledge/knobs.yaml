@@ -132,3 +132,10 @@
   default: 'std'
   rationale: v2:8.6-r5
   note: off/std/full；off=NullMetrics 一键关闭（PI-15）
+
+- name: diag.report_file
+  env: VOE_REPORT_FILE
+  type: str
+  default: ''
+  rationale: v2:8.6-N3
+  note: RunReport 细档 JSON sidecar 输出路径；空=不写（写文件是副作用，须显式 opt-in）

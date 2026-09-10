@@ -45,9 +45,13 @@ from ._helpers import (  # noqa: F401
     _read_fps_from_vr,
 )
 from .config import resolve
+from .domain.metrics import (
+    NULL_METRICS, PROFILE_GAUGES, PROFILE_SPANS, PROFILE_TOTALS, make_metrics,
+)
 from .pipeline.engine import SegmentEngine
 from .pipeline.gpu_backend import GpuRunSpec, run_gpu_pipeline
 from .pipeline.host_backend import HostRunSpec, run_host_pipeline
+from .pipeline.report import build_report, write_report_file
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +171,11 @@ class FieldExtractor:
         self._prof_lock = None
         if self._profile_enabled:
             self._prof_lock = threading.Lock()
+        # S6-0（§8.6 N-2/N-3）：每次 run 新建 Metrics 与报告（B1 同类重置）。
+        # telemetry=off → NULL_METRICS 单例，全链路空调用、不组装报告。
+        self._metrics = NULL_METRICS
+        self._metric_totals: dict = {}
+        self._report: dict = {}
         self._validate_params()
         self._ensure_roi_capable_decoder()
         roi_w = max(1, self._roi[2] - self._roi[0] + 1)
@@ -305,13 +314,23 @@ class FieldExtractor:
     def _build_session_spec(self):
         """纯构建（无线程/无引擎）——S9-2 供会话与测试共用。"""
         s = self
-        from .pipeline.ocr_stage import SessionSpec
+        from .pipeline.ocr_stage import SessionSpec, effective_reorder_window
+        from .ocr.native import ocr_pad_floor
+        _x1, _y1, _x2, _y2 = s._roi
+        _roi_w = max(1, _x2 - _x1 + 1)
+        _roi_h = max(1, _y2 - _y1 + 1)
+        _force_aspect = float(getattr(s, '_force_aspect', 0) or 0.0)
+        # S6-f：pad 下限支配时按宽分组不可能有收益 → 窗口收敛到 1（唯一出处
+        # 见 ocr_stage.effective_reorder_window 的判据说明）
+        _floor = ocr_pad_floor(s._ocr_model, s._fill_width, s._pad_floor_env)
+        _window = effective_reorder_window(
+            _roi_w, _roi_h, _floor, _force_aspect, s._ocr_reorder_window)
         return SessionSpec(
             buffer_size=s._buffer_size,
             model=s._ocr_model,
             fill_width=s._fill_width,
-            force_aspect=float(getattr(s, '_force_aspect', 0) or 0.0),
-            reorder_window=s._ocr_reorder_window,
+            force_aspect=_force_aspect,
+            reorder_window=_window,
             yuv_output=s._yuv_output,
             color_range=s._color_range,
             gpu_pipeline_mode=getattr(s, '_gpu_pipeline_mode', False),
@@ -329,6 +348,7 @@ class FieldExtractor:
             ocr_instances=s._rc.ocr_instances,
             gpu_ctc=s._rc.ocr_gpu_ctc,
             pad_floor_env=s._pad_floor_env,
+            metrics=s._metrics,
         )
 
     def _set_bin_thresh(self, th: int) -> None:
@@ -385,7 +405,13 @@ class FieldExtractor:
         self._backend = ""
         self._ocr_backend_used = ""
         self._bin_thresh = 0
+        # S6-0：RunReport 的一次 run 生命周期（§8.6 N-3）
+        self._metrics = make_metrics(self._rc.diag_telemetry)
+        self._metric_totals = {}
+        self._report = {}
+        _t_run = time.perf_counter()
         _outcome = self._run_pipelined()   # S9-6：RunOutcome（裸 5 元组已退场）
+        _wall = time.perf_counter() - _t_run
         frames, segs, texts, confs, rep_frames = _outcome.as_tuple()
         self._frames = frames
         segments = [
@@ -404,33 +430,70 @@ class FieldExtractor:
             frames=frames if self._keep_frames else [],
             fps=self._fps or 0.0,
             timing=dict(self.timing),
-            meta={"backend": self._backend,
-                  "ocr_backend": self._ocr_backend_used,
-                  "codec": self._codec,
-                  "n_segments": len(segments),
-                  "engine_version": config.__version__,
-                  # D4：rep_crop_rgb helper 依赖这两个字段还原预览
-                  "color_range": self._color_range,
-                  "rep_crop_format": ("yuv" if self._yuv_output
-                                      else "gray"),
-                  "degraded_reason": (self._degraded or None),   # D3
-                  "params": {                                     # D3
-                      "roi": tuple(self._roi),
-                      "frame_start": self._frame_start,
-                      "frame_end": self._frame_end,
-                      "decode_backend": self._decode_backend,
-                      "ocr_backend": self._ocr_backend,
-                      "sample_stride": self._sample_stride,
-                      "fill_width": self._fill_width,
-                      "force_aspect": self._force_aspect,
-                      "rep_crop_format": self._rep_crop_format,
-                      "keep_crops": self._keep_crops,
-                      "keep_frames": self._keep_frames,
-                      "merge_similar": self._merge_similar,
-                      "merge_similar_threshold": self._merge_similar_threshold,
-                      "merge_text_sep": self._merge_effective_mode(),
-                      "buffer_size": self._buffer_size,
-                      "C": self._C}})
+            meta=self._build_meta(segments, _wall))
+
+    def _build_meta(self, segments: list, wall: float) -> dict:
+        """meta 组装（§10.1 的 9 键逐字不变 + S6-0 增补 report，只增不改）。"""
+        meta = {"backend": self._backend,
+                "ocr_backend": self._ocr_backend_used,
+                "codec": self._codec,
+                "n_segments": len(segments),
+                "engine_version": config.__version__,
+                # D4：rep_crop_rgb helper 依赖这两个字段还原预览
+                "color_range": self._color_range,
+                "rep_crop_format": ("yuv" if self._yuv_output
+                                    else "gray"),
+                "degraded_reason": (self._degraded or None),   # D3
+                "params": {                                     # D3
+                    "roi": tuple(self._roi),
+                    "frame_start": self._frame_start,
+                    "frame_end": self._frame_end,
+                    "decode_backend": self._decode_backend,
+                    "ocr_backend": self._ocr_backend,
+                    "sample_stride": self._sample_stride,
+                    "fill_width": self._fill_width,
+                    "force_aspect": self._force_aspect,
+                    "rep_crop_format": self._rep_crop_format,
+                    "keep_crops": self._keep_crops,
+                    "keep_frames": self._keep_frames,
+                    "merge_similar": self._merge_similar,
+                    "merge_similar_threshold": self._merge_similar_threshold,
+                    "merge_text_sep": self._merge_effective_mode(),
+                    "buffer_size": self._buffer_size,
+                    "C": self._C}}
+        report = self._assemble_report(wall, len(segments))
+        if report:
+            meta["report"] = report                     # §8.6 N-3：只增不改
+            _rf = (self._rc.diag_report_file or "").strip()
+            if _rf:
+                try:
+                    write_report_file(report, _rf)
+                except OSError:
+                    # 写 sidecar 是显式 opt-in 的副作用，失败不该毁掉 run
+                    logger.warning("RunReport sidecar 写入失败: %s", _rf,
+                                   exc_info=True)
+        return meta
+
+    def _assemble_report(self, wall: float, n_segments: int) -> dict:
+        """把单次 run 的观测收敛成 RunReport（off 档返回 {}）。"""
+        m = self._metrics
+        if not m.enabled:
+            return {}
+        for name, total in self._metric_totals.items():
+            m.gauge(name, total)
+        # 编排三段的显式计时段（res.timing 由两后端直写；此处转成正样本 span）
+        for _k, _name in (("decode", "pipeline.decode"),
+                          ("ocr", "pipeline.ocr"),
+                          ("ocr_tail", "pipeline.ocr_tail")):
+            _v = self.timing.get(_k)
+            if _v is not None:
+                m.record_span(_name, float(_v))
+        rep = build_report(
+            m, wall=wall, config_digest=self._rc.config_digest,
+            degradations=self._degraded, n_segments=n_segments,
+            backend=self._backend, ocr_backend=self._ocr_backend_used)
+        self._report = rep
+        return rep
 
     @property
     def frames(self) -> list:
@@ -441,14 +504,64 @@ class FieldExtractor:
     def frames(self, v: list) -> None:
         self._frames = v
 
+    def warmup(self) -> int:
+        """显式预热 OCR 引擎池（v2 §7.5 P-b / S6-e）。
+
+        把冷启动的一次性成本（TRT 反序列化 + 建上下文 **0.39–0.44s**，实测
+        `ocr.engine_init`）从"首个视频的关键路径"挪到调用方显式选择的时刻——
+        批量循环、UI 首帧、需要稳定首段延迟的场景。
+
+        与 `extract()` 用**完全相同**的池 key（同源 `_build_session_spec`，
+        PI-10 key 稳定性），因此随后的 extract 命中热池（实测首个 extract
+        的 `ocr.engine_init` 从 0.39s 降到 ~0.0001s）。
+
+        注意 C-24 的边界：**不改变任何 run 的总吞吐**（预热只是把成本提前）；
+        本方法不改变 `extract()` 内部行为，也不自动触发。返回预热的引擎数
+        （0 = 需要时再建，例如非 TRT/ONNX 双实例路径）。
+        """
+        spec = self._build_session_spec()
+        from .pipeline.ocr_stage import warmup_engines
+        t0 = time.perf_counter()
+        n = warmup_engines(spec)
+        logger.debug("OCR 引擎池预热完成：%d 个，耗时 %.3fs",
+                     n, time.perf_counter() - t0)
+        return n
+
     def _prof_end(self, group: str, key: str, t0: float) -> None:
-        """累加一段耗时到 profile（线程安全；关闭时仅一次属性判断）。"""
-        if not self._profile_enabled:
+        """单一计时脊柱（§8.6 N-2）：同一 t0 同时喂 profile 与指标。
+        profile（diagnostics.profile）保留 v1 的 13 相位原始字典；
+        telemetry（std/full）走注册指标名。两档都关时**只做两次属性判断**，
+        连 perf_counter 都不调用——PI-15 的 off 档"一行关闭"靠这里兑现。
+        """
+        prof = self._profile_enabled
+        met = self._metrics.enabled
+        if not (prof or met):
             return
         elapsed = time.perf_counter() - t0
-        with self._prof_lock:
-            d = self.profile.setdefault(group, {})
-            d[key] = d.get(key, 0.0) + elapsed
+        if prof:
+            with self._prof_lock:
+                d = self.profile.setdefault(group, {})
+                d[key] = d.get(key, 0.0) + elapsed
+        if met:
+            self._metric_from_profile(group, key, elapsed)
+
+    def _metric_from_profile(self, group: str, key: str, elapsed: float) -> None:
+        """(group, key) → 注册指标名（映射表在 domain/metrics.py，单一出处）。"""
+        m = self._metrics
+        name = PROFILE_GAUGES.get((group, key))
+        if name is not None:
+            m.gauge(name, elapsed)          # 单值量：末次即本 run 的 engine_init
+            return
+        name = PROFILE_SPANS.get((group, key))
+        if name is not None:
+            m.record_span(name, elapsed)    # 有界相位：std 档逐次采样
+            return
+        name = PROFILE_TOTALS.get((group, key))
+        if name is not None:
+            t = self._metric_totals
+            t[name] = t.get(name, 0.0) + elapsed
+            if m.detailed:
+                m.record_span(name, elapsed)   # full 档另留逐次样本
 
     def _open_vr(self):
         """按 decode_backend 打开解码器（auto/cpu/nvdec/hybrid）。
@@ -689,6 +802,7 @@ class FieldExtractor:
             progress=self._progress, cancel=self._cancel,
             prof_end=self._prof_end,
             on_bin_thresh=self._set_bin_thresh,
+            metrics=self._metrics,
             fps_box=[self._fps])
         res = run_gpu_pipeline(spec, _ocr_engines)
         if res.fell_back_to_host:
@@ -894,6 +1008,7 @@ class FieldExtractor:
             progress=self._progress, cancel=self._cancel,
             prof_end=self._prof_end,
             on_bin_thresh=self._set_bin_thresh,
+            metrics=self._metrics,
             fps_box=[self._fps])
         if _preopened_vr is not None:
             res = run_host_pipeline(spec, _ocr_engines,

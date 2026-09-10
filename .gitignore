@@ -45,3 +45,6 @@ tools/_merge_vis/
 PERFORMACE_REPORT.txt
 gpu_kernels/
 ocr_engines/*.engine
+
+# bench run registry（append-only 本地证据，§8.6 N-4）
+bench/

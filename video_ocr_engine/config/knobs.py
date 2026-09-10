@@ -65,4 +65,7 @@ KNOBS = Registry(knobs=(
          "diag", _ALL, "ec:86"),
     Knob("diag.telemetry", "VOE_TELEMETRY", "VOE_TELEMETRY", "str", "std",
          "diag", _ALL, "v2:8.6-r5", note="off/std/full；off=NullMetrics 一键关闭（PI-15）"),
+    Knob("diag.report_file", "VOE_REPORT_FILE", "VOE_REPORT_FILE", "str", "",
+         "diag", _ALL, "v2:8.6-N3",
+         note="RunReport 细档 JSON sidecar 输出路径；空=不写（写文件是副作用，须显式 opt-in）"),
 ))

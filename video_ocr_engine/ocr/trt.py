@@ -360,6 +360,9 @@ class TrtEngine:
             self._reducer = reducer
         idx_parts = []
         prob_parts = []
+        _m = getattr(self, '_metrics', None)
+        _n_sync = 0
+        _n_sub = 0
         for i in range(0, B, self.max_batch):
             nb = min(self.max_batch, B - i)
             if i > 0 and nb < self.max_batch:
@@ -367,6 +370,7 @@ class TrtEngine:
                 # （TRT 不支持 in-flight 修改 context 形状；且若按前批
                 # batch 维执行，末批会越界读输入/写出多余行）。
                 self.synchronize()
+                _n_sync += 1
             sub_shape = (nb,) + tuple(shape[1:])
             out_shape = self._prepare_shape(sub_shape)
             out_nbytes = int(np.prod(out_shape)) * 4
@@ -379,9 +383,18 @@ class TrtEngine:
                 self.in_name, dev_input + i * elem_floats * 4)
             self.context.set_tensor_address(self.out_name, self._dev_out)
             self.context.execute_async_v3(stream)
+            # S6-c：reduce 的 D2H 走异步 + 每子批一次流同步（原为 2 次
+            # 阻塞 cudaMemcpy = 隐式设备级同步，PI-14 守卫 GPU_CTC=0/1
+            # 文本 sha 一致；此处计数供 PI-3 的 syncs/chunk 判定）。
             idx, prob = reducer.reduce(self._dev_out, out_shape)
+            _n_sub += 1
             idx_parts.append(idx)
             prob_parts.append(prob)
+        if _m is not None and getattr(_m, 'enabled', False):
+            _m.counter('ocr.syncs', _n_sync + _n_sub)
+            _m.counter('ocr.sub_chunks', _n_sub)
+            _m.gauge('ocr.syncs_per_chunk',
+                     (_n_sync + _n_sub) / max(1, _n_sub))
         idx_all = np.concatenate(idx_parts) if len(idx_parts) > 1 \
             else idx_parts[0]
         prob_all = np.concatenate(prob_parts) if len(prob_parts) > 1 \

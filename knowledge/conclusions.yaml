@@ -31,11 +31,11 @@
   evidence: PERF §21 §22.1；log 2026-09-08
 
 - id: C-05
-  conclusion: hybrid = decord fork 原生（≥v0.7.15）：TRT 走 hybrid_gpu 显存直通、CPU OCR 走宿主帧。0.8.2 发布版：任一编码不优于最优单侧。**本地预路由+池深修复（未发布）后改观**：decode-only hybrid 近两侧理想和（av1 损耗 29.5%→8.2%），且随 dav1d 线程正常扩展（h264 ct32 3563fps 超纯 CPU 3504、hevc ct32 2559 超 NVDEC 2217）；引擎口径 hybrid ≈ 最优单侧 ±3-5%（消费端为共享瓶颈），**av1 上 hybrid 成为最快路径（1.67-1.75s vs NVDEC 1.80s）**
+  conclusion: hybrid = decord fork 原生（≥v0.7.15）：TRT 走 hybrid_gpu 显存直通、CPU OCR 走宿主帧。0.8.2 发布版任一编码不优于最优单侧；**本地预路由+池深修复（未发布）后 av1 上 hybrid 成为最快路径**（引擎口径 ≈ 最优单侧 ±3-5%，逐项数字见 evidence）
   status: active
   premises: 本地 dll（fork 73e5540/d94d92e/3b96c6f，未推送/未发 wheel）；0.8.2 pip wheel 不含
   revisit: fork 发布 wheel 后重测；单侧速率格局再变
-  evidence: log 2026-09-10-hybrid联调深挖 §K7/K8/P；tools/_probe_hybrid_sum_gap/_probe_hybrid_trace/_probe_hybrid_bitwise
+  evidence: log 2026-09-10-hybrid联调深挖 §K7/K8/P；tools/_probe_hybrid_sum_gap
 
 - id: C-06
   status: superseded
@@ -91,11 +91,11 @@
   evidence: DECISIONS「P0-6 翻案」
 
 - id: C-15
-  conclusion: OCR pad 下限 224 保持（160 已回退：生产误读退化；320 已证伪）
+  conclusion: OCR pad 下限 224 保持（160 已回退：生产误读退化；320 已证伪）——S6 复核：该下限下填充率仅 40.2%，但 pad 非杠杆（224→320 仅 +3.66%）
   status: active
-  premises: —
-  revisit: pad / 预处理架构变更
-  evidence: ARCHIVE §16.2
+  premises: v6_small + racelog 内容
+  revisit: pad/预处理架构变更；换模型
+  evidence: ARCHIVE §16.2；log 2026-09-10-S6性能轮 §6
 
 - id: C-16
   conclusion: OCR 裁切余量 10% 优于 0%；裁切即使省不到算力也能提准确率（旧"守卫"前提是错的）
@@ -134,9 +134,25 @@
   status: superseded
   replaced_by: C-08
 - id: C-34
-  conclusion: S7 复评（Q4）——重构后单视频仍受解码供给限制（h264-gpu 3.107s/3000 帧 ≈ NVDEC 1013fps 天花板,解码相位占主导）,ExtractionPool 互补配对的前提成立;但它是新增公共 API,实现待显式立项（触发条件②③未发生:无真实多视频批量场景诉求,S4.5/S5 未做故解码格局未变）
+  conclusion: S7 复评（Q4）——重构后单视频仍受解码供给限制（h264-gpu ≈ NVDEC 1013fps 天花板，解码相位占主导），ExtractionPool 互补配对前提成立；但它是新增公共 API，实现待显式立项（无真实多视频批量诉求；S4.5/S5 未做故解码格局未变）
   status: active
-  premises: 2026-09-10 S0 bench（本机 4060/8GB）;触发条件①已满足
-  revisit: 用户出现多视频批量场景 / S5 内联后解码格局变化 / 显式立项请求
-  evidence: tests/golden/bench_baseline.json;knowledge/benchmarks.yaml
+  premises: 2026-09-10 S0/S6 bench（本机 4060/8GB）；触发条件①已满足
+  revisit: 出现多视频批量场景 / S5 内联后解码格局变化 / 显式立项请求
+  evidence: tests/golden/bench_baseline.json；log 2026-09-10-S6性能轮 §0
+
+- id: C-36
+  conclusion: 冷启动一次性成本 = cuda.core 0.22s + NVRTC 0.09s + TRT 反序列化 0.39–0.44s；显式 `warmup()` 把它移出首个 extract（engine_init 0.39→0.0001s，首个视频 −33%），总吞吐不变（C-24）；预热调用点前移零收益、已回退
+  status: active
+  premises: 引擎文件已缓存；首个 extract
+  revisit: 换后端/引擎格式/跨进程预热
+  evidence: log §3；tests/pipeline/test_warmup.py
+
+- id: C-37
+  conclusion: 消费端提交可批量化：归约 D2H 阻塞→异步+本流同步（冷 h264-cpu −5.19%，3/3）、keep_crops D2H 并批窗口 16（冷 h264-gpu −2.45%，3/3），PI-14 全段逐位一致；pad 下限支配时按宽分组无收益（rw64 vs rw1 +5.05%，4/4）→ 窗口按"ROI 上界宽高比 ≤ 下限比"收敛到 1
+  status: active
+  premises: 本机 4060；交错 A/B
+  revisit: 段密度翻倍 / ROI 形态使判据翻转
+  evidence: log §4-§6；ocr_stage.effective_reorder_window
+
+
 

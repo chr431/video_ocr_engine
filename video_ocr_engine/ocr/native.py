@@ -68,6 +68,24 @@ class RecOut:
         self.scores = [float(score)]
 
 
+def ocr_pad_floor(variant: str, fill_width: int,
+                  pad_floor_env: "int | None" = None) -> int:
+    """OCR 输入 pad 宽度下限（**唯一出处**：批识别与 GPU 直通两条路径共用）。
+
+    优先级：env `OCR_PAD_SMALL` > 用户 `fill_width` > 模型下限。旧实现把
+    fill_width 放在最前，而 extractor 默认就传 224 → env 旋钮其实是死的
+    （README 自称排查陷阱之一）。
+    """
+    _env = (pad_floor_env if pad_floor_env is not None
+            else config.env_int(config.OCR_PAD_SMALL_ENV, 0))
+    if _env > 0:
+        return int(_env)
+    if fill_width and fill_width > 0:
+        return int(fill_width)
+    return int(config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(variant,
+                                                    config.OCR_PAD_WIDTH_MIN))
+
+
 class OcrEngine:
     """PP-OCRv6 rec 原生引擎（ONNX / TensorRT 双后端）。
 
@@ -325,17 +343,17 @@ class OcrEngine:
         # fill_width=DEFAULT_FILL_WIDTH(224) → **OCR_PAD_SMALL 永远轮不到**，
         # README 里那个"OCR 输入 pad 宽下限覆盖"的旋钮其实是死的。
         # env 是"调参覆盖"语义，必须能盖过构造参数，故提到最前。
-        _env = (self._pad_floor_env if self._pad_floor_env is not None
-                else config.env_int(config.OCR_PAD_SMALL_ENV, 0))
-        if _env > 0:
-            _floor = _env
-        elif self._fill_width > 0:
-            _floor = self._fill_width
-        else:
-            _floor = config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(
-                self._variant, config.OCR_PAD_WIDTH_MIN)
+        _floor = ocr_pad_floor(self._variant, self._fill_width,
+                               self._pad_floor_env)
         max_wh = max(_floor / config.OCR_TARGET_H,
                      *(float(im.shape[1]) / im.shape[0] for im in img_list))
+        _m = getattr(self, '_metrics', None)
+        if _m is not None and getattr(_m, 'enabled', False):
+            _rows = len(img_list)
+            _m.counter('ocr.rows', _rows)
+            _m.counter('ocr.padded_cols', int(h0 * max_wh) * _rows)
+            _m.counter('ocr.content_cols',
+                       sum(int(im.shape[1]) for im in img_list))
         if self._trt is not None:
             # GPU 预处理路径：直接生成显存模型输入，省去 host batch 构造
             return self._call_trt_gpu(img_list, max_wh, h0)
@@ -406,15 +424,8 @@ class OcrEngine:
         src_h = int(infos[0].h)
         src_w = int(infos[0].w)
         # 优先级同 __call__：env OCR_PAD_SMALL > fill_width > 模型下限。
-        _env = (self._pad_floor_env if self._pad_floor_env is not None
-                else config.env_int(config.OCR_PAD_SMALL_ENV, 0))
-        if _env > 0:
-            _floor = _env
-        elif self._fill_width > 0:
-            _floor = self._fill_width
-        else:
-            _floor = config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(
-                self._variant, config.OCR_PAD_WIDTH_MIN)
+        _floor = ocr_pad_floor(self._variant, self._fill_width,
+                               self._pad_floor_env)
         if force_aspect and force_aspect > 0:
             _ratio = float(force_aspect)
         else:
@@ -422,6 +433,14 @@ class OcrEngine:
             _ratio = max(float(t.span[1]) for t in infos) / float(src_h)
         max_wh = max(_floor / config.OCR_TARGET_H, _ratio)
         out_width = int(config.OCR_TARGET_H * max_wh)
+        # S6-f：填充率计量（pad 宽是 rec 的计算宽度；content 是真实内容宽）
+        _m = getattr(self, '_metrics', None)
+        if _m is not None and getattr(_m, 'enabled', False):
+            _rows = len(infos)
+            _m.counter('ocr.rows', _rows)
+            _m.counter('ocr.padded_cols', out_width * _rows)
+            _m.counter('ocr.content_cols',
+                       sum(int(t.span[1]) for t in infos))
         dev_ptr, shape = self._gpu_pre.process_gray_raw(
             infos, out_width, force_aspect=float(force_aspect))
         if getattr(self, "_gpu_ctc_mode", False):
@@ -511,11 +530,13 @@ def acquire_ocr_engine(variant: str = "v6_small",
         if idle:
             eng = idle.pop()
             _POOL_IDLE_ORDER.pop(id(eng), None)
+            eng._pool_hit = True     # S6-0：PI-10 热池判定（RunReport 计数）
             return eng
     eng = OcrEngine(variant, engine_type, fill_width=fill_width,
                     num_threads=num_threads, pad_floor_env=pad_floor_env,
                     gamma=gamma, gpu_ctc=gpu_ctc)
     eng._pool_key = key
+    eng._pool_hit = False
     return eng
 
 

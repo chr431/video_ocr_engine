@@ -12,6 +12,10 @@
 "构造后改 env 仍生效"或"env 盖过构造参数"；③若你读取 OMP_WAIT_POLICY
 被引擎隐式设置。
 
+**0.13.2（S6 性能轮）只做加法**：`meta` 新增 `report` 键（第 10 键）、新增
+`FieldExtractor.warmup()` 与 `VOE_REPORT_FILE` 旋钮；无参数语义变更。
+
+
 ---
 
 ## 1. 导入路径迁移（六根模块 → 包内，0.14.0 删除旧路径）
@@ -82,6 +86,16 @@
 - `pytest -m gpu`：宿主↔GPU 双后端等价门禁；
 - `tests/golden/`：28 用例金标向量（`record.py --verify` 复验）。
 
+### 4.1 S6 性能轮新增（0.13.2，只增不改）
+
+| 面 | 说明 |
+|---|---|
+| `result.meta["report"]` | RunReport（schema v1）：`spans`/`counters`/`gauges`/`health`/`environment`/`pipeline`/`degradations`。**默认开（std 档）**，实测开销 −0.15%（噪声内）。`VOE_TELEMETRY=off` 则无此键 |
+| `FieldExtractor.warmup()` | 显式预热 OCR 引擎池（首个 extract 的 `engine_init` 0.39s→0.0001s）。不自动触发、不改 `extract()` 行为、总吞吐不变（C-24） |
+| `VOE_REPORT_FILE` | 把 RunReport 细档 JSON 写到指定路径（空=不写；写文件是副作用，须显式 opt-in） |
+| `tools/bench.py` | 报告矩阵 / `diff`（D10 双档）/ `ab`（交错 A/B，对抗机器漂移）/ `telemetry-check`（PI-15） |
+| `reorder_window` 生效值 | **行为变更（性能向，结果不变）**：pad 下限支配 ROI 时（ROI 上界宽高比 ≤ `fill_width/48`），按宽分组的等待窗口自动收敛到 1（实测热轮 −5.05%）。宽 ROI/`force_aspect>0` 场景保持原窗口。金标 28/28 逐位一致 |
+
 ## 5. 发布节奏
 
 | 版本 | 内容 |
@@ -89,4 +103,5 @@
 | 0.12.0 | S0–S8：编排契约化、mixin 消灭、知识库、21 项审计 |
 | 0.13.0 | S9：模块入包 + shim、D6/Q5 激活（本指南 §1/§2.1/§2.2） |
 | 0.13.1 | S9 续：载荷类型化（DeviceRef/SegmentTask/InferBatch）、设备层迁 `gpu/`、打包修复（子包入 wheel） |
+| 0.13.2 | S6：原生测量系统（RunReport + `meta['report']` + `bench`）、显式 `warmup()`、归约 D2H 异步化、keep_crops D2H 并批、分组窗口自适应（§4.1） |
 | 0.14.0（计划） | 删除六根模块 shim、`VOE_ENV_WINS`；届时无新破坏 |

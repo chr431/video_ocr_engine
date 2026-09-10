@@ -36,6 +36,7 @@ class RunConfig:
     diag_subprobe: bool = False
     diag_bounds_debug: bool = False
     diag_telemetry: str = "std"            # off/std/full（§8.6 r5）
+    diag_report_file: str = ""             # RunReport sidecar 路径（§8.6 N-3）
     # ── 指纹 ──
     config_digest: str = ""
 

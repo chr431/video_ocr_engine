@@ -35,19 +35,29 @@ _CUDA_CORE_PREWARM: threading.Thread | None = None
 
 
 def prewarm_cuda_core() -> None:
-    """后台启动 cuda.core 导入（幂等；不阻塞调用方）。"""
+    """后台启动 cuda.core 导入（幂等；不阻塞调用方）。
+
+    P1-9 类竞态修复（S6 轮实测抓获）：原实现先发布 `_CUDA_CORE_PREWARM`
+    再 `start()`——两条线程同时进入时，另一侧会 join 到一个**尚未 start**
+    的 Thread，抛 `RuntimeError: cannot join thread before it is started`
+    （主线程校准建 GpuFrameAnalyzer 与 OCR worker 建 TrtEngine 天然并发）。
+    现在持锁 **先 start 再发布**，`_cuda_core()` 侧另加 ident 守卫。
+    """
     global _CUDA_CORE_PREWARM
-    if _CUDA_CORE is None and _CUDA_CORE_PREWARM is None:
-        _CUDA_CORE_PREWARM = threading.Thread(
-            target=_cuda_core, daemon=True)
-        _CUDA_CORE_PREWARM.start()
+    with _CUDA_CORE_LOCK:
+        if _CUDA_CORE is not None or _CUDA_CORE_PREWARM is not None:
+            return
+        t = threading.Thread(target=_cuda_core, daemon=True)
+        t.start()
+        _CUDA_CORE_PREWARM = t
 
 
 def _cuda_core():
     global _CUDA_CORE
     if _CUDA_CORE is None:
         _t = _CUDA_CORE_PREWARM
-        if _t is not None and _t is not threading.current_thread():
+        if (_t is not None and _t is not threading.current_thread()
+                and _t.ident is not None):   # 未 start 的 Thread 不可 join
             _t.join()  # 预热中：等它导入完（不重复付 import 成本）
         with _CUDA_CORE_LOCK:
             if _CUDA_CORE is None:
@@ -510,7 +520,14 @@ extern "C" __global__ void argmax_last(
         self._owns_stream = False
 
     def reduce(self, preds_dev: int, out_shape: tuple):
-        """对显存中的 (B,S,C) 输出做归约，回传 (idx int32[B*S], prob f32[B*S])。"""
+        """对显存中的 (B,S,C) 输出做归约，回传 (idx int32[B*S], prob f32[B*S])。
+
+        S6-c：D2H 走**异步拷贝 + 流同步**（原为 2 次阻塞 `cudaMemcpy`——
+        阻塞拷贝是隐式**设备级**同步，会顺带把生产者/分析流上在飞的
+        extract_luma/analyze 一起排干，破坏 decode∥analyze 重叠）。
+        归约 kernel 与本拷贝同在 `self._stream`：流内次序保证 argmax 完成后
+        才拷贝，故一次流同步即等价（PI-14 以 GPU_CTC=0/1 文本 sha 一致守卫）。
+        """
         import numpy as np
         from cuda.bindings import runtime as cudart
         rows = int(np.prod(out_shape[:-1], dtype=np.int64))
@@ -539,10 +556,12 @@ extern "C" __global__ void argmax_last(
                      np.int64(rows), np.int32(cdim))
         idx = np.empty(rows, dtype=np.int32)
         prob = np.empty(rows, dtype=np.float32)
-        cudart.cudaMemcpy(idx.ctypes.data, self._idx_dev, nbytes_idx,
-                          cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
-        cudart.cudaMemcpy(prob.ctypes.data, self._prob_dev, nbytes_idx,
-                          cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
+        _d2h = cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost
+        cudart.cudaMemcpyAsync(idx.ctypes.data, self._idx_dev, nbytes_idx,
+                               _d2h, self._stream)
+        cudart.cudaMemcpyAsync(prob.ctypes.data, self._prob_dev,
+                               nbytes_idx, _d2h, self._stream)
+        cudart.cudaStreamSynchronize(self._stream)
         return idx, prob
 
 

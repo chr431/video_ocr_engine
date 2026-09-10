@@ -20,6 +20,7 @@ from typing import Callable
 import numpy as np
 
 from video_ocr_engine.config import constants as config
+from ..domain.metrics import NULL_METRICS
 from ..gpu.frame_ref import DeviceRef
 from video_ocr_engine.domain.segmentation import SegmentStateMachine, _otsu, otsu_median_threshold
 
@@ -57,6 +58,8 @@ class HostRunSpec:
     on_bin_thresh: Callable | None = None     # (th) -> None
     # 可变盒（门面持有缓存，后端读写）
     fps_box: list = field(default_factory=lambda: [None])     # B2：同实例缓存
+    # S6-0：注入的指标记录器（§8.6 N-2；off 档为 NullMetrics 单例）
+    metrics: object = NULL_METRICS
 
 
 @dataclass
@@ -147,6 +150,10 @@ def _frame_stream(spec: HostRunSpec, frames, vr, calib, th, *, with_dev: bool):
         nds = vr.get_batch(frames[bstart:bend], roi=(x1, y1, x2 + 1, y2 + 1))
         crops = nds.asnumpy()
         _prof(spec, 'producer', 'decode_batch', _t_d)
+        if spec.metrics.enabled:
+            m = spec.metrics
+            m.counter('decode.batches')
+            m.counter('decode.frames', bend - bstart)
         _t_g = time.perf_counter()
         if g_buf is None:
             # 灰度 Y 缓冲（每批形状恒定才可跨批复用）：
@@ -302,6 +309,8 @@ def run_host_pipeline(spec: HostRunSpec, ocr_engines=None,
         if spec.keep_crops:
             rep_crops[r_frame] = r_crop
         seg_idx += 1
+        if spec.metrics.enabled:
+            spec.metrics.counter('segment.segments')
 
     t0 = time.perf_counter()
     try:

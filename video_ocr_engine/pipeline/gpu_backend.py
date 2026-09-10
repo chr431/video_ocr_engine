@@ -22,6 +22,7 @@ from typing import Callable
 import numpy as np
 
 from video_ocr_engine.domain.segmentation import SegmentStateMachine, similar_decision
+from ..domain.metrics import NULL_METRICS
 from ..gpu.frame_ref import DeviceRef
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,8 @@ class GpuRunSpec:
     on_bin_thresh: Callable | None = None   # (th) -> None（F-4 同类：即时回写）
     # 可变盒（门面持有缓存）
     fps_box: list = field(default_factory=lambda: [None])
+    # S6-0：注入的指标记录器（§8.6 N-2；off 档为 NullMetrics 单例）
+    metrics: object = NULL_METRICS
 
 
 @dataclass
@@ -321,6 +324,7 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
     seg_idx = 0
     k = 0
     t0 = time.perf_counter()
+    _MET = spec.metrics
     from cuda.bindings import runtime as cudart
     raw_ready_ref = ocr_session.raw_ready
 
@@ -338,7 +342,43 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
             cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost,
             ctx.analyzer._stream_c)
         cudart.cudaStreamSynchronize(ctx.analyzer._stream_c)
+        if _MET.enabled:
+            _MET.counter('emit.d2h_calls')
+            _MET.counter('emit.d2h_bytes', dev.h * dev.w)
+            _MET.counter('emit.syncs')
         return arr
+
+    # ── S6-b：keep_crops 的 D2H 并批（v1 每段一次 async D2H + 一次流同步，
+    # 3000 帧/1083 段 = 1083 次同步全落在消费线程上）。改为有界窗口收集 +
+    # 每窗一次流同步；窗口 = 16 段，避免把过多 decord 批 owner 钉住（PI-5）。
+    pending_crops: list = []          # [(r_frame, dev, prefer_device)]
+    _KEEP_CROPS_WINDOW = 16
+
+    def _resolve_keep_crops() -> None:
+        if not pending_crops:
+            return
+        _t_d2h = time.perf_counter()
+        arrs: list = []
+        for _rf, _dev, _prefer in pending_crops:
+            _hc = getattr(_dev.owner, 'host_crop', None)
+            _h = _hc() if (_hc is not None and not _prefer) else None
+            if _h is not None:
+                arrs.append(np.array(_h))
+                continue
+            _arr = np.empty((_dev.h, _dev.w), dtype=np.uint8)
+            cudart.cudaMemcpyAsync(
+                _arr.ctypes.data, int(_dev.ptr), _dev.h * _dev.w,
+                cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost,
+                ctx.analyzer._stream_c)
+            arrs.append(_arr)
+        cudart.cudaStreamSynchronize(ctx.analyzer._stream_c)   # 每窗一次
+        for (_rf, _dev, _prefer), _arr in zip(pending_crops, arrs):
+            rep_crops[_rf] = _arr
+        if _MET.enabled:
+            _MET.counter('emit.keep_crops_batched', len(pending_crops))
+        if spec.prof_end is not None:
+            spec.prof_end('producer', 'emit_d2h', _t_d2h)
+        pending_crops.clear()
 
     def _autocrop_device(gray_ptr, sharp):
         """GPU 直通裁切：col_ink 判「有墨迹列范围」+ 宿主同一余量规则。"""
@@ -373,9 +413,14 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
         else:
             ap, bp = int(a_dev.ptr), int(b_dev.ptr)
         try:
+            _t_cmp = time.perf_counter()
             mad, chg = ctx.analyzer.compare_pair(
                 ap, bp, ctx.src_h, ctx.src_w, spec.bin_thresh_ref[0],
                 use_bin, stream=ctx.analyzer._stream_c)
+            if spec.prof_end is not None:
+                # S6-b：合并判定的提交开销（每段边界一次 grid=1 launch+sync，
+                # 消费线程内串行——批量化收益的判据）
+                spec.prof_end('producer', 'merge_pair', _t_cmp)
         finally:
             # S4：合并判定的池帧显式归还（不再依赖 GC 时机；payload 携带的
             # 池帧仍由 __del__ 入列回收——owner 生命周期跨线程，无法在此收口）
@@ -385,9 +430,12 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
                 ctx.y_pool.recycle(yb)
         n = ctx.src_h * ctx.src_w
         mean = 255.0 * mad / n if use_bin else mad / n
-        return similar_decision(mean, chg,
+        _dec = similar_decision(mean, chg,
                                 spec.merge_similar_threshold,
                                 spec.merge_max_changed_pixels)
+        if _MET.enabled:
+            _MET.counter('segment.merges', 1 if _dec else 0)
+        return _dec
 
     def _emit_ocr(idx, r_frame, r_dev, frac, r_sharp) -> None:
         _t_push = time.perf_counter()
@@ -427,14 +475,20 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
         else:
             crop_h = _d2h_rep(r_dev)
         if spec.keep_crops:
-            _t_d2h = time.perf_counter()
-            rep_crops[r_frame] = (crop_h if crop_h is not None
-                                  else _d2h_rep(
-                                      r_dev,
-                                      prefer_device=(dev_ocr is not None
-                                                     and not yuv)))
-            if spec.prof_end is not None:
-                spec.prof_end('producer', 'emit_d2h', _t_d2h)
+            if crop_h is not None:
+                # 该段已在走宿主路径，代表帧就是宿主数组：直接落盘，无需 D2H
+                rep_crops[r_frame] = crop_h
+            else:
+                # S6-b：设备代表帧的 D2H 进窗口并批（见 _resolve_keep_crops）。
+                # 实测（交错 A/B，4 次独立进程）：冷启动 h264-gpu −2.45%
+                # （符号一致），其余配置中性——收益集中在"代表帧留显存"的
+                # raw 直通路径。
+                pending_crops.append(
+                    (r_frame, r_dev, dev_ocr is not None and not yuv))
+                if len(pending_crops) >= _KEEP_CROPS_WINDOW:
+                    _resolve_keep_crops()
+                if _MET.enabled:
+                    _MET.counter('emit.keep_crops_d2h')
         if dev_ocr is not None and not yuv:
             drop_host = getattr(dev_ocr.owner, 'drop_host', None)
             if drop_host is not None:
@@ -448,6 +502,8 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
         nonlocal seg_idx
         _emit_ocr(seg_idx, rep[0], rep[1], frac, rep[2])
         seg_idx += 1
+        if _MET.enabled:
+            _MET.counter('segment.segments')
 
     machine = SegmentStateMachine(
         frames, C=spec.C,
@@ -489,6 +545,7 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
         segs = machine.segs
     finally:
         producer_stop.set()   # C6：任何退出路径都叫停 producer
+        _resolve_keep_crops()   # S6-b：尾窗收口（rep_crops 必须完整）
         if producer is not None:
             try:
                 producer.join(_PRODUCER_JOIN_TIMEOUT)
