@@ -161,4 +161,20 @@
                     实测 637 帧 CPU 存货卡在一个永不落地的 GPU chunk 后面）
   unforced_recheck_fps_2000: {before: [2980, 2994, 3071], after: [2833, 3077, 3041]}
   golden_with_fork_dll: 28/28 逐位一致
+# ── CPU 速率估计器"排空棘轮"缺陷 + sustained 修正（§7.2-1 先量后做）────────
+- metric: hybrid_cpu_rate_ratchet         # 非打印 DECORD_CPU_RATE_DEBUG trace 锤实
+  hevc_hybrid_fps: {ewma: 1951, sustained: 2688}   # decode-only 3000f×3 中位
+  h264_hybrid_fps: {ewma: 3537, sustained: 3167}   # sustained 略降但 h264 走显式 cpu
+  av1_hybrid_fps: {ewma: 2645, sustained: 2580}    # ≈持平（噪声内）
+  root_cause: 容量 EWMA（升1.3x/降5%）被**解码器预跑存货排空孤峰**逐发棘轮
+  trace_evidence: hevc 真产率 r≈630-900 但 r=2491..9138 孤峰每~15折一发，
+                  EWMA 永久卡 1200-2500（纯 nvdec 单臂仅 2036）
+  consequence: BuildPlan 冻结高估 rc → hevc CPU 份额翻 2-3x → 混跑 1568 < nvdec 2036
+  sustained_fix: 滑窗8折内连续4折最小值的最大值 + 0.997/折慢降锁
+  key_correction: sustained 下 hevc hybrid 2688-2778 **> 纯 nvdec 2036**，达并行
+                  理想(2790) 的 96-99% → §7.1 "混跑净亏损"很大程度是估计器伪影
+  gpu_out_deadlock: hybrid_gpu（引擎 GPU 管线口径）真实倾斜计划暴露先存在死锁
+                    ~2/8 挂死（EWMA 对照 16/16 干净）→ sustained 暂 opt-in
+                    DECORD_CPU_RATE_SUSTAINED=1，默认仍 EWMA（金标 28/28）
+  fork_commit: 75b8602
 

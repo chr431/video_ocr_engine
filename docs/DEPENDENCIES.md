@@ -31,10 +31,13 @@
 
 ### decord（自建 fork，pip wheel 安装）
 - **0.8.3（2026-09-10 本地预备，未发布；2026-09-11 追加一个修复）**：fork
-  master 领先 0.8.2 五个提交（73e5540 析构 UAF 修复 / d94d92e hybrid GPU 池深
+  master 领先 0.8.2 六个提交（73e5540 析构 UAF 修复 / d94d92e hybrid GPU 池深
   按 ROI 重算 / 3b96c6f hybrid chunk 预路由 / 93a5ce1 / **99b8785 FORCE_SIDE
-  诊断臂死锁修复**——bootstrap 与预路由绕过覆盖，导致 `force=cpu` 挂死），
-  本地提交 486d2f6 已 bump 版本号。
+  诊断臂死锁修复**——bootstrap 与预路由绕过覆盖，导致 `force=cpu` 挂死 /
+  **75b8602 hybrid 非打印 stats 层 + 实验性 sustained 产能估计器**，默认口径
+  仍 EWMA、金标 28/28 不变；`DECORD_CPU_RATE_SUSTAINED=1` 才切滑窗持续产能，
+  实测 hevc hybrid 2688-2778 超纯 nvdec 2036，但 GPU 驻留倾斜计划暴露先
+  存在的 ~2/8 死锁，故暂不默认），本地提交 486d2f6 已 bump 版本号。
   本地开发 dll：`DECORD_LIBRARY_PATH=D:\Repo\decord\build-081fix`（与
   HEAD 同步，ninja 验新）。发布步骤见
   `tools/_roadmap_20260910/release-notes-0.8.3-draft.md`（目录已删除）。

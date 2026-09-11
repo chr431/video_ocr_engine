@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **73 个 `.py`**（12,363 行），其中 61 个是探针
+`tools/` 现有 **74 个 `.py`**（12,564 行），其中 62 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -56,7 +56,8 @@
 | `_probe_run_setup_cost.py` | 80 | 每 run 固定成本分解：analyzer/池/kernel 全在 0.1ms 级 → 0.083s 的 `calibrate` 主体是**首帧解码冷启**（不可省） | 同上 §0 |
 | `_probe_hybrid_gap.py` | 107 | hybrid **三层差距分解**（L1 解码器能力 / L2 两路吞吐相加理想 / L3 引擎口径）：hybrid_gpu 仅达理想 67–77%；hybrid_gpu 比宿主输出慢 19–24% | log 2026-09-11-hybrid差距分解；C-05 |
 | `_probe_phase_cores.py` | 91 | **每相位资源读数**（§8.6 r5 L1/L2 的消费者）：墙钟/平均并行核数/线程/RSS/磁盘速率/显存 + full 档 NVML 峰值因子。实测 h264-cpu 解码相位 **21.2/32 核** → hybrid CPU 分片必与引擎线程争核 | log 2026-09-11-资源层与门控校准 §3 |
-| `_probe_upload_chain.py` | 157 | 用 fork 的 `DECORD_HYBRID_FORCE_SIDE` 拆 **mixed / 纯NVDEC / 纯CPU** 三臂（每组独立子进程 + **45–90s 硬超时** + 轮内组序轮转 + 进度落文件）。修 fork 死锁后据此量出 **mixed 低于最优单侧**（h264 −28%、hevc −32%） | log 2026-09-11-hybrid差距分解 §7；DECISIONS 2026-09-11 fork 修复 |
+| `_probe_upload_chain.py` | 157 | 用 fork 的 `DECORD_HYBRID_FORCE_SIDE` 拆 **mixed / 纯NVDEC / 纯CPU** 三臂（每组独立子进程 + **45–90s 硬超时** + 轮内组序轮转 + 进度落文件）。量出 mixed"低于最优单侧"（§7.1）——**该结论已被 §8 翻案**：EWMA 估计器伪影 | log 2026-09-11-hybrid差距分解 §7/§8；DECISIONS 2026-09-11 fork 修复 |
+| `_probe_hol_stats.py` | 201 | 走 fork **非打印** `DECORD_HYBRID_STATS`（零打印扰动）实测队头阻塞时长/episode/搁置峰值 + BuildPlan 冻结速率/CPU 折数/时刻；decode-only 每格独立子进程+硬超时，`--set KEY=VAL` 做单变量 A/B | log 2026-09-11-hybrid差距分解 §8；knowledge `hybrid_cpu_rate_ratchet` |
 
 ## B. 库型 / worker 型（**被其他探针依赖，动不得**）
 
