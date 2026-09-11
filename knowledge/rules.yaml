@@ -22,5 +22,8 @@
   mechanism: ci
 - rule: 历史文档（docs/log 大档案）append-only——不注入、不做活性检查、不回写
   mechanism: ci
+- rule: 压测/复现的子进程必须带硬超时且进度逐行落文件（管道吞 stdout 会把挂死伪装成在跑）——同款坑三次：孤儿 worker 烧 735s、无界压测烧 1543s
+  mechanism: script
+  # 执行体 = tools/_probe_stress_harness.py（trial 级子进程 + --timeout + 行缓冲日志）；新压测按此规格写，不许裸循环
 - rule: 测试不依赖真实视频/GPU 时必须可离线跑；依赖者带 skip 守卫或 -m gpu
   mechanism: ci
