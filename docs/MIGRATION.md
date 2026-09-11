@@ -96,6 +96,16 @@
 | `tools/bench.py` | 报告矩阵 / `diff`（D10 双档）/ `ab`（交错 A/B，对抗机器漂移）/ `telemetry-check`（PI-15） |
 | `reorder_window` 生效值 | **行为变更（性能向，结果不变）**：pad 下限支配 ROI 时（ROI 上界宽高比 ≤ `fill_width/48`），按宽分组的等待窗口自动收敛到 1（实测热轮 −5.05%）。宽 ROI/`force_aspect>0` 场景保持原窗口。金标 28/28 逐位一致 |
 
+### 4.2 S6 续轮新增（0.13.3，只增不改）
+
+| 面 | 说明 |
+|---|---|
+| RunReport **schema v2** | `report_version` 1→2，**只加键**：`resources`（std+：每相位平均并行核数/线程数/RSS·VRAM 增量/磁盘读写速率 + 每来源真出处或 `unavailable:原因`）、`hardware`（仅 full 档采样过才出现：GPU%/NVDEC%/显存 min·p50·p99·max）。按 v1 解析的旧读者不受影响；金标只记 `meta` 键名，故无需重录（28/28 逐位一致已验） |
+| `hybrid` CPU 线程档位 | 默认 12→**16**（核数//2 钳 [8,16]），并取消按 decord 版本号的门控（对 `DECORD_LIBRARY_PATH` 换 dll 的情形判错）。交错 A/B：h264-hybrid −6.5%、hevc-hybrid −12.7%；`HYBRID_CPU_THREADS` 显式覆盖仍有效 |
+| PI-15 门禁校准 | 判据改"同进程交替 + 档位轮转 + 同轮配对差分**均值** + 符号多数一致"，阈值按本机 A/A 标定（**+0.85%**；规则 `\|偏差\|+3×SE`）。§13.2 设计目标 +0.1%/+1% 仍打印。**换机器后需 `bench.py telemetry-check --aa` 重标**。µs 级严格性移至 `tests/config/test_telemetry_cost.py`（插桩路径重放 ≤2ms/run） |
+| 环境指纹 GPU 来源 | 改走 NVML（43.1ms→20.8ms、免子进程），失败回退 nvidia-smi；新增 `environment["gpu_source"]`（`nvml`/`nvidia-smi`/`unavailable`） |
+| **不新增**：PCIe 速率 | 本机不可直读，v2 报告**不产该字段**（原承诺收窄为 L3 推导：counter 字节 ÷ 相位墙钟，由使用者自行换算） |
+
 ## 5. 发布节奏
 
 | 版本 | 内容 |
@@ -104,4 +114,5 @@
 | 0.13.0 | S9：模块入包 + shim、D6/Q5 激活（本指南 §1/§2.1/§2.2） |
 | 0.13.1 | S9 续：载荷类型化（DeviceRef/SegmentTask/InferBatch）、设备层迁 `gpu/`、打包修复（子包入 wheel） |
 | 0.13.2 | S6：原生测量系统（RunReport + `meta['report']` + `bench`）、显式 `warmup()`、归约 D2H 异步化、keep_crops D2H 并批、分组窗口自适应（§4.1） |
+| **0.13.3** | S6 续：**资源层落地**（`report["resources"]` L1 相位差分、full 档 `report["hardware"]` NVML）→ **RunReport schema v1→v2（只加键）**；hybrid CPU 线程档位 12→**16**（h264 −6.5% / hevc −12.7%，取消版本号门控）；PI-15 门禁按本机 A/A 校准（§4.2）；修 off 档仍查注册表的缺陷 |
 | 0.14.0（计划） | 删除六根模块 shim、`VOE_ENV_WINS`；届时无新破坏 |

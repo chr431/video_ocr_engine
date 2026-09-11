@@ -12,6 +12,10 @@
 - rule: 性能 A/B 必须交错测量——同码连跑两次可差 7.7%（GPU 热降），顺序 A/B 会把漂移记到 B 头上
   mechanism: script
   # 执行体 = tools/bench.py ab（独立子进程 + 逐对符号一致性 + 冷却）
+- rule: 门禁阈值必须 ≥ 本机可分辨下限——先 A/A 标定（同配置两槽），阈值=|均值偏差|+3×SE；低于分辨力的阈值只生产误报，µs 级严格性交给确定性成本守卫
+  mechanism: script
+  # 执行体 = tools/bench.py telemetry-check --aa；判据=同轮配对差分的**均值**+符号多数一致（位置效应靠轮转对消；双峰分布下中位数失效、均值有效）
+  # 严格守卫 = tests/config/test_telemetry_cost.py（量插桩路径本身，分辨力高墙钟 ~10⁴ 倍）
 - rule: 新增静默吞噬需行内注释豁免（audit 判据）；清理路径须 logger.debug
   mechanism: ci
 - rule: 旋钮进 config/ 注册表（未注册名不得读取）；默认值依据带锚点

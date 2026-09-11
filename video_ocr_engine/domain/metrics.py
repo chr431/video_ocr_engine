@@ -18,6 +18,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Iterator, Literal
 
+from .resources import NvmlSampler, ResourceProbe
+
 MetricKind = Literal["span", "counter", "gauge", "histogram"]
 METRIC_CAP = 64
 
@@ -160,7 +162,7 @@ class Metrics:
     """
 
     __slots__ = ("_tier", "_registry", "_clock", "_lock", "_local",
-                 "_buckets", "_master", "_checked")
+                 "_buckets", "_master", "_checked", "_resources", "_hw")
 
     def __init__(self, tier: str = "std", registry: MetricRegistry = METRICS,
                  clock=time.perf_counter) -> None:
@@ -173,6 +175,12 @@ class Metrics:
         self._buckets: list = []
         self._master: dict = _empty_bucket()
         self._checked: set = set()     # 已校验名（首次上报校验，之后集合命中）
+        # §8.6 r5 资源层：L1 相位边界差分（std+，纯 stdlib 计数，见
+        # domain/resources.py 的成本实测）；L2 设备峰值采样仅 full 档显式启动。
+        # None = off 档永不采样；False = std+ 但本 run 还没到边界（惰性建探针：
+        # 探针构造含 ctypes 结构定义，宿主/短路径不必付这笔钱）。
+        self._resources = None if tier == "off" else False
+        self._hw = None
 
     def _check(self, name: str) -> None:
         """N-1：未注册的名字不得上报（校验结果缓存，热路径只做集合命中）。"""
@@ -213,10 +221,42 @@ class Metrics:
         finally:
             self.record_span(name, self._clock() - t0)
 
+    def checkpoint(self, phase: str) -> None:
+        """L1 相位边界资源采样（std+；off 一行不执行）。"""
+        r = self._resources
+        if r is None:
+            return
+        if r is False:
+            r = self._resources = ResourceProbe()
+        r.checkpoint(phase)
+
+    def resource_report(self) -> dict | None:
+        """`{"sources":…, "per_phase":…}`；off 档 / 未建探针 → None。"""
+        r = self._resources
+        if not r:
+            return None
+        return {"sources": r.sources, "per_phase": r.per_phase()}
+
+    def start_hardware(self) -> None:
+        """L2 设备峰值采样：**仅 full 档**、仅显式调用时建线程（B6）。"""
+        if self._tier != "full" or self._hw is not None:
+            return
+        sampler = NvmlSampler()
+        sampler.start()
+        self._hw = sampler
+
+    def hardware_report(self) -> dict | None:
+        """停采样并返回摘要（未启动 / 非 full 档 → None）。"""
+        s = self._hw
+        if s is None:
+            return None
+        self._hw = None
+        return s.stop()
+
     def record_span(self, name: str, seconds: float) -> None:
         """已计时点的上报口（`_prof_end` 单一时序脊柱走这里，零额外时钟）。"""
         if not self.enabled:
-            return
+            return                    # off 档：不查注册表、不取桶、不分配（PI-15）
         self._check(name)
         b = self._bucket()
         s = b["spans"]

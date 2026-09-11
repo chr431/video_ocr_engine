@@ -98,4 +98,56 @@
   buffer_size_128_to_512_hevc_pct: 2.00
   gpu_pipeline_stream_0_to_1_h264_pct: 0.71
   verdict: 队列/预取均无收益；剩余候选=CPU 争用（待线程时间线剖析）
+# ── §8.6 r5 资源层首批真读数（L1 差分 / L2 NVML，2026-09-11）──────────────
+- metric: resource_layer_call_cost      # 单次采样成本实测（本机 Windows）
+  time_process_time_us: 0.05
+  kernel32_io_counters_us: 2.5
+  psapi_memory_info_us: 4.6
+  cudaMemGetInfo_us: 0.9
+  nvml_GetUtilizationRates_us: 0.3
+  nvml_GetMemoryInfo_us: 1.7
+  nvml_GetDecoderUtilization_us: 0.5
+  banned_psutil_threads_ms: 43.0        # 地雷：一次就吃满 PI-15 预算
+  banned_psutil_num_threads_ms: 5.1
+  l1_checkpoint_total_us: 10            # 每 run 仅 4 个边界 ≈ 40µs
+- metric: per_phase_cores_h264cpu_3000  # h264-cpu（TRT OCR），热轮差分
+  calibrate: {wall_s: 0.065, cores_avg: 9.18, threads: 4, rss_delta_mib: 267.4, disk_read_mbps: 967.2}
+  decode:    {wall_s: 0.953, cores_avg: 21.21, threads: 4, rss_delta_mib: 71.5, disk_read_mbps: 108.6, vram_used_mib: 1667.5}
+  ocr_tail:  {wall_s: 0.068, cores_avg: 7.38, threads: 2, rss_delta_mib: -349.9}
+  reading: CPU 软解相位实测用到 ~21/32 逻辑核 → hybrid 的 CPU 分片必与引擎线程争核
+- metric: nvml_sanity_check             # 探针不可自嗨：CPU 软解配置下 NVDEC 必须读 0
+  config: h264-cpu
+  nvdec_util_pct: {min: 0, p50: 0, max: 0}
+  gpu_util_pct: {min: 7, p50: 7, max: 34}
+- metric: pi15_gate_calibration          # 门禁阈值按本机 A/A 现测标定（r11 用户授权放松）
+  bad_estimator_same_code_two_reads_pct: [-0.504, 0.930]   # 旧判据：三档各自中位相减
+  fixed_order_full_delta_pct: 3.32       # 位置效应：每轮先跑的档系统性偏慢
+  subproc_aa_pct: {p50abs: 0.24, p95abs: 2.33, maxabs: 3.98}   # 子进程模式噪声
+  inproc_aa_25pairs_inner3_pct: {mean: -0.179, median: -0.365, sd: 1.053, se: 0.211,
+                                 p95abs: 1.811, maxabs: 2.597}
+  rule: limit = ceil_0.05(|A/A 均值偏差| + 3×SE), floor 0.30%
+  calibrated_limits_pct: {std: 0.85, full: 0.85}
+  statistic: 配对差分**均值**（轮转后差值 ±X 双峰，中位数落在峰上→失效）
+  sign_majority: 0.70
+- metric: pi15_final_verdict_quiet      # 独占机器复测（25 对 × inner 3，h264-cpu/3000）
+  off_s: 1.2106
+  std_s: 1.2096
+  full_s: 1.2053
+  std_vs_off_pct: 0.029
+  std_se_pct: 0.291
+  full_vs_off_pct: 0.140
+  full_se_pct: 0.257
+  signs: {std: 13/25, full: 13/25}
+  verdict: 通过（点估计其实优于原设计目标 +0.1%/+1%，但 SE 0.29% 不足以证明）
+- metric: telemetry_cost_guard          # 严格性搬到的确定性守卫（µs 级分辨力）
+  real_run_records: {span_keys: 9, span_samples: 138, counter_keys: 10, gauge_keys: 8, checkpoints: 4}
+  std_full_path_budget_ms_per_run: 2.0
+  off_tier_records_cost_ms_per_run: 0.012
+  report_assembly_ms: {samples_138: 0.107, samples_552: 0.078, samples_2760: 0.072}
+  note: 组装成本与样本数无关（drain 一次合并）；99ms 那种数字是 environment() 首调
+- metric: gpu_fingerprint_source        # 环境指纹改走 NVML（进程级缓存，落在报告路径上）
+  nvidia_smi_subprocess_ms: 43.1
+  nvml_first_call_ms: 20.8
+  nvml_calls_us: {GetUtilizationRates: 0.3, GetMemoryInfo: 1.7, GetDecoderUtilization: 0.5}
+  fallback: nvidia-smi（记 gpu_source=nvidia-smi；两者皆失败记 unavailable）
 

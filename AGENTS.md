@@ -73,12 +73,15 @@ python tools/_doc_section.py docs/log/ARCHIVE.md 4.4b        # 支持 16 / 16.8 
 | OCR 调度 / 引擎池 | `video_ocr_engine/ocr/native.py`（根 `ocr_native.py` 为兼容 shim） |
 | TRT | `video_ocr_engine/ocr/trt.py` + `video_ocr_engine/_gpu_kernels.py` |
 | 配置常量 | `video_ocr_engine/config/constants.py`（根 `engine_config.py` 为兼容 shim）；旋钮注册表 `video_ocr_engine/config/` |
-| 运行报告 | `video_ocr_engine/pipeline/report.py`（RunReport schema v1 → `meta['report']`）；指标注册表 `video_ocr_engine/domain/metrics.py` |
+| 运行报告 | `video_ocr_engine/pipeline/report.py`（RunReport schema **v2** → `meta['report']`；v2 加 `resources`/`hardware`）；指标注册表 `video_ocr_engine/domain/metrics.py`；资源层 `video_ocr_engine/domain/resources.py`（L1 边界差分 / L2 NVML） |
 | 分相打桩 | `video_ocr_engine/extractor.py` 的 `_prof_end`（**单一计时脊柱**：同一 t0 喂 profile 与指标） |
 | 性能 A/B | `tools/bench.py`（`run`/`diff`/`show`/`ab`/`telemetry-check`；报告落 `bench/registry.jsonl`） |
 
 ⚠️ **A/B 必须交错**（`bench ab`）：同一份代码连跑两次实测可差 **7.7%**
 （GPU 热降/后台占用），顺序 A 全跑再 B 全跑会把漂移记到 B 头上。
+⚠️ **门禁阈值必须 ≥ 本机可分辨下限**：先 `bench telemetry-check --aa` 标定
+（本机 A/A 同档两槽 \|Δ\|p95 达 1.8%），阈值 = \|偏差\|+3×SE；判据是**同轮配对
+差分的均值**+符号多数一致。µs 级严格性在 `tests/config/test_telemetry_cost.py`。
 `AGENTS.md` 只留指路，执行体在脚本（`knowledge/rules.yaml` 同名规则）。
 
 **现役并行维度只有一个**：`decode_backend="hybrid"` 的 CPU+NVDEC 双解码，

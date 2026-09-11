@@ -16,7 +16,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPORT_VERSION = 1
+# schema 版本：**只增不改**；任何结构演进必须 bump + 快照测试。
+# v2（S6 续轮）：新增 `resources`（L1 相位边界差分）与 `hardware`（L2 NVML
+# 峰值因子，仅 full 档采样过才出现）——都是**新增键**，按 v1 解析的旧读者不受影响。
+REPORT_VERSION = 2
 
 #: PI 守卫阈值（§13.2 N-5：散文 → 指标名 + 阈值）
 PI_LIMITS = {
@@ -30,8 +33,9 @@ _ENV_CACHE: dict | None = None
 def environment() -> dict:
     """录制基准字段（与 S0 manifest 同字段，§8.6 N-3）。
 
-    进程内缓存：GPU/驱动/版本查询含子进程调用，每 run 重查会污染 std 档
-    开销（PI-15）。
+    进程内缓存：GPU/驱动查询要 **20–43ms 一次**（本机 NVML 20.8ms、
+    nvidia-smi 子进程 43.1ms），落在报告组装路径上——每 run 重查会直接
+    污染 std 档开销（PI-15）。首 run 付一次，之后 ~0。
     """
     global _ENV_CACHE
     if _ENV_CACHE is not None:
@@ -49,16 +53,26 @@ def environment() -> dict:
         env["tensorrt"] = tensorrt.__version__
     except Exception:  # noqa: BLE001
         env["tensorrt"] = None
-    try:
-        out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,driver_version",
-             "--format=csv,noheader"], capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=10).stdout.strip()
-        name, _, drv = out.partition(",")
-        env["gpu"] = name.strip() or None
-        env["driver"] = drv.strip() or None
-    except Exception:  # noqa: BLE001
-        env["gpu"] = env["driver"] = None
+    # GPU/驱动：优先 NVML（本机实测 20.8ms 首调 vs nvidia-smi 子进程 43.1ms，
+    # 且不起子进程），失败才回退 nvidia-smi；两者都不行记 unavailable。
+    # 这段成本落在**报告组装路径**上（进程级缓存，只付一次），故能省则省。
+    from video_ocr_engine.domain.resources import gpu_identity
+    ident = gpu_identity()
+    if ident:
+        env["gpu"], env["driver"], env["gpu_source"] = ident[0], ident[1], "nvml"
+    else:
+        try:
+            out = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,driver_version",
+                 "--format=csv,noheader"], capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=10).stdout.strip()
+            name, _, drv = out.partition(",")
+            env["gpu"] = name.strip() or None
+            env["driver"] = drv.strip() or None
+            env["gpu_source"] = "nvidia-smi" if name.strip() else "unavailable"
+        except Exception:  # noqa: BLE001 无驱动工具 → 显式记不可用
+            env["gpu"] = env["driver"] = None
+            env["gpu_source"] = "unavailable"
     _ENV_CACHE = dict(env)
     return env
 
@@ -92,7 +106,8 @@ def health(snap: dict, *, counters: dict | None = None) -> dict:
 def build_report(metrics, *, wall: float, config_digest: str = "",
                  params: dict | None = None, degradations: list | None = None,
                  n_segments: int = 0, backend: str = "",
-                 ocr_backend: str = "", extra: dict | None = None) -> dict:
+                 ocr_backend: str = "", extra: dict | None = None,
+                 hardware: dict | None = None) -> dict:
     """组装 RunReport（telemetry=off 时返回 {}）。"""
     if not getattr(metrics, "enabled", False):
         return {}
@@ -117,6 +132,20 @@ def build_report(metrics, *, wall: float, config_digest: str = "",
                      "config_digest": config_digest},
         "degradations": list(degradations or []),
     }
+    # §8.6 r5 资源层（**report_version 2 的新增段，只加不改**）：
+    # resources = L1 相位边界差分（std+ 即有）；hardware = L2 NVML 峰值因子
+    # （仅 full 档采样过才出现；未采样时**不写该键**，而不是写空值冒充）。
+    if hasattr(metrics, "resource_report"):
+        res = metrics.resource_report()
+        if res:
+            res = dict(res)
+            res["notes"] = ("L1 为进程级差分，OCR 与解码并发时核数互相计入"
+                            "（相位平均并行核数的本意）；本机自测口径，跨机"
+                            "不可比；PCIe 本机不可直读，只能由 counter 字节 ÷"
+                            "相位墙钟推算（L3 推导区，本表不产该字段）")
+            rep["resources"] = res
+    if hardware is not None:
+        rep["hardware"] = hardware
     if params:
         rep["params"] = dict(params)
     if extra:

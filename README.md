@@ -195,11 +195,26 @@ ex.extract()         # 首个 extract 的 ocr.engine_init → ~0.0001s，首视�
 即可（引擎池按"模型/引擎类型/pad 下限/线程数"共享）。
 
 **运行报告**：`extract()` 返回的 `result.meta["report"]` 里带一份 RunReport
-（schema 版本化）：相位 span、全部计数器、PI 健康判定（热池 `engine_init`
-<0.1s、`syncs/chunk` ≤3）与环境指纹（commit 之外的 GPU/driver/TRT/decord
-版本）。默认档 `std` 开销在噪声内（实测 −0.15%）；`VOE_TELEMETRY=off` 一行
-关掉（`meta` 无 `report` 键、不组装报告）；`VOE_REPORT_FILE=<path>` 可把
-细档 JSON 落盘。A/B 用 `python tools/bench.py run/diff/ab`（报告口径，不写探针）。
+（schema 版本化，当前 **v2**）：相位 span、全部计数器、PI 健康判定（热池
+`engine_init` <0.1s、`syncs/chunk` ≤3）、环境指纹（commit 之外的
+GPU/driver/TRT/decord 版本），以及 v2 新增的**资源段**：
+
+| 段 | 档位 | 内容 |
+|---|---|---|
+| `resources.per_phase` | std+ | 每个粗相位边界的**差分**：墙钟、**平均并行核数**、活跃线程数、RSS 增量、磁盘读写 MB/s、显存占用 |
+| `resources.sources` | std+ | 每个读数的**真实来源**或 `unavailable:原因`（不用 None/0 冒充真值） |
+| `hardware` | full | NVML 低优先级采样（~200ms、上限 600 点、关停丢半帧）：GPU% / **NVDEC%** / 显存的 min/p50/p99/max + 采样失败计数 |
+
+资源层只用 stdlib（`time.process_time` + kernel32/psapi ctypes）——实测
+`psutil.Process.threads()` 在本机要 **43ms 一次**，用在遥测路径上会直接吃满
+PI-15 预算，故有测试禁止产品代码调用它。**本机自测口径、跨机不可比**；PCIe
+本机不可直读，报告不产该字段（只能由 counter 字节 ÷ 相位墙钟推算）。
+读数工具：`python tools/_probe_phase_cores.py --configs h264-cpu,h264-hybrid`。
+
+默认档 `std` 开销在噪声内（PI-15 复测见 `docs/log/`）；`VOE_TELEMETRY=off`
+一行关掉（`meta` 无 `report` 键、不组装报告、不建探针）；
+`VOE_REPORT_FILE=<path>` 可把细档 JSON 落盘。A/B 用
+`python tools/bench.py run/diff/ab`（报告口径，不写探针）。
 
 要点：实例完全独立（各自 OCR 会话/TRT 上下文共存正常）；GIL 无碍
 （GPU 管线消费线程极轻）。`decode_backend="cpu"` 与 `"auto"` 混搭即可

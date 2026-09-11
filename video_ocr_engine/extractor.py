@@ -409,8 +409,15 @@ class FieldExtractor:
         self._metrics = make_metrics(self._rc.diag_telemetry)
         self._metric_totals = {}
         self._report = {}
+        self._hardware = None
         _t_run = time.perf_counter()
-        _outcome = self._run_pipelined()   # S9-6：RunOutcome（裸 5 元组已退场）
+        # L2 设备峰值采样：**仅 full 档**建采样线程（B6——std/off 这里是一次
+        # 属性比较即返回），run 结束立刻停并丢弃半帧。
+        self._metrics.start_hardware()
+        try:
+            _outcome = self._run_pipelined()   # S9-6：RunOutcome（裸 5 元组已退场）
+        finally:
+            self._hardware = self._metrics.hardware_report()
         _wall = time.perf_counter() - _t_run
         frames, segs, texts, confs, rep_frames = _outcome.as_tuple()
         self._frames = frames
@@ -491,7 +498,8 @@ class FieldExtractor:
         rep = build_report(
             m, wall=wall, config_digest=self._rc.config_digest,
             degradations=self._degraded, n_segments=n_segments,
-            backend=self._backend, ocr_backend=self._ocr_backend_used)
+            backend=self._backend, ocr_backend=self._ocr_backend_used,
+            hardware=self._hardware)
         self._report = rep
         return rep
 

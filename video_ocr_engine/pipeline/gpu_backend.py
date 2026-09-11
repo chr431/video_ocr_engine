@@ -135,6 +135,9 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
     from .._helpers import _decode_progress_pct
 
     res = GpuRunResult()
+    # 指标器别名：L1 边界（`_MET.checkpoint`）从 open 起就要用，故在函数
+    # 顶端取一次（纯别名，无副作用；off 档是 NULL_METRICS 单例，全 no-op）。
+    _MET = spec.metrics
     # Cleanup handles are initialized before any calibration/setup can fail.
     ocr_session = None
     producer = None
@@ -172,6 +175,10 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
         raise
     if spec.prof_end is not None:
         spec.prof_end('producer', 'open_and_fps', _t_open)
+    # L1 资源边界（§8.6 r5）：粗相位结束处各采一次，差分见 run report。
+    # 记的是**进程级**用量，OCR 与解码并发时核数会互相计入——这是"该相位
+    # 平均并行核数"的本意（不是单相位隔离）。off 档此调用为空操作。
+    _MET.checkpoint('open')
     # OCR 会话提前到校准前启动（引擎构建与校准并行重叠）。
     try:
         ocr_session = spec.start_ocr_session(ocr_engines)
@@ -280,6 +287,7 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
         spec.on_bin_thresh(_th)
     if spec.prof_end is not None:
         spec.prof_end('producer', 'gpu_calib_total', _t_open)
+    _MET.checkpoint('calibrate')
     # B5（真装配点）：y_pool 依赖校准产出的 src_h/src_w；生产者未启动，
     # 此处赋值先行于一切并发读者。
     ctx.y_pool = (_YFramePool(ctx.src_h * ctx.src_w)
@@ -325,7 +333,6 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
     merge_hits = [0]          # PI-15：逐段计数器改局部累加（run 末一次上报）
     k = 0
     t0 = time.perf_counter()
-    _MET = spec.metrics
     from cuda.bindings import runtime as cudart
     raw_ready_ref = ocr_session.raw_ready
 
@@ -552,6 +559,7 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
                 logger.debug("producer.join 清理忽略异常", exc_info=True)
         _t_consume_end = time.perf_counter()
         res.timing['decode'] = _t_consume_end - t0
+        _MET.checkpoint('decode')
         try:
             ocr_session.finish()
         except BaseException:
@@ -570,6 +578,7 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
         _MET.counter('segment.segments', seg_idx)
         _MET.counter('segment.merges', merge_hits[0])
     res.timing['ocr'] = ocr_wall[0]
+    _MET.checkpoint('ocr')
     res.frames = frames
     res.segs = segs
     res.n_segments = len(segs)

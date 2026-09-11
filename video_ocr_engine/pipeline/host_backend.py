@@ -284,6 +284,8 @@ def run_host_pipeline(spec: HostRunSpec, ocr_engines=None,
         if spec.on_bin_thresh is not None:
             spec.on_bin_thresh(th)   # 流式合并判定活读，必须即时回写（F-4）
         _prof(spec, 'producer', 'calib_total', _t_cal)
+        if spec.metrics.enabled:
+            spec.metrics.checkpoint('calibrate')   # L1 资源边界（§8.6 r5）
     except BaseException:
         logger.debug("校准相位异常进入清理", exc_info=True)
         try:
@@ -319,6 +321,8 @@ def run_host_pipeline(spec: HostRunSpec, ocr_engines=None,
     finally:
         _t_consume_end = time.perf_counter()
         res.timing['decode'] = _t_consume_end - t0
+        if spec.metrics.enabled:
+            spec.metrics.checkpoint('decode')
         _prof(spec, 'producer', 'consumer_total', t0)
         ocr_session.finish()
         res.timing['ocr_tail'] = time.perf_counter() - _t_consume_end
@@ -332,6 +336,8 @@ def run_host_pipeline(spec: HostRunSpec, ocr_engines=None,
     if spec.metrics.enabled:
         spec.metrics.counter('segment.segments', seg_idx)   # PI-15：run 末一次
     res.timing['ocr'] = ocr_wall[0]
+    if spec.metrics.enabled:
+        spec.metrics.checkpoint('ocr')
     res.frames = frames
     res.segs = segs
     res.n_segments = len(segs)
