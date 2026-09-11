@@ -30,10 +30,12 @@
 ## 已知问题与注意
 
 ### decord（自建 fork，pip wheel 安装）
-- **0.8.3（2026-09-10 本地预备，未发布）**：fork master 领先 0.8.2 四个提交
-  （73e5540 析构 UAF 修复 / d94d92e hybrid GPU 池深按 ROI 重算 /
-  3b96c6f hybrid chunk 预路由 / 93a5ce1），本地提交 486d2f6 已 bump 版本号。
-  本地开发 dll：`DECORD_LIBRARY_PATH=D:\Repo\decorduild-081fix`（与
+- **0.8.3（2026-09-10 本地预备，未发布；2026-09-11 追加一个修复）**：fork
+  master 领先 0.8.2 五个提交（73e5540 析构 UAF 修复 / d94d92e hybrid GPU 池深
+  按 ROI 重算 / 3b96c6f hybrid chunk 预路由 / 93a5ce1 / **99b8785 FORCE_SIDE
+  诊断臂死锁修复**——bootstrap 与预路由绕过覆盖，导致 `force=cpu` 挂死），
+  本地提交 486d2f6 已 bump 版本号。
+  本地开发 dll：`DECORD_LIBRARY_PATH=D:\Repo\decord\build-081fix`（与
   HEAD 同步，ninja 验新）。发布步骤见
   `tools/_roadmap_20260910/release-notes-0.8.3-draft.md`（目录已删除）。
 - **h264 NVDEC 是本机硬件天花板，非软件问题**（2026-09-10 实测）：同内容

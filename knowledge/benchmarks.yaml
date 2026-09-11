@@ -150,4 +150,15 @@
   nvml_first_call_ms: 20.8
   nvml_calls_us: {GetUtilizationRates: 0.3, GetMemoryInfo: 1.7, GetDecoderUtilization: 0.5}
   fallback: nvidia-smi（记 gpu_source=nvidia-smi；两者皆失败记 unavailable）
+# ── hybrid 混跑损耗（fork 死锁修复后才可测；2026-09-11，600 帧/臂）──────────
+- metric: hybrid_mixing_loss_fps        # FORCE_SIDE 三臂（短窗含暖机，看相对量）
+  h264: {gpu_arm: 920, cpu_arm: 2200, mixed: 1588, ideal_sum: 3120}
+  hevc: {gpu_arm: 1976, cpu_arm: 898, mixed: 1334, ideal_sum: 2874}
+  mixed_vs_best_single_pct: {h264: -28, hevc: -32}
+  reading: 混跑相对**最优单侧**是净亏损（与"hybrid_gpu 仅达理想 67–77%"是两笔账）
+  first_suspect: 队头阻塞——发射按 chunk 严格保序，chunk 边界=关键帧（GOP≈299 帧）
+  fork_bug_fixed: 99b8785（bootstrap/BuildPlan 绕过 FORCE_SIDE → force=cpu 死锁，
+                    实测 637 帧 CPU 存货卡在一个永不落地的 GPU chunk 后面）
+  unforced_recheck_fps_2000: {before: [2980, 2994, 3071], after: [2833, 3077, 3041]}
+  golden_with_fork_dll: 28/28 逐位一致
 

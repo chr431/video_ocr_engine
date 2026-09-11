@@ -38,7 +38,8 @@ AUDITS = [
 def _run(rel: str) -> tuple[int, str]:
     p = ROOT / rel
     r = subprocess.run([sys.executable, str(p)],
-                       cwd=str(ROOT), capture_output=True, text=True)
+                       cwd=str(ROOT), capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
