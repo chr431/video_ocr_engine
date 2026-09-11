@@ -184,7 +184,10 @@
                        → 瞬态滞留变永久冻结 → 队头缺帧/盲窗被对侧库存吃满
   fix: 跨侧切换后新 chunk 前 KICK_BURST=5 包克隆喂离场侧（越界 stash/陈旧
        丢弃兜底）；DECORD_HYBRID_KICK_BURST=0 可消融回单包 kick
-  stress: 慢消费者压测（_probe_stress_harness 规格）24/24 干净（修复前 ~2/8 挂）
+  stress: 引擎 GPU 管线全片判别：DECORD_HYBRID_KICK_BURST=0 → hevc 4/4 挂死，
+          =5 数十次运行零挂死（金标 28/28 含 hybrid）。⚠️ 纯 VideoReader 慢
+          消费者 harness（3000f 与全片）复现不了该死锁（kick=0 也干净）——
+          §8.2"复现配方（无需引擎）"记载有误，判别必须走引擎
   gate_off: sustained 转默认 + DECORD_CPU_RATE_SUSTAINED env 删除（双轨期结束）
   e2e_full_video: # 引擎 GPU 管线全片 e2e，配对 3 遍，段数逐位一致（_probe_e2e_mode）
     hevc: {ewma_s: 12.73, sustained_s: 9.66, delta: "-24%，3/3"}
@@ -194,8 +197,20 @@
     av1: {delta: "持平（±1% 漂移内）"}
   decode_only: hevc hybrid 2498 / hybrid_gpu 2659 fps（并行理想 2790 的 90-95%）
   golden_with_fork_dll: 28/28 逐位一致
-  leftover: 上传批次碎裂仍在（avg_batch 1.1-3 vs 设计 8，nobuf=0）——kUploadBatch
-            A/B 待做；decode-only 口径 h264 sustained −3%（engine e2e 反而 −4.7%）
+  leftover: 上传批次碎裂已定性为**无害**（见下条 kUploadBatch A/B）
   fork_commit: 4ccf889
   dev_dll_md5: 52a10789
+# ── 2026-09-12 续：kUploadBatch A/B 负面结果（§9.4-1 关账）─────────────────
+- metric: hybrid_upload_batch_ab          # DECORD_HYBRID_UPLOAD_BATCH 消融（fork 281a738）
+  result: 批大小不是杠杆，上传链重构不做
+  mechanism: 有效批均 1.1-3 的约束是 **cpu-empty**（上传者消费快于 CPU 解码者
+             补充，队列近恒空），不是上限——32/64 档批均纹丝不动（恒 1.1）
+  batch1_arm: 逐帧同步旧行为（batch=1）引擎全片 e2e 无差：hevc 配对 3 遍中位
+              9.54 vs 9.66s（符号混乱=漂移内）；av1 9.55s、h264 3.28s 均在
+              多rep基线带内 → 上传同步成本完全不在关键路径
+  conclusion: cpu-empty 提前冲刷（低发射延迟）是正确默认；avg_batch 1.1 vs 设计
+              8 的"账面差距"无性能后果，勿再立项重构
+  knob: DECORD_HYBRID_UPLOAD_BATCH 保留（操作点变化时可复测；1=逐帧同步）
+  fork_commit: 281a738
+  dev_dll_md5: 5ffacd49
 

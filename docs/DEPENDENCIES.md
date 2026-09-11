@@ -30,20 +30,22 @@
 ## 已知问题与注意
 
 ### decord（自建 fork，pip wheel 安装）
-- **0.8.3（2026-09-10 本地预备，未发布；2026-09-11/12 追加三个修复）**：fork
-  master 领先 0.8.2 八个提交（73e5540 析构 UAF 修复 / d94d92e hybrid GPU 池深
+- **0.8.3（2026-09-10 本地预备，未发布；2026-09-11/12 追加四个修复）**：fork
+  master 领先 0.8.2 九个提交（73e5540 析构 UAF 修复 / d94d92e hybrid GPU 池深
   按 ROI 重算 / 3b96c6f hybrid chunk 预路由 / 93a5ce1 / **99b8785 FORCE_SIDE
   诊断臂死锁修复** / **75b8602 hybrid 非打印 stats 层 + sustained 产能估计器
   （实验性 opt-in）** / **4ccf889 sustained 产能口径转默认 + EWMA 旧口径删除
-  + kick 突发治倾斜计划死锁**），本地提交 486d2f6 已 bump 版本号。
+  + kick 突发治倾斜计划死锁** / **281a738 上载批大小消融旋钮 + kick 承重
+  判别**），本地提交 486d2f6 已 bump 版本号。
   - **sustained（滑窗持续产能）现为唯一 CPU 产能口径**（4ccf889 起）：
     `DECORD_CPU_RATE_SUSTAINED` env 已删除。机制/数字见
     `knowledge/benchmarks.yaml` 的 `hybrid_cpu_rate_ratchet`。
-    kick 突发（KICK_BURST=5）治 open-GOP DPB 队头尾帧死锁，
+    kick 突发（KICK_BURST=5）治 open-GOP DPB 队头尾帧死锁
+    （引擎全片 kick=0 消融 4/4 挂死，承重性确凿）；
     `DECORD_HYBRID_KICK_BURST=0` 可消融回单包 kick。
   - 引擎 GPU 管线全片 e2e（配对 3 遍）：hevc −24%（且 hybrid 首次显著
     胜纯 NVDEC −23%）、h264 −4.7%、av1 持平；金标 28/28 逐位一致。
-  - 开发 dll md5 `52a10789`（build-081fix，与 fork HEAD 同步）。
+  - 开发 dll md5 `5ffacd49`（build-081fix，与 fork HEAD 同步）。
 - **h264 NVDEC 是本机硬件天花板，非软件问题**（2026-09-10 实测）：同内容
   三编码 NVDEC 982(h264)/2103(hevc)/1749(av1) fps；ffmpeg 自带 cuvid 同比
   （16.5x vs 38.7x）。h264 解码选峰值应走 CPU 软解/显式 hybrid。
