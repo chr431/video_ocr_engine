@@ -1,0 +1,243 @@
+"""hybrid 发布门禁（§18 硬化）：把 §16/§17 的手工验证矩阵固化成一键脚本。
+
+背景：死锁类 bug 两次都只在引擎口径暴露（§10.2、§16.1），且时序敏感——
+零散手跑守不住，必须矩阵化重复。门禁分六步（全部子进程 + 硬超时，
+退出码非 0 = 有 FAIL）：
+
+  1 gold      金标 28 用例（tests/golden/record.py --verify）
+  2 fast      三码 × hybrid+TRT（hybrid_gpu 设备路径）×2：完成 + 段数对表
+  3 slow      三码 + bf16 酷刑流 × hybrid+ONNX（宿主路径）：完成 + 段数对表
+  4 stress    压测 harness 三码 hybrid_gpu 全片 ×2 trials：bad=0
+  5 corrupt   损坏码流三例（faststart 截断 60%/90% + 中段坏字节）× 双路径：
+              完成或干净报错均可，超时/崩溃 = FAIL（验证护栏+EOF 冲刷兜底）
+  6 ablation  KICK_BURST=0 + h264lg+ONNX：**期望超时挂死**（反馈清偿机制
+              在被测构建里承重的判别；健康完成 = 修复缺失 = FAIL）
+
+用法：
+  python tools/_probe_release_gate.py                     # 用已装 wheel
+  python tools/_probe_release_gate.py --fork D:/Repo/decord/build-081fix
+  python tools/_probe_release_gate.py --only fast,slow    # 跑子集
+  python tools/_probe_release_gate.py --keep-corrupt      # 保留损坏流产物
+
+⚠️ 段数期望表是**内容锚点**：引擎分段语义正当变更（如代表帧选择改动）会
+改段数——改引擎后先单跑确认新段数再更新表；fork/dll 变更不得动段数。
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.stdout.reconfigure(encoding="utf-8")
+
+_VDIR = Path(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"))
+_CORRUPT_DIR = ROOT / "bench" / "corrupt"
+_FFMPEG = r"D:/Software/ffmpeg-n9.0-latest-win64-gpl-shared-9.0/bin/ffmpeg.exe"
+
+# (文件名, 期望段数)。段数锚点说明见模块 docstring。
+E2E_CASES = {
+    "test6_h264.mp4": 8241,
+    "test6_hevc.mp4": 8243,
+    "test6.mp4": 8241,
+    "test6_h264_bf16.mp4": 8242,   # §17 酷刑流（重排深度 17）
+}
+
+_RE_E2E = re.compile(
+    r"E2E (\S+) (\S+) wall=([\d.]+)s segs=(\d+) gpu_pipeline_mode=(\S+)")
+
+
+def sh(args: list[str], timeout: float, env: dict | None = None,
+       cwd: Path | None = None) -> tuple[int, str, str, bool]:
+    """跑子进程，返回 (rc, out, err, timed_out)。"""
+    try:
+        p = subprocess.run(
+            args, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=timeout, env=env, cwd=cwd)
+        return p.returncode, p.stdout, p.stderr, False
+    except subprocess.TimeoutExpired as e:
+        def _s(x):
+            return x.decode("utf-8", "replace") if isinstance(x, bytes) else (x or "")
+        return 124, _s(e.stdout), _s(e.stderr), True
+
+
+def gate_env(extra: dict | None = None) -> dict:
+    env = dict(os.environ)
+    env.pop("DECORD_HYBRID_DEBUG", None)
+    env.pop("DECORD_HYBRID_KICK_BURST", None)
+    env.pop("DECORD_HYBRID_STATS", None)
+    if extra:
+        env.update(extra)
+    return env
+
+
+def run_e2e(vid: str, backend: str, ocr: str, env: dict,
+            timeout: float) -> tuple[bool, str]:
+    """单次引擎 e2e。返回 (pass, 摘要)。"""
+    rc, out, err, to = sh(
+        [sys.executable, str(ROOT / "tools" / "_probe_e2e_mode.py"),
+         vid, backend, ocr], timeout, env=env)
+    if to:
+        return False, "TIMEOUT"
+    m = _RE_E2E.search(out)
+    if not m:
+        crash = "Traceback" not in err
+        return False, ("CRASH(rc=%d)" % rc) if crash else "ERR(rc=%d)" % rc
+    wall, segs = float(m.group(3)), int(m.group(4))
+    exp = E2E_CASES.get(Path(vid).name)
+    seg_ok = (exp is None or segs == exp)
+    # stall 取证默认开后，健康运行不应出现 [pop-stall]（A2 的零误报门）
+    stall = err.count("[pop-stall]")
+    ok = rc == 0 and seg_ok and stall == 0
+    note = "segs=%d%s wall=%.1fs" % (segs, "" if seg_ok else "≠%d" % exp, wall)
+    if stall:
+        note += " ⚠stall×%d" % stall
+    return ok, note
+
+
+def gen_corrupt() -> list[Path]:
+    """生成损坏码流（faststart 重封装使 moov 前置，截断/坏字节后仍可开）。
+
+    产物放 bench/corrupt/（git 忽略），名字含 test6 保证 ROI 约定命中。
+    """
+    if not os.path.exists(_FFMPEG):
+        alt = shutil.which("ffmpeg")
+        if not alt:
+            raise RuntimeError("ffmpeg 不可用：%s" % _FFMPEG)
+    ff = _FFMPEG if os.path.exists(_FFMPEG) else shutil.which("ffmpeg")
+    _CORRUPT_DIR.mkdir(parents=True, exist_ok=True)
+    src = _VDIR / "test6_h264.mp4"
+    base = _CORRUPT_DIR / "test6_gate_base.mp4"
+    rc, _, err, _ = sh([ff, "-y", "-i", str(src), "-c", "copy",
+                        "-movflags", "+faststart", str(base)], 120)
+    if rc != 0:
+        raise RuntimeError("faststart 重封装失败: %s" % err[-200:])
+    raw = base.read_bytes()
+    out: list[Path] = []
+    for name, frac in (("test6_gate_trunc60.mp4", 0.6),
+                       ("test6_gate_trunc90.mp4", 0.9)):
+        p = _CORRUPT_DIR / name
+        p.write_bytes(raw[: int(len(raw) * frac)])
+        out.append(p)
+    mid = bytearray(raw)
+    off = int(len(mid) * 0.55)
+    for i in range(off, min(off + 4096, len(mid))):
+        mid[i] ^= 0xFF
+    p = _CORRUPT_DIR / "test6_gate_midcorrupt.mp4"
+    p.write_bytes(bytes(mid))
+    out.append(p)
+    base.unlink()
+    return out
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--fork", default=os.environ.get("DECORD_FORK_BUILD", ""),
+                    help="指向 fork 构建树（不给了用已装 wheel）")
+    ap.add_argument("--only", default="",
+                    help="逗号分隔子集：gold,fast,slow,stress,corrupt,ablation")
+    ap.add_argument("--timeout-e2e", type=float, default=300.0)
+    ap.add_argument("--timeout-ablation", type=float, default=120.0,
+                    help="消融判别的挂死等待（健康跑 ~25s 会先完成 → FAIL）")
+    ap.add_argument("--keep-corrupt", action="store_true")
+    args = ap.parse_args()
+
+    env = gate_env()
+    if args.fork:
+        env["DECORD_LIBRARY_PATH"] = args.fork
+    dll = env.get("DECORD_LIBRARY_PATH", "已装 wheel")
+    steps = set(args.only.split(",")) if args.only else {
+        "gold", "fast", "slow", "stress", "corrupt", "ablation"}
+    results: list[tuple[str, str, bool]] = []
+    t_all = time.perf_counter()
+
+    import decord
+    print("门禁环境: decord %s（dll: %s）" % (decord.__version__, dll))
+
+    if "gold" in steps:
+        t0 = time.perf_counter()
+        rc, out, err, to = sh(
+            [sys.executable, str(ROOT / "tests" / "golden" / "record.py"),
+             "--verify"], 1800, env=env)
+        m = re.search(r"verify: (\d+)/(\d+) 一致", out)
+        ok = bool(m) and m.group(1) == m.group(2) and not to
+        results.append(("gold", m.group(0) if m else "无输出(rc=%d,to=%s)" % (rc, to), ok))
+        print("  [gold] %s (%.0fs)" % (results[-1][1], time.perf_counter() - t0))
+
+    if "fast" in steps:
+        for rep in (1, 2):
+            for vid in ("test6_h264.mp4", "test6_hevc.mp4", "test6.mp4"):
+                ok, note = run_e2e(vid, "hybrid", "tensorrt", env, args.timeout_e2e)
+                results.append(("fast", "%s %s" % (vid, note), ok))
+                print("  [fast %d] %s %s" % (rep, vid, note))
+
+    if "slow" in steps:
+        for vid in E2E_CASES:
+            ok, note = run_e2e(vid, "hybrid", "cpu", env, args.timeout_e2e)
+            results.append(("slow", "%s %s" % (vid, note), ok))
+            print("  [slow] %s %s" % (vid, note))
+
+    if "stress" in steps:
+        t0 = time.perf_counter()
+        rc, out, err, to = sh(
+            [sys.executable, str(ROOT / "tools" / "_probe_stress_harness.py"),
+             "--cases", "hevc-gpu,av1-gpu,h264lg-gpu",
+             "--trials", "2", "--nt", "32", "--frames", "99999",
+             "--timeout", "180"], 1800, env=env)
+        ok = ("bad=0" in out) and not to
+        tail = (out.strip().splitlines() or ["?"])[-1]
+        results.append(("stress", "%s (%.0fs)" % (tail, time.perf_counter() - t0), ok))
+        print("  [stress] %s" % results[-1][1])
+
+    if "corrupt" in steps:
+        try:
+            files = gen_corrupt()
+        except RuntimeError as e:
+            results.append(("corrupt", "生成失败: %s" % e, False))
+            files = []
+        for p in files:
+            for backend, ocr in (("hybrid", "tensorrt"), ("hybrid", "cpu")):
+                rc, out, err, to = sh(
+                    [sys.executable, str(ROOT / "tools" / "_probe_e2e_mode.py"),
+                     str(p), backend, ocr], args.timeout_e2e, env=env)
+                if to:
+                    ok, note = False, "TIMEOUT"
+                elif rc == 0 and _RE_E2E.search(out):
+                    ok, note = True, _RE_E2E.search(out).group(0)
+                elif "Traceback" in err:
+                    ok, note = True, "干净报错(rc=%d)" % rc
+                else:
+                    ok, note = False, "CRASH(rc=%d)" % rc
+                results.append(("corrupt", "%s %s/%s %s" % (
+                    p.name, backend, ocr, note), ok))
+                print("  [corrupt] %s" % results[-1][1])
+        if not args.keep_corrupt and _CORRUPT_DIR.exists():
+            shutil.rmtree(_CORRUPT_DIR, ignore_errors=True)
+
+    if "ablation" in steps:
+        rc, out, err, to = sh(
+            [sys.executable, str(ROOT / "tools" / "_probe_e2e_mode.py"),
+             "test6_h264.mp4", "hybrid", "cpu"],
+            args.timeout_ablation,
+            env=gate_env({"DECORD_HYBRID_KICK_BURST": "0",
+                          **({"DECORD_LIBRARY_PATH": args.fork}
+                             if args.fork else {})}))
+        ok, note = to, "挂死如预期(机制承重)" if to else "健康完成=修复缺失!"
+        results.append(("ablation", note, ok))
+        print("  [ablation] %s" % note)
+
+    fails = [r for r in results if not r[2]]
+    print("\n════ 发布门禁：%d/%d 通过（%.0fs）════" % (
+        len(results) - len(fails), len(results), time.perf_counter() - t_all))
+    for step, note, ok in fails:
+        print("  ✗ [%s] %s" % (step, note))
+    return 1 if fails else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

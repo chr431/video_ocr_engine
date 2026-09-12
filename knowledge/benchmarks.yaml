@@ -338,3 +338,30 @@
           正确键是 bframes；测量重排深度用包序逆序游程，别信 has_b_frames
   next: 已发布 v0.8.3（tag + cp39–cp314 + gpu.zip；CI cp313 抽验同绿）
   fork_commit: b67f9eb
+# ── 2026-09-12 续：稳定性硬化轮（§18）──────────────────────────────────────
+- metric: hybrid_release_gate
+  question: 死锁/崩溃类时序敏感 bug 如何系统守住（§10.2/§16 两轮手工验证的固化）？
+  result: tools/_probe_release_gate.py 六步 19 项一键门禁（金标/快慢双路径/
+          压测/损坏码流/消融判别），dev dll 全绿 528s；损坏流现场生成
+          （faststart+截断专打 demux 中途 EOF）
+  evidence: 全门禁 19/19；ablation 步 KICK_BURST=0 挂死如预期（判别=机制承重）
+  next: 发布前必跑（对 wheel 或待发 dll）；新视频/引擎分段语义变更需同步
+          段数期望表
+- metric: corrupt_stream_hardening
+  question: 门禁首轮 corrupt 4/6 失败——截断流的崩溃/挂死根因？
+  result: 双重 CHECK 致命化（fork d6028fe 修复）：filter Push 对 buffersrc
+          拒收（截断尾帧 -12）CHECK abort=0xC0000409 崩溃；Pop EAGAIN 同型；
+          异常路径下 worker 中断→析构 join 卡死=假挂起。改丢弃+早退后
+          NextFrameImpl 既有 EOF 代偿（FetchCachedFrame 补位）接管——
+          三 ctx 截断全优雅完成 14831/14831，ASAN 零报告
+  caveat: 纯 NVDEC 路径本就幸免（无 ffmpeg filter 链）；观测上的"挂死"
+          多数实为关闭路径 join 卡死，取证先看 CPU 占用（0%=阻塞非自旋）
+  next: 已修，随 0.8.4 发布（v0.8.3 wheel 不含）
+  fork_commit: d6028fe
+- metric: stall_forensics_default
+  question: pop-stall 取证能否默认开（不再要求先开 STATS 复现）？
+  result: 时间判别器（3s 无进展首报 + 指数退避至 60s，进展即清零）；
+          计数判别器证伪——健康供帧间隙毫秒级即凑满连败（误报 8 行/跑）。
+          挂死 70s 打 14 行、健康双路径零误报（fork 32241f5）
+  next: 已落地；0xC0000409 与 0% CPU 阻塞是两类故障的快速指纹
+  fork_commit: 32241f5
