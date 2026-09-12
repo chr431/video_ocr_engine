@@ -214,3 +214,22 @@
   fork_commit: 281a738
   dev_dll_md5: 5ffacd49
 
+# ── 2026-09-12 续：全片 vs 3000f 窗口的 HOL 摊薄实验（§11）─────────────────
+- metric: hybrid_hol_fullvideo            # _probe_hol_stats --frames 99999，双 ctx × 2 reps
+  question: 队头阻塞消耗能否被完整视频时长摊薄？
+  answer: 只摊薄宿主路径；HOL 秒数随片长增长（固有等待），跨时长健康指标 =
+          吞吐达成率而非 HOL%
+  host_ctx: hybrid(宿主) 三码全片 +9~27%：h264 3135→3975（达成 69%→87%）、
+            hevc 2498→2897、av1 2445→2670（→95%）；hevc 全片超 3000f 理想分母
+            （单臂短窗口径低估长跑，非超并行理想）
+  gpu_ctx: hybrid_gpu 分化——hevc +7.8%（→103%）；h264 零摊薄（68% 持平）；
+           **av1 回退 6.4%**（2462→2304，88%→82%）
+  av1_regression_mechanism: sustained rc 长片塌到 702（单臂真值 1112 的 63%）
+           → 计划 78% 倾斜 GPU → g-head strand 17884 / HOL 6.52s；引擎级未显形
+           （消费节奏慢自然配平，e2e 与 EWMA 持平），快消费场景（批量互补/
+           并发流水）会踩到
+  hol_metric_note: 全片 HOL% 普升至 32-68% 且 g-head 绝对值 4.3-6.5s，但吞吐
+           同向上升——HOL 时间 = 快臂份额跑完后按保序等慢臂的固有等待，
+           不可由消费端调度回收
+  next: av1/h264 sustained 读数钳制或分相位采样（§11.2 排序第一）
+  fork_commit: 281a738
