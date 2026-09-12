@@ -233,3 +233,24 @@
            不可由消费端调度回收
   next: av1/h264 sustained 读数钳制或分相位采样（§11.2 排序第一）
   fork_commit: 281a738
+# ── 2026-09-12 续：控制变量重测——test6 转 h264 + 全片单臂（§12）────────────
+- metric: hybrid_controlled_codec_matrix  # test6_h264.mp4 = libx264 crf19 medium，
+  #  High profile、严格 GOP 300（-sc_threshold 0）、1080p60、23970 帧、同 ROI
+  first_confounder: 编码——同内容 CPU 单臂 h264/av1/hevc = 2690/1290/964（2.8x）；
+             旧"h264 67% 最远"有 25% 是分母错（test5 CPU 3573 ≠ test6 内容真值 2690）
+  arm_longrun_gain: CPU 单臂全片 vs 3000f = hevc +28%、av1 +16%；NVDEC ≈0%
+             （固定功能不挑内容不挑片长）→ 旧理想和系统性低估 5-15%
+  corrected_matrix: # 全片 23970 帧，达成率 = fps/(单臂和)
+    h264lg: {cpu: 2690, nvdec: 965, ideal: 3655, hybrid: 3268, hybrid_gpu: 2944}
+    hevc: {cpu: 964, nvdec: 2113, ideal: 3077, hybrid: 2897, hybrid_gpu: 2866}
+    av1: {cpu: 1290, nvdec: 1734, ideal: 3024, hybrid: 2670, hybrid_gpu: 2304}
+  achievement: hybrid 89/94/88%，hybrid_gpu 81/93/76%（h264lg/hevc/av1）
+  dev_host_gap_law: 设备路径差距与 CPU 臂产能正相关（hevc 1.1%/h264 9.9%/
+             av1 13.7%）——快 CPU 编码下上载交付上限 bind（h264lg c-head
+             3.45s、strandmax 仅 440/571 = 交付跟不上而非保序积压）
+  av1_76pct_mechanism: BuildPlan 一次性冻结在首窗坏读数（全片仅 6 折样本、
+             rc=702 = 真值 1290 的 54%）；慢降锁保读数不棘轮但规划不重读
+  supersede: §11 表的达成率全部按本条分母重算（hevc"超100%"为分母伪影）
+  next: ① 首窗读数钳制/分相位采样（修 BuildPlan 输入质量）② 设备路径上载
+        天花板量化 ③ 0.8.3 wheel 发布
+  fork_commit: 281a738

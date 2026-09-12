@@ -63,7 +63,11 @@ print("HOLJSON " + json.dumps({"wall": wall, "got": got}))
 _VDIR = os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test")
 CASES = {"h264": (os.path.join(_VDIR, "test5.mp4"), "843,993,949,1026"),
          "hevc": (os.path.join(_VDIR, "test6_hevc.mp4"), "841,994,950,1027"),
-         "av1": (os.path.join(_VDIR, "test6.mp4"), "841,994,950,1027")}
+         "av1": (os.path.join(_VDIR, "test6.mp4"), "841,994,950,1027"),
+         # test6(av1) 的 h264 转码（同内容同长度 23970 帧、同 GOP 300、
+         # High profile、libx264 crf19 medium）——长片单臂 vs 混合的
+         # 控制变量臂，编码/长度/GOP 与 av1 源全同（§11 后续实验）
+         "h264lg": (os.path.join(_VDIR, "test6_h264.mp4"), "841,994,950,1027")}
 
 _RE = {
     "mode": re.compile(r"mode=(\S+) frames c=(\d+) g=(\d+) chunks c=(\d+) g=(\d+)"),
