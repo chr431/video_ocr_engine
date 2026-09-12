@@ -37,6 +37,12 @@ _SEED = (
     ("pipeline.ocr_tail", "span", "s", "pipeline", ""),
     ("pipeline.q_get_wait", "gauge", "s", "pipeline", "PI-5"),
     ("pipeline.q_put_block", "gauge", "s", "pipeline", "PI-5"),
+    # 背压分诊（std 档即有）：总时长只说明"堵了多久"，次数与单次最长
+    # 才区分"偶发长停顿"与"持续细碎互锁"——前者查尾帧，后者查调度。
+    ("pipeline.q_get_wait_n", "counter", "次", "pipeline", "PI-5"),
+    ("pipeline.q_get_wait_max", "gauge", "s", "pipeline", "PI-5"),
+    ("pipeline.q_put_block_n", "counter", "次", "pipeline", "PI-5"),
+    ("pipeline.q_put_block_max", "gauge", "s", "pipeline", "PI-5"),
     ("pipeline.consume_feed", "span", "s", "pipeline", ""),
     # ── decode：批级（std 档不含 per-frame）──
     ("decode.batch", "span", "s", "decode", ""),
@@ -134,6 +140,15 @@ PROFILE_SPANS = {
     ("ocr", "ctc_decode"): "ocr.ctc_decode",
 }
 #: 无界（每段/每帧调用）→ std 档只累加总量（`totals` 段）；full 档另采样
+#: TOTALS 的伴随观测（std 档即有）：出现次数 / 单次最长
+PROFILE_TOTALS_N = {
+    ("producer", "q_put_block"): "pipeline.q_put_block_n",
+    ("ocr", "q_get_wait"): "pipeline.q_get_wait_n",
+}
+PROFILE_TOTALS_MAX = {
+    ("producer", "q_put_block"): "pipeline.q_put_block_max",
+    ("ocr", "q_get_wait"): "pipeline.q_get_wait_max",
+}
 PROFILE_TOTALS = {
     ("producer", "consume_feed"): "pipeline.consume_feed",
     ("producer", "q_put_block"): "pipeline.q_put_block",

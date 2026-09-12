@@ -49,7 +49,8 @@ from ._helpers import (  # noqa: F401
 )
 from .config import resolve
 from .domain.metrics import (
-    NULL_METRICS, PROFILE_GAUGES, PROFILE_SPANS, PROFILE_TOTALS, make_metrics,
+    NULL_METRICS, PROFILE_GAUGES, PROFILE_SPANS, PROFILE_TOTALS,
+    PROFILE_TOTALS_MAX, PROFILE_TOTALS_N, make_metrics,
 )
 from .pipeline.engine import SegmentEngine
 from .pipeline.gpu_backend import GpuRunSpec, run_gpu_pipeline
@@ -428,6 +429,7 @@ class FieldExtractor:
         self._diag = open_diagnostics(self._rc.diag_report_file,
                                       metrics=self._metrics)
         self._metric_totals = {}
+        self._metric_max = {}
         self._report = {}
         self._hardware = None
         _t_run = time.perf_counter()
@@ -509,6 +511,8 @@ class FieldExtractor:
             return {}
         for name, total in self._metric_totals.items():
             m.gauge(name, total)
+        for name, mx in self._metric_max.items():
+            m.gauge(name, mx)      # 单次最长（0 = 一次都没发生）
         # 编排三段的显式计时段（res.timing 由两后端直写；此处转成正样本 span）
         for _k, _name in (("decode", "pipeline.decode"),
                           ("ocr", "pipeline.ocr"),
@@ -594,6 +598,13 @@ class FieldExtractor:
         if name is not None:
             t = self._metric_totals
             t[name] = t.get(name, 0.0) + elapsed
+            # std 档也留「次数 + 单次最长」：背压分诊的最小充分集
+            _n = PROFILE_TOTALS_N.get((group, key))
+            if _n is not None:
+                m.counter(_n)
+                _mx = PROFILE_TOTALS_MAX[(group, key)]
+                if elapsed > self._metric_max.get(_mx, 0.0):
+                    self._metric_max[_mx] = elapsed
             if m.detailed:
                 m.record_span(name, elapsed)   # full 档另留逐次样本
 
