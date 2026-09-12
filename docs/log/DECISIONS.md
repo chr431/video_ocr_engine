@@ -1093,3 +1093,45 @@ README 去史化：批量修订史压缩为指向 PERF §19/§21 的指针，删
 
 **为何迁出**：AGENTS.md 有 12 KB 注入硬顶，本条是"已完成的一次性清理史"，
 不是"现在必须知道的"——故只留结论与自检命令，成因叙事存档于此。
+
+## 2026-09-13 · cuda/TensorRT 弃用 API 清偿；其中一条会静默重建引擎
+
+背景：每次 pytest 产生 9 条 `Passing foreign stream objects ... Stream(obj)`
++ 1 条 `Context managers for TensorRT types are deprecated`。
+
+### (a) 流协议弃用（**已诊断，未采用修复**）
+单根因：`_gpu_kernels.py` 把 `cuda.bindings` 原生流直接喂给 `cuda.core.launch()`
+（10 个发射点：3 处 `self._launch` + 7 处裸 `launch`；9 个警告位置只是不同入口的栈帧）。
+
+试过的修法：`_cs()` 用 `Stream.from_handle(int(stream))` 包一层，按句柄缓存。
+- 实测 `from_handle` **3.55 µs/次**，逐帧逐发射不可接受 → 必须缓存（已做）
+- 但**金标掉到 6/28**。且**对照实验证明不是它干的**（见下），然而既然
+  "包装不得改行为" 无法被证实，按 rules.yaml「金标漂移即回退」**已整体回退**。
+  仍未解决：包装后 `launch` 的行为差异机制未查明（当前只知"实测有差异"）。
+
+### (b) TensorRT 上下文管理器弃用（**已修，且是真 bug**）
+`trt.py:204` 的 `with trt.Runtime(logger) as rt:` —— 13.x 起弃用。
+
+**故障模式（实测）**：在把 `DeprecationWarning` 当错误的场景（CI `-W error`），
+该 `with` 抛异常 → 加载路径判定"引擎连续加载失败" → **同名重建引擎**
+（trt.py 保留文件、走重建路径），并在 native.py 回退 ONNX 的判定链上留下噪声。
+
+**证据**：`ocr_engines/multi_PP-OCRv6_rec_small_sm89_fp32_tf32unset_b18.engine`
+的 mtime = **2026-09-13 01:09**，与一次 `-W error` 跑（01:08:39→01:09:45）完全重合。
+`ocr_engines/` 被 .gitignore → 原引擎二进制**不在 git，不可恢复**。
+
+修法：去掉 `with`，改 `rt = trt.Runtime(logger)` + `del rt`（复现旧 `with`
+块出口的释放时机）。修后 `-W error` 下 GPU 等价性用例**通过（4.77s）**；
+修前同一用例在严格模式下要 80s —— 因为它先撞弃用异常、删引擎、重建、再跑。
+
+### (c) 连带发现：金标 28/28 → 6/28 是**缓存伪影，不是代码回归**
+- 控制实验：把产品代码 `git checkout` 回 HEAD 原状，全矩阵 `--verify` 仍是
+  **6/28**；带本轮改动也是 6/28 → **代码无罪**。
+- 真因：01:09 重建的新引擎与录制基线（8/28 的旧引擎）数值不同，
+  22 例 `ocr.segments` 漂移。**非确定性来自 TRT builder**（类比
+  DEPENDENCIES 已记的 MSVC 构建不确定性）。
+- ⚠️ 另记：`record.py --verify --case <X>` **不可作判据**——原状代码在
+  单例上同样 DIFF（与本文件 FINDINGS F-8「冷池态」注记同源）。判据只能用
+  全矩阵。
+- **待用户处置**：要么承认新引擎为新基线并走 §10.2 重录，要么手工重建
+  到旧引擎数值（无原始产物，需另找路径）。本轮**未擅自重录**（那会掩盖信号）。

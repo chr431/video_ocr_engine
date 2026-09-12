@@ -201,8 +201,15 @@ class TrtEngine:
         import tensorrt as trt
         self._wait_cuda_ready()
         logger = trt.Logger(trt.Logger.WARNING)  # type: ignore[attr-defined]
-        with open(engine_path, "rb") as f, trt.Runtime(logger) as rt:  # type: ignore[attr-defined]
+        # 不用 `with trt.Runtime(...) as rt:` —— TensorRT 类型的上下文管理器已
+        # 弃用：13.x 起每次发出 DeprecationWarning，且在把 DeprecationWarning
+        # 当错误的场景（CI `-W error`）会被升级为异常，使这里被判为"引擎加载
+        # 失败"→ **同名重建引擎**（实测引擎 mtime 与该次运行重合）→ 连带金标
+        # 数值漂移。改为显式 del，释放时机与旧 `with` 块出口一致。
+        rt = trt.Runtime(logger)  # type: ignore[attr-defined]
+        with open(engine_path, "rb") as f:
             self.engine = rt.deserialize_cuda_engine(f.read())
+        del rt
         self.context = self.engine.create_execution_context()  # type: ignore[attr-defined]
         in_name = self.engine.get_tensor_name(0)
         out_name = self.engine.get_tensor_name(1)
