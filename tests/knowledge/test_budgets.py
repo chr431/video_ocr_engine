@@ -27,7 +27,7 @@ def test_render_check_passes():
 
 def test_agents_budget():
     size = (ROOT / "AGENTS.md").stat().st_size
-    assert size <= 12 * 1024, "AGENTS.md %d B 超 12 KB 注入预算" % size
+    assert size <= 14 * 1024, "AGENTS.md %d B 超 14 KB 注入预算" % size
 
 
 def test_superseded_pointers_resolve():

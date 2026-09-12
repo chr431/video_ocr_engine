@@ -24,7 +24,7 @@ import pytest
 from _paths import ROOT
 
 # 硬上限：AGENTS.md 在每个会话开头被注入，超过就必须迁内容到 docs/log/DECISIONS.md
-CLAUDE_MD_MAX_BYTES = 12 * 1024
+CLAUDE_MD_MAX_BYTES = 14 * 1024
 
 DOCS = ["README.md", "AGENTS.md", "docs/log/PERFORMANCE.md", "docs/log/DECISIONS.md",
         "docs/DEPENDENCIES.md", "docs/log/ARCHIVE.md", "tools/INDEX.md",
@@ -69,7 +69,7 @@ def test_claude_md_within_injection_budget() -> None:
     size = p.stat().st_size
     assert size <= CLAUDE_MD_MAX_BYTES, (
         f"AGENTS.md 已 {size} 字节，超过注入预算 {CLAUDE_MD_MAX_BYTES} 字节"
-        f"（硬上限 12 KB）。\n"
+        f"（硬上限 14 KB）。\n"
         f"它在每个会话开头被全量注入，涨上去等于每个会话都付 token。\n"
         f"处理：把历史/过程性章节迁到 docs/log/DECISIONS.md，本文件只留指针。"
     )

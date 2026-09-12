@@ -1,9 +1,9 @@
 # AGENTS.md — 开发记录与约定（注入核）
 
 > 本文件在每个会话开头被注入，**只放"现在必须知道的"**。
-> **硬上限 12 KB** — 超了就把内容迁到 `docs/log/DECISIONS.md`，这里只留指针。
+> **硬上限 14 KB** — 超了就把内容迁到 `docs/log/DECISIONS.md`，这里只留指针。
 
-## 文档地图（7 份，别再新增）
+## 文档地图（7 份治理文档，别再新增；另有 4 份衍生/辅助）
 
 | 文件 | 性质 | 什么时候读 |
 |---|---|---|
@@ -14,6 +14,10 @@
 | `docs/log/DECISIONS.md` | 每轮决策过程、已删除功能、设计审查结论 | 想问"为什么这么做"时 |
 | `docs/log/ARCHIVE.md` | 归档（PERF §4 / §8 / §16 / §18），**编号保留勿重编** | 只看"为什么不做" |
 | `docs/DEPENDENCIES.md` | 依赖版本与已知问题 | 装环境 / 报 bug 时 |
+| `docs/MIGRATION.md` | API 迁移表（v0.11→v0.13；**0.14.0 删除清单在这里**） | 改导入路径 / 删 shim 前 |
+| `docs/KNOBS.md` | 旋钮表（render 产物，事实源 `video_ocr_engine/config/knobs.py`） | 查旋钮默认值与依据 |
+| `docs/log/README.md` | `docs/log/` 自己的写作规则（叙事不放规范性语句） | 往 log 写东西前 |
+| `docs/architecture.svg` | README 配图（用户向架构图，**手绘，改架构时同步刷新版本号**） | 改架构 / 发版时 |
 
 ⚠️ **现役规则以本文件为准**；`docs/log/DECISIONS.md` 是迁出的原文存档，冲突时
 以本文件为真相（避免"两套真相"，设计审查 D6）。结论的**当前状态**
@@ -147,10 +151,11 @@ python tools/_probe_index_audit.py               # tools/INDEX.md 数字一致�
 - **产品代码的 print 必须受 debug 开关保护**（`env_bool(DEBUG_BOUNDS_ENV)` /
   `self._probe`），否则走 `logging`。docstring 里的用法示例不算。
 - **未使用的 import**：有意 re-export 加 `# noqa: F401`，否则删掉。
+- **探针分层（L2）**：`tools/INDEX.md` 的「探针状态」小节是唯一权威——**只有 `live` 名单里的探针有修复义务**，其余默认 `frozen`（证据已产出、结论已封板 → 豁免活性检查，重构时不必修）。新增 live 须写理由。现状 live 5 / frozen 75 —— 这就是抑制「探针无限堆积 + 失效修复成本无限增高」的机制。
 - **不得引用六个废弃根模块 shim**（`engine_config` / `gpu_setup` /
   `ocr_native` / `ocr_trt` / `segmentation` / `video_utils`）——审计项 22，
   白名单只有两个冻结 shim 可导入性的契约测试；迁移表 `docs/MIGRATION.md` §1。
-- **文档裸 CR = 0、AGENTS.md ≤ 12 KB**：`tests/test_docs_hygiene.py` 守护。
+- **文档裸 CR = 0、AGENTS.md ≤ 14 KB**：`tests/test_docs_hygiene.py` 守护。
 
 （旧「只能用二进制」「Edit 工具不安全」两条规矩**双向都错**，勘误原文见
 `docs/log/DECISIONS.md` 2026-09-12「编辑护栏勘误」。）

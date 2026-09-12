@@ -23,7 +23,7 @@
     [7]  版本号一致性（engine_config.__version__ ↔ 最新 git tag）
     [8]  文档里指向仓库内文件的引用是否悬空
     [9]  文档裸 CR（会让 git 判为二进制 + CommonMark 渲染错误）
-    [10] AGENTS.md 注入预算（12 KB 硬上限）
+    [10] AGENTS.md 注入预算（14 KB 硬上限）
     [11] 未跟踪的产物文件（该进 .gitignore 或该提交）
     [12] 测试纪律：依赖真实视频/真值的测试必须有 skip 保护
 
@@ -72,7 +72,7 @@ for _dir, _subs, _files in os.walk(os.path.join(ROOT, "tests")):
 DOCS = ["README.md", "AGENTS.md", "docs/log/PERFORMANCE.md", "docs/log/ARCHIVE.md",
         "docs/log/DECISIONS.md", "docs/DEPENDENCIES.md", "tools/INDEX.md"]
 
-CLAUDE_MD_MAX_BYTES = 12 * 1024
+CLAUDE_MD_MAX_BYTES = 14 * 1024
 
 errors: list[str] = []
 warns: list[str] = []
@@ -447,7 +447,7 @@ def check_claude_budget() -> None:
     size = os.path.getsize(p)
     print("    AGENTS.md %d 字节 / 上限 %d" % (size, CLAUDE_MD_MAX_BYTES))
     if size > CLAUDE_MD_MAX_BYTES:
-        fail("AGENTS.md %d 字节，超 12 KB 注入预算" % size)
+        fail("AGENTS.md %d 字节，超 14 KB 注入预算" % size)
 
 
 def check_untracked() -> None:

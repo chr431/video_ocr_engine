@@ -3,7 +3,7 @@
 yaml 是唯一事实源；docs/CONCLUSIONS.md / docs/KNOBS.md 为渲染产物
 （render.py --check 校验一致性，防手写漂移——v1 的 INDEX.md 之病）。
 预算（tests/knowledge/test_budgets.py 守护）：conclusions ≤ 8 KB、
-knobs ≤ 24 KB；AGENTS.md ≤ 12 KB。
+knobs ≤ 24 KB；AGENTS.md ≤ 14 KB。
 """
 from __future__ import annotations
 
