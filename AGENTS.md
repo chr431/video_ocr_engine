@@ -110,12 +110,13 @@ python tools/_doc_section.py docs/log/ARCHIVE.md 4.4b        # 支持 16 / 16.8 
   1.7~2.8×（C-04，显式选型依据），但弱 CPU 上可能反慢，且 CPU 解码必带争用/
   功耗代价，NVDEC 稳妥优先；批量互补仍需**显式** `decode_backend="cpu"`（C-07/C-08）
 - GPU 分段 + ONNX OCR 无净收益，门控只放行 NVDEC+TRT（PERF §9）
-- hybrid 已迁 **decord 原生**；fork 九提交未发布（sustained 默认 + kick 治
-  死锁）：hevc 引擎全片比纯 NVDEC 快 23%；调度器达混跑理想 94-97%，剩余 =
-  CPU 臂同线程折价 −7~−20%（§14 修正，旧 −41% 系 16T/32T 错配伪影）；hybrid
-  CPU 臂线程档 = cpu 后端 codec 感知策略（§14，旧 //2 档三码劣 4~13%）；h264
-  峰值走显式 `cpu`（C-08）；0.8.2 wheel 不含。统一口径：h264lg + 全片单臂
-  分母 + 交错配对；死锁判别走引擎全片（§10.2）
+- hybrid 已迁 **decord 原生**；fork 十提交未发布（sustained 默认 + kick 治
+  死锁 + §16 宿主慢消费者环死锁修）：hevc 引擎全片比纯 NVDEC 快 23%；调度
+  器达混跑理想 94-97%（§14 修正：旧 −41% 折价系线程错配伪影；线程档 =
+  codec 感知策略）；**收益面 = TRT/设备路径（三码反超 −12~−33%）；ONNX
+  宿主路径不反超（hevc/av1 慢 11~31%，选 nvdec）**；h264 峰值走显式
+  `cpu`（C-08）；0.8.2 wheel 不含。统一口径：h264lg + 全片单臂分母 +
+  交错配对；死锁判别走引擎全片（§10.2）
 - **racelog_test 全部视频测量/验证一律 `sample_stride=1`**（2026-09-10 重申，
   防漏信息）；stride>1 仅用于字幕场景（字幕更新频率慢，如批量剧集字幕提取）
 

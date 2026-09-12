@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **77 个 `.py`**（12,865 行），其中 63 个是探针
+`tools/` 现有 **77 个 `.py`**（12,867 行），其中 63 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -59,7 +59,7 @@
 | `_probe_upload_chain.py` | 157 | 用 fork 的 `DECORD_HYBRID_FORCE_SIDE` 拆 **mixed / 纯NVDEC / 纯CPU** 三臂（每组独立子进程 + **45–90s 硬超时** + 轮内组序轮转 + 进度落文件）。量出 mixed"低于最优单侧"（§7.1）——**该结论已被 §8 翻案**：EWMA 估计器伪影 | log 2026-09-11-hybrid差距分解 §7/§8；DECISIONS 2026-09-11 fork 修复 |
 | `_probe_hol_stats.py` | 224 | 走 fork **非打印** `DECORD_HYBRID_STATS`（零打印扰动）实测队头阻塞时长/episode/搁置峰值 + BuildPlan 冻结速率/CPU 折数/时刻；decode-only 每格独立子进程+硬超时，`--set KEY=VAL` 做单变量 A/B；`--nts 16,24,32` 展开 CPU 臂线程档位（§14：hybrid_gpu 传 num_threads=0 在 decord 内隐式落 16，同口径比较必须显式给 nt） | log 2026-09-11-hybrid差距分解 §8/§14；knowledge `hybrid_cpu_rate_ratchet` |
 | `_probe_stress_harness.py` | 109 | hybrid 死锁/性能**压测 harness 通用规格**：每 trial 独立子进程 + 硬超时 + 进度逐行落文件（慢消费者 = get_batch+asnumpy 保留；"无超时压测烧千秒"三踩后的纪律固化，rules.yaml 同名规则）。kick 突发修复 24/24 证据；`--nt` 覆盖 CPU 臂线程（§14 起引擎新档 24/32 同须压测） | log 2026-09-11-hybrid差距分解 §8.2/§9.1/§14.5；knowledge `hybrid_sustained_default` |
-| `_probe_e2e_mode.py` | 32 | 单视频引擎 e2e + 管线模式取证（`_gpu_pipeline_mode` + `DECORD_HYBRID_STATS` 汇总）；全片配对 A/B 用它做 sustained 转默认测量 | log 2026-09-11-hybrid差距分解 §9.2；knowledge `hybrid_sustained_default` |
+| `_probe_e2e_mode.py` | 34 | 单视频引擎 e2e + 管线模式取证（`_gpu_pipeline_mode` + `DECORD_HYBRID_STATS` 汇总）；全片配对 A/B 用它做 sustained 转默认测量 | log 2026-09-11-hybrid差距分解 §9.2；knowledge `hybrid_sustained_default` |
 | `_probe_hybrid_threads_e2e.py` | 137 | hybrid CPU 臂线程档位的**引擎 e2e 配对 A/B**（独立子进程槽位 + 交错 + 段数/唯一文本集 sha 门禁）：§14 定档证据链——16→24/24→32/32→48 三码矩阵，h264→32 / hevc→32 / av1→24 恰为 `_decode_num_threads` 现行策略 | log 2026-09-11-hybrid差距分解 §14；knowledge `hybrid_cpu_threads_tier` |
 
 ## B. 库型 / worker 型（**被其他探针依赖，动不得**）

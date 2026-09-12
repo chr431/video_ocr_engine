@@ -31,11 +31,11 @@
   evidence: PERF §21 §22.1；log 2026-09-08
 
 - id: C-05
-  conclusion: hybrid = decord fork 原生（TRT→hybrid_gpu、CPU→宿主帧）。§9-§13：sustained+kick 后 hevc 快纯 NVDEC 23%、达理想 94-97%。§14：旧 av1 折价 −41% 系 16T/32T 错配（同 nt −7~−23%）；hybrid CPU 臂线程档统一为 _decode_num_threads（h264/hevc=32、av1=24；旧 //2=16 档劣 4~13%；以引擎 e2e 为准）
+  conclusion: hybrid = decord fork 原生（TRT→hybrid_gpu、CPU→宿主帧）。§9-§13 hevc 快纯 NVDEC 23%、达混跑理想 94-97%。§14 旧 av1 折价 −41% 系 16T/32T 错配；CPU 臂线程档统一 _decode_num_threads。§16 收益面=TRT/设备路径（三码 e2e 反超 −12~−33%）；ONNX 宿主路径不反超（hevc +11%/av1 +31%，CPU 臂抢核，选 nvdec）；宿主慢消费者环死锁已修（02c91e6）
   status: active
-  premises: 本机 4060/16C32T；fork dll 281a738 未发布；0.8.2=旧结论
+  premises: 4060/16C32T；fork 02c91e6 未发布；0.8.2=旧结论
   revisit: fork wheel / >32 核档位复测 / 上载天花板量化
-  evidence: log 2026-09-11-hybrid差距分解 §11-§14；benchmarks hybrid_*
+  evidence: log 2026-09-11-hybrid差距分解 §11-§16；benchmarks hybrid_*
 
 - id: C-06
   status: superseded
@@ -117,7 +117,7 @@
   replaced_by: C-05
 
 - id: C-31
-  conclusion: decord 0.8.1 + FFmpeg9 升级：seek 本身未变慢（两构建同斜率 ~2.6ms/帧×关键帧距离）；此前"av1 seek 变慢"是 NT=4 探针口径假象 + FFmpeg9 dav1d 线程扩展性改善被引擎旧 av1 线程策略（cores//2=8T，FFmpeg8 时代口径）埋没。修复：av1 → 逻辑核 3/4 钳 [8,24]（不分 OCR 位置），CPU 后端 5.47→2.72s（−50%）、hybrid 1.90→1.80s、host_cpu e2e 6.26→3.42s（−45%）；release 初版 yuv 路径必挂（shim 误用 v1 cuMemcpy2D 导出 → 201），须含 cuMemcpy2D_v2 修复（fork 7ef70f5）
+  conclusion: decord 0.8.1 + FFmpeg9 升级：seek 本身未变慢（两构建同斜率 ~2.6ms/帧×关键帧距离）；此前"av1 seek 变慢"是 NT=4 探针口径假象 + FFmpeg9 dav1d 线程扩展性改善被引擎旧 av1 线程策略（cores//2=8T，FFmpeg8 时代口径）埋没。修复：av1 → 逻辑核 3/4 钳 [8,24]（不分 OCR 位置），CPU 后端 5.47→2.72s（−50%）、host_cpu e2e 6.26→3.42s（−45%）（yuv 挂死/cuMemcpy2D_v2 前置史实见 DEPENDENCIES）
   status: active
   premises: pip wheel 0.8.2（dll md5 6597eea6，已含修复，DLL 随包自带）
   revisit: fork 再升级 / 驱动或 FFmpeg 再换代

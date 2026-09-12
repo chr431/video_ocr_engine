@@ -30,26 +30,29 @@
 ## 已知问题与注意
 
 ### decord（自建 fork，pip wheel 安装）
-- **0.8.3（2026-09-12 发布验证轮完成，GitHub 发布待用户 dispatch）**：fork
-  master 领先 0.8.2 九个提交（73e5540 析构 UAF 修复 / d94d92e hybrid GPU 池深
-  按 ROI 重算 / 3b96c6f hybrid chunk 预路由 / 93a5ce1 / **99b8785 FORCE_SIDE
-  诊断臂死锁修复** / **75b8602 hybrid 非打印 stats 层 + sustained 产能估计器
-  （实验性 opt-in）** / **4ccf889 sustained 产能口径转默认 + EWMA 旧口径删除
-  + kick 突发治倾斜计划死锁** / **281a738 上载批大小消融旋钮 + kick 承重
-  判别**），本地提交 486d2f6 已 bump 版本号（三源一致）。
-  - **本地 cp313 wheel 已构建并安装**（sha256 `bad116d0…`，64MB dll 闭包
-    完整；0.8.2 wheel 在 fork `dist/` 可回滚）。**wheel 口径验证全绿**
-    （§15）：金标 28/28 ×2（重录整矩阵同序——局部 `--case` 重录会录在
-    冷池态，见 FINDINGS F-8 注记）、引擎 e2e 三码全片×2 段数与 dev dll
-    一致、压测 6/6、decode-only 2753≈2782fps。
-  - ⚠️ **kick=0 判别（§10.2）不可复现**：wheel 与 dev dll 同口径各 4 次
-    全干净（16T/32T 都试过）——死锁窗口时序敏感。替换证据：默认运行
-    `kicks c=30 g=30`（代码活跃）+ wheel≡dev 全对位；历史 4/4 对照保留。
+- **0.8.3（2026-09-12 发布验证轮完成 + §16 死锁修复追加，GitHub 发布待用户
+  dispatch）**：fork master 领先 0.8.2 十个提交（73e5540 析构 UAF 修复 /
+  d94d92e hybrid GPU 池深按 ROI 重算 / 3b96c6f hybrid chunk 预路由 / 93a5ce1 /
+  **99b8785 FORCE_SIDE 诊断臂死锁修复** / **75b8602 hybrid 非打印 stats 层 +
+  sustained 产能估计器（实验性 opt-in）** / **4ccf889 sustained 产能口径转默认
+  + EWMA 旧口径删除 + kick 突发治倾斜计划死锁** / **281a738 上载批大小消融
+  旋钮 + kick 承重判别** / **02c91e6 宿主路径慢消费者环死锁修复（kick 突发
+  放行 + KICK_BURST 5→16）**），本地提交 486d2f6 已 bump 版本号（三源一致）。
+  - **本地 cp313 wheel 已构建并安装**（含 02c91e6，sha256 `1b180227…`，
+    64MB dll 闭包完整；0.8.2 wheel 在 fork `dist/` 可回滚）。**wheel 口径
+    验证全绿**（§15/§16）：金标 28/28 ×2（重录整矩阵同序——局部
+    `--case` 重录会录在冷池态，见 FINDINGS F-8 注记）、挂死用例干净、
+    引擎 e2e 三码全片段数与 dev dll 一致、压测 9/9、decode-only 漂移带内。
+  - ⚠️ **§16 死锁事故**：hybrid 宿主路径 + ONNX 慢消费者（h264lg B 金字塔
+    深重排）曾 2/2 必现挂死——突发被在途窗口截断 + KICK_BURST=5 不够
+    冲开 DPB。修复见 `knowledge/benchmarks.yaml:hybrid_host_deadlock_fix`。
+    另 §10.2 的 kick=0 判别当日不可复现（时序敏感），替换证据 = kicks
+    激活计数 + wheel≡dev 全对位；历史 4/4 对照保留。
   - **sustained（滑窗持续产能）现为唯一 CPU 产能口径**（4ccf889 起）：
     `DECORD_CPU_RATE_SUSTAINED` env 已删除。机制/数字见
     `knowledge/benchmarks.yaml` 的 `hybrid_cpu_rate_ratchet`。
-    kick 突发（KICK_BURST=5）治 open-GOP DPB 队头尾帧死锁；
-    `DECORD_HYBRID_KICK_BURST=0` 可消融回单包 kick。
+    kick 突发（**KICK_BURST=16**，02c91e6 起）治 open-GOP DPB 队头尾帧
+    死锁；`DECORD_HYBRID_KICK_BURST` 可消融（0 = 单包 kick，5 = 旧默认）。
   - 引擎 GPU 管线全片 e2e（配对 3 遍）：hevc −24%（且 hybrid 首次显著
     胜纯 NVDEC −23%）、h264 −4.7%、av1 持平；金标 28/28 逐位一致。
   - 开发 dll md5 `2fd49ea5`（build-081fix，2026-09-12 replan 回滚后从

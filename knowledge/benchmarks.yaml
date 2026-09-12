@@ -300,3 +300,25 @@
   next: 用户执行：fork push origin master → GitHub dispatch release.yml
         (version=0.8.3)；CI 产物发布后抽验（pip 装 + §15.4 矩阵复跑）
   fork_commit: 281a738（零新提交；wheel sha256 bad116d0…）
+# ── 2026-09-12 续：宿主路径环死锁修复 + 全面反超判定矩阵（§16）────────────
+- metric: hybrid_host_deadlock_fix
+  question: hybrid+ONNX（宿主管线慢消费）挂死根因与修复
+  result: 两层致死环——①kick 突发递送被 NeedsPackets 在途窗口截断（ONNX
+          慢消费顶满 inflight→demux 停读→剩余克隆不来→队头永冻）；
+          ②KICK_BURST=5 冲不开深重排流（libx264 medium B 金字塔，5 包喂入
+          后 NVDEC 仍扣 5 帧）。修复（fork 02c91e6）：突发武装期
+          NeedsPackets 无条件放行 + KICK_BURST 5→16；消融坐实（只修①
+          仍挂；②=16 后 4/4 干净）
+  evidence: pop-stall 签名（kick=0/1、cud=0/5/0、em=293/300、np=0）；
+          TRT/压测全绿回归（金标 28/28、压测 9/9）；wheel sha16 1b180227
+  next: 无（关闭；发布随 0.8.3）
+  fork_commit: 02c91e6
+- metric: hybrid_full_matrix_verdict
+  question: 三码 × 两输出路径，hybrid 是否全面反超最优单解码器？
+  result: 设备路径（TRT）三码全面反超（h264lg −11.8% / hevc −19.5% /
+          av1 −32.8% vs 最优单侧 e2e）；宿主路径（ONNX）不反超——h264lg
+          三者持平（OCR 瓶颈）、hevc 慢 11%、av1 慢 31%（nvdec 结构性
+          占优：CPU 臂与 ONNX 抢核）；decode-only 6 格仍全反超（+27~60%）
+  caveat: 宿主路径结论前提 = ONNX 吃满核；换更轻 OCR 或未来 ORT 提速需复评
+  next: 文档警示（README/AGENTS 已注）；无代码动作
+  fork_commit: 02c91e6（测量时点）
