@@ -91,8 +91,8 @@ DEBUG_BOUNDS_ENV: str = "DEBUG_BOUNDS"                          # 1 打印分段
 # 历史参数（项目层 HybridDecoder 的 SCHED/MIGRATE/SOLO_GUARD/CALIB/折扣等）
 # 已随该实现一并删除；调度由 decord 内部的生产速率实测 + min-max 积压贪心承担。
 HYBRID_CPU_THREADS_ENV: str = "HYBRID_CPU_THREADS"              # CPU reader 线程数；
-HYBRID_CPU_THREADS_AUTO_MIN: int = 8
-HYBRID_CPU_THREADS_AUTO_MAX: int = 16
+# 0=自动时与 cpu 后端同一 codec 感知策略（extractor._decode_num_threads，
+# §14 定档）；旧的 [8,16] clamp 常量已随该定档删除。
 # ═══════════════════ CPU 软解线程预算（按 OCR 是否在 GPU 分档）═══════════════
 # 背景：引擎不显式传 num_threads 时，CPU 解码线程数由 decord fork 的
 # DECORD_FFMPEG_THREAD_COUNT 决定（fork 源码 src/video/video_reader.cc，

@@ -45,7 +45,9 @@
     `DECORD_HYBRID_KICK_BURST=0` 可消融回单包 kick。
   - 引擎 GPU 管线全片 e2e（配对 3 遍）：hevc −24%（且 hybrid 首次显著
     胜纯 NVDEC −23%）、h264 −4.7%、av1 持平；金标 28/28 逐位一致。
-  - 开发 dll md5 `5ffacd49`（build-081fix，与 fork HEAD 同步）。
+  - 开发 dll md5 `2fd49ea5`（build-081fix，2026-09-12 replan 回滚后从
+    HEAD 281a738 重建——MSVC 非确定性构建产物，md5 每次重建会变，以
+    行为判别为准：回滚后构建的 stats 行无 `replans=` 字段）。
 - **h264 NVDEC 是本机硬件天花板，非软件问题**（2026-09-10 实测）：同内容
   三编码 NVDEC 982(h264)/2103(hevc)/1749(av1) fps；ffmpeg 自带 cuvid 同比
   （16.5x vs 38.7x）。h264 解码选峰值应走 CPU 软解/显式 hybrid。

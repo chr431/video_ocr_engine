@@ -1,6 +1,6 @@
 # S0 金标向量清单——录制基准与期望哈希（由 record.py 生成，人不得手改）
 environment:
-  commit: "eb8918b3c166d353b2e90e353ff089c3db27cb05"
+  commit: "276632e2656d703879fecc12430797c673e7f81f"
   ocr_engine: "multi_PP-OCRv6_rec_small_sm89_fp32_tf32unset_b18.engine@4fe4ceccd1fcdba0"
   decord: "0.8.2"
   gpu: "NVIDIA GeForce RTX 4060 Laptop GPU"
@@ -9,7 +9,7 @@ environment:
 videos:
   test5: 44fd96af569f2c3a9eae239323353a5ef97037f0046885d18befc8a3851bdfad
   test6_av1: 3c3d2abb557c155d244a680c4af889653819f6d9a65f555a14d29ccdc88f2130
-  test6_h264: c948c66b63eb3efc8092396d78fcaa48e88be2d8117d014c0776eadde39f0af0
+  test6_h264: 06e193925797f8f6e0b28a60b350e4428b48b541402add58a0247922cfb8475d
   test6_hevc: 379677d0819b69b3e3174f139834c4e813ec4b74a48a9d28436853000fbe5c8a
 cases:
   - id: A-cpu-p0-cpu
@@ -149,19 +149,19 @@ cases:
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "cpu", "ocr_backend": "tensorrt"}
-    sha: [ba1f49ba09454d48, a8387ed7ae0a1ea7]
+    sha: [ba1f49ba09454d48, 08a9642574ab0969]
   - id: C-h264-nvdec
     video: test6_h264
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "nvdec", "ocr_backend": "tensorrt"}
-    sha: [683d4e1463d72ae5, e95cd388f735120f]
+    sha: [683d4e1463d72ae5, 3814dbf487c9d2c1]
   - id: C-h264-hybrid
     video: test6_h264
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "hybrid", "ocr_backend": "tensorrt"}
-    sha: [525272339b317ab6, bfab0b9574c0af00]
+    sha: [525272339b317ab6, 6ebef2e164afd075]
   - id: C-hevc-cpu
     video: test6_hevc
     window: [0, 3000]

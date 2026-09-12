@@ -222,7 +222,7 @@ def test_param_defaults_consistent_with_engine_config() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     expectations = [
         ("HYBRID_CPU_THREADS 自动分档",
-         f"钳 [{config.HYBRID_CPU_THREADS_AUTO_MIN}, {config.HYBRID_CPU_THREADS_AUTO_MAX}]"),
+         "自动：与 CPU 软解后端同一 codec 感知策略"),
         ("OCR pad 下限", f"默认 {config.OCR_PAD_WIDTH_MIN}"),
         ("OCR 批大小", f"默认 {config.OCR_BATCH_SIZE}"),
     ]

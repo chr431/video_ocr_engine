@@ -254,3 +254,35 @@
   next: ① 首窗读数钳制/分相位采样（修 BuildPlan 输入质量）② 设备路径上载
         天花板量化 ③ 0.8.3 wheel 发布
   fork_commit: 281a738
+# ── 2026-09-12 续：replan（重规划）实验——机制否定 + av1 归因翻案（§13）──────
+- metric: hybrid_replan_ab                # 实现于 fork 工作区，3码×3对交错全片 A/B 后被否
+  question: §12.2 假设"av1 76% = 一次性规划冻结在首窗坏读数"——重规划能否修复？
+  result: 否——读数正确稳定，replan 永不触发；机制回滚未进 fork 历史
+  evidence: rc 在全部 125 折样本上稳定 702-875（偏离冻结值 <8pp）；replans=0
+            于 6/6 cell；A/B Δ-1.5%~-0.1%（噪声带）
+  real_mechanism: CPU 软解臂混跑期真实折价——纯臂 1290 → 混跑期 sustained
+            读数 ~760（-41%，dav1d 多线程与喂包/消费/上载抢核）；GPU 臂不折价。
+            按混跑理想（折价 rc + 纯 nvdec）重算：av1 91-101% / h264lg 91-96% /
+            hevc 96-98% → 调度器已达自身上限，剩余差距 = CPU 供给折价
+  closes: 首窗钳制 / 分相位采样 / 重规划整族思路（估计器输入无问题）
+  next: CPU 臂折价的供给侧（线程数/喂包隔离）——h264/av1 引擎走显式路由已绕行，低优先
+# ── 2026-09-12 续：hybrid CPU 臂线程定档（§14）——错配伪影修正 + 引擎统一 codec 感知 ──
+- metric: hybrid_cpu_threads_tier
+  question: §13.3 的"CPU 臂混跑折价 av1 −41%"是否真实？hybrid CPU 臂线程
+            档位（旧：逻辑核//2 钳 [8,16]=本机 16）是否最优？
+  result: 折价是口径伪影——探针 hybrid_gpu 传 num_threads=0 在 decord 内
+          隐式落 16T（hw//2 钳 [2,16]），单臂 cpu 跑 32T，"−41%"= 16T 混跑
+          vs 32T 纯臂；同 nt 诚实折价仅 −7~−23%（随 nt 升高加深）。引擎
+          e2e 配对 A/B（文本集逐位一致）：16→24 h264lg −5.9%/hevc −4.4%/
+          av1 −12.8%（全 3/3）；24→32 h264lg 再 −4.8%（3/3）、av1 反向
+          +5.1%（dav1d 过订阅）。档位顶点 h264/hevc=32、av1=24 恰为
+          _decode_num_threads 现行策略 → hybrid 分支统一复用，删除 //2 档。
+  caveat: decode-only 24T 已饱和（32T 无增益）但引擎口径 32T 更优——消费
+          节奏（OCR/分段线程共存）改变顶点，档位判定以引擎 e2e 为准；
+          旧 §11.3"av1 长片回退 6.4%"/§12.2"76%"均为 16T 伪影
+  evidence: tools/_probe_hol_stats.py --nts 16,24,32 全片矩阵（纯臂/hybrid/
+          hybrid_gpu 三 ctx）；tools/_probe_hybrid_threads_e2e.py 配对 A/B；
+          压测 32T 18/18 零挂死；金标重录后 28/28（C-h264 三例系 §12
+          重转码改 sha 致预存失配，非线程改动）
+  next: 0.8.3 wheel 发布（口径不变）；上载天花板量化（低优先）
+  fork_commit: 281a738（fork 零改动，本轮全部引擎侧）

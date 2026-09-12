@@ -1064,3 +1064,15 @@ README 去史化：批量修订史压缩为指向 PERF §19/§21 的指针，删
   或改配对数后必须 `bench.py telemetry-check --aa` 重标。
 - **证据**：docs/log/2026-09-11-资源层与门控校准.md §4-§5；
   knowledge/benchmarks.yaml:pi15_gate_calibration；rules.yaml 新增该条。
+
+## 2026-09-12 · 编辑护栏勘误（自 AGENTS.md 迁出，原文存档）
+
+> AGENTS.md 注入核超 12 KB 硬上限，本节为迁出的原文（两方真伪不变，
+> 仍在 `tests/test_docs_hygiene.py` 守护范围）。
+
+⚠️ **旧规矩双向都错，别再照着做**：
+- 「只能用二进制」—— 从来不是必需。文本模式显式 `newline=''` 或 `'\n'` 就
+  100% 保真，唯一致命的是默认 `newline=None`（通用换行翻译，把行中 CR 全转
+  成 `\n`，文件从 3450 行劈到 4366 行）。实测见 `tools/_probe_cr_roundtrip.py`。
+- 「Edit 工具不安全」—— 它只做 CRLF→LF 规范化，而 `.gitattributes` 就是
+  `* text=auto eol=lf`，那正是 git 期望的行为。

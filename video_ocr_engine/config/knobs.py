@@ -24,7 +24,7 @@ KNOBS = Registry(knobs=(
          "decode", _ALL, "ec:96-130", note="0=自动分档（codec×stride 公式在消费端）"),
     Knob("decode.hybrid_cpu_threads", "HYBRID_CPU_THREADS_ENV", "HYBRID_CPU_THREADS",
          "int", 0, "decode", _ALL, "ec:87-95",
-         note="0=自动 clamp [HYBRID_CPU_THREADS_AUTO_MIN, MAX]=[8,16]"),
+         note="0=自动：与 cpu 后端同一 codec 感知策略（_decode_num_threads）"),
     # ── ocr ──
     Knob("ocr.threads", "OCR_THREADS_ENV", "OCR_THREADS", "int", 0,
          "ocr", _ALL, "ec:68", note="0=全部物理核（消费端派生）"),

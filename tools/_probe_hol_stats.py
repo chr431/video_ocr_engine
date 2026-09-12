@@ -43,9 +43,15 @@ from decord import cpu, gpu, hybrid, hybrid_gpu
 name = os.environ["PROBE_CTX"]
 CTX = {"hybrid": hybrid, "hybrid_gpu": hybrid_gpu,
        "cpu": cpu, "nvdec": gpu}[name]
+# PROBE_NT：CPU 臂线程数覆盖（--nts 旋钮注入）。不设时保持旧口径 ——
+# cpu/hybrid=32、hybrid_gpu=0（0 在 decord 内 = hw//2 钳 [2,16] = 本机 16，
+# video_reader.cc SetVideoResampleDriver 的 DECORD_FFMPEG_THREAD_COUNT 路径；
+# §14 线程消融起所有同口径比较必须显式给 nt，勿再依赖 0 的隐式落点）。
+_nt_dflt = 32 if name in ("cpu", "hybrid") else 0
+num_threads = int(os.environ.get("PROBE_NT", _nt_dflt))
 vr = decord.VideoReader(os.environ["PROBE_VID"], ctx=CTX(0),
                         output_format="gray",
-                        num_threads=32 if name in ("cpu", "hybrid") else 0,
+                        num_threads=num_threads,
                         roi=tuple(int(x) for x in
                                   os.environ["PROBE_ROI"].split(",")))
 n = min(int(os.environ["PROBE_FRAMES"]), len(vr))
@@ -72,7 +78,8 @@ CASES = {"h264": (os.path.join(_VDIR, "test5.mp4"), "843,993,949,1026"),
 _RE = {
     "mode": re.compile(r"mode=(\S+) frames c=(\d+) g=(\d+) chunks c=(\d+) g=(\d+)"),
     "plan": re.compile(r"plan rc=(\d+) rg=(\d+) frames c=(\d+) g=(\d+)"
-                       r"(?: folds=(\d+) age=(\d+)ms)?"),
+                       r"(?: folds=(\d+) age=(\d+)ms)?"
+                       r"(?: replans=(\d+) share=(-?\d+)‰)?"),
     "hol": re.compile(r"hol cpu-head us=(\d+) ev=(\d+) strandmax=(\d+)"
                       r" \| gpu-head us=(\d+) ev=(\d+) strandmax=(\d+)"),
     "up": re.compile(r"upload flushes=(\d+) frames=(\d+) avg_batch=([\d.]+)"
@@ -94,6 +101,8 @@ def parse_stats(err: str) -> dict | None:
                        plan_c=int(m.group(3)), plan_g=int(m.group(4)))
             if m.group(5):
                 out.update(plan_folds=int(m.group(5)), plan_age_ms=int(m.group(6)))
+            if m.group(7):
+                out.update(replans=int(m.group(7)), plan_share=int(m.group(8)))
         elif "[hybrid-stats] hol " in ln:
             m = _RE["hol"].search(ln)
             out.update(hol_us_c=int(m.group(1)), hol_ev_c=int(m.group(2)),
@@ -108,13 +117,15 @@ def parse_stats(err: str) -> dict | None:
 
 
 def run_cell(vid: str, roi: str, ctx: str, frames: int, timeout: float,
-             extra: dict) -> tuple[dict | None, str | None]:
+             extra: dict, nt: int | None = None) -> tuple[dict | None, str | None]:
     env = dict(os.environ)
     env.update({"PROBE_ROOT": str(ROOT), "PROBE_VID": vid, "PROBE_ROI": roi,
                 "PROBE_CTX": ctx, "PROBE_FRAMES": str(frames),
                 "DECORD_HYBRID_STATS": "1"})
     env.pop("DECORD_HYBRID_DEBUG", None)
     env.pop("DECORD_HYBRID_FORCE_SIDE", None)
+    if nt is not None:
+        env["PROBE_NT"] = str(nt)
     env.update(extra)
     try:
         p = subprocess.run([sys.executable, "-c", WORKER], env=env,
@@ -142,6 +153,10 @@ def main() -> int:
     ap.add_argument("--fork", default=os.environ.get("DECORD_FORK_BUILD", ""))
     ap.add_argument("--set", action="append", default=[],
                     help="附加 env，KEY=VAL，可重复（份额/预算实验用）")
+    ap.add_argument("--nts", default="",
+                    help="CPU 臂线程数档位（逗号分隔，如 16,24,32）——展开成"
+                         " cell 第三维并轮转交错；不给则沿用旧隐式口径"
+                         "（cpu/hybrid=32、hybrid_gpu=0→16）")
     args = ap.parse_args()
     extra = dict(kv.split("=", 1) for kv in args.set)
     if args.fork:
@@ -149,26 +164,29 @@ def main() -> int:
     else:
         print("⚠️ 未给 DECORD_FORK_BUILD → 用已安装 decord（0.8.2 wheel 无"
               " stats，会报无 [hybrid-stats]）")
-    cells = [(c, x) for c in args.cases.split(",") for x in args.ctxs.split(",")]
+    nts = [int(x) for x in args.nts.split(",")] if args.nts else [None]
+    cells = [(c, x, nt) for c in args.cases.split(",")
+             for x in args.ctxs.split(",") for nt in nts]
     res: dict = {}
     fails = 0
     for i in range(args.reps):
         rot = cells[i % len(cells):] + cells[:i % len(cells)]
-        for case, ctx in rot:
+        for case, ctx, nt in rot:
             vid, roi = CASES[case]
             t0 = time.perf_counter()
-            r, err = run_cell(vid, roi, ctx, args.frames, args.timeout, extra)
-            res.setdefault((case, ctx), []).append(r)
+            r, err = run_cell(vid, roi, ctx, args.frames, args.timeout, extra, nt)
+            res.setdefault((case, ctx, nt), []).append(r)
+            lbl = "%s@%s" % (ctx, nt if nt is not None else "dflt")
             if r is None:
                 fails += 1
-                print("  [%d] %-5s %-10s %s" % (i, case, ctx, err), flush=True)
+                print("  [%d] %-5s %-14s %s" % (i, case, lbl, err), flush=True)
                 continue
             st = r["stats"]
             hol_ms = (st.get("hol_us_c", 0) + st.get("hol_us_g", 0)) / 1000
-            print("  [%d] %-5s %-10s %6.0f fps  hol=%.0fms/%.0fms (%.1f%%)"
+            print("  [%d] %-5s %-14s %6.0f fps  hol=%.0fms/%.0fms (%.1f%%)"
                   "  plan rc/rg=%d/%d share_g=%.0f%%→real %.0f%%"
                   " folds=%d age=%dms%s" % (
-                      i, case, ctx, r["got"] / r["wall"], hol_ms,
+                      i, case, lbl, r["got"] / r["wall"], hol_ms,
                       r["wall"] * 1000, hol_ms / (r["wall"] * 10) if r["wall"] else 0,
                       st.get("rc", 0), st.get("rg", 0),
                       100 * st.get("plan_g", 0) / max(st.get("plan_g", 0) + st.get("plan_c", 0), 1),
@@ -178,21 +196,22 @@ def main() -> int:
                           st.get("avg_batch", 0), st.get("nobuf", 0),
                           st.get("cpuempty", 0))) if "avg_batch" in st else ""),
                   flush=True)
-    print("\n%-5s %-10s %7s %7s %9s %9s %13s %9s" % (
-        "编码", "ctx", "fps", "HOL%", "c-head秒", "g-head秒",
+    print("\n%-5s %-14s %7s %7s %9s %9s %13s %9s" % (
+        "编码", "ctx@nt", "fps", "HOL%", "c-head秒", "g-head秒",
         "strandmax c/g", "批均"))
-    for case, ctx in cells:
-        v = [x for x in res.get((case, ctx), []) if x]
+    for case, ctx, nt in cells:
+        v = [x for x in res.get((case, ctx, nt), []) if x]
         if not v:
-            print("%-5s %-10s 无成功槽位" % (case, ctx))
+            print("%-5s %-14s 无成功槽位" % (case, "%s@%s" % (ctx, nt)))
             continue
         w = statistics.median(x["wall"] for x in v)
         med = min(v, key=lambda x: abs(x["wall"] - w))
         st = med["stats"]
         hol_c = st.get("hol_us_c", 0) / 1e6
         hol_g = st.get("hol_us_g", 0) / 1e6
-        print("%-5s %-10s %7.0f %6.1f%% %9.2f %9.2f %7d/%-5d %9s" % (
-            case, ctx, med["got"] / med["wall"],
+        print("%-5s %-14s %7.0f %6.1f%% %9.2f %9.2f %7d/%-5d %9s" % (
+            case, "%s@%s" % (ctx, nt if nt is not None else "dflt"),
+            med["got"] / med["wall"],
             100 * (hol_c + hol_g) / med["wall"], hol_c, hol_g,
             st.get("strand_c", 0), st.get("strand_g", 0),
             "%.1f" % st["avg_batch"] if "avg_batch" in st else "—"))

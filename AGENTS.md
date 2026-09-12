@@ -110,11 +110,12 @@ python tools/_doc_section.py docs/log/ARCHIVE.md 4.4b        # 支持 16 / 16.8 
   1.7~2.8×（C-04，显式选型依据），但弱 CPU 上可能反慢，且 CPU 解码必带争用/
   功耗代价，NVDEC 稳妥优先；批量互补仍需**显式** `decode_backend="cpu"`（C-07/C-08）
 - GPU 分段 + ONNX OCR 无净收益，门控只放行 NVDEC+TRT（PERF §9）
-- hybrid 已迁 **decord 原生**；fork 九提交（未发布：预路由/池深 + 4ccf889
-  **sustained 产能口径转默认** + kick 治死锁）后 decode-only 达并行理想
-  90-95%，**hevc/av1 上 hybrid 是引擎内最快路径**（hevc 全片 e2e 比纯
-  NVDEC 快 23%）；h264 峰值仍走显式 `cpu`（C-08）；0.8.2 wheel 不含（C-05）。
-  死锁判别必须走引擎全片口径，VideoReader 配方复现不了（叙事 §10.2）
+- hybrid 已迁 **decord 原生**；fork 九提交未发布（sustained 默认 + kick 治
+  死锁）：hevc 引擎全片比纯 NVDEC 快 23%；调度器达混跑理想 94-97%，剩余 =
+  CPU 臂同线程折价 −7~−20%（§14 修正，旧 −41% 系 16T/32T 错配伪影）；hybrid
+  CPU 臂线程档 = cpu 后端 codec 感知策略（§14，旧 //2 档三码劣 4~13%）；h264
+  峰值走显式 `cpu`（C-08）；0.8.2 wheel 不含。统一口径：h264lg + 全片单臂
+  分母 + 交错配对；死锁判别走引擎全片（§10.2）
 - **racelog_test 全部视频测量/验证一律 `sample_stride=1`**（2026-09-10 重申，
   防漏信息）；stride>1 仅用于字幕场景（字幕更新频率慢，如批量剧集字幕提取）
 
@@ -159,12 +160,8 @@ python tools/_probe_index_audit.py               # tools/INDEX.md 数字一致�
 - **未使用的 import**：有意 re-export 加 `# noqa: F401`，否则删掉。
 - **文档裸 CR = 0、AGENTS.md ≤ 12 KB**：`tests/test_docs_hygiene.py` 守护。
 
-⚠️ **旧规矩双向都错，别再照着做**：
-- 「只能用二进制」—— 从来不是必需。文本模式显式 `newline=''` 或 `'\n'` 就
-  100% 保真，唯一致命的是默认 `newline=None`（通用换行翻译，把行中 CR 全转
-  成 `\n`，文件从 3450 行劈到 4366 行）。实测见 `tools/_probe_cr_roundtrip.py`。
-- 「Edit 工具不安全」—— 它只做 CRLF→LF 规范化，而 `.gitattributes` 就是
-  `* text=auto eol=lf`，那正是 git 期望的行为。
+（旧「只能用二进制」「Edit 工具不安全」两条规矩**双向都错**，勘误原文见
+`docs/log/DECISIONS.md` 2026-09-12「编辑护栏勘误」。）
 
 ## 环境与命令
 

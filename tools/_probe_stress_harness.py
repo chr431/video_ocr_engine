@@ -26,7 +26,8 @@ ctxf = hybrid if os.environ["PROBE_CTX"] == "cpu" else hybrid_gpu
 vid = os.path.join(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"),
                    os.environ["PROBE_VID"])
 roi = (841, 994, 950, 1027) if "hevc" in os.environ["PROBE_VID"] or "test6" in os.environ["PROBE_VID"] else (843, 993, 949, 1026)
-vr = VideoReader(vid, ctx=ctxf(0), output_format="gray", num_threads=16, roi=roi)
+vr = VideoReader(vid, ctx=ctxf(0), output_format="gray",
+                 num_threads=int(os.environ.get("PROBE_NT", "16")), roi=roi)
 n = len(vr); idx = list(range(n)); t = time.perf_counter(); held = []
 for s in range(0, min(n, int(os.environ["PROBE_FRAMES"])), 64):
     b = vr.get_batch(idx[s:s+64])
@@ -46,6 +47,9 @@ CASES = {
     "av1-cpu": ("cpu", "test6.mp4", {}),
     "h264-gpu": ("gpu", "test5.mp4", {}),
     "h264-cpu": ("cpu", "test5.mp4", {}),
+    # h264lg = test6 同内容 h264 转码（§12）：快 CPU 臂 + hybrid_gpu 的
+    # 上载天花板路径，32T 档位稳定性对照（§14）
+    "h264lg-gpu": ("gpu", "test6_h264.mp4", {}),
 }
 
 
@@ -59,6 +63,8 @@ def main() -> int:
     ap.add_argument("--cases", default="hevc-cpu,hevc-gpu,av1-gpu")
     ap.add_argument("--trials", type=int, default=4)
     ap.add_argument("--frames", type=int, default=3000)
+    ap.add_argument("--nt", type=int, default=16,
+                    help="CPU 臂线程数（§14 起引擎默认 24/32，压测须覆盖新档）")
     ap.add_argument("--timeout", type=float, default=90.0)
     ap.add_argument("--log", default=str(ROOT / "bench" / "stress_harness.log"))
     args = ap.parse_args()
@@ -70,7 +76,8 @@ def main() -> int:
         for i in range(args.trials):
             env = dict(os.environ)
             env.update({"PROBE_ROOT": str(ROOT), "PROBE_VID": vid,
-                        "PROBE_CTX": ctx, "PROBE_FRAMES": str(args.frames)})
+                        "PROBE_CTX": ctx, "PROBE_FRAMES": str(args.frames),
+                        "PROBE_NT": str(args.nt)})
             env.pop("DECORD_HYBRID_DEBUG", None)
             env.update(extra)
             line = ""

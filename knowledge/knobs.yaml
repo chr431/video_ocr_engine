@@ -12,7 +12,7 @@
   type: int
   default: 0
   rationale: ec:87-95
-  note: 0=自动 clamp [HYBRID_CPU_THREADS_AUTO_MIN, MAX]=[8,16]
+  note: 0=自动：与 cpu 后端同一 codec 感知策略（_decode_num_threads）
 
 - name: ocr.threads
   env: OCR_THREADS
