@@ -36,9 +36,9 @@
   **99b8785 FORCE_SIDE 诊断臂死锁修复** / **75b8602 hybrid 非打印 stats 层 +
   sustained 产能估计器（实验性 opt-in）** / **4ccf889 sustained 产能口径转默认
   + EWMA 旧口径删除 + kick 突发治倾斜计划死锁** / **281a738 上载批大小消融
-  旋钮 + kick 承重判别** / **02c91e6 宿主路径慢消费者环死锁修复（kick 突发
-  放行 + KICK_BURST 5→16）**），本地提交 486d2f6 已 bump 版本号（三源一致）。
-  - **本地 cp313 wheel 已构建并安装**（含 02c91e6，sha256 `1b180227…`，
+  旋钮 + kick 承重判别** / **02c91e6→**b67f9eb** 宿主慢消费者环死锁修复——反馈式
+  清偿（债务快照+克隆至清偿，EOF 冲刷兜底）取代定长突发**），本地提交 486d2f6 已 bump 版本号（三源一致）。
+  - **本地 cp313 wheel 已构建并安装**（含 b67f9eb，sha256 `8e6f17a5…`，
     64MB dll 闭包完整；0.8.2 wheel 在 fork `dist/` 可回滚）。**wheel 口径
     验证全绿**（§15/§16）：金标 28/28 ×2（重录整矩阵同序——局部
     `--case` 重录会录在冷池态，见 FINDINGS F-8 注记）、挂死用例干净、
@@ -51,8 +51,9 @@
   - **sustained（滑窗持续产能）现为唯一 CPU 产能口径**（4ccf889 起）：
     `DECORD_CPU_RATE_SUSTAINED` env 已删除。机制/数字见
     `knowledge/benchmarks.yaml` 的 `hybrid_cpu_rate_ratchet`。
-    kick 突发（**KICK_BURST=16**，02c91e6 起）治 open-GOP DPB 队头尾帧
-    死锁；`DECORD_HYBRID_KICK_BURST` 可消融（0 = 单包 kick，5 = 旧默认）。
+    kick 清偿（**反馈式**，b67f9eb 起：克隆至离场侧债务清偿，护栏 64 防损坏流，
+    EOF 冲刷兜底；bf16 重排 17>16 酷刑流 3/3 实证）治 open-GOP DPB 队头尾帧
+    死锁；`DECORD_HYBRID_KICK_BURST`：0 = 消融关（单包 kick），>0 = 护栏值。
   - 引擎 GPU 管线全片 e2e（配对 3 遍）：hevc −24%（且 hybrid 首次显著
     胜纯 NVDEC −23%）、h264 −4.7%、av1 持平；金标 28/28 逐位一致。
   - 开发 dll md5 `2fd49ea5`（build-081fix，2026-09-12 replan 回滚后从

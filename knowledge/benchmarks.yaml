@@ -322,3 +322,19 @@
   caveat: 宿主路径结论前提 = ONNX 吃满核；换更轻 OCR 或未来 ORT 提速需复评
   next: 文档警示（README/AGENTS 已注）；无代码动作
   fork_commit: 02c91e6（测量时点）
+# ── 2026-09-12 续：kick 清偿机制定稿——反馈式取代定长（§17）────────────────
+- metric: hybrid_kick_feedback
+  question: §16 的 KICK_BURST=16 仍是猜深度调参（重排 >16 的流仍挂）——机制级修复？
+  result: 反馈式清偿（fork b67f9eb）：切换时刻快照离场侧债务
+          （side_pending_），此后非 key 包持续克隆至 pending−cloned ≤ 0
+          （发射/陈旧丢弃都减 pending——由解码器实际产出闭环，零深度假设）；
+          NeedsPackets 债务放行（治 §16.1 窗口截断环）；护栏 64 防损坏流，
+          击穿后武装保持放行至 EOF 冲刷（Push(nullptr) 确定性全量排空）兜底
+  evidence: 酷刑流 bf16（bframes=16 b-adapt=0 金字塔，包序实测重排深度 17）
+          3/3 干净；原挂死流 4/4 干净；env=0 消融挂死复现（承重）；
+          护栏 16+酷刑流 22.7s 干净（EOF 兜底实证）；金标 28/28×2、压测
+          9/9、TRT e2e/decode-only 同带；wheel 8e6f17a5 验证同源
+  caveat: 酷刑流首转用错参数名（bf=16 被 x264 静默忽略只排 3 连 B）——
+          正确键是 bframes；测量重排深度用包序逆序游程，别信 has_b_frames
+  next: 发布随 0.8.3（十一提交 b67f9eb）
+  fork_commit: b67f9eb
