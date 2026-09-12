@@ -15,40 +15,37 @@
 | `docs/log/ARCHIVE.md` | 归档（PERF §4 / §8 / §16 / §18），**编号保留勿重编** | 只看"为什么不做" |
 | `docs/DEPENDENCIES.md` | 依赖版本与已知问题 | 装环境 / 报 bug 时 |
 
-⚠️ **现役规则以本文件为准**。`docs/log/DECISIONS.md` 是迁出的原文存档，
-两者冲突时以本文件为真相（避免"两套真相"，见设计审查 D6）。结论的
-**当前状态**（active / superseded / dead）以 `docs/CONCLUSIONS.md` 为准。
+⚠️ **现役规则以本文件为准**；`docs/log/DECISIONS.md` 是迁出的原文存档，冲突时
+以本文件为真相（避免"两套真相"，设计审查 D6）。结论的**当前状态**
+（active / superseded / dead）以 `docs/CONCLUSIONS.md` 为准。
 
 ### ⛔ 查文档前先定位，不要整文件读
 
-实测（tiktoken cl100k，2026-09-08）：PERFORMANCE.md ≈ **30k**、
-ARCHIVE.md ≈ **28k**、DECISIONS.md ≈ **17k** tokens —— 而本文件每会话注入
-才 **~2.4k tokens**。**误读一次大文档 ≈ 12 倍的注入成本**，这是本项目最大的
-token 浪费点。查结论先读 `docs/CONCLUSIONS.md`（≈3k，预算受测试守护）。
+大文档实测（cl100k）：PERFORMANCE ≈ **30k**、ARCHIVE ≈ **28k**、
+DECISIONS ≈ **17k** tokens，而本文件注入才 **~2.4k** —— **误读一次 ≈ 12 倍
+注入成本**，本项目最大的 token 浪费点。
 
 ```bash
-python tools/_doc_section.py --find <关键词>        # 跨文档按标题定位，≈357 tokens
-python tools/_doc_section.py --toc docs/log/PERFORMANCE.md   # 目录+token数，≈838 tokens
-python tools/_doc_section.py docs/log/PERFORMANCE.md 21      # 只读 §21
-python tools/_doc_section.py docs/log/ARCHIVE.md 4.4b        # 支持 16 / 16.8 / 4.4b
+python tools/_doc_section.py --find <关键词>   # 跨文档按标题定位（≈357 tok）
+python tools/_doc_section.py --toc <文件>      # 目录+token 数（≈838 tok）
+python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.8 / 4.4b）
 ```
 
-典型路径：`--toc`(838) + 读单章(≈2,000) ≈ **2,800 tokens**，比整文件读
-**省 84~96%**。`--find` 只搜标题；要搜正文再用 grep。
+`--toc` + 单章 ≈ **2,800 tokens**，比整文件读**省 84~96%**；`--find` 只搜标题，
+搜正文用 grep。查结论先读 `docs/CONCLUSIONS.md`（≈3k，预算受测试守护）。
 
 ## 铁律（先量后做）
 
 1. **先量后做**：任何结论必须带实测数字，禁止凭直觉推断下结论。
 2. **正确性门禁** = 段数 + 唯一文本集（或真值准确率），不是"看起来没问题"。
-3. **判断 OCR 变好还是变坏，只测"文本有没有变"会得出错误结论** —— 必须
-   **按帧对齐真值**测准确率；别用置信度当代理（`羸弱→赢弱` 是退化，
-   置信度反而 0.9433→0.9700）。
+3. **只测"文本有没有变"会判错 OCR 的好坏** —— 必须**按帧对齐真值**测准确率；
+   别用置信度当代理（`羸弱→赢弱` 是退化，置信度反而 0.9433→0.9700）。
 4. **均值不能替代逐片检查**：5 片均值 ±0.01pp 曾用来支持"无负面影响"，
    第 6 片就翻了案。
 5. **真值本身要抽查**：版本、剥零、哨兵、时间基准都可能错
    （见 DECISIONS「P0-6 翻案」）。
-6. **别按"看起来旧"删脚本**：`tools/` 的探针是**证据链**，删之前先查引用
-   （35/40 被文档引用，另有 5 处跨探针 import 与 69 处文档路径引用）。
+6. **别按"看起来旧"删脚本**：`tools/` 的探针是**证据链**，删前先查引用
+   （绝大多数被文档、跨探针 import 或文档路径引用锚定）。
 7. **探针放 `tools/_probe_*.py`**（下划线前缀 = 调查工具，不随产品发布）。
 8. **结论分离**：结论一行进 `docs/CONCLUSIONS.md`（必须带状态/前提/复评
    触发），实验叙事进 `docs/log/`（PERFORMANCE.md 已冻结增长）；历史章节
@@ -65,7 +62,7 @@ python tools/_doc_section.py docs/log/ARCHIVE.md 4.4b        # 支持 16 / 16.8 
 | 阶段 | 入口 |
 |---|---|
 | 解码 | `decord.VideoReader.get_batch`（**唯一入口**；decode_backend=hybrid 走 decord 原生混合解码 ctx） |
-| 分段 | `segmentation.py` |
+| 分段 | `video_ocr_engine/domain/segmentation.py` |
 | 编排引擎 | `video_ocr_engine/pipeline/engine.py`（SegmentEngine 唯一入口） |
 | 宿主后端 | `video_ocr_engine/pipeline/host_backend.py` |
 | GPU 后端 | `video_ocr_engine/pipeline/gpu_backend.py`（gray+NVDEC+TRT 时默认；设备侧机制在 `video_ocr_engine/gpu/device.py`） |
@@ -77,12 +74,11 @@ python tools/_doc_section.py docs/log/ARCHIVE.md 4.4b        # 支持 16 / 16.8 
 | 分相打桩 | `video_ocr_engine/extractor.py` 的 `_prof_end`（**单一计时脊柱**：同一 t0 喂 profile 与指标） |
 | 性能 A/B | `tools/bench.py`（`run`/`diff`/`show`/`ab`/`telemetry-check`；报告落 `bench/registry.jsonl`） |
 
-⚠️ **A/B 必须交错**（`bench ab`）：同一份代码连跑两次实测可差 **7.7%**
-（GPU 热降/后台占用），顺序 A 全跑再 B 全跑会把漂移记到 B 头上。
-⚠️ **门禁阈值必须 ≥ 本机可分辨下限**：先 `bench telemetry-check --aa` 标定
-（本机 A/A 同档两槽 \|Δ\|p95 达 1.8%），阈值 = \|偏差\|+3×SE；判据是**同轮配对
-差分的均值**+符号多数一致。µs 级严格性在 `tests/config/test_telemetry_cost.py`。
-`AGENTS.md` 只留指路，执行体在脚本（`knowledge/rules.yaml` 同名规则）。
+⚠️ **A/B 必须交错**（`bench ab`）：同码连跑两次实测可差 **7.7%**（GPU 热降），
+顺序跑会把漂移记到 B 头上。⚠️ **门禁阈值 ≥ 本机可分辨下限**：先
+`bench telemetry-check --aa` 标定（本机 A/A \|Δ\|p95 1.8%），阈值 =
+\|偏差\|+3×SE，判据 = 同轮配对差分**均值** + 符号多数一致；µs 级严格性见
+`tests/config/test_telemetry_cost.py`。执行体在脚本（`knowledge/rules.yaml`）。
 
 **现役并行维度只有一个**：`decode_backend="hybrid"` 的 CPU+NVDEC 双解码，
 **已由 decord fork 原生实现**（v0.7.15+ 的 `hybrid`/`hybrid_gpu` ctx，引擎只
@@ -102,21 +98,20 @@ python tools/_doc_section.py docs/log/ARCHIVE.md 4.4b        # 支持 16 / 16.8 
 
 ## 已封板结论 → `docs/CONCLUSIONS.md`
 
-全部 33 条结论（含状态 / 前提 / 复评触发）在 `docs/CONCLUSIONS.md`，
-这里只留最容易踩的六条：
+全部 26 条结论（20 条 active / 6 条 superseded 指针；dead 已整体降级
+`docs/log/`）在 `docs/CONCLUSIONS.md`，这里只留最容易踩的六条：
 
 - 并发退化真因 = **NVDEC 会话数**；互补配对首选 NVDEC∥CPU，聚合 1.87×（PERF §21）
 - `auto` **恒为 NVDEC 优先**（刻意决策，2026-09-10 重申）：本机 h264 CPU 软解虽快
-  1.7~2.8×（C-04，显式选型依据），但弱 CPU 上可能反慢，且 CPU 解码必带争用/
-  功耗代价，NVDEC 稳妥优先；批量互补仍需**显式** `decode_backend="cpu"`（C-07/C-08）
+  1.7~2.8×（C-04），但弱 CPU 可能反慢且必带争用/功耗代价；批量互补仍需**显式**
+  `decode_backend="cpu"`（C-07/C-08）
 - GPU 分段 + ONNX OCR 无净收益，门控只放行 NVDEC+TRT（PERF §9）
-- hybrid 已迁 **decord 原生**；fork 十提交未发布（sustained 默认 + kick 治
-  死锁 + §16 宿主慢消费者环死锁修）：hevc 引擎全片比纯 NVDEC 快 23%；调度
-  器达混跑理想 94-97%（§14 修正：旧 −41% 折价系线程错配伪影；线程档 =
-  codec 感知策略）；**收益面 = TRT/设备路径（三码反超 −12~−33%）；ONNX
-  宿主路径不反超（hevc/av1 慢 11~31%，选 nvdec）**；h264 峰值走显式
-  `cpu`（C-08）。统一口径：h264lg + 全片单臂分母 +
-  交错配对；死锁判别走引擎全片（§10.2）
+- hybrid 已迁 **decord 原生**；fork 十一提交**已随 v0.8.3 发布**（sustained
+  默认 + kick 治死锁 + §16 宿主慢消费者环死锁修）：hevc 引擎全片比纯 NVDEC 快
+  23%；调度器达混跑理想 94-97%（§14 修正：旧 −41% 折价系线程错配伪影）；**收益面
+  = TRT/设备路径（三码反超 −12~−33%）；ONNX 宿主路径不反超（hevc/av1 慢
+  11~31%，选 nvdec）**；h264 峰值走显式 `cpu`（C-08）。统一口径：h264lg +
+  全片单臂分母 + 交错配对；死锁判别走引擎全片（§10.2）
 - **racelog_test 全部视频测量/验证一律 `sample_stride=1`**（2026-09-10 重申，
   防漏信息）；stride>1 仅用于字幕场景（字幕更新频率慢，如批量剧集字幕提取）
 - **合并判定默认带「稠密簇门」**（`segment.merge_dense_gate`）：遥测内容不再合并，
@@ -124,21 +119,14 @@ python tools/_doc_section.py docs/log/ARCHIVE.md 4.4b        # 支持 16 / 16.8 
 
 ## 编辑护栏（docs/log/PERFORMANCE.md）
 
-✅ **2026-08-31 已清除全部 934 个裸 `\r`**（提交 `fd2a76a`），现为**纯 LF 文件**，
-裸 CR = **0**。**任何工具都安全** —— 文本模式（含默认 `newline=None`）、Edit 工具、
-二进制模式，对纯 LF 文件都 100% 保真。
-
-那 934 个 CR 是什么：每个 `\r` 与下一个 `\n` 之间只有空格或一个重复的 `>`，
-**无一后跟正文**。CommonMark 把裸 `\r` 也当行结束符 → 154 处块引用被劈成多段、
-762 处意外硬换行，**当时有 934 处渲染错误**，只是没人读渲染结果才没暴露。
-
-- 修法（若哪天又出现）：`re.sub(r'\r(>?[ ]*)(?=\n)', '', txt)`
-- 自检：`open(p,'rb').read().count(b'\r') == 0`
-- 回归防护：`tests/test_docs_hygiene.py`
+✅ **纯 LF，裸 CR = 0**（2026-08-31 清除 934 处，提交 `fd2a76a`）——文本模式
+（含默认 `newline=None`）、Edit 工具、二进制模式**都 100% 保真**。自检
+`open(p,'rb').read().count(b'\r') == 0`；防护 `tests/test_docs_hygiene.py`；
+934 处的成因与修法见 `docs/log/DECISIONS.md`「编辑护栏：934 裸 CR 清除记」。
 
 ## 纪律与自动化守卫
 
-**改完代码跑一次**（12 项，退出码非 0 即违规；关键项另有单测守护）：
+**改完代码跑一次**（22 项 = 12 基础 + 10 扩展，退出码非 0 即违规；关键项另有单测守护）：
 
 ```bash
 python tools/_probe_discipline_audit.py          # 全量
@@ -148,19 +136,20 @@ python tools/_probe_index_audit.py               # tools/INDEX.md 数字一致�
 
 几条容易踩、且已自动化的：
 
-- **路径不许写死**。仓库内路径一律 `__file__` 推导；外部测试视频走环境变量
+- **路径不许写死**：仓库内路径一律 `__file__` 推导；外部视频走环境变量
   （`RACELOG_VIDEO_DIR` / `RACELOG_BATCH_DIR`），硬编码值只能当默认值。
   ⚠️ **`WORKER = r"""..."""` 子进程模板是特例**：它以 `python -c` 执行，
-  **`-c` 下 `__file__` 未定义**，必须靠父进程注入 `PROBE_ROOT` 环境变量
-  （`_probe_cpu_onnx.py` 例外：它做新旧版本 A/B，子进程 cwd 就是旧 worktree，
-  **必须插 cwd** 才不会变成"新代码 vs 新代码"）。
-- **`except … pass` 不许无声**。要么 `logger.debug`，要么 `pass  # 为何可忽略`。
-  存量 63 处登记在 `tools/_discipline_baseline.json` —— **存量豁免、增量严格**。
-  改到某个文件时顺手补注释，它自然脱出 baseline。
-  `except BaseException` 只在清理路径允许（否则连 Ctrl-C 一起吞）。
+  **`-c` 下 `__file__` 未定义**，须靠父进程注入 `PROBE_ROOT`（`_probe_cpu_onnx.py`
+  例外：它做新旧版本 A/B，子进程 cwd 就是旧 worktree，**必须插 cwd**）。
+- **`except … pass` 不许无声**：要么 `logger.debug`，要么 `pass  # 为何可忽略`
+  （存量 63 处登记在 `tools/_discipline_baseline.json`，**存量豁免、增量严格**；
+  改到该文件时顺手补注释即自然脱出）。`except BaseException` 仅清理路径允许。
 - **产品代码的 print 必须受 debug 开关保护**（`env_bool(DEBUG_BOUNDS_ENV)` /
   `self._probe`），否则走 `logging`。docstring 里的用法示例不算。
 - **未使用的 import**：有意 re-export 加 `# noqa: F401`，否则删掉。
+- **不得引用六个废弃根模块 shim**（`engine_config` / `gpu_setup` /
+  `ocr_native` / `ocr_trt` / `segmentation` / `video_utils`）——审计项 22，
+  白名单只有两个冻结 shim 可导入性的契约测试；迁移表 `docs/MIGRATION.md` §1。
 - **文档裸 CR = 0、AGENTS.md ≤ 12 KB**：`tests/test_docs_hygiene.py` 守护。
 
 （旧「只能用二进制」「Edit 工具不安全」两条规矩**双向都错**，勘误原文见
@@ -171,12 +160,12 @@ python tools/_probe_index_audit.py               # tools/INDEX.md 数字一致�
 - Python：`c:/Users/eric chen/AppData/Local/Programs/Python/python313/python.exe`
   （**PATH 上的 `python` 缺 numpy，不是项目环境**）。pytest / numpy / psutil /
   cuda.bindings / decord 均可用。
-- 硬件：RTX 4060（**单 NVDEC 单元**）/ 16 物理核 32 逻辑核 / 2×16GB DDR5-6000
-  （实测流式上限 **55.8 GB/s**；WMI 的 `Speed`=5600 是 SPD 标称，
-  `ConfiguredClockSpeed`=6000 才是实际值）。
+- 硬件：RTX 4060（**单 NVDEC 单元**）/ 16C32T / 2×16GB DDR5-6000（实测流式
+  上限 **55.8 GB/s**；WMI `Speed`=5600 是 SPD 标称，`ConfiguredClockSpeed`
+  =6000 才是实际值）。
 - 测试视频 `D:\Videos\racelog_test\`，真值在 `ground_truth_csv/`
   （头是 `# roi=...`，**必须用正则取四个整数**，按逗号切只能拿到第一个）。
-  ⚠️ **该目录全部视频一律 `sample_stride=1`**（防漏信息）；`stride>1` 只
-  用于字幕提取场景（`text_text`/`batch_test`，字幕更新频率慢）。
+  ⚠️ **该目录全部视频一律 `sample_stride=1`**（防漏信息）；`stride>1` 只用于
+  字幕提取场景（`text_text`/`batch_test`，字幕更新频率慢）。
 - 中文输出需 `sys.stdout.reconfigure(encoding="utf-8")`（GBK 控制台会崩）。
 - `tools/` 子目录下 `sys.path[0]` 是 tools/，探针须 `sys.path.insert(0, 上级目录)`。
