@@ -5,8 +5,13 @@ ROI 面积 A/B（_probe_roi_segcost.py）有混淆——ROI 变大同时改变 O
 （infer +134%）与解码侧转换量，无法分离出分段成本。
 
 本探针直接给两个函数打计时桩（包装原函数，行为不变）：
-  · video_ocr_engine._host_pipeline._cluster_win3 —— 每帧一次，热点候选
-  · video_ocr_engine.extractor._host_segment_frames —— 宿主分段全过程
+  · video_ocr_engine.domain.segmentation._cluster_win3 —— 每帧一次，热点候选
+    （2026-09-13 修正：原打桩点 `_host_pipeline._cluster_win3` 随 S9 模块化
+     消失。新点位仍是**调用点所在模块**——状态机在 segmentation 内以模块全局
+     查名调用，且 extractor 走函数内 `from ... import` 每次调用重解析，
+     两者都会被本桩拦下。）
+  · video_ocr_engine.pipeline.host_backend._segment_frames —— 宿主分段全过程
+    （原 extractor._host_segment_frames，S9 迁入 host_backend 并改名）
 累计其绝对耗时，与墙钟相比得到真实占比。段数/唯一文本作为正确性校验
 （包装不应改变任何行为）。
 
@@ -37,28 +42,28 @@ os.environ['ENGINE_PROFILE'] = '1'
 path, roi_s, n, dbe, obe, st = sys.argv[1:7]
 roi = tuple(int(x) for x in roi_s.split(','))
 
-import video_ocr_engine._host_pipeline as hp
-import video_ocr_engine.extractor as ex_mod
+import video_ocr_engine.domain.segmentation as seg_mod
+import video_ocr_engine.pipeline.host_backend as hb_mod
 
 acc = {'cluster': 0.0, 'cluster_n': 0, 'seg': 0.0, 'seg_n': 0}
 
-_orig_cluster = hp._cluster_win3
+_orig_cluster = seg_mod._cluster_win3
 def _w_cluster(d):
     t0 = time.perf_counter()
     r = _orig_cluster(d)
     acc['cluster'] += time.perf_counter() - t0
     acc['cluster_n'] += 1
     return r
-hp._cluster_win3 = _w_cluster
+seg_mod._cluster_win3 = _w_cluster
 
-_orig_seg = ex_mod._host_segment_frames
+_orig_seg = hb_mod._segment_frames
 def _w_seg(*a, **kw):
     t0 = time.perf_counter()
     r = _orig_seg(*a, **kw)
     acc['seg'] += time.perf_counter() - t0
     acc['seg_n'] += 1
     return r
-ex_mod._host_segment_frames = _w_seg
+hb_mod._segment_frames = _w_seg
 
 from video_ocr_engine import FieldExtractor
 ex = FieldExtractor(path, roi, frame_end=int(n), sample_stride=int(st),
@@ -143,8 +148,8 @@ def main():
               f"{d['seg_s']:8.3f}s {d['seg_s']/d['wall']*100:5.1f}% "
               f"{d['cluster_s']:8.3f}s "
               f"{d['cluster_s']/d['wall']*100:5.1f}% {d['cluster_n']:7d}")
-    print("\n注1：GPU 管线下分段在 GPU 上做，_host_segment_frames 不被调用"
-          "（调用次数 0 = 该次跑的是 GPU 管线）。")
+    print("\n注1：GPU 管线下分段在 GPU 上做，host_backend._segment_frames 不被"
+          "调用（调用次数 0 = 该次跑的是 GPU 管线）。")
     print("注2：占比 = 分段绝对耗时 / 墙钟。若分段跑在消费者线程且被解码"
           "掩盖，实际可优化空间小于该值。")
 

@@ -29,8 +29,11 @@ VIDS = {
 
 
 def trace_pipeline(video: str, roi: tuple, frames: int, gpu_pl: str) -> dict:
-    import video_ocr_engine.gpu.device as gp
-    import video_ocr_engine._host_pipeline as hp
+    # 2026-09-13 修正：同 _probe_d1_trace.py——打桩点改为状态机的两个消费方
+    # 模块（gpu_backend / host_backend），旧点位 gpu/device.py 与
+    # _host_pipeline.py 已随 S9 模块化消失。
+    import video_ocr_engine.pipeline.gpu_backend as gp
+    import video_ocr_engine.pipeline.host_backend as hp
     from video_ocr_engine.domain.segmentation import SegmentStateMachine, _cluster_win3
     os.environ["GPU_PIPELINE"] = gpu_pl
 

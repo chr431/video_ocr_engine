@@ -6,15 +6,18 @@
 方法体最初由既有视频项目的历史 tools/archive 生成脚本从 segment_flow.py
 抽取；独立成仓后随引擎维护，不再依赖任何下游仓库。
 
-模块划分（2026-08 七轮修正后按逻辑拆分）：
-  extractor.py      — 引擎骨架：构造/参数校验/解码器打开/流水线分发/结果组装
-  _host_pipeline.py — 宿主管线：校准/帧流/分段状态机/OCR 会话
-                      （_host_calibrate / _host_frame_stream /
-                      _host_segment_frames / _HostPipelineMixin）
-  _helpers.py       — 无类依赖的独立工具函数
-  _result_types.py  — ExtractedSegment / ExtractionResult
-  gpu/              — 设备侧（context=DLL 注册 / device=池+帧流+校准 /
-                      frame_ref=DeviceRef）
+模块划分（S9 模块化后的现行布局；旧扁平面 `_host_pipeline.py` /
+`_gpu_pipeline.py` / `_ocr_session.py` 均已删除）：
+  extractor.py  — 引擎骨架：构造/参数校验/解码器打开/后端分发/结果组装（门面）
+  pipeline/     — engine=SegmentEngine 唯一编排入口；host_backend / gpu_backend
+                  两个执行后端（HostRunSpec / GpuRunSpec 显式契约）；
+                  ocr_stage=OcrSession（吃 SessionSpec）；report=RunReport
+  domain/       — segmentation=分段/状态机/裁切/预处理的**唯一实现处**；
+                  video_utils=像素转换；metrics=指标注册表；resources=资源层
+  ocr/          — native=OCR 调度+引擎池；trt=TRT 执行；port=后端协议
+  gpu/          — context=DLL 注册 / device=设备池+帧流+校准 / frame_ref=DeviceRef
+  config/       — constants + 旋钮注册表/解析（env 读取唯一入口）
+  _helpers.py / _result_types.py / _gpu_kernels.py — 工具 / 轨迹类型 / 设备侧核
 双流水线并行已被移除（2026-08 清理）；CPU+NVDEC 双解码（decode_backend=
 "hybrid"）由 decord fork 原生实现（≥v0.7.15 的 hybrid/hybrid_gpu ctx），
 引擎只透传解码参数；项目层 hybrid_decode.py 已删除，勿再引用。

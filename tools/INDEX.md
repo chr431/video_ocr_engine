@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **89 个 `.py`**（14,722 行），其中 79 个是探针
+`tools/` 现有 **89 个 `.py`**（14,761 行），其中 79 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -116,8 +116,8 @@
 
 | 文件 | 行 | 改于 |
 |---|---:|---|
-| `_probe_python_cost.py` | 130 | 2026-08-30 |
-| `_probe_seg_share.py` | 154 | 2026-08-30 |
+| `_probe_python_cost.py` | 157 | 2026-08-30 |
+| `_probe_seg_share.py` | 159 | 2026-08-30 |
 | `_probe_hybrid_ab.py` | 119 | 2026-08-29 |
 | `_probe_batch_coldstart.py` | 101 | 2026-08-31 |
 
@@ -153,8 +153,8 @@
 | 文件 | 行 | 改于 | 支撑 |
 |---|---:|---|---|
 | `_probe_d1_prim_diff.py` | 125 | 2026-09-10 | log《hybrid联调深挖》D1：帧级原语逐项对比（1083 vs 1042 根因定位） |
-| `_probe_d1_trace.py` | 114 | 2026-09-10 | log《hybrid联调深挖》D1：分段判定逐帧 trace |
-| `_probe_d1_trace2.py` | 145 | 2026-09-10 | log《hybrid联调深挖》D1：合并判定失真定位（PI-6 修复证据） |
+| `_probe_d1_trace.py` | 118 | 2026-09-10 | log《hybrid联调深挖》D1：分段判定逐帧 trace |
+| `_probe_d1_trace2.py` | 148 | 2026-09-10 | log《hybrid联调深挖》D1：合并判定失真定位（PI-6 修复证据） |
 
 ## D. 孤儿（无任何文档引用、也无代码引用）
 

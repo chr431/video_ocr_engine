@@ -48,3 +48,8 @@ ocr_engines/*.engine
 
 # bench run registry（append-only 本地证据，§8.6 N-4）
 bench/
+
+# 探针/基准运行日志与一次性调试 dump（run 产物，非源码；与 bench/ 同政策）
+# 例：tools/_bench_mig*_*.log（22 个，零引用）、/_spy_{new,old}.json
+tools/*.log
+/_spy_*.json
