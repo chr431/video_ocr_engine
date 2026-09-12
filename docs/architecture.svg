@@ -16,7 +16,7 @@
     </style>
   </defs>
 
-  <text x="24" y="34" class="title">video-ocr-engine 识别链架构（0.11.x）</text>
+  <text x="24" y="34" class="title">video-ocr-engine 识别链架构（0.13.3）</text>
   <rect x="24" y="44" width="470" height="20" class="badge"/>
   <text x="32" y="58" class="sub">链路：解码 → 像素分段 → 代表帧 → OCR → 相似段合并（引擎零领域语义）</text>
 
@@ -28,7 +28,7 @@
 
   <!-- 解码层 -->
   <rect x="196" y="80" width="264" height="96" class="grp" rx="12"/>
-  <text x="328" y="102" text-anchor="middle" class="lbl">decord fork（chr431/decord 0.8.2，pip wheel）</text>
+  <text x="328" y="102" text-anchor="middle" class="lbl">decord fork（chr431/decord 0.8.3，pip wheel）</text>
   <text x="328" y="121" text-anchor="middle" class="sub">ctx：cpu(24T·av1) / gpu(NVDEC) / hybrid / hybrid_gpu</text>
   <text x="328" y="138" text-anchor="middle" class="sub">ROI-first 裁切 · gray / yuv420 输出 · stride 等差快径</text>
   <text x="328" y="158" text-anchor="middle" class="code">decode_backend = auto | cpu | nvdec | hybrid</text>

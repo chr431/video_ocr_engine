@@ -1,5 +1,13 @@
-# 结论历史（dead/superseded 全文，自 CONCLUSIONS.md 降级；
+# 结论历史（dead/superseded 全文，自 docs/CONCLUSIONS.md 降级；
 # append-only，永不注入，显式检索可达——Q7 R3）
+#
+# ⚠️ 冻结档案：**不是可重生成的产物**。原生成器 knowledge/build_yaml.py
+# 要求 docs/CONCLUSIONS.md 为 6 列表格，而现行渲染产物只有 5 列
+# （status 已拆为独立小节）→ 该转换器已结构性失效
+# （实测 assert len(rows)==33 抛 AssertionError: 0）。
+# 本文件是 12 条 dead 结论（含复评触发）的**唯一载体**——
+# knowledge/conclusions.yaml 的 dead 计数为 0，C-12/C-25/C-30 等 id 在
+# yaml 中完全不存在。故：不得删除、不得指望重跑刷新，只能追加。
 
 ## C-06（superseded → C-05）
 - 结论：项目层 hybrid 调度（v3~v7：kfe 分片/校准/折扣/在线移界/窃取）

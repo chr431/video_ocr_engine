@@ -33,6 +33,10 @@ index/
 # Agent worktree：会话产出的完整仓库副本。实测 .claude/ 达 154 MB，
 # 且让每次搜索多返回约 6 倍重复命中。搜索侧另由 .rgignore 单独控制。
 .claude/
+# 智能体会话残留：Zed/agent 的 plans 目录（会话 UUID 命名，非项目文档）。
+# 实测曾入库一个 v5 调度计划——其前提（项目层 hybrid 调度）已由 C-05 判死，
+# 且它要求新增两个注册表里不存在的环境旋钮，被当规范读会误导。与 .claude/ 同政策。
+.zcode/
 # 探针输出产物
 tools/_probe_truth_env.json
 tools/_int8_probe/
