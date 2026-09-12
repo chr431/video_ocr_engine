@@ -10,7 +10,7 @@
 | numpy | 2.x | PyPI | 预处理/信号计算，纯 numpy 无 scipy |
 | onnxruntime | 1.29.x | PyPI | CPU OCR 后端；1.28 含 protobuf CVE 修复；1.29.0 实测升级安全、性能持平 |
 | psutil | 6+ | PyPI | 物理核数探测 / RSS 采样（缺失时降级） |
-| decord | **0.8.2（pip wheel）** | chr431/decord release | NVDEC 硬解 + CPU 软解；**PyPI 官方版不支持** `next_roi` / ROI-first / GPU gray / YUV420 / `sample_stride` 等差步长快速路径；fork 自 0.8.2 起发布 cp39–cp314 全版本 wheel，`pip install <wheel>` 即用 |
+| decord | **0.8.3（本地 wheel 已装，GitHub 发布待 dispatch，§15）** | chr431/decord release | NVDEC 硬解 + CPU 软解；**PyPI 官方版不支持** `next_roi` / ROI-first / GPU gray / YUV420 / `sample_stride` 等差步长快速路径；fork 自 0.8.2 起发布 cp39–cp314 全版本 wheel，`pip install <wheel>` 即用 |
 | cuda-python | 13.x | PyPI | TRT 执行 + decord GPU DLL 注册 |
 | tensorrt_*_bindings | 11.x | PyPI | TensorRT thin binding（~1MB）；运行 DLL 从系统 PATH 加载 |
 
@@ -30,18 +30,25 @@
 ## 已知问题与注意
 
 ### decord（自建 fork，pip wheel 安装）
-- **0.8.3（2026-09-10 本地预备，未发布；2026-09-11/12 追加四个修复）**：fork
+- **0.8.3（2026-09-12 发布验证轮完成，GitHub 发布待用户 dispatch）**：fork
   master 领先 0.8.2 九个提交（73e5540 析构 UAF 修复 / d94d92e hybrid GPU 池深
   按 ROI 重算 / 3b96c6f hybrid chunk 预路由 / 93a5ce1 / **99b8785 FORCE_SIDE
   诊断臂死锁修复** / **75b8602 hybrid 非打印 stats 层 + sustained 产能估计器
   （实验性 opt-in）** / **4ccf889 sustained 产能口径转默认 + EWMA 旧口径删除
   + kick 突发治倾斜计划死锁** / **281a738 上载批大小消融旋钮 + kick 承重
-  判别**），本地提交 486d2f6 已 bump 版本号。
+  判别**），本地提交 486d2f6 已 bump 版本号（三源一致）。
+  - **本地 cp313 wheel 已构建并安装**（sha256 `bad116d0…`，64MB dll 闭包
+    完整；0.8.2 wheel 在 fork `dist/` 可回滚）。**wheel 口径验证全绿**
+    （§15）：金标 28/28 ×2（重录整矩阵同序——局部 `--case` 重录会录在
+    冷池态，见 FINDINGS F-8 注记）、引擎 e2e 三码全片×2 段数与 dev dll
+    一致、压测 6/6、decode-only 2753≈2782fps。
+  - ⚠️ **kick=0 判别（§10.2）不可复现**：wheel 与 dev dll 同口径各 4 次
+    全干净（16T/32T 都试过）——死锁窗口时序敏感。替换证据：默认运行
+    `kicks c=30 g=30`（代码活跃）+ wheel≡dev 全对位；历史 4/4 对照保留。
   - **sustained（滑窗持续产能）现为唯一 CPU 产能口径**（4ccf889 起）：
     `DECORD_CPU_RATE_SUSTAINED` env 已删除。机制/数字见
     `knowledge/benchmarks.yaml` 的 `hybrid_cpu_rate_ratchet`。
-    kick 突发（KICK_BURST=5）治 open-GOP DPB 队头尾帧死锁
-    （引擎全片 kick=0 消融 4/4 挂死，承重性确凿）；
+    kick 突发（KICK_BURST=5）治 open-GOP DPB 队头尾帧死锁；
     `DECORD_HYBRID_KICK_BURST=0` 可消融回单包 kick。
   - 引擎 GPU 管线全片 e2e（配对 3 遍）：hevc −24%（且 hybrid 首次显著
     胜纯 NVDEC −23%）、h264 −4.7%、av1 持平；金标 28/28 逐位一致。

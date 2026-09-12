@@ -286,3 +286,17 @@
           重转码改 sha 致预存失配，非线程改动）
   next: 0.8.3 wheel 发布（口径不变）；上载天花板量化（低优先）
   fork_commit: 281a738（fork 零改动，本轮全部引擎侧）
+# ── 2026-09-12 续：0.8.3 wheel 发布验证轮（§15）────────────────────────────
+- metric: decord_083_wheel_validation
+  question: fork 九提交打包的 0.8.3 wheel（cp313 本地构建）行为是否与已验证的
+            dev dll 一致？发布门禁（金标 + kick 判别）是否通过？
+  result: wheel≡dev 全对位——金标 28/28 ×2（重录整矩阵同序后；C-h264-cpu
+          曾 27/28 系局部 --case 重录录在冷池态、全量 verify 跑到时已热，
+          F-8 刀锋段置信度末位翻转，非回归）；e2e 三码全片×2 段数一致；
+          压测 6/6；decode-only av1@24T 2753 vs dev 2782fps（±1%）
+  caveat: kick=0 消融判别（§10.2 的 4/4 挂死）当日对 wheel 与 dev dll 均不可
+          复现（各 4 次全干净，16T/32T 都试）——死锁窗口时序敏感；替换证据
+          = 默认运行 kicks c=30 g=30 + wheel≡dev 对位。历史 4/4 对照保留
+  next: 用户执行：fork push origin master → GitHub dispatch release.yml
+        (version=0.8.3)；CI 产物发布后抽验（pip 装 + §15.4 矩阵复跑）
+  fork_commit: 281a738（零新提交；wheel sha256 bad116d0…）
