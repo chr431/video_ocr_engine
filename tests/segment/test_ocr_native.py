@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from ocr_native import OcrEngine
+from video_ocr_engine.ocr.native import OcrEngine
 
 
 @pytest.fixture(scope="module")

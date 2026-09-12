@@ -10,8 +10,8 @@ import time
 
 import numpy as np
 
-import engine_config as config
-from segmentation import _cluster_win3
+import video_ocr_engine.config.constants as config
+from video_ocr_engine.domain.segmentation import _cluster_win3
 from video_ocr_engine._host_pipeline import _host_segment_frames
 
 
@@ -39,7 +39,7 @@ class FakeEx:
         return 'binary'
 
     def _segments_similar(self, a, b):
-        from segmentation import _text_sep_binary   # S2：直连实现（壳已删）
+        from video_ocr_engine.domain.segmentation import _text_sep_binary   # S2：直连实现（壳已删）
         a = _text_sep_binary(a, self._bin_thresh)
         b = _text_sep_binary(b, self._bin_thresh)
         d = np.abs(a.astype(np.int16) - b.astype(np.int16))

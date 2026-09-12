@@ -46,7 +46,7 @@ WORKER = r"""
 import sys, json
 sys.path.insert(0, os.environ["PROBE_ROOT"])
 import numpy as np
-from segmentation import _otsu
+from video_ocr_engine.domain.segmentation import _otsu
 from video_ocr_engine import FieldExtractor
 
 vp, roi_s, s, e, stride, nframes = sys.argv[1:7]

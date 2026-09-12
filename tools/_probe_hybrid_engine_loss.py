@@ -16,7 +16,7 @@ sys.path.insert(0, str(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 
 def run(video, roi, batch=None, stream=None, runs=2, frames=3000):
-    import engine_config as config
+    import video_ocr_engine.config.constants as config
     from video_ocr_engine import FieldExtractor
     saved_batch = config.GPU_PIPELINE_DECODE_BATCH
     if batch is not None:

@@ -82,7 +82,7 @@ def bench_decode(path, roi, nframes, stride, ctx_tag, with_roi=True):
 def bench_full(path, roi, nframes, stride, backend, ocr):
     """端到端 extract（含分段+OCR）。"""
     os.environ.setdefault("ENGINE_PROFILE", "1")
-    import engine_config  # noqa
+    import video_ocr_engine.config.constants as engine_config  # noqa
     if os.environ.get("ENGINE_PROFILE") != "1":
         os.environ["ENGINE_PROFILE"] = "1"
     from video_ocr_engine import FieldExtractor

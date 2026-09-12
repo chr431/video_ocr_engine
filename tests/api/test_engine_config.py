@@ -1,7 +1,10 @@
-"""engine_config 一致性 + 模型资产存在性（引擎可运行的基础）。"""
+"""配置常量一致性 + 模型资产存在性（引擎可运行的基础）。
+
+常量唯一出处 = `video_ocr_engine.config.constants`（根 `engine_config` 是
+0.14.0 待删 shim；文件名沿用历史名）。"""
 from __future__ import annotations
 
-import engine_config as config
+import video_ocr_engine.config.constants as config
 import video_ocr_engine
 from _paths import ROOT  # tests/_paths.py：与目录深度无关的仓库根
 
@@ -27,8 +30,8 @@ def test_ocr_model_assets_exist():
 
 def test_models_dir_finds_marker_in_source_tree():
     """源码模式下 _models_dir 必须解析到含模型文件的目录（wheel 安装回归保护）。"""
-    from ocr_native import _models_dir as onnx_models
-    from ocr_trt import _models_dir as trt_models
+    from video_ocr_engine.ocr.native import _models_dir as onnx_models
+    from video_ocr_engine.ocr.trt import _models_dir as trt_models
     for fn in (onnx_models, trt_models):
         p = fn()
         assert (p / "PP-OCRv6_rec_small.onnx").is_file(), p
@@ -37,7 +40,7 @@ def test_models_dir_finds_marker_in_source_tree():
 
 def test_dict_format_matches_models_dir():
     """字符表：读表逻辑 = 文件行数 + 末尾空格 + 开头 blank（与 ocr_native 一致）。"""
-    from ocr_native import OcrEngine, _models_dir
+    from video_ocr_engine.ocr.native import OcrEngine, _models_dir
     dict_path = _models_dir() / "ppocrv6_dict.txt"
     assert dict_path.is_file(), f"字符表不在模型目录: {dict_path}"
     with open(dict_path, "rb") as f:

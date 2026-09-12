@@ -37,8 +37,8 @@ def main() -> None:
     from decord import VideoReader, gpu
     from video_ocr_engine._helpers import _ndarray_device_ptr
     from video_ocr_engine._gpu_kernels import GpuFrameAnalyzer
-    from video_utils import _nv12_batch_luma_full
-    from segmentation import _cluster_win3, similar_decision
+    from video_ocr_engine.domain.video_utils import _nv12_batch_luma_full
+    from video_ocr_engine.domain.segmentation import _cluster_win3, similar_decision
     from cuda.bindings import runtime as cudart
 
     path, roi = VIDS[args.video]
@@ -97,7 +97,7 @@ def main() -> None:
     a, b = 10, 11  # 任取同批相邻两帧作代表帧对
     ga, gb = g_host[a], g_host[b]
     ba, bb = ga > th, gb > th
-    from segmentation import _text_sep_binary
+    from video_ocr_engine.domain.segmentation import _text_sep_binary
     xa, xb = _text_sep_binary(ga, th), _text_sep_binary(gb, th)
     diff = xa != xb
     n = ga.size

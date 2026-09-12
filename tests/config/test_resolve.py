@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-import engine_config as config
+import video_ocr_engine.config.constants as config
 from video_ocr_engine.config import KNOBS, RunConfig, resolve
 
 ENV_NAMES = KNOBS.env_names()

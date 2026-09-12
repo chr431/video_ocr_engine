@@ -12,8 +12,13 @@ v1 的公共面在这里**逐字冻结**：v2 strangler 迁移（S1–S5）期�
   3. ExtractedSegment 7 字段 / ExtractionResult 5 字段（含顺序，允许位置构造）
   4. meta 9 键 + params 16 子键 + timing 3 键（键集合；实际值由金标向量冻结）
   5. 包导出面与 6 个根模块可顶层导入
-  6. engine_config 的 18 个 *_ENV 常量名
+  6. engine_config 的 19 个 *_ENV 常量名（含 SEG_MERGE_DENSE_GATE_ENV）
   7. 已删除名字保持不存在（硬失败，不得静默复活）
+
+本文件**有意**走已废弃的六个根模块路径——第 5/6 项冻结的正是 shim 的
+可导入性与常量面。0.14.0 删除 shim 时，本文件与
+`tests/api/test_engine_imports.py` 的 ENGINE_MODULES 必须同步改为包内路径
+（见 docs/MIGRATION.md §1），这是删除动作的完整清单。
 """
 from __future__ import annotations
 

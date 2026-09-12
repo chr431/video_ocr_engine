@@ -36,8 +36,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import engine_config as config  # noqa: E402
-from segmentation import _otsu  # noqa: E402
+import video_ocr_engine.config.constants as config  # noqa: E402
+from video_ocr_engine.domain.segmentation import _otsu  # noqa: E402
 from video_ocr_engine import FieldExtractor  # noqa: E402
 
 

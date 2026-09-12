@@ -20,7 +20,7 @@ import time
 
 import numpy as np
 
-from segmentation import _cluster_win3 as orig
+from video_ocr_engine.domain.segmentation import _cluster_win3 as orig
 
 
 def cluster_u8(diff: np.ndarray) -> float:

@@ -10,6 +10,9 @@ import pytest
 
 from _paths import PKG  # tests/_paths.py：与目录深度无关的 video_ocr_engine/ 路径
 
+# 0.14.0 删除六个根模块 shim 时，本表前 6 项须换成包内路径
+# （video_ocr_engine.config.constants / .gpu.context / .ocr.native /
+# .ocr.trt / .domain.segmentation / .domain.video_utils）——见 docs/MIGRATION.md §1。
 ENGINE_MODULES = [
     "engine_config", "gpu_setup", "ocr_native",
     "ocr_trt", "segmentation", "video_utils", "video_ocr_engine",

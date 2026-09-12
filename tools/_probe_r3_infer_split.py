@@ -28,7 +28,7 @@ FRAMES = 3000
 def run_once(backend: str) -> None:
     os.environ["ENGINE_PROFILE"] = "1"
     os.environ["TRT_SUBPROBE"] = "1"
-    import ocr_trt
+    import video_ocr_engine.ocr.trt as ocr_trt
     ocr_trt.SUBPROBE.update(htod=0.0, enqueue=0.0, dtoh=0.0, sync=0.0)
     from video_ocr_engine import FieldExtractor
     ex = FieldExtractor(VID, ROI, frame_end=FRAMES, sample_stride=1,

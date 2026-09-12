@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from video_ocr_engine import FieldExtractor
-import engine_config as config
+import video_ocr_engine.config.constants as config
 
 
 def test_default_is_one():

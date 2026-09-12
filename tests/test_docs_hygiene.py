@@ -212,12 +212,12 @@ def test_no_dangling_file_refs() -> None:
 
 
 def test_param_defaults_consistent_with_engine_config() -> None:
-    """README 宣称的参数默认值必须与 engine_config 一致。
+    """README 宣称的参数默认值必须与 `video_ocr_engine.config.constants` 一致。
 
     防「engine 已改、文档没改」式漂移（实例：HYBRID 分档 README 写 [8, 24]
     而 engine_config 已是 [8, 16]，漂移存活了两周）。清单可按需追加。
     """
-    import engine_config as config
+    import video_ocr_engine.config.constants as config
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     expectations = [

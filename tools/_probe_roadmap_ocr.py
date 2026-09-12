@@ -29,7 +29,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 def bench_onnx(bs_list, n, threads=None):
     import numpy as np
-    from ocr_native import OcrEngine
+    from video_ocr_engine.ocr.native import OcrEngine
     ot = OcrEngine(variant="v6_small", engine_type="onnxruntime",
                    num_threads=threads)
     x = np.random.rand(n, 3, 48, 224).astype(np.float32)
@@ -51,7 +51,7 @@ def bench_onnx(bs_list, n, threads=None):
 
 def bench_trt(bs_list, n):
     import numpy as np
-    from ocr_native import OcrEngine
+    from video_ocr_engine.ocr.native import OcrEngine
     eng = OcrEngine(variant="v6_small", engine_type="tensorrt")
     trt = eng._trt
     print(f"  TRT max_batch={trt.max_batch}", flush=True)
@@ -77,7 +77,7 @@ def build_test_engine(max_b: int, fp16: bool, out_path: Path) -> None:
     仅改 batch 上限与精度 flag。TRT 11：显式 batch 为默认。
     """
     import tensorrt as trt
-    import engine_config as config
+    import video_ocr_engine.config.constants as config
     models = Path(__file__).resolve().parent.parent / "assets" / "ocr_models"
     logger = trt.Logger(trt.Logger.WARNING)
     builder = trt.Builder(logger)
@@ -115,8 +115,8 @@ def build_test_engine(max_b: int, fp16: bool, out_path: Path) -> None:
 def bench_engine_file(engine_path: Path, bs_list, n) -> None:
     """把 TrtEngine 指到自定义 engine 文件跑批扫描（monkeypatch 候选路径）。"""
     import numpy as np
-    import ocr_trt
-    from ocr_native import OcrEngine
+    import video_ocr_engine.ocr.trt as ocr_trt
+    from video_ocr_engine.ocr.native import OcrEngine
     orig = ocr_trt.TrtEngine._engine_candidates
 
     @staticmethod
@@ -143,7 +143,7 @@ def bench_engine_file(engine_path: Path, bs_list, n) -> None:
 
 def bench_preprocess(n):
     import numpy as np
-    from ocr_native import OcrEngine
+    from video_ocr_engine.ocr.native import OcrEngine
     img = (np.random.rand(33, 130, 1) * 255).astype(np.uint8)
     t0 = time.perf_counter()
     reps = 2000

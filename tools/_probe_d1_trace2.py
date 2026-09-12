@@ -31,7 +31,7 @@ VIDS = {
 def trace_pipeline(video: str, roi: tuple, frames: int, gpu_pl: str) -> dict:
     import video_ocr_engine.gpu.device as gp
     import video_ocr_engine._host_pipeline as hp
-    from segmentation import SegmentStateMachine, _cluster_win3
+    from video_ocr_engine.domain.segmentation import SegmentStateMachine, _cluster_win3
     os.environ["GPU_PIPELINE"] = gpu_pl
 
     rec: dict = {"feed": [], "emit": [], "similar": []}

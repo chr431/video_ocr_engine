@@ -1,4 +1,4 @@
-"""S8 审计扩展（v2 §8.2 目标 21 项中的新增 9 项，13..21）。
+"""S8 审计扩展（v2 §8.2 目标审计的扩展项，13..22）。
 
 由 _probe_discipline_audit.py 经 CHECKS_EXT 并入同一入口（钩子/CI 共用）。
 每项失败即违规；历史豁免沿用既有机制（--since 快检兼容）。
@@ -23,6 +23,20 @@ def _product_files():
     pkg = ROOT / "video_ocr_engine"
     files += [p for p in pkg.rglob("*.py") if "__pycache__" not in p.parts]
     return [p for p in files if p.exists()]
+
+
+# 六个废弃根模块（0.13.0 弃用 / 0.14.0 删除，docs/MIGRATION.md §1）
+_SHIM_MODULES = ("engine_config", "gpu_setup", "ocr_native",
+                 "ocr_trt", "segmentation", "video_utils")
+_SHIM_IMPORT_PAT = re.compile(
+    r"^[ \t]*(?:from|import)[ \t]+(?:%s)\b" % "|".join(_SHIM_MODULES), re.M)
+
+# 有意走废弃路径的白名单：冻结 shim 可导入性/常量面的两个契约测试。
+# 0.14.0 删除 shim 时改的就是这两个文件（见各文件内注记）。
+_SHIM_WHITELIST = {
+    "tests/api/test_compat_snapshot.py",
+    "tests/api/test_engine_imports.py",
+}
 
 
 def check_layering() -> str | None:
@@ -194,6 +208,35 @@ def check_baseline_liveness() -> str | None:
     return None
 
 
+def check_no_deprecated_shim_usage() -> str | None:
+    """[22] 六个废弃根模块 shim 不得新增引用（存量已迁清，防回归）。
+
+    shim 是 0.13.0 弃用、0.14.0 删除的过渡面（docs/MIGRATION.md §1）。
+    仓库内 45 处引用已迁至包内路径；本项只留两个**有意**冻结 shim 的
+    契约测试在白名单里——删除动作的完整清单就是这两个文件。
+    """
+    hits = []
+    for d in (ROOT / "tests", ROOT / "tools", ROOT / "video_ocr_engine"):
+        if not d.exists():
+            continue
+        for p in sorted(d.rglob("*.py")):
+            if "__pycache__" in p.parts:
+                continue
+            rel = p.relative_to(ROOT).as_posix()
+            if rel in _SHIM_WHITELIST:
+                continue
+            try:
+                t = io.open(p, encoding="utf-8").read()
+            except OSError:
+                continue
+            for m in _SHIM_IMPORT_PAT.finditer(t):
+                hits.append("%s:%d" % (rel, t.count("\n", 0, m.start()) + 1))
+    if hits:
+        return ("废弃根模块 shim 新增引用 %d 处（改走包内路径，"
+                "见 docs/MIGRATION.md §1）：%s" % (len(hits), ", ".join(hits[:5])))
+    return None
+
+
 CHECKS_EXT = {
     13: ("layering 分层无环", check_layering),
     14: ("no_shim_duplication 转发壳", check_no_shim_duplication),
@@ -204,6 +247,7 @@ CHECKS_EXT = {
     19: ("metrics_coverage 指标注册表", check_metrics_coverage),
     20: ("rules_ladder 规则执行梯", check_rules_ladder),
     21: ("baseline_liveness 豁免活性", check_baseline_liveness),
+    22: ("no_deprecated_shim_usage 废弃 shim", check_no_deprecated_shim_usage),
 }
 
 if __name__ == "__main__":

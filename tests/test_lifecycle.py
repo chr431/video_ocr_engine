@@ -191,7 +191,7 @@ class _FakeEngine:
 
 
 def _reset_pool():
-    import ocr_native
+    import video_ocr_engine.ocr.native as ocr_native
     ocr_native._ENGINE_POOL.clear()
     ocr_native._POOL_IDLE_ORDER.clear()
 
@@ -202,7 +202,7 @@ def test_engine_pool_respects_total_cap():
     单 key 上限（4）会先于总上限触发，所以必须用多个 key 才能覆盖到
     _POOL_MAX_TOTAL 这条路径：6 个 key × 4 = 24 > 16。
     """
-    import ocr_native
+    import video_ocr_engine.ocr.native as ocr_native
     _reset_pool()
     released = []
     n_keys = 6
@@ -230,7 +230,7 @@ def test_engine_pool_respects_total_cap():
 
 
 def test_engine_pool_checkout_removes_from_order():
-    import ocr_native
+    import video_ocr_engine.ocr.native as ocr_native
     _reset_pool()
     e = _FakeEngine(("v6_small", "tensorrt", 224, 0))
     ocr_native.checkin_ocr_engine(e)
@@ -242,7 +242,7 @@ def test_engine_pool_checkout_removes_from_order():
 
 
 def test_engine_pool_release_is_idempotent():
-    import ocr_native
+    import video_ocr_engine.ocr.native as ocr_native
     _reset_pool()
     ocr_native.release_ocr_pool()
     ocr_native.release_ocr_pool()   # 幂等

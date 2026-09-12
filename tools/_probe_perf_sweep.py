@@ -28,7 +28,7 @@ VIDEOS = {
 
 
 def run_once(path, roi, bk, envs, frames=3000):
-    import engine_config as config
+    import video_ocr_engine.config.constants as config
     from video_ocr_engine import FieldExtractor
     # GPU_PIPELINE_DECODE_BATCH 是模块常量（非 env）→ sweep 用 monkey-patch
     #（调用点读的是 config 属性，patch 即生效）。

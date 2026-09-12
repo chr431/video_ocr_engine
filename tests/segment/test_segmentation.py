@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import numpy as np
 
-from segmentation import (
+from video_ocr_engine.domain.segmentation import (
     _cluster_win3, _gray_batch, _gray_seg_yuv,
     _gray_seg_yuv_batch, _otsu,
 )
-from video_utils import _nv12_luma_full
+from video_ocr_engine.domain.video_utils import _nv12_luma_full
 
 
 def test_gray_batch_single_and_rgb():

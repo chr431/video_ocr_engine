@@ -1,15 +1,15 @@
-"""video_utils 测试：NV12 Y 展开 / RGB 转换 / resize / 标准预处理。"""
+"""NV12 Y 展开 / RGB 转换 / resize / 标准预处理（`video_ocr_engine.domain.video_utils`）。"""
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from video_utils import (
+from video_ocr_engine.domain.video_utils import (
     _gray, _np_resize, _nv12_luma, _nv12_luma_full,
     nv12_to_rgb,
 )
 # S2：_preprocess_standard 转发壳已删，实现唯一出处 segmentation
-from segmentation import preprocess_standard as _preprocess_standard
+from video_ocr_engine.domain.segmentation import preprocess_standard as _preprocess_standard
 
 
 def _gray_expected(raw_y: np.ndarray, color_range: int) -> np.ndarray:
@@ -130,7 +130,7 @@ def test_nvdec_available_failure_not_cached(monkeypatch):
     import sys
     import types
 
-    from video_utils import nvdec_available
+    from video_ocr_engine.domain.video_utils import nvdec_available
 
     calls = {"gpu": 0}
 
