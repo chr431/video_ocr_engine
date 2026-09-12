@@ -40,7 +40,9 @@ REGISTRY = ROOT / "bench" / "registry.jsonl"
 
 VIDS = {"test5": r"D:\Videos\racelog_test\test5.mp4",
         "test6_av1": r"D:\Videos\racelog_test\test6.mp4",
-        "test6_hevc": r"D:\Videos\racelog_test\test6_hevc.mp4"}
+        "test6_hevc": r"D:\Videos\racelog_test\test6_hevc.mp4",
+        # 与 test6_av1/test6_hevc **同内容**重编码 → 编码对照必须用它
+        "test6_h264": r"D:\Videos\racelog_test\test6_h264.mp4"}
 ROI = {"test5": (843, 993, 948, 1025), "test6": (841, 994, 949, 1026)}
 #: §12 三配置展开为 4（与 tests/golden/bench_baseline.py 同口径，可比）
 CONFIGS = {
@@ -55,12 +57,18 @@ CONFIGS = {
     "hevc-hybrid": dict(video="test6_hevc", decode_backend="hybrid"),
     "hevc-cpu": dict(video="test6_hevc", decode_backend="cpu"),
     "av1-cpu": dict(video="test6_av1", decode_backend="cpu"),
+    # 同内容族 h264（跨编码对照的第三支柱）；解码后端由 --decode-backend
+    # 覆盖，故此处默认值只作占位。
+    "h264same-nvdec": dict(video="test6_h264", decode_backend="nvdec"),
+    "h264same-cpu": dict(video="test6_h264", decode_backend="cpu"),
+    "h264same-hybrid": dict(video="test6_h264", decode_backend="hybrid"),
 }
 
 
 def _round(cfg_name: str, window: int, telemetry: str, keep_crops: bool,
            ocr_backend: str, rep_format: str = "",
-           buffer_size: int | None = None) -> dict:
+           buffer_size: int | None = None,
+           decode_override: str = "") -> dict:
     from video_ocr_engine import FieldExtractor
     cfg = CONFIGS[cfg_name]
     vid = cfg["video"]
@@ -71,7 +79,8 @@ def _round(cfg_name: str, window: int, telemetry: str, keep_crops: bool,
         kw["buffer_size"] = buffer_size
     ex = FieldExtractor(VIDS[vid], ROI["test5" if vid == "test5" else "test6"],
                         frame_start=0, frame_end=window,
-                        decode_backend=cfg["decode_backend"],
+                        decode_backend=(decode_override
+                                        or cfg["decode_backend"]),
                         ocr_backend=ocr_backend, keep_crops=keep_crops,
                         sample_stride=cfg.get("sample_stride", 1), **kw)
     t0 = time.perf_counter()
@@ -107,7 +116,8 @@ def cmd_run(args) -> int:
         rounds = []
         for i in range(args.rounds):
             rec = _round(name, args.window, args.telemetry, args.keep_crops,
-                         args.ocr_backend, args.rep_format, args.buffer_size)
+                         args.ocr_backend, args.rep_format, args.buffer_size,
+                         getattr(args, "decode_backend", ""))
             rec["round"] = i + 1
             rounds.append(rec)
             print("  %-12s round %d  %.4fs  %d 段" % (
@@ -485,12 +495,14 @@ def cmd_ab(args) -> int:
           --a base --b s6c --env-b VOE_S6C_ASYNC=1
     """
     import os
+    # 本次运行唯一后缀：防与历史运行重名（2026-09-13 实测到该污染）
+    run_id = time.strftime("%m%d-%H%M%S")
     pairs: list = []
     for i in range(args.repeat):
         row = {}
         for tag, label, envspec, extra in (("A", args.a, args.env_a, args.args_a),
                                            ("B", args.b, args.env_b, args.args_b)):
-            lab = "%s#%d" % (label, i)
+            lab = "%s#%d@%s" % (label, i, run_id)
             env = dict(os.environ)
             for kv in filter(None, envspec.split(",")):
                 k, _, v = kv.partition("=")
@@ -517,20 +529,23 @@ def cmd_ab(args) -> int:
         pairs.append(row)
     data = None  # 直接按 registry 聚合，不做二次缓存
     # 聚合：每个 variant 在窗口内的全部轮次（冷=第 1 轮 / 热=其余）
-    def _walls(label):
+    def _walls(labels: set):
+        """按**精确 label 集合**聚合（不再按前缀扫——那会纳入历史同名运行）。"""
         out: dict = {}
         for line in REGISTRY.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             rec = json.loads(line)
             lab = rec.get("label", "")
-            if "".join(lab.split("#")[:-1]) != label:
+            if lab not in labels:
                 continue
             out.setdefault(rec["config"], []).append(
                 (lab, rec.get("round", 1), rec["wall"]))
         return out
 
-    wa, wb = _walls(args.a), _walls(args.b)
+    wa = _walls({row["A"] for row in pairs})
+    wb = _walls({row["B"] for row in pairs})
+    print("本次运行 label 后缀 @%s（聚合只认这些）" % run_id)
     print("\n交错 A/B（每 variant %d 次独立进程；冷=第 1 轮，热=第 2 轮起）"
           % args.repeat)
     for mode in ("cold", "hot"):
@@ -594,6 +609,10 @@ def main() -> int:
     r.add_argument("--rep-format", default="", help="yuv|gray（默认按引擎规则）")
     r.add_argument("--buffer-size", type=int, default=0, help="生产者队列深度")
     r.add_argument("--label", required=True)
+    r.add_argument("--decode-backend", default="",
+                   choices=("", "auto", "cpu", "nvdec", "hybrid"),
+                   help="覆盖 config 的解码后端（空=用 config 值）。"
+                        "配合 ab 的 --args-a/--args-b 即可做跨解码器交错 A/B")
     r.set_defaults(func=cmd_run)
     d = sub.add_parser("diff", help="两个 label 的逐指标对比（D10 双档）")
     d.add_argument("a")
