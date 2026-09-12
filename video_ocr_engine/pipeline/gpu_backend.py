@@ -21,7 +21,9 @@ from typing import Callable
 
 import numpy as np
 
-from video_ocr_engine.domain.segmentation import SegmentStateMachine, similar_decision
+from video_ocr_engine.domain.segmentation import (SegmentStateMachine,
+                                                  dense_gate_hit,
+                                                  similar_decision)
 from ..domain.metrics import NULL_METRICS
 from ..gpu.frame_ref import DeviceRef
 
@@ -77,6 +79,7 @@ class GpuRunSpec:
     merge_similar: bool
     merge_similar_threshold: float
     merge_max_changed_pixels: int
+    merge_dense_gate: int           # 0=关；>0=差异图 win3 阈值（稠密簇门）
     keep_crops: bool
     yuv_output: bool
     color_range: int
@@ -424,7 +427,7 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
             ap, bp = int(a_dev.ptr), int(b_dev.ptr)
         try:
             _t_cmp = time.perf_counter()
-            mad, chg = ctx.analyzer.compare_pair(
+            mad, chg, win3 = ctx.analyzer.compare_pair(
                 ap, bp, ctx.src_h, ctx.src_w, spec.bin_thresh_ref[0],
                 use_bin, stream=ctx.analyzer._stream_c)
             if spec.prof_end is not None:
@@ -440,9 +443,14 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
                 ctx.y_pool.recycle(yb)
         n = ctx.src_h * ctx.src_w
         mean = 255.0 * mad / n if use_bin else mad / n
+        # 稠密簇门：win3 由 sim_pair 设备侧算出，与宿主 _cluster_win3 逐位
+        # 一致（同一 3×3 邻域定义）；两侧共用 dense_gate_hit + similar_decision，
+        # 否则 C-32「GPU 为宿主逐位镜像」的契约在阈值处破。
         _dec = similar_decision(mean, chg,
                                 spec.merge_similar_threshold,
-                                spec.merge_max_changed_pixels)
+                                spec.merge_max_changed_pixels,
+                                dense=dense_gate_hit(win3,
+                                                     spec.merge_dense_gate))
         if _dec:
             merge_hits[0] += 1        # PI-15：逐段计数改为局部累加，run 末一次上报
         return _dec

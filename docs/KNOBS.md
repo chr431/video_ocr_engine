@@ -15,6 +15,7 @@
 | `ocr.instances` | `OCR_INSTANCES` | bool | `True` | ec:77 |
 | `ocr.gpu_ctc` | `GPU_CTC` | bool | `True` | ec:83 |
 | `segment.text_sep_merge` | `TEXT_SEP_MERGE` | str | `binary` | ec:229 |
+| `segment.merge_dense_gate` | `SEG_MERGE_DENSE_GATE` | int | `5` | log:2026-09-12-准确项-§2 |
 | `pipeline.gpu` | `GPU_PIPELINE` | bool|none | `None` | ec:81 |
 | `pipeline.gpu_stream` | `GPU_PIPELINE_STREAM` | bool | `False` | ec:82 |
 | `diag.profile` | `ENGINE_PROFILE` | bool | `False` | ec:84 |

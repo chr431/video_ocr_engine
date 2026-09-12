@@ -272,10 +272,27 @@ class NvmlSampler:
     `sources`（报告必须能区分 NVML 直读与"不可用"）。
     """
 
+    #: nvmlClocksThrottleReasons 位定义（nvml.h；名称 snake_case 记账）。
+    #: GpuIdle / ApplicationsClocksSetting / SyncBoost 属常态、非降速；
+    #: 其余任一出现 = 设备在主动压时钟（热/功率/硬件保护）——「忙而慢」
+    #: 的直接证据（NVDEC% 是时间加权占用率不是吞吐率，掉频时照样 100%）。
+    THROTTLE_BITS: tuple = (
+        ("gpu_idle", 0x1),
+        ("apps_clocks_setting", 0x2),
+        ("sw_power_cap", 0x4),
+        ("hw_slowdown", 0x8),
+        ("sync_boost", 0x10),
+        ("sw_thermal_slowdown", 0x20),
+        ("hw_thermal_slowdown", 0x40),
+        ("hw_power_brake_slowdown", 0x80),
+        ("display_clock_setting", 0x100),
+    )
+
     def __init__(self, interval_s: float = 0.2, max_points: int = 600) -> None:
         self._interval = max(0.05, float(interval_s))
         self._max = int(max_points)
-        self._pts: list = []       # (t, gpu%, decode%, vram_used_mib)
+        # (t, gpu%, decode%, vram_mib, sm_mhz, mem_mhz, vid_mhz, throttle_mask)
+        self._pts: list = []
         self._fails = 0            # 采样失败/全空读数次数（摘要里可见，不静默）
         self._stop = threading.Event()
         self._th: threading.Thread | None = None
@@ -305,15 +322,23 @@ class NvmlSampler:
 
         util, mem = _Util(), _Mem()
         dec, dur = ctypes.c_uint(), ctypes.c_uint()
+        sm, mclk, vclk = ctypes.c_uint(), ctypes.c_uint(), ctypes.c_uint()
+        reasons = ctypes.c_ulonglong()
         rates = nvml.nvmlDeviceGetUtilizationRates
         dutil = nvml.nvmlDeviceGetDecoderUtilization
         minfo = nvml.nvmlDeviceGetMemoryInfo
+        # nvmlClockType: GRAPHICS=0 / SM=1 / MEM=2 / VIDEO=3。NVDEC 工作负载
+        # 跟随 VIDEO 域（部分驱动回落 SM），两域都记。
+        clock = nvml.nvmlDeviceGetClockInfo
+        throttle = getattr(nvml, "nvmlDeviceGetCurrentClocksThrottleReasons",
+                           None)
 
         def loop():
             # 每 tick 独立 try（单次 NVML 调用失败只计 _fails，不杀线程）；
             # NVML 会话是进程级的（环境指纹可能还在用），故此处不 shutdown。
             while not self._stop.wait(self._interval):
-                row = [time.perf_counter(), None, None, None]
+                row = [time.perf_counter(), None, None, None,
+                       None, None, None, None]
                 try:
                     if int(rates(h, ctypes.byref(util))) == 0:
                         row[1] = int(util.gpu)
@@ -323,6 +348,15 @@ class NvmlSampler:
                         row[2] = int(dec.value)
                     if int(minfo(h, ctypes.byref(mem))) == 0:
                         row[3] = round(int(mem.used) / 1048576.0, 1)
+                    if int(clock(h, 1, ctypes.byref(sm))) == 0:
+                        row[4] = int(sm.value)
+                    if int(clock(h, 2, ctypes.byref(mclk))) == 0:
+                        row[5] = int(mclk.value)
+                    if int(clock(h, 3, ctypes.byref(vclk))) == 0:
+                        row[6] = int(vclk.value)
+                    if throttle is not None and int(
+                            throttle(h, ctypes.byref(reasons))) == 0:
+                        row[7] = int(reasons.value)
                 except Exception:  # noqa: BLE001 单次调用失败计入 _fails
                     self._fails += 1
                     continue
@@ -360,8 +394,31 @@ class NvmlSampler:
             return {"min": q(0.0), "p50": q(0.5), "p99": q(0.99),
                     "max": q(1.0), "n": len(v)}
 
-        return {"sources": self.sources, "error": self._err or None,
-                "interval_s": self._interval, "n": len(pts),
-                "sample_failures": fails,
-                "gpu_util_pct": summary(1), "nvdec_util_pct": summary(2),
-                "vram_used_mib": summary(3)}
+        out = {"sources": self.sources, "error": self._err or None,
+               "interval_s": self._interval, "n": len(pts),
+               "sample_failures": fails,
+               "gpu_util_pct": summary(1), "nvdec_util_pct": summary(2),
+               "vram_used_mib": summary(3),
+               "sm_clock_mhz": summary(4), "mem_clock_mhz": summary(5),
+               "video_clock_mhz": summary(6)}
+        # 热降/功率位：按原因记 tick 数；ticks_throttled 只计「非常态」原因
+        # （GpuIdle/AppsClocksSetting/SyncBoost 除外）。与 NVDEC% 联合判读：
+        # 占用率高 + 时钟贴上限 + 无原因位 = 忙且健康；占用率高 + 原因位
+        # 频发 = 忙而慢（降速）；占用率低 = 闲置（归因看 hybrid-stats）。
+        rc = {k: 0 for k, _ in self.THROTTLE_BITS}
+        n_throttle = 0
+        for p in pts:
+            mask = p[7]
+            if mask is None:
+                continue
+            hit = False
+            for k, bit in self.THROTTLE_BITS:
+                if mask & bit:
+                    rc[k] += 1
+                    if k not in ("gpu_idle", "apps_clocks_setting",
+                                 "sync_boost"):
+                        hit = True
+            n_throttle += hit
+        out["throttle"] = {"ticks_throttled": n_throttle, "ticks": len(pts),
+                           "reason_ticks": {k: v for k, v in rc.items() if v}}
+        return out

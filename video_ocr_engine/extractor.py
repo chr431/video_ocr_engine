@@ -182,6 +182,9 @@ class FieldExtractor:
         roi_h = max(1, self._roi[3] - self._roi[1] + 1)
         self._merge_max_changed_pixels = max(
             32, int(roi_w * roi_h * config.SEG_MERGE_MAX_CHANGED_RATIO))
+        # 稠密簇门（segment.merge_dense_gate）：0=关；>0=差异图 win3 阈值。
+        # 构造期一次冻结（D6）；与断段判据 SEG_C 共用同一"内容变了"定义。
+        self._merge_dense_gate = max(0, int(self._rc.segment_merge_dense_gate))
         # 后处理参数由子类（SegmentPipeline）在构造时设置；引擎识别链不读。
 
     def _validate_params(self) -> None:
@@ -376,10 +379,18 @@ class FieldExtractor:
         # 整数精确累加一致（阈值处仅 float32 末位舍入差异，文档已承认）。
         # 两阈值判定统一走 segmentation.similar_decision（GPU 共用）。
         diff = np.abs(a.astype(np.int16) - b.astype(np.int16))
-        from video_ocr_engine.domain.segmentation import similar_decision
+        from video_ocr_engine.domain.segmentation import (dense_gate_hit,
+                                                          similar_decision,
+                                                          _cluster_win3)
+        # 稠密簇门：diff>10 与 changed_px 同一谓词（binary 模式下 diff∈{0,255}
+        # 与阈值穿越逐位等价）。win3 ≥ 分段阈值 C 的稠密簇 = 笔画级变化，
+        # 与断段判据自洽（同一 win3 定义“内容变了”），恒不合并。
+        _dense = dense_gate_hit(_cluster_win3(diff > 10),
+                                self._merge_dense_gate)
         return similar_decision(float(diff.mean()), int(np.sum(diff > 10)),
                                 self._merge_similar_threshold,
-                                self._merge_max_changed_pixels)
+                                self._merge_max_changed_pixels,
+                                dense=_dense)
 
     def extract(self):
         """通用文本提取：解码∥分段∥OCR → 结构化结果（每段原始文本+置信度）。
@@ -465,6 +476,7 @@ class FieldExtractor:
                     "keep_frames": self._keep_frames,
                     "merge_similar": self._merge_similar,
                     "merge_similar_threshold": self._merge_similar_threshold,
+                    "merge_dense_gate": self._merge_dense_gate,
                     "merge_text_sep": self._merge_effective_mode(),
                     "buffer_size": self._buffer_size,
                     "C": self._C}}
@@ -793,6 +805,7 @@ class FieldExtractor:
             C=self._C, merge_similar=self._merge_similar,
             merge_similar_threshold=self._merge_similar_threshold,
             merge_max_changed_pixels=self._merge_max_changed_pixels,
+            merge_dense_gate=self._merge_dense_gate,
             keep_crops=self._keep_crops, yuv_output=self._yuv_output,
             color_range=self._color_range, ocr_autocrop=self._ocr_autocrop,
             bin_thresh_ref=[self._bin_thresh],

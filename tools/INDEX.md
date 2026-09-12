@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **78 个 `.py`**（13,111 行），其中 64 个是探针
+`tools/` 现有 **89 个 `.py`**（14,678 行），其中 79 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -57,10 +57,10 @@
 | `_probe_hybrid_gap.py` | 107 | hybrid **三层差距分解**（L1 解码器能力 / L2 两路吞吐相加理想 / L3 引擎口径）：hybrid_gpu 仅达理想 67–77%；hybrid_gpu 比宿主输出慢 19–24% | log 2026-09-11-hybrid差距分解；C-05 |
 | `_probe_phase_cores.py` | 91 | **每相位资源读数**（§8.6 r5 L1/L2 的消费者）：墙钟/平均并行核数/线程/RSS/磁盘速率/显存 + full 档 NVML 峰值因子。实测 h264-cpu 解码相位 **21.2/32 核** → hybrid CPU 分片必与引擎线程争核 | log 2026-09-11-资源层与门控校准 §3 |
 | `_probe_upload_chain.py` | 157 | 用 fork 的 `DECORD_HYBRID_FORCE_SIDE` 拆 **mixed / 纯NVDEC / 纯CPU** 三臂（每组独立子进程 + **45–90s 硬超时** + 轮内组序轮转 + 进度落文件）。量出 mixed"低于最优单侧"（§7.1）——**该结论已被 §8 翻案**：EWMA 估计器伪影 | log 2026-09-11-hybrid差距分解 §7/§8；DECISIONS 2026-09-11 fork 修复 |
-| `_probe_hol_stats.py` | 224 | 走 fork **非打印** `DECORD_HYBRID_STATS`（零打印扰动）实测队头阻塞时长/episode/搁置峰值 + BuildPlan 冻结速率/CPU 折数/时刻；decode-only 每格独立子进程+硬超时，`--set KEY=VAL` 做单变量 A/B；`--nts 16,24,32` 展开 CPU 臂线程档位（§14：hybrid_gpu 传 num_threads=0 在 decord 内隐式落 16，同口径比较必须显式给 nt） | log 2026-09-11-hybrid差距分解 §8/§14；knowledge `hybrid_cpu_rate_ratchet` |
+| `_probe_hol_stats.py` | 245 | 走 fork **非打印** `DECORD_HYBRID_STATS`（零打印扰动）实测队头阻塞时长/episode/搁置峰值 + BuildPlan 冻结速率/CPU 折数/时刻；decode-only 每格独立子进程+硬超时，`--set KEY=VAL` 做单变量 A/B；`--nts 16,24,32` 展开 CPU 臂线程档位（§14：hybrid_gpu 传 num_threads=0 在 decord 内隐式落 16，同口径比较必须显式给 nt） | log 2026-09-11-hybrid差距分解 §8/§14；knowledge `hybrid_cpu_rate_ratchet` |
 | `_probe_stress_harness.py` | 109 | hybrid 死锁/性能**压测 harness 通用规格**：每 trial 独立子进程 + 硬超时 + 进度逐行落文件（慢消费者 = get_batch+asnumpy 保留；"无超时压测烧千秒"三踩后的纪律固化，rules.yaml 同名规则）。kick 突发修复 24/24 证据；`--nt` 覆盖 CPU 臂线程（§14 起引擎新档 24/32 同须压测） | log 2026-09-11-hybrid差距分解 §8.2/§9.1/§14.5；knowledge `hybrid_sustained_default` |
 | `_probe_e2e_mode.py` | 34 | 单视频引擎 e2e + 管线模式取证（`_gpu_pipeline_mode` + `DECORD_HYBRID_STATS` 汇总）；全片配对 A/B 用它做 sustained 转默认测量 | log 2026-09-11-hybrid差距分解 §9.2；knowledge `hybrid_sustained_default` |
-| `_probe_release_gate.py` | 244 | **hybrid 发布门禁**（§18 硬化）：六步 19 项一键跑——金标 28/28 / 三码×双路径 e2e（段数对表+零 stall 误报）/ 压测 / 损坏码流（现场生成 faststart 截断+坏字节，完成或干净报错）/ KICK_BURST=0 消融判别（期望挂死=机制承重）。损坏流段数不查表；⚠️ 段数期望表是内容锚点，引擎分段语义变更需同步 | log 2026-09-11-hybrid差距分解 §18；knowledge `hybrid_release_gate` |
+| `_probe_release_gate.py` | 248 | **hybrid 发布门禁**（§18 硬化）：六步 19 项一键跑——金标 28/28 / 三码×双路径 e2e（段数对表+零 stall 误报）/ 压测 / 损坏码流（现场生成 faststart 截断+坏字节，完成或干净报错）/ KICK_BURST=0 消融判别（期望挂死=机制承重）。损坏流段数不查表；⚠️ 段数期望表是内容锚点，引擎分段语义变更需同步 | log 2026-09-11-hybrid差距分解 §18；knowledge `hybrid_release_gate` |
 | `_probe_hybrid_threads_e2e.py` | 137 | hybrid CPU 臂线程档位的**引擎 e2e 配对 A/B**（独立子进程槽位 + 交错 + 段数/唯一文本集 sha 门禁）：§14 定档证据链——16→24/24→32/32→48 三码矩阵，h264→32 / hevc→32 / av1→24 恰为 `_decode_num_threads` 现行策略 | log 2026-09-11-hybrid差距分解 §14；knowledge `hybrid_cpu_threads_tier` |
 
 ## B. 库型 / worker 型（**被其他探针依赖，动不得**）
@@ -131,6 +131,22 @@
 | `_probe_cr_roundtrip.py` | 182 | 2026-08-31 | 裸 CR 保真性（AGENTS.md 编辑护栏） |
 
 | `tools/_audit_ext.py` | 220 | 2026-09-10 | S8 审计扩展 13..21（与纪律审计同一入口） |
+
+### 2026-09-12 准确项（分段合并稠密簇门 · 预处理 gamma 复核）
+
+| 文件 | 行 | 改于 | 支撑 |
+|---|---:|---|---|
+| `_probe_acc_baseline.py` | 214 | 2026-09-12 | 六片真值逐帧准确率基线 + 误差分类（边界类/段中类），落 `bench/acc_baseline.json` |
+| `_probe_acc_ab.py` | 211 | 2026-09-12 | **准确率 A/B harness**：参数化 env 旋钮跑真实引擎全片比对（`--knob OCR_GAMMA=2.0,1.0`），落 `bench/acc_ab_<knob>.json` |
+| `_probe_merge_log.py` | 103 | 2026-09-12 | merge_similar 逐次判定插桩（mean/npx/win3/merged）：证明 test5 33/33、test6 94/94 次合并全部 win3=9（稠密簇被吞） |
+| `_probe_roi_dump.py` | 111 | 2026-09-12 | ROI 放大导出（6×，帧号标注）+ `--pad` 看框外内容 + `--montage` 拼竖排长图——真值可疑时目视核实原始像素的工具（2026-09-12 §2 的三处裁定都由它复现） |
+| `_probe_gamma_sweep.py` | 138 | 2026-09-12 | 误读帧的**离线单帧** gamma/对比度变体扫描（落 `bench/gamma_sweep.json`）。⚠️ 其结论未在真实管线复现（见 log），仅作线索探针保留 |
+| `_probe_text_ab.py` | 81 | 2026-09-12 | 字幕场景 A/B：`text_test.mp4` 时间戳式真值按 fps 映射区间取多数文本；门开关两侧字幕行命中 125/198 **完全相同**、墙钟不变（段数 403→1175）|
+| `_probe_golden_drift.py` | 64 | 2026-09-12 | 金标漂移的**定性**核对：复用 `record.summarize` 口径逐用例比对唯一文本集——重锚前必须证明「段数变了但没丢文本」（实测 28 用例丢 0 / 增 3）|
+| `_probe_hybrid_reeval.py` | 165 | 2026-09-13 | **hybrid 重评 harness**：引擎全片 nvdec/hybrid 双臂 × 三码，一次 run 同时拿 NVML（时钟/热降）与 hybrid-stats（每臂忙时）——忙而慢 vs 调度闲置的归因工具（C-39）|
+| `_probe_busy_overhead.py` | 96 | 2026-09-13 | busy 计数器**零开销确认**：fork dll vs wheel 交错配对（轮转先后）——h264 −0.02%、hevc +3.9%（符号混合，噪声内）|
+| `_probe_prep_ab.py` | 283 | 2026-09-12 | **预处理重设计 A/B**（全管线，monkeypatch `preprocess_standard`，宿主路径两侧）：6 变体全测 → 只有双三次 +7 帧，逐图拉伸 −49 / unsharp −99 / 局部平场 −1170；`base` 复现 GPU 数字做自检 |
+| `_probe_crop_stats.py` | 76 | 2026-09-12 | 代表帧裁切图强度分布：test5/test6 几乎完全相同（Otsu 均 121、文字占比均 0.181）却对每个色调旋钮反向 ⇒ 逐图自适应在信息上不可行（C-15 的依据）|
 
 ### 2026-09-10 D1/D2 调查（gpu/host 段数分歧 · 线程优先级）
 

@@ -231,6 +231,17 @@ SEG_MERGE_SIMILAR_THRESHOLD: float = 3.0
 # 相似段合并的“显著变化像素”上限（ROI 面积比例）：即使平均绝对差很小，若
 # 变化像素占比超过该比例，仍视为真实内容变化（防止宽 ROI 中单字短字幕被误合并）。
 SEG_MERGE_MAX_CHANGED_RATIO: float = 0.01
+# 稠密簇门（2026-09-12 准确项）：合并判定的差异图若含 win3 ≥ 此值的 3×3
+# 稠密簇，恒判不相似。动机：末位单数字变化只动 12-14px（< 1% 面积上限），
+# 被 merge 吞掉 2 帧短状态（test5 33/33、test6 94/94 合并全为此类，
+# _probe_merge_log）；断段判据用同一 win3 定义“内容变了”，合并放行稠密簇
+# 等于自相矛盾。**这是单侧安全闸而非分类器**：实测 test5/test6 的合并全部
+# win3=9（在那里等于关闭合并）——仍稳定增益是因为代价不对称（挡无害合并
+# 只多一次 OCR 调用，挡有害合并回收帧），详见 segmentation.similar_decision
+# 与 docs/log/2026-09-12-准确项.md §3。旋钮 segment.merge_dense_gate 经
+# resolve() 生效（D6）；0=关，>0=阈值。
+SEG_MERGE_DENSE_GATE_ENV: str = "SEG_MERGE_DENSE_GATE"
+SEG_MERGE_DENSE_GATE: int = 5              # 默认 = SEG_C，与断段判据同源
 
 # ═══════════════════ OCR 输入 pad 宽度下限 ═══════════════════
 # **2026-08-29 回退：160 → 224。上一轮的"下调到 160"是错的，勿再改。**

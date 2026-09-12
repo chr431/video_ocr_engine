@@ -100,13 +100,14 @@ def test_package_exports_and_root_modules():
 def test_env_name_constants_frozen():
     import engine_config as config
     names = sorted(n for n in dir(config) if n.endswith("_ENV"))
-    assert len(names) == 18
-    # 名字快照（附录 C 全表的键集合）
+    assert len(names) == 19
+    # 名字快照（附录 C 全表的键集合 + SEG_MERGE_DENSE_GATE_ENV）
     assert names == sorted([
         "OCR_THREADS_ENV", "OCR_BATCH_ENV", "OCR_GAMMA_ENV",
         "OCR_PAD_SMALL_ENV", "OCR_ROI_AUTOCROP_ENV",
         "OCR_ROI_AUTOCROP_MARGIN_ENV", "OCR_ROI_AUTOCROP_MIN_GAIN_ENV",
         "OCR_REORDER_WINDOW_ENV", "OCR_INSTANCES_ENV", "TEXT_SEP_MERGE_ENV",
+        "SEG_MERGE_DENSE_GATE_ENV",
         "DECODE_THREADS_ENV", "GPU_PIPELINE_ENV", "GPU_PIPELINE_STREAM_ENV",
         "GPU_CTC_ENV", "ENGINE_PROFILE_ENV", "TRT_SUBPROBE_ENV",
         "DEBUG_BOUNDS_ENV", "HYBRID_CPU_THREADS_ENV"])

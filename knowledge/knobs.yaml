@@ -91,6 +91,13 @@
   rationale: ec:229
   note: v1 裸 get 非布尔；未知值消费端回落 binary（B3 将改构造期校验）
 
+- name: segment.merge_dense_gate
+  env: SEG_MERGE_DENSE_GATE
+  type: int
+  default: 5
+  rationale: log:2026-09-12-准确项-§2
+  note: 0=关；>0=差异图最大 3×3 窗口和（win3）阈值：≥ 此值判「内容已变」恒不合并。默认 = SEG_C（与断段判据共用同一 win3 定义，两处自洽）；判据/实测/与被否决判据的差别见 docs/log/ 准确项章节
+
 - name: pipeline.gpu
   env: GPU_PIPELINE
   type: bool|none

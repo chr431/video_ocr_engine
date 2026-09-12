@@ -28,6 +28,7 @@ class RunConfig:
     ocr_gpu_ctc: bool = True
     # ── segment ──
     segment_text_sep_merge: str = "binary"
+    segment_merge_dense_gate: int = 5      # 0=关；>0=差异图 win3 阈值（稠密簇门）
     # ── pipeline ──
     pipeline_gpu: bool | None = None       # None=规则判定
     pipeline_gpu_stream: bool = False

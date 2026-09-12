@@ -175,13 +175,42 @@ def otsu_median_threshold(ths) -> int:
     return int(np.median(ths))
 
 
+def dense_gate_hit(win3: float, gate: int) -> bool:
+    """稠密簇门判定（宿主 numpy 与 GPU sim_pair 标量共用同一式）。
+
+    `gate` 由调用方从 RunConfig 传入（`segment.merge_dense_gate`）——
+    本函数不读 env（D6：resolve() 是全仓库唯一 env 读取点）。
+    """
+    return gate > 0 and win3 >= gate
+
+
 def similar_decision(mean: float, changed_px: int, threshold: float,
-                     max_changed: int) -> bool:
+                     max_changed: int, dense: bool = False) -> bool:
     """相似段合并的两阈值判定（宿主 numpy 统计与 GPU sim_pair 标量共用）。
 
     只看平均绝对差会把宽 ROI 中的单字短字幕（如"在""不"）误判为噪声：
     大部分区域未变，均值被稀释 —— 因此附加"显著变化像素数"上限。
+
+    dense（2026-09-12 准确项加固）：差异图内存在 win3 ≥ 分段阈值 C 的
+    3×3 稠密簇时恒判**不相似**。动机：末位单数字变化（198→196）在
+    108×32 ROI 上只动 12-14px，低于像素数上限（ROI 面积 1%≈35px）被
+    误合并，2 帧短状态整个被吞（test5 33/33、test6 94/94 合并全为此类，
+    实测 _probe_merge_log）。断段判据本身用同一 win3 簇定义"内容变了"
+    （win3 ≥ C ⇒ 断段），合并判据若允许稠密簇差异通过，等于用另一套
+    标准否决了断段 —— 本门使两处判据自洽。
+    关法：`segment.merge_dense_gate=0`（env SEG_MERGE_DENSE_GATE）。
+
+    **本门是单侧安全闸，不是「安全/误合并」分类器**（实测：test5/test6 的
+    合并全部 win3=9，即在那里退化为「关闭合并」）。之所以仍然稳定增益，
+    是因为两类错误的代价不对称：挡掉**无害**合并只多花一次 OCR 调用
+    （两段文本本就相同，准确率不变），挡掉**有害**合并才回收帧。于是净
+    收益由回收帧主导（实测 6 片 +226 帧）。这与 §14.1/§14.2 的问法不同：
+    那两轮问「能否收紧判据既压误合并又保住安全合并（OCR 调用仍下降）」，
+    答案否；本轮问「能否以失去合并为代价压掉误合并」，答案是能，且代价
+    可承受（段数 +1.2~3.6%；这些视频 decode-bound，墙钟不变）。
     """
+    if dense:
+        return False
     if mean > threshold:
         return False
     return changed_px <= max_changed

@@ -93,25 +93,37 @@ for seg in result.segments:
 （刻意决策，2026-09-10 重申：弱 CPU 上 h264 软解可能慢于 NVDEC，且 CPU
 解码必然引入资源争用与整机功耗上升，NVDEC 稳妥优先，不按编码分流）。
 
-**按编码选后端**（本机 7945HX + RTX 4060，3000 帧实测热轮中位；换机需按
+**按编码选后端**（本机 7945HX 16C32T + RTX 4060 Laptop，3000 帧窗口、
+`ocr_backend="tensorrt"`、三轮取热轮中位；**整矩阵独立跑三遍再取中位**，
+故 `hybrid`/`cpu` 的绝对秒与单次跑有 ±2~4% 差。换机需按
 `docs/CONCLUSIONS.md` C-04/C-05/C-08 的复评条件重测）：
 
-| 片源编码 | 最快 | 次优 | `auto`（NVDEC） | 相对最优 |
-|---|---|---|---|---|
-| **h264** | `decode_backend="cpu"` 0.99 s | `"hybrid"` 1.38 s | 3.11 s | **慢 3.1×** |
-| **hevc** | `auto`/`"nvdec"` 1.53 s | `"hybrid"` 1.58 s | 1.53 s | 已最优 |
-| **av1** | `"hybrid"` 1.37 s | `"nvdec"` 1.82 s | 1.82 s | **慢 33%** |
+| 片源编码 | `cpu` | `nvdec` | `hybrid` | `auto`（=NVDEC） | 建议 |
+|---|---:|---:|---:|---:|---|
+| **h264** | **1.06 s** | 3.15 s | 1.54 s | 3.13 s | 显式 `cpu`（比 hybrid 快 1.45×） |
+| **hevc** | 3.57 s | 1.55 s | **1.54 s** | 1.55 s | 默认即可（hybrid 与 NVDEC 持平） |
+| **av1** | 2.51 s | 1.85 s | **1.38 s** | 1.84 s | 显式 `hybrid`（比 NVDEC 快 33%） |
 
 即：h264 且 CPU 核多时**显式**选 `cpu`；av1 选 `hybrid`；hevc 保持默认。
 （`auto` 不自动分流，是上面那条刻意决策。）
+
+> 口径提醒：hybrid 的单次 `bench run` 有 **3–5% 轮间散布**（本轮回测中
+> av1-hybrid 见过 13%），所以上表的 hybrid 列是三遍中位，**单点值只作量级
+> 参考**；要下"谁更快"的结论必须用 `tools/bench.py ab` 的交错配对 + 符号一致性。
+> 证据与消元过程见 `docs/log/2026-09-11-hybrid差距分解.md`。
 
 `decode_backend="hybrid"` 由 **decord fork 原生实现**（≥v0.7.15）：同一实例内
 NVDEC 与 CPU 软解并行解码，分片与负载调度在 decord 内部完成，引擎只透传解码
 参数（参数面与 `cpu` / `nvdec` 完全一致，含 `sample_stride`）。要求 NVDEC 可用；
 OCR 在 GPU（TRT）时走 `hybrid_gpu` 上下文，输出帧驻留显存、直通零拷贝管线；
 OCR 在 CPU 时输出宿主帧。打开失败自动降级（`meta.degraded_reason` 有记录）。
-CPU 分片线程档位默认 **核数//2 钳 [8,16]**（实测 12→16：h264 −6.5%、hevc −12.7%）；
-差距分解（解码器调度侧 23–33% 与引擎 CPU 争用 10–27%）见
+CPU 分片线程档位与 `cpu` 后端**共用同一 codec 感知策略**
+（`extractor._decode_num_threads`；OCR 在 GPU 时本机 32 逻辑核下
+h264/hevc → 32、av1 stride=1 → 24、stride>1 上限 48）。该档位按**引擎
+e2e 口径**定档（decode-only 口径 24T 即饱和，但引擎里解码与分段/OCR 线程
+共存、消费节奏顶点更高）：`tools/_probe_hybrid_threads_e2e.py` 全片配对
+复测 h264 **32T 比 16T 快 6.6%（3/3 配对同号，唯一文本集一致）**。可用
+`HYBRID_CPU_THREADS` 显式覆盖；差距分解见
 `docs/log/2026-09-11-hybrid差距分解.md`。
 
 > **迁移记录**：原项目层实现（hybrid_decode.py，已于 2026-09-06 删除）由 decord
@@ -128,8 +140,9 @@ CPU 分片线程档位默认 **核数//2 钳 [8,16]**（实测 12→16：h264 �
 | `timing` | 各阶段耗时（`decode` / `ocr` / `ocr_tail`） |
 | `meta` | `backend / ocr_backend / codec / n_segments / engine_version / params（本次生效参数）/ degraded_reason（降级原因）/ color_range / rep_crop_format` |
 
-> 进度回调口径：引擎初始化 ~2.5%、解码/分段 3→58、OCR 58→86——**上限 86%**
-> （OCR 收尾与结果组装无进度事件）。
+> 进度回调口径（实测 1500 帧 run／89 次回调）：解码+分段 `3 → 58`、
+> OCR `58 → 86`——**上限 86%**（余下 14% 是 OCR 收尾与结果组装，不回调；
+> 已无"引擎初始化 ~2.5%"这一档）。
 
 > 引擎内部链恒为单通道灰度（解码输出 `yuv420` 或 `gray`，不再输出 RGB 帧——
 > RGB→灰度转换由解码侧/fork 完成）。`rep_crop` 的像素格式由
@@ -174,8 +187,9 @@ seg/text 与顺序完全一致）：
 > **实测修订**（证据与消元过程见 `docs/log/PERFORMANCE.md` §19/§21）：「IO 竞争」
 > 与「内存带宽」均已证伪——并发退化真因是**单一 NVDEC 硬件单元串行化**；
 > 加速比按聚合吞吐口径看（互补配对 1.83–1.87×，双 NVDEC 仅 1.01–1.20×）。
-> 支配变量是对端往 GPU 提交工作的速率；编码决定一切（h264 上 CPU 软解比
-> NVDEC 快 2.6×，AV1 上慢 2.9×），选配对前先看对端视频的编码。
+> 支配变量是对端往 GPU 提交工作的速率；编码决定一切（同一 3000 帧窗口
+> e2e：h264 上 CPU 软解比 NVDEC 快 **3.0×**，AV1 上慢 **1.36×**；纯解码
+> 口径的倍数见 C-04/C-31），选配对前先看对端视频的编码。
 
 ```python
 import threading
@@ -203,10 +217,11 @@ GPU/driver/TRT/decord 版本），以及 v2 新增的**资源段**：
 |---|---|---|
 | `resources.per_phase` | std+ | 每个粗相位边界的**差分**：墙钟、**平均并行核数**、活跃线程数、RSS 增量、磁盘读写 MB/s、显存占用 |
 | `resources.sources` | std+ | 每个读数的**真实来源**或 `unavailable:原因`（不用 None/0 冒充真值） |
-| `hardware` | full | NVML 低优先级采样（~200ms、上限 600 点、关停丢半帧）：GPU% / **NVDEC%** / 显存的 min/p50/p99/max + 采样失败计数 |
+| `hardware` | full | NVML 低优先级采样（~200ms、上限 600 点、关停丢半帧）：GPU% / **NVDEC%** / 显存 / **SM·MEM·VIDEO 时钟** / **热降原因位**（`throttle.ticks_throttled` 只计热/功率/硬件类原因）的 min/p50/p99/max + 采样失败计数。⚠️ 实测（4060 Laptop）**NVDEC% 是"在用"指示器而非占空比**——解码器仅 35% 占空时仍读 98%；忙闲判别用 fork 侧 `[hybrid-stats] busy`（每臂忙时，fork ≥ 6da2957） |
 
 资源层只用 stdlib（`time.process_time` + kernel32/psapi ctypes）——实测
-`psutil.Process.threads()` 在本机要 **43ms 一次**，用在遥测路径上会直接吃满
+`psutil.Process.threads()` 在本机要 **~52ms 一次**（200 次中位，随进程线程数
+变化），用在遥测路径上会直接吃满
 PI-15 预算，故有测试禁止产品代码调用它。**本机自测口径、跨机不可比**；PCIe
 本机不可直读，报告不产该字段（只能由 counter 字节 ÷ 相位墙钟推算）。
 读数工具：`python tools/_probe_phase_cores.py --configs h264-cpu,h264-hybrid`。
@@ -292,14 +307,15 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 | `OCR_THREADS` | OCR 推理线程数覆盖（默认全物理核） |
 | `OCR_BATCH` | OCR 批大小覆盖（默认 16） |
 | `OCR_PAD_SMALL` | OCR 输入 pad 宽度下限覆盖（未设置时由构造参数 `fill_width` 决定，默认 224；此 env 优先级**高于**构造参数，调这个就能改 pad 下限） |
-| `OCR_GAMMA` | OCR 预处理 gamma（默认 2.0） |
+| `OCR_GAMMA` | OCR 预处理 gamma（默认 2.0；**已复核为真折中，勿再调**——跳出 gamma 框架的逐图自适应拉伸/锐化/局部平场/重采样共六变体实测无杠杆，见 `docs/CONCLUSIONS.md` C-15 与 `docs/log/2026-09-12-准确项.md`） |
 | `OCR_ROI_AUTOCROP` | `0` 关闭 OCR 输入宽度自适应裁切（默认开；按二值图内容列裁掉两侧空白，生产门禁 5 视频原始误读 **148 → 124**；真值口径四片均值 +0.82pp，**该 pp 值测于 pad 160 时代，pad 已回退 224，勿直接引用**） |
 | `OCR_ROI_AUTOCROP_MARGIN` | 裁切时内容两侧保留的余量（占 ROI 宽 %，默认 10；**调小会插入多余空格且准确率下降**，见 `docs/log/ARCHIVE.md` §16.2 P0-4） |
 | `OCR_REORDER_WINDOW` | OCR 重排窗口段数（默认 64；按宽度分组才能让 pad 宽真的降下来） |
 | `DECORD_SKIP_LOOP_FILTER` | **显式 opt-in**（2026-08-30 起，默认**不设置**——import 不再改写进程级 env）：设为 `all` 开启 CPU 软解关去块滤波，须在打开解码器前设置。收益：HEVC **-8.3%~-14.3% 墙钟**、h264 -0.6%~-4.2%、AV1 无效（-0.2%）；NVDEC 不受影响。六片真值 + test4 逐帧**视觉裁定**确认对 OCR 无负面影响（5 片 +0.00~+0.08pp；test4 账面 −0.19pp 系真值伪影——显示为三位补零 `020`、真值剥零，视觉裁定按显示忠实度关滤波反而略优）。注意：显示为 2 位数字时输出会带前导零（`020`，更忠实于显示），下游字符串匹配需注意；rep_crop 预览有块状伪影。需 decord fork ≥v0.7.13 |
 | `DECODE_THREADS` | CPU 软解 FFmpeg 帧线程数覆盖（默认按 OCR 落点 + 采样步长分档：OCR 在 GPU 取满逻辑核钳 8~32；OCR 在 CPU 时 stride>1 取逻辑核 3/4 钳 8~24、stride==1 取 1/3 钳 8~12） |
 | `TEXT_SEP_MERGE` | 相似段合并分离模式（binary/off；contrast 已于 0.9.0 删除） |
-| `HYBRID_CPU_THREADS` | 混合解码（decord 原生）中 CPU 软解线程数（默认 0 = **自动：与 CPU 软解后端同一 codec 感知策略**，即 `DECODE_THREADS` 的分档公式；2026-09-12 §14 引擎全片 e2e 定档）。项目层时代的线程数 A/B 实测（方向性结论仍可参考）见 `docs/log/PERFORMANCE.md` §17.2 |
+| `SEG_MERGE_DENSE_GATE` | 相似段合并的**稠密簇门**：`0` 关闭；`>0` 时若差异图含 win3 ≥ 该值的 3×3 稠密簇则恒判不合并（默认 `5` = 断段阈值 `SEG_C`）。**默认开启**，遥测/数字类内容基本不再发生相似合并 → 段数比 0.9.x 口径高 1~4%，换得逐帧准确率净 **+226 帧 / 47,134**（见 C-38；OCR-bound 部署可设 `0` 换回段数） |
+| `HYBRID_CPU_THREADS` | 混合解码（decord 原生）中 CPU 软解线程数（默认 0 = **自动：与 CPU 软解后端同一 codec 感知策略**，即 `DECODE_THREADS` 的分档公式，本机 h264/hevc → 32、av1 → 24；全片配对 A/B 复测 h264 32T 比 16T 快 **6.6%**，3/3 同号）。定档依据与 decode-only 口径的差别见 `docs/log/2026-09-11-hybrid差距分解.md` §14；项目层时代的线程 A/B 见 `docs/log/PERFORMANCE.md` §17.2 |
 
 ### 实验/诊断（排查问题时用）
 

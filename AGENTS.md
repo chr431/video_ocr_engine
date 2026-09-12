@@ -103,7 +103,7 @@ python tools/_doc_section.py docs/log/ARCHIVE.md 4.4b        # 支持 16 / 16.8 
 ## 已封板结论 → `docs/CONCLUSIONS.md`
 
 全部 33 条结论（含状态 / 前提 / 复评触发）在 `docs/CONCLUSIONS.md`，
-这里只留最容易踩的五条：
+这里只留最容易踩的六条：
 
 - 并发退化真因 = **NVDEC 会话数**；互补配对首选 NVDEC∥CPU，聚合 1.87×（PERF §21）
 - `auto` **恒为 NVDEC 优先**（刻意决策，2026-09-10 重申）：本机 h264 CPU 软解虽快
@@ -119,6 +119,8 @@ python tools/_doc_section.py docs/log/ARCHIVE.md 4.4b        # 支持 16 / 16.8 
   交错配对；死锁判别走引擎全片（§10.2）
 - **racelog_test 全部视频测量/验证一律 `sample_stride=1`**（2026-09-10 重申，
   防漏信息）；stride>1 仅用于字幕场景（字幕更新频率慢，如批量剧集字幕提取）
+- **合并判定默认带「稠密簇门」**（`segment.merge_dense_gate`）：遥测内容不再合并，
+  段数比此前高 1~4%（C-38）
 
 ## 编辑护栏（docs/log/PERFORMANCE.md）
 

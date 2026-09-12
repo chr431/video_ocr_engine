@@ -14,17 +14,18 @@ from video_ocr_engine.config import KNOBS, RunConfig, resolve
 ENV_NAMES = KNOBS.env_names()
 
 
-# ── env 契约：18 个 v1 旋钮名 + v2 新增 ─────────────────────────────
+# ── env 契约：19 个 v1 风格旋钮名 + v2 新增 ─────────────────────────
 def test_env_contract_covers_all_v1_knobs():
     v1_names = {getattr(config, n) for n in dir(config) if n.endswith("_ENV")}
-    assert len(v1_names) == 18
+    assert len(v1_names) == 19          # 18 v1 + SEG_MERGE_DENSE_GATE（§准确项）
     assert set(ENV_NAMES) >= v1_names          # v1 全部迁入，一个不丢
     # v2 新增仅两个：r5 telemetry 三档 + S6-0 报告 sidecar（§8.6 N-3）
     assert set(ENV_NAMES) - v1_names == {"VOE_TELEMETRY", "VOE_REPORT_FILE"}
 
 
 def test_knob_registry_shape():
-    assert len(KNOBS.knobs) == 20              # 18 v1 + telemetry + report_file
+    # 18 v1 + merge_dense_gate + telemetry + report_file
+    assert len(KNOBS.knobs) == 21
     for k in KNOBS.knobs:
         assert k.rationale_id, k.name          # 每个旋钮有依据锚点（D5）
 

@@ -743,37 +743,69 @@ extern "C" __global__ void sim_pair(
     const unsigned char* __restrict__ a,
     const unsigned char* __restrict__ b,
     double* __restrict__ out,
-    int n, int th, int use_bin) {
-    // merge_similar 判定的差异标量：out[0]=MAD 累加和，out[1]=显著变化数。
-    // use_bin=1 按二值化域（阈值穿越 ⇔ |0-255| 差），否则按原始灰度域。
-    // 与宿主 _segments_similar（binary text_sep / raw）语义一一对应：
-    // 整数精确累加（与 numpy 的 float32 均值仅差末位舍入，见 _similar_device）。
+    int n, int th, int use_bin, int W, int H) {
+    // merge_similar 判定的差异标量：out[0]=MAD 累加和，out[1]=显著变化数，
+    // out[2]=差异图 max 3×3 窗口和（稠密簇门，与 _cluster_win3 同一语义）。
+    // use_bin=1 按二值化域（阈值穿越 ⇔ |0-255| 差），否则按原始灰度域：
+    // MAD 在两种域下分别累加「穿越数」与「|Δ| 整数和」，**不共用**——宿主
+    // binary 域的 mean 是 255×穿越数/n（见 _similar_device 换算），非 binary
+    // 域是 |Δ| 均值，混用会使 off 模式的 mean 判据整体失真。
+    // 与宿主 _segments_similar（binary text_sep / raw）语义一一对应：整数
+    // 精确累加（与 numpy 的 float32 均值仅差末位舍入，见 _similar_device）。
+    // win3 与宿主 _cluster_win3 逐位一致：**每个像素都作窗口中心**求 3×3
+    // 和（越界按 0）取 max —— 只在变化点上求会漏：8 邻域全变而中心未变时
+    // 宿主得 8、只在变化点求只得 5，两管线在阈值处即可分出不同判定。
     __shared__ double s_mad[256];
     __shared__ unsigned long long s_chg[256];
+    __shared__ int s_max[256];
     int t = threadIdx.x;
     double mad = 0.0;
     unsigned long long chg = 0;
+    int maxc = 0;
     for (int p = t; p < n; p += 256) {
+        int dchg;
         if (use_bin) {
-            int d = ((a[p] > th) != (b[p] > th)) ? 1 : 0;
-            mad += d;
-            chg += d;
+            dchg = ((a[p] > th) != (b[p] > th)) ? 1 : 0;
+            mad += dchg;
         } else {
             int d = abs((int)a[p] - (int)b[p]);
             mad += d;
-            chg += d > 10 ? 1 : 0;
+            dchg = d > 10 ? 1 : 0;
         }
+        chg += dchg;
+        int y = p / W;
+        int x = p - y * W;
+        int y0 = y > 0 ? y - 1 : 0;
+        int y1 = y + 1 < H ? y + 1 : H - 1;
+        int x0 = x > 0 ? x - 1 : 0;
+        int x1 = x + 1 < W ? x + 1 : W - 1;
+        int s3 = 0;
+        for (int yy = y0; yy <= y1; yy++) {
+            int row = yy * W;
+            for (int xx = x0; xx <= x1; xx++) {
+                int q = row + xx;
+                s3 += use_bin
+                    ? (((a[q] > th) != (b[q] > th)) ? 1 : 0)
+                    : ((abs((int)a[q] - (int)b[q]) > 10) ? 1 : 0);
+            }
+        }
+        if (s3 > maxc) maxc = s3;
     }
-    s_mad[t] = mad; s_chg[t] = chg;
+    s_mad[t] = mad; s_chg[t] = chg; s_max[t] = maxc;
     __syncthreads();
     for (int s = 128; s > 0; s >>= 1) {
         if (t < s) {
             s_mad[t] += s_mad[t + s];
             s_chg[t] += s_chg[t + s];
+            if (s_max[t + s] > s_max[t]) s_max[t] = s_max[t + s];
         }
         __syncthreads();
     }
-    if (t == 0) { out[0] = s_mad[0]; out[1] = (double)s_chg[0]; }
+    if (t == 0) {
+        out[0] = s_mad[0];
+        out[1] = (double)s_chg[0];
+        out[2] = (double)s_max[0];
+    }
 }
 
 extern "C" __global__ void hist_gray_perframe(
@@ -1062,35 +1094,39 @@ extern "C" __global__ void luma_nv12(
         return self._luma_dev
 
     def compare_pair(self, a_ptr: int, b_ptr: int, H: int, W: int,
-                     th: int, use_bin: bool, stream=None) -> "tuple[int, int]":
-        """两帧差异标量（merge_similar 判定）：(mad_sum, changed_count)。
+                     th: int, use_bin: bool, stream=None) -> "tuple[int, int, int]":
+        """两帧差异标量（merge_similar 判定）：(mad_sum, changed, win3_max)。
 
         use_bin=True 按二值化域：mad_sum = 阈值穿越像素数（宿主换算
         MAD = 255*mad_sum/n），changed = 同一计数（|0-255|>10 恒真）。
         use_bin=False 按原始灰度域：mad_sum = |a-b| 整数和，changed =
         count(|a-b|>10)。整数精确累加（double 归约，值域 < 2^53），
         与宿主 _segments_similar 的两个条件一一对应。
+        win3_max = 差异图最大 3×3 窗口和，与宿主 _cluster_win3 逐位一致
+        （稠密簇门，见 segmentation.merge_dense_gate）。
         stream：消费端传 _stream_c（消费专用流）。"""
         import numpy as np
         from cuda.bindings import runtime as cudart
         from cuda.core import Buffer, LaunchConfig, launch
         s = self._stream if stream is None else stream
+        # 3 个 double：mad_sum / changed / win3_max（out[2] 由稠密簇门消费）
         if getattr(self, "_sim_dev", None) is None:
-            _err, self._sim_dev = cudart.cudaMalloc(2 * 8)
+            _err, self._sim_dev = cudart.cudaMalloc(3 * 8)
         n = H * W
-        out_buf = Buffer.from_handle(self._sim_dev, 2 * 8)
+        out_buf = Buffer.from_handle(self._sim_dev, 3 * 8)
         launch(s, LaunchConfig(grid=1, block=256),
                self._kernel_sim,
                Buffer.from_handle(a_ptr, n),
                Buffer.from_handle(b_ptr, n),
                out_buf, np.int32(n), np.int32(th),
-               np.int32(1 if use_bin else 0))
-        out = np.empty(2, dtype=np.float64)
+               np.int32(1 if use_bin else 0),
+               np.int32(W), np.int32(H))
+        out = np.empty(3, dtype=np.float64)
         cudart.cudaMemcpyAsync(
-            out.ctypes.data, self._sim_dev, 2 * 8,
+            out.ctypes.data, self._sim_dev, 3 * 8,
             cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, s)
         cudart.cudaStreamSynchronize(s)
-        return int(out[0]), int(out[1])
+        return int(out[0]), int(out[1]), int(out[2])
 
     def analyze_batch(self, raw_ptr: int, prev_ptr: int, B: int,
                       H: int, W: int, th: float) -> "np.ndarray":

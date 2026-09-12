@@ -1,6 +1,6 @@
 # S0 金标向量清单——录制基准与期望哈希（由 record.py 生成，人不得手改）
 environment:
-  commit: "7d5fe4eee7fb0297008a3fc240a279a65a5dfb85"
+  commit: "15dc24a1cb5b5fbe291ad863144b14777e8b65dd"
   ocr_engine: "multi_PP-OCRv6_rec_small_sm89_fp32_tf32unset_b18.engine@4fe4ceccd1fcdba0"
   decord: "0.8.3"
   gpu: "NVIDIA GeForce RTX 4060 Laptop GPU"
@@ -17,166 +17,166 @@ cases:
     window: [0, 3000]
     env: {"GPU_PIPELINE": "0"}
     kwargs: {"keep_crops": false, "decode_backend": "cpu", "ocr_backend": "cpu"}
-    sha: [24fed7bdc9989261, 1a5ce5d8e4815099]
+    sha: [24fed7bdc9989261, f4cf0999d8f415e5]
   - id: A-cpu-p0-tensorrt
     video: test5
     window: [0, 3000]
     env: {"GPU_PIPELINE": "0"}
     kwargs: {"keep_crops": false, "decode_backend": "cpu", "ocr_backend": "tensorrt"}
-    sha: [eabc548332226ed1, 97f83340e6c03cc1]
+    sha: [eabc548332226ed1, acaa19a3fdc88b6b]
   - id: A-cpu-p1-cpu
     video: test5
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "cpu", "ocr_backend": "cpu"}
-    sha: [24fed7bdc9989261, 6477144604c3c363]
+    sha: [24fed7bdc9989261, ddde9b2569d79d66]
   - id: A-cpu-p1-tensorrt
     video: test5
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "cpu", "ocr_backend": "tensorrt"}
-    sha: [eabc548332226ed1, decc602d602e25d2]
+    sha: [eabc548332226ed1, 841569dca5db9027]
   - id: A-nvdec-p0-cpu
     video: test5
     window: [0, 3000]
     env: {"GPU_PIPELINE": "0"}
     kwargs: {"keep_crops": false, "decode_backend": "nvdec", "ocr_backend": "cpu"}
-    sha: [b38ee190c3caf973, b09ff49066a9804d]
+    sha: [b38ee190c3caf973, a58d25c11c674cc3]
   - id: A-nvdec-p0-tensorrt
     video: test5
     window: [0, 3000]
     env: {"GPU_PIPELINE": "0"}
     kwargs: {"keep_crops": false, "decode_backend": "nvdec", "ocr_backend": "tensorrt"}
-    sha: [9ba4b60fedb553df, 8989f141d9135bc6]
+    sha: [9ba4b60fedb553df, 42c5948fa0a4abfb]
   - id: A-nvdec-p1-cpu
     video: test5
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "nvdec", "ocr_backend": "cpu"}
-    sha: [b38ee190c3caf973, 4adf2397e317a2a7]
+    sha: [b38ee190c3caf973, 2f8cd77eaab27fa8]
   - id: A-nvdec-p1-tensorrt
     video: test5
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "nvdec", "ocr_backend": "tensorrt"}
-    sha: [9ba4b60fedb553df, 40341c1bb9f73cc7]
+    sha: [9ba4b60fedb553df, ce8b186894cb1c34]
   - id: A-hybrid-p0-cpu
     video: test5
     window: [0, 3000]
     env: {"GPU_PIPELINE": "0"}
     kwargs: {"keep_crops": false, "decode_backend": "hybrid", "ocr_backend": "cpu"}
-    sha: [2638b8940e5f82d0, 3093f275ab8951be]
+    sha: [2638b8940e5f82d0, 7577d550a0af1494]
   - id: A-hybrid-p0-tensorrt
     video: test5
     window: [0, 3000]
     env: {"GPU_PIPELINE": "0"}
     kwargs: {"keep_crops": false, "decode_backend": "hybrid", "ocr_backend": "tensorrt"}
-    sha: [fd2053cf5f101dad, b6dc58c456534fe8]
+    sha: [fd2053cf5f101dad, bb61028e065e7606]
   - id: A-hybrid-p1-cpu
     video: test5
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "hybrid", "ocr_backend": "cpu"}
-    sha: [2638b8940e5f82d0, f7d038e3a75dd149]
+    sha: [2638b8940e5f82d0, c268b442bd8dedce]
   - id: A-hybrid-p1-tensorrt
     video: test5
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "hybrid", "ocr_backend": "tensorrt"}
-    sha: [fd2053cf5f101dad, 6f0508f0ad15494f]
+    sha: [fd2053cf5f101dad, d0c6752313ab59b1]
   - id: B-fmt-gray-kc1
     video: test5
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": true, "decode_backend": "nvdec", "ocr_backend": "tensorrt", "rep_crop_format": "gray"}
-    sha: [9ba4b60fedb553df, 235dc2e25812784f]
+    sha: [9ba4b60fedb553df, 8f249ff3faeed103]
   - id: B-fmt-gray-kc0
     video: test5
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "nvdec", "ocr_backend": "tensorrt", "rep_crop_format": "gray"}
-    sha: [9ba4b60fedb553df, 36d6c28ba221a114]
+    sha: [9ba4b60fedb553df, b8e774558743b53a]
   - id: B-fmt-yuv-kc1
     video: test5
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": true, "decode_backend": "nvdec", "ocr_backend": "tensorrt", "rep_crop_format": "yuv"}
-    sha: [9ba4b60fedb553df, b313af1a28ab04d4]
+    sha: [9ba4b60fedb553df, 57efe91cf7d50802]
   - id: B-fmt-yuv-kc0
     video: test5
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "nvdec", "ocr_backend": "tensorrt", "rep_crop_format": "yuv"}
-    sha: [9ba4b60fedb553df, 24f9e6fda9c171c4]
+    sha: [9ba4b60fedb553df, 78f8c358bf5b6d18]
   - id: B-stride8
     video: test5
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "nvdec", "ocr_backend": "tensorrt", "sample_stride": 8}
-    sha: [32937f7b9f87b7f1, 1f719da7e037f23f]
+    sha: [32937f7b9f87b7f1, b7186b09631e9b14]
   - id: B-aspect4
     video: test5
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "nvdec", "ocr_backend": "tensorrt", "force_aspect": 4.0}
-    sha: [9ba4b60fedb553df, 0dbfb6147eabb8d2]
+    sha: [9ba4b60fedb553df, f1f10d6a2969daa2]
   - id: B-nomerge
     video: test5
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "nvdec", "ocr_backend": "tensorrt", "merge_similar": false}
-    sha: [9ba4b60fedb553df, 40fce538803bd47e]
+    sha: [9ba4b60fedb553df, ac8771ad0272866a]
   - id: C-av1-cpu
     video: test6_av1
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "cpu", "ocr_backend": "tensorrt"}
-    sha: [6b48553540e31b41, 2f97c910f1727016]
+    sha: [6b48553540e31b41, 1e3b66a8b9f4f881]
   - id: C-av1-nvdec
     video: test6_av1
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "nvdec", "ocr_backend": "tensorrt"}
-    sha: [d8c62f6674c7b526, e9c6163d0a392369]
+    sha: [d8c62f6674c7b526, b4aeb578980a51b2]
   - id: C-av1-hybrid
     video: test6_av1
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "hybrid", "ocr_backend": "tensorrt"}
-    sha: [65e64e300fa703f2, 2aaf684e08f85be2]
+    sha: [65e64e300fa703f2, dd26fe0ad7b3aa14]
   - id: C-h264-cpu
     video: test6_h264
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "cpu", "ocr_backend": "tensorrt"}
-    sha: [ba1f49ba09454d48, 262acad62276b5ce]
+    sha: [ba1f49ba09454d48, aa285e4ab389a598]
   - id: C-h264-nvdec
     video: test6_h264
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "nvdec", "ocr_backend": "tensorrt"}
-    sha: [683d4e1463d72ae5, 283fbe2bec0d7653]
+    sha: [683d4e1463d72ae5, 5afaf990782eb06f]
   - id: C-h264-hybrid
     video: test6_h264
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "hybrid", "ocr_backend": "tensorrt"}
-    sha: [525272339b317ab6, f938142829feb370]
+    sha: [525272339b317ab6, c296b68e12a63bf3]
   - id: C-hevc-cpu
     video: test6_hevc
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "cpu", "ocr_backend": "tensorrt"}
-    sha: [72c4a852295f3578, 3d6a28666360336d]
+    sha: [72c4a852295f3578, 5e771b0826562c03]
   - id: C-hevc-nvdec
     video: test6_hevc
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "nvdec", "ocr_backend": "tensorrt"}
-    sha: [f159c6348b402b0c, 33738b1bb4c818f2]
+    sha: [f159c6348b402b0c, 6fa0e7b7b2ebeacb]
   - id: C-hevc-hybrid
     video: test6_hevc
     window: [0, 3000]
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "hybrid", "ocr_backend": "tensorrt"}
-    sha: [f32b9ec1df292d7c, 0594714575b8f43c]
+    sha: [f32b9ec1df292d7c, 69ea56518800c335]

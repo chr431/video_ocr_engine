@@ -41,11 +41,15 @@ _CORRUPT_DIR = ROOT / "bench" / "corrupt"
 _FFMPEG = r"D:/Software/ffmpeg-n9.0-latest-win64-gpl-shared-9.0/bin/ffmpeg.exe"
 
 # (文件名, 期望段数)。段数锚点说明见模块 docstring。
+# 2026-09-12 重锚：segment.merge_dense_gate 默认开后四例统一为 8340
+# （重锚前 8241/8243/8241/8242，编码与重排深度间有 ±2 差异——那差异来自
+# **噪声合并**，门挡掉后段结构对编码不敏感）。重锚依据：零文本丢失 +
+# 逐帧准确率净 +226 帧，见 docs/log/2026-09-12-准确项.md。
 E2E_CASES = {
-    "test6_h264.mp4": 8241,
-    "test6_hevc.mp4": 8243,
-    "test6.mp4": 8241,
-    "test6_h264_bf16.mp4": 8242,   # §17 酷刑流（重排深度 17）
+    "test6_h264.mp4": 8340,
+    "test6_hevc.mp4": 8340,
+    "test6.mp4": 8340,
+    "test6_h264_bf16.mp4": 8340,   # §17 酷刑流（重排深度 17）
 }
 
 _RE_E2E = re.compile(

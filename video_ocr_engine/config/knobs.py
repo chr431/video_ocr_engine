@@ -50,6 +50,12 @@ KNOBS = Registry(knobs=(
     Knob("segment.text_sep_merge", "TEXT_SEP_MERGE_ENV", "TEXT_SEP_MERGE", "str",
          "binary", "segment", _ALL, "ec:229",
          note="v1 裸 get 非布尔；未知值消费端回落 binary（B3 将改构造期校验）"),
+    Knob("segment.merge_dense_gate", "SEG_MERGE_DENSE_GATE_ENV",
+         "SEG_MERGE_DENSE_GATE", "int", 5, "segment", _ALL,
+         "log:2026-09-12-准确项-§2",
+         note="0=关；>0=差异图最大 3×3 窗口和（win3）阈值：≥ 此值判「内容已"
+              "变」恒不合并。默认 = SEG_C（与断段判据共用同一 win3 定义，两处"
+              "自洽）；判据/实测/与被否决判据的差别见 docs/log/ 准确项章节"),
     # ── pipeline ──
     Knob("pipeline.gpu", "GPU_PIPELINE_ENV", "GPU_PIPELINE", "bool|none", None,
          "pipeline", ("gpu",), "ec:81",

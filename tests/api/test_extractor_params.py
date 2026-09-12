@@ -117,10 +117,29 @@ def test_segments_similar_requires_small_changed_area():
     b_small = a.copy()
     b_small[:10, :10] = 200          # 100 像素显著变化 > 50 -> 不相似
     assert not ex._segments_similar(a, b_small)
-    b_tiny = a.copy()
-    b_tiny[:5, :5] = 200             # 25 像素显著变化 <= 50 -> 相似
-    assert ex._segments_similar(a, b_tiny)
+    # 稀疏小变化（不构成 3×3 稠密簇）<= 50 -> 相似：像素数上限本身仍生效
+    b_sparse = a.copy()
+    for i in range(0, 50, 2):
+        b_sparse[i, 0] = 200         # 25 像素显著变化，1px 宽 → win3 = 3
+    assert ex._segments_similar(a, b_sparse)
     # 平均差超阈值也判不相似
     b_mean = a.copy()
     b_mean[:, :] = 30                # 整体抬升，平均差 30 > 3
     assert not ex._segments_similar(a, b_mean)
+
+
+def test_segments_similar_dense_gate(monkeypatch):
+    """稠密簇门（segment.merge_dense_gate）：紧凑 3×3 簇恒判不相似。
+
+    动机（实测）：末位单数字变化在紧凑 ROI 上只动 12-14px，低于
+    max_changed 上限（面积 1%）而被合并吞掉整段短状态。断段判据用
+    win3 ≥ C 定义「内容变了」，合并判据必须自洽。
+    """
+    a = np.zeros((50, 100), dtype=np.uint8)
+    b_dense = a.copy()
+    b_dense[:4, :4] = 200        # 16px ≤ max_changed(51)，但 3×3 窗口和=9
+    monkeypatch.delenv("SEG_MERGE_DENSE_GATE", raising=False)
+    assert not _make(merge_similar=True)._segments_similar(a, b_dense)
+    # gate=0 关闭 → 回到纯两阈值判定（16 ≤ 51 → 相似）
+    monkeypatch.setenv("SEG_MERGE_DENSE_GATE", "0")
+    assert _make(merge_similar=True)._segments_similar(a, b_dense)

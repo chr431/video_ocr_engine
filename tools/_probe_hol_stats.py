@@ -84,6 +84,9 @@ _RE = {
                       r" \| gpu-head us=(\d+) ev=(\d+) strandmax=(\d+)"),
     "up": re.compile(r"upload flushes=(\d+) frames=(\d+) avg_batch=([\d.]+)"
                      r" nobuf=(\d+) cpuempty=(\d+)"),
+    # 忙时分解（2026-09-12 可见性）：两臂实际解码墙钟 + 处理量
+    "busy": re.compile(r"busy cpu_us=(\d+) pkts=(\d+)"
+                       r" \| gpu_us=(\d+) pics=(\d+)"),
 }
 
 
@@ -103,6 +106,13 @@ def parse_stats(err: str) -> dict | None:
                 out.update(plan_folds=int(m.group(5)), plan_age_ms=int(m.group(6)))
             if m.group(7):
                 out.update(replans=int(m.group(7)), plan_share=int(m.group(8)))
+        elif "[hybrid-stats] busy " in ln:
+            m = _RE["busy"].search(ln)
+            if m:
+                out.update(busy_c_us=int(m.group(1)),
+                           busy_pkts=int(m.group(2)),
+                           busy_g_us=int(m.group(3)),
+                           busy_pics=int(m.group(4)))
         elif "[hybrid-stats] hol " in ln:
             m = _RE["hol"].search(ln)
             out.update(hol_us_c=int(m.group(1)), hol_ev_c=int(m.group(2)),
@@ -183,9 +193,19 @@ def main() -> int:
                 continue
             st = r["stats"]
             hol_ms = (st.get("hol_us_c", 0) + st.get("hol_us_g", 0)) / 1000
+            # 忙时分解（有 busy 行才显示）：两臂 busy fps 与忙碌占比
+            busy = ""
+            if "busy_c_us" in st:
+                wc = st.get("busy_c_us", 0) / 1e6
+                wg = st.get("busy_g_us", 0) / 1e6
+                busy = ("  busy c=%.0ffps/%.0f%% g=%.0ffps/%.0f%%" % (
+                    st.get("busy_pkts", 0) / wc if wc else 0,
+                    100 * wc / r["wall"] if r["wall"] else 0,
+                    st.get("busy_pics", 0) / wg if wg else 0,
+                    100 * wg / r["wall"] if r["wall"] else 0))
             print("  [%d] %-5s %-14s %6.0f fps  hol=%.0fms/%.0fms (%.1f%%)"
                   "  plan rc/rg=%d/%d share_g=%.0f%%→real %.0f%%"
-                  " folds=%d age=%dms%s" % (
+                  " folds=%d age=%dms%s%s" % (
                       i, case, lbl, r["got"] / r["wall"], hol_ms,
                       r["wall"] * 1000, hol_ms / (r["wall"] * 10) if r["wall"] else 0,
                       st.get("rc", 0), st.get("rg", 0),
@@ -194,7 +214,8 @@ def main() -> int:
                       st.get("plan_folds", -1), st.get("plan_age_ms", -1),
                       ("  batch=%.1f nobuf=%d cempty=%d" % (
                           st.get("avg_batch", 0), st.get("nobuf", 0),
-                          st.get("cpuempty", 0))) if "avg_batch" in st else ""),
+                          st.get("cpuempty", 0))) if "avg_batch" in st else "",
+                      busy),
                   flush=True)
     print("\n%-5s %-14s %7s %7s %9s %9s %13s %9s" % (
         "编码", "ctx@nt", "fps", "HOL%", "c-head秒", "g-head秒",
