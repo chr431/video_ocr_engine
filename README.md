@@ -209,15 +209,16 @@ ex.extract()         # 首个 extract 的 ocr.engine_init → ~0.0001s，首视�
 即可（引擎池按"模型/引擎类型/pad 下限/线程数"共享）。
 
 **运行报告**：`extract()` 返回的 `result.meta["report"]` 里带一份 RunReport
-（schema 版本化，当前 **v2**）：相位 span、全部计数器、PI 健康判定（热池
+（schema 版本化，当前 **v3**）：相位 span、全部计数器、PI 健康判定（热池
 `engine_init` <0.1s、`syncs/chunk` ≤3）、环境指纹（commit 之外的
-GPU/driver/TRT/decord 版本），以及 v2 新增的**资源段**：
+GPU/driver/TRT/decord 版本）、v2 新增的**资源段**、v3 新增的**自诊断段**：
 
 | 段 | 档位 | 内容 |
 |---|---|---|
 | `resources.per_phase` | std+ | 每个粗相位边界的**差分**：墙钟、**平均并行核数**、活跃线程数、RSS 增量、磁盘读写 MB/s、显存占用 |
 | `resources.sources` | std+ | 每个读数的**真实来源**或 `unavailable:原因`（不用 None/0 冒充真值） |
 | `hardware` | full | NVML 低优先级采样（~200ms、上限 600 点、关停丢半帧）：GPU% / **NVDEC%** / 显存 / **SM·MEM·VIDEO 时钟** / **热降原因位**（`throttle.ticks_throttled` 只计热/功率/硬件类原因）的 min/p50/p99/max + 采样失败计数。⚠️ 实测（4060 Laptop）**NVDEC% 是"在用"指示器而非占空比**——解码器仅 35% 占空时仍读 98%；忙闲判别用 fork 侧 `[hybrid-stats] busy`（每臂忙时，fork ≥ 6da2957） |
+| `diagnostics` | 仅 opt-in | 自诊断（v3）：`armed`/停顿次数/落盘路径。**只在设了 `VOE_REPORT_FILE` 时出现**，不写空值冒充 |
 
 资源层只用 stdlib（`time.process_time` + kernel32/psapi ctypes）——实测
 `psutil.Process.threads()` 在本机要 **~52ms 一次**（200 次中位，随进程线程数
@@ -228,7 +229,11 @@ PI-15 预算，故有测试禁止产品代码调用它。**本机自测口径、
 
 默认档 `std` 开销在噪声内（PI-15 复测见 `docs/log/`）；`VOE_TELEMETRY=off`
 一行关掉（`meta` 无 `report` 键、不组装报告、不建探针）；
-`VOE_REPORT_FILE=<path>` 可把细档 JSON 落盘。A/B 用
+`VOE_REPORT_FILE=<path>` 可把细档 JSON 落盘，并**同时开启自诊断**——
+同前缀的 `.journal.jsonl`（里程碑崩溃日志：相位+本次耗时，环形缓冲，
+硬崩溃后文件尾部即"最后到达点"）与 `.diag.stall-<N>` 后缀的 JSON（停顿现场：
+每线程栈、队列深度、指标快照、fork hybrid stats）。**挂死或硬崩溃时这就是
+唯一现场，无需另写探针**；停顿阈值默认 30s。A/B 用
 `python tools/bench.py run/diff/ab`（报告口径，不写探针）。
 
 要点：实例完全独立（各自 OCR 会话/TRT 上下文共存正常）；GIL 无碍
