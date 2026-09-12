@@ -27,6 +27,9 @@
   # 执行体 = tools/_probe_stress_harness.py（trial 级子进程 + --timeout + 行缓冲日志）；新压测按此规格写，不许裸循环
 - rule: 测试不依赖真实视频/GPU 时必须可离线跑；依赖者带 skip 守卫或 -m gpu
   mechanism: ci
+- rule: 探针的打桩点必须经 tools/_probe_hooks.py 的 POINTS 表取点，不得直接 import 产品私有符号——重构后只改该表，探针不动
+  mechanism: ci
+  # 执行体 = tools/_audit_ext.py [23] probe_hooks_resolve；POINTS 选点原则见该文件头
 - rule: 新增代码不得引用六个废弃根模块 shim（engine_config/gpu_setup/ocr_native/ocr_trt/segmentation/video_utils）——存量 45 处已迁包内路径，白名单只留两个冻结 shim 可导入性的契约测试；0.14.0 删除时改的就是这两个文件
   mechanism: ci
   # 执行体 = tools/_audit_ext.py [22] no_deprecated_shim_usage；迁移表 docs/MIGRATION.md §1

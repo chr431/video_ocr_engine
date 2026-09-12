@@ -237,6 +237,26 @@ def check_no_deprecated_shim_usage() -> str | None:
     return None
 
 
+def check_probe_hooks_resolve() -> str | None:
+    """[23] 探针打桩点表全部可解析（L1）。
+
+    探针靠 monkeypatch 私有符号取数，重构会让点位失效。L1 把全部点位收敛到
+    `tools/_probe_hooks.py:POINTS` —— 于是"哪些点位坏了"只需在本项报出来，
+    而不是靠逐个探针跑来发现（2026-09-13 实测：S9 模块化一次打破 4 个探针）。
+    """
+    import sys as _sys
+    _sys.path.insert(0, str(HERE))
+    try:
+        from _probe_hooks import hooks
+    except Exception as e:                  # noqa: BLE001
+        return "tools/_probe_hooks.py 不可导入：%r" % (e,)
+    bad = hooks.audit()
+    if bad:
+        return "打桩点失效 %d 项（改 POINTS 表即可，探针不必动）：%s" % (
+            len(bad), "；".join(bad[:2]))
+    return None
+
+
 CHECKS_EXT = {
     13: ("layering 分层无环", check_layering),
     14: ("no_shim_duplication 转发壳", check_no_shim_duplication),
@@ -248,6 +268,7 @@ CHECKS_EXT = {
     20: ("rules_ladder 规则执行梯", check_rules_ladder),
     21: ("baseline_liveness 豁免活性", check_baseline_liveness),
     22: ("no_deprecated_shim_usage 废弃 shim", check_no_deprecated_shim_usage),
+    23: ("probe_hooks_resolve 打桩点表", check_probe_hooks_resolve),
 }
 
 if __name__ == "__main__":

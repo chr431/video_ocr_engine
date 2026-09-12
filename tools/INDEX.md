@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **90 个 `.py`**（14,862 行），其中 80 个是探针
+`tools/` 现有 **91 个 `.py`**（15,033 行），其中 80 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -66,6 +66,7 @@
 ## B. 库型 / worker 型（**被其他探针依赖，动不得**）
 
 | 文件 | 行 | 被谁依赖 | 形式 |
+| `_probe_hooks.py` | 150 | 2026-09-13 | **探针打桩点间接层（L1）**：全部 monkeypatch 点位收敛成一张 POINTS 表——重构只改表，探针不动。重构后跑 `python tools/_probe_hooks.py` 自检，或看审计项 23 |
 |---|---:|---|---|
 | `_probe_mp_scale.py` | 173 | `_probe_mem_bw` | 子进程 worker（`SCALE` 常量） |
 | `_probe_roi_segcost.py` | 132 | `_probe_seg_share` | 代码引用 |
@@ -130,7 +131,7 @@
 | `_probe_round4_bw.py` | 102 | 2026-08-31 | §21 带宽矩阵 |
 | `_probe_cr_roundtrip.py` | 182 | 2026-08-31 | 裸 CR 保真性（AGENTS.md 编辑护栏） |
 
-| `tools/_audit_ext.py` | 264 | 2026-09-10 | S8 审计扩展 13..22（与纪律审计同一入口） |
+| `tools/_audit_ext.py` | 285 | 2026-09-10 | S8 审计扩展 13..22（与纪律审计同一入口） |
 
 ### 2026-09-12 准确项（分段合并稠密簇门 · 预处理 gamma 复核）
 
