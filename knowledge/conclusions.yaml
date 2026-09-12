@@ -33,8 +33,8 @@
 - id: C-05
   conclusion: hybrid = decord fork 原生（TRT→hybrid_gpu、CPU→宿主帧）。§9-§13 hevc 快纯 NVDEC 23%、达混跑理想 94-97%。§14 旧 av1 折价 −41% 系 16T/32T 错配；CPU 臂线程档统一 _decode_num_threads。§16 收益面=TRT/设备路径（三码 e2e 反超 −12~−33%）；ONNX 宿主路径不反超（hevc +11%/av1 +31%，CPU 臂抢核，选 nvdec）；宿主慢消费者环死锁已修（反馈式清偿 b67f9eb）
   status: active
-  premises: 4060/16C32T；fork b67f9eb 未发布；0.8.2=旧结论
-  revisit: fork wheel / >32 核档位复测 / 上载天花板量化
+  premises: 4060/16C32T；0.8.3 已发布（b67f9eb）
+  revisit: >32 核档位复测 / 上载天花板量化
   evidence: log 2026-09-11-hybrid差距分解 §11-§16；benchmarks hybrid_*
 
 - id: C-06

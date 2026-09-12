@@ -336,5 +336,5 @@
           9/9、TRT e2e/decode-only 同带；wheel 8e6f17a5 验证同源
   caveat: 酷刑流首转用错参数名（bf=16 被 x264 静默忽略只排 3 连 B）——
           正确键是 bframes；测量重排深度用包序逆序游程，别信 has_b_frames
-  next: 发布随 0.8.3（十一提交 b67f9eb）
+  next: 已发布 v0.8.3（tag + cp39–cp314 + gpu.zip；CI cp313 抽验同绿）
   fork_commit: b67f9eb
