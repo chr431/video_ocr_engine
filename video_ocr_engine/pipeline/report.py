@@ -19,7 +19,8 @@ from pathlib import Path
 # schema 版本：**只增不改**；任何结构演进必须 bump + 快照测试。
 # v2（S6 续轮）：新增 `resources`（L1 相位边界差分）与 `hardware`（L2 NVML
 # 峰值因子，仅 full 档采样过才出现）——都是**新增键**，按 v1 解析的旧读者不受影响。
-REPORT_VERSION = 2
+# v3（2026-09-13）：新增 `diagnostics`（看门狗/崩溃日志/停顿落盘），同样**只加键**。
+REPORT_VERSION = 3
 
 #: PI 守卫阈值（§13.2 N-5：散文 → 指标名 + 阈值）
 PI_LIMITS = {
@@ -107,7 +108,8 @@ def build_report(metrics, *, wall: float, config_digest: str = "",
                  params: dict | None = None, degradations: list | None = None,
                  n_segments: int = 0, backend: str = "",
                  ocr_backend: str = "", extra: dict | None = None,
-                 hardware: dict | None = None) -> dict:
+                 hardware: dict | None = None,
+                 diagnostics: dict | None = None) -> dict:
     """组装 RunReport（telemetry=off 时返回 {}）。"""
     if not getattr(metrics, "enabled", False):
         return {}
@@ -146,6 +148,9 @@ def build_report(metrics, *, wall: float, config_digest: str = "",
             rep["resources"] = res
     if hardware is not None:
         rep["hardware"] = hardware
+    # v3：诊断段（未 arming 时不写该键，而不是写空值冒充）
+    if diagnostics:
+        rep["diagnostics"] = dict(diagnostics)
     if params:
         rep["params"] = dict(params)
     if extra:

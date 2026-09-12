@@ -54,6 +54,7 @@ from .domain.metrics import (
 from .pipeline.engine import SegmentEngine
 from .pipeline.gpu_backend import GpuRunSpec, run_gpu_pipeline
 from .pipeline.host_backend import HostRunSpec, run_host_pipeline
+from .domain.diagnostics import NULL_DIAG, open_diagnostics
 from .pipeline.report import build_report, write_report_file
 
 logger = logging.getLogger(__name__)
@@ -177,6 +178,7 @@ class FieldExtractor:
         # S6-0（§8.6 N-2/N-3）：每次 run 新建 Metrics 与报告（B1 同类重置）。
         # telemetry=off → NULL_METRICS 单例，全链路空调用、不组装报告。
         self._metrics = NULL_METRICS
+        self._diag = NULL_DIAG
         self._metric_totals: dict = {}
         self._report: dict = {}
         self._validate_params()
@@ -421,6 +423,10 @@ class FieldExtractor:
         self._bin_thresh = 0
         # S6-0：RunReport 的一次 run 生命周期（§8.6 N-3）
         self._metrics = make_metrics(self._rc.diag_telemetry)
+        # 自诊断：挂在既有 VOE_REPORT_FILE opt-in 上（不新增旋钮）。
+        # 未 opt-in → NULL_DIAG，下面 tick 是一次属性判断即返回。
+        self._diag = open_diagnostics(self._rc.diag_report_file,
+                                      metrics=self._metrics)
         self._metric_totals = {}
         self._report = {}
         self._hardware = None
@@ -510,11 +516,13 @@ class FieldExtractor:
             _v = self.timing.get(_k)
             if _v is not None:
                 m.record_span(_name, float(_v))
+        # 诊断收尾：停看门狗、冲刷崩溃日志（未 arming 时是空字典）
+        diag_rep = self._diag.stop() if self._diag.armed else {}
         rep = build_report(
             m, wall=wall, config_digest=self._rc.config_digest,
             degradations=self._degraded, n_segments=n_segments,
             backend=self._backend, ocr_backend=self._ocr_backend_used,
-            hardware=self._hardware)
+            hardware=self._hardware, diagnostics=diag_rep)
         self._report = rep
         return rep
 
@@ -567,6 +575,9 @@ class FieldExtractor:
                 d[key] = d.get(key, 0.0) + elapsed
         if met:
             self._metric_from_profile(group, key, elapsed)
+            if self._diag.armed:      # 进展心跳：挂死时可归因到相位
+                self._diag.tick("%s.%s" % (group, key),
+                                "%.4fs" % elapsed)
 
     def _metric_from_profile(self, group: str, key: str, elapsed: float) -> None:
         """(group, key) → 注册指标名（映射表在 domain/metrics.py，单一出处）。"""

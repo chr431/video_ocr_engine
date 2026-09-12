@@ -22,6 +22,7 @@ from video_ocr_engine.pipeline.report import (REPORT_VERSION, build_report,
                                               health)
 
 # v2 快照：新增键只允许**加**，改语义/删键必须 bump REPORT_VERSION。
+# v3（2026-09-13）：加 `diagnostics`（自诊断，仅 opt-in 时出现）→ 已 bump。
 REPORT_KEYS = {
     "report_version", "tier", "wall_s", "spans", "counters", "gauges",
     "health", "environment", "pipeline", "degradations",
@@ -45,7 +46,8 @@ def _std_metrics():
 
 # ── schema 快照 ────────────────────────────────────────────────────────
 def test_report_version_is_pinned():
-    assert REPORT_VERSION == 2
+    # v1→v2：+resources/+hardware；v2→v3：+diagnostics（均为只加键）
+    assert REPORT_VERSION == 3
 
 
 def test_report_schema_snapshot():
