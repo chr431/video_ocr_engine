@@ -77,11 +77,26 @@
   **该 DLL 已过金标 28/28**（含 C-hevc-hybrid）。重建方式（不经 cmd.exe）：
   在 PS 工具里直接配 `PATH`/`INCLUDE`/`LIB` 后跑 `ninja`（见
   `docs/log/2026-09-13-hybrid解码率与理论并联和.md`「续六」）。
-  ⚠️ 该提交**未推送、未发 wheel** —— 与本文件"本地开发 dll"同政策。
-  ⚠️ **默认加载的不是它**：pip wheel 内的 `decord.dll`（md5 `4116fb4a…`）
-  才是产品默认路径的二进制；本仓工具链（`bench.py` / `_probe_hybrid_reeval.py`）
-  显式设 `DECORD_LIBRARY_PATH` 才切到 dev 构建。故 `f946d72` 要进产品须
-  重建并安装 wheel。开发态用 `DECORD_LIBRARY_PATH=D:\Repo\decord\build-081fix`
+  ⚠️ 该提交**未推送、未发上游 wheel** —— 与本文件"本地开发 dll"同政策。
+  ✅ **产品默认路径已含该修正（2026-09-13 重建 wheel 并安装）**：
+  `dist/decord-0.8.3-cp313-cp313-win_amd64.whl`（63,925,990 B）→
+  `pip install --force-reinstall --no-deps`。包内 `decord.dll` md5
+  `4116fb4a…` → **`af2a652d…`**（含 `f946d72`：盲阶段只采样一个 CPU chunk）。
+  - **验证**：金标 `record.py --verify` **28/28**（**不设** `DECORD_LIBRARY_PATH`）；
+    路由行为随补丁改变 —— `DECORD_HYBRID_DEBUG=1` 下 `hybrid-plan` 建立点
+    由 `k0=3` 变为 **`k0=4`**（这是判定"安装的 DLL 确含补丁"的判据）。
+  - ⚠️ **顺带变更了 FFmpeg 运行库来源**：包内 `avcodec-63.dll` md5
+    `e32261c7…` → **`a8deaa57…`**。原 wheel 用的是 `D:/Repo/decord-release-dl/…`
+    树（**该目录已不存在**），本次用现存且 CI 脚本引用的
+    `D:/Software/ffmpeg-n9.0-latest-win64-gpl-shared-9.0`（与 `rebuild_dev.bat`
+    同源）。两者同为 avcodec-63（FFmpeg 9），金标 28/28 已复验。
+  - 回滚：`dist/prepatch/decord-0.8.3-cp313-cp313-win_amd64.whl`（改名前为
+    09-12 13:47 那份），`pip install --force-reinstall --no-deps` 即可退回。
+  - 重建方式（**不经 cmd.exe**）：在 PS 工具里配 MSVC `PATH`/`INCLUDE`/`LIB`
+    ＋ `FFMPEG_DIR`，再以**系统解释器绝对路径**跑
+    `python -m pip wheel . --no-deps --no-build-isolation -w dist`。
+    ⚠️ 坑：`PATH` 上的 `python` 是受管运行时（**未装 scikit-build-core**）→
+    必须显式用 `c:/Users/eric chen/AppData/Local/Programs/Python/python313/python.exe`。开发态用 `DECORD_LIBRARY_PATH=D:\Repo\decord\build-081fix`
   切换；重建 `rebuild_dev.bat`（FFMPEG_DIR=D:/Software/ffmpeg-n9.0-...）。
   pip wheel 0.8.2 与引擎当前代码兼容（已验证 sha 逐位一致），仅缺该崩溃
   修复。诊断构建 `configure_asan.bat`（ASAN）。
