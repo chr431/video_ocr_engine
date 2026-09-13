@@ -69,7 +69,15 @@
 - **本地开发 dll（2026-09-10，含未发布修复）**：`build-081fix/decord.dll`
   含 VideoReader 析构顺序 UAF 修复（hybrid_gpu 帧 Deleter 摸已析构池 →
   av1 hybrid close 偶发/必现崩溃；fork 本地提交 73e5540，**未推送/未发
-  wheel**）。开发态用 `DECORD_LIBRARY_PATH=D:\Repo\decord\build-081fix`
+  wheel**）。
+- **⚠️ 本地 dll 已于 2026-09-13 重建（含盲阶段路由修正）**：fork 提交
+  `f946d72`（净 +5/−1 行）——`ChooseSide()` 盲阶段由"无条件采样 CPU"改为
+  "只采样一个 CPU chunk，其后回 GPU 直供"，避免连续两块压慢腿串行化队头。
+  新 md5 `6367c5fa…`（旧 `2f4c9a11…`，备份 `decord.dll.bak-prefix-0913-1324`）。
+  **该 DLL 已过金标 28/28**（含 C-hevc-hybrid）。重建方式（不经 cmd.exe）：
+  在 PS 工具里直接配 `PATH`/`INCLUDE`/`LIB` 后跑 `ninja`（见
+  `docs/log/2026-09-13-hybrid解码率与理论并联和.md`「续六」）。
+  ⚠️ 该提交**未推送、未发 wheel** —— 与本文件"本地开发 dll"同政策。开发态用 `DECORD_LIBRARY_PATH=D:\Repo\decord\build-081fix`
   切换；重建 `rebuild_dev.bat`（FFMPEG_DIR=D:/Software/ffmpeg-n9.0-...）。
   pip wheel 0.8.2 与引擎当前代码兼容（已验证 sha 逐位一致），仅缺该崩溃
   修复。诊断构建 `configure_asan.bat`（ASAN）。
