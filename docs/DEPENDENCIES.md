@@ -92,6 +92,27 @@
     同源）。两者同为 avcodec-63（FFmpeg 9），金标 28/28 已复验。
   - 回滚：`dist/prepatch/decord-0.8.3-cp313-cp313-win_amd64.whl`（改名前为
     09-12 13:47 那份），`pip install --force-reinstall --no-deps` 即可退回。
+- **⚠️ 2026-09-13 晚：本地 dll 与 wheel 再重建（fork `4cebeef`，并联缺口收口
+  C-45）**：ROI 银行解耦（queue 按 ROI 字节重算 + raw 按全帧 768MB 解耦）+
+  计划滑动视界（`DECORD_HYBRID_PLAN_HORIZON`，默认 4096，0=关；
+  **REPLAN_PCT/GAP 已删除**）。fork 全片 hevc +12.8% / h264 +14.8% / av1
+  +3.0%（对两解码器并联和 77/68/88%→87/78/90%）；引擎干净对 A/B：hevc
+  −4.8%（28 轮 23/28）、av1 −2.9%（7/8）、h264 平价。金标 28/28。
+  - wheel：`dist/decord-0.8.3-cp313-cp313-win_amd64.whl`（63,926,361 B），
+    包内 `decord/decord.dll` md5 **`27349408…`**；已 `pip install` 覆盖。
+    **判据**：不设 `DECORD_LIBRARY_PATH` 跑 `DECORD_HYBRID_STATS=1`，
+    `[hybrid-stats] plan` 行含 `horizon=4096 rebuilds=N`。
+  - dev dll：`build-081fix/decord.dll` = `bc7c27a1…`（同源 4cebeef 干净
+    重建；MSVC 非确定性 → md5 与 wheel 内不同属正常）。
+  - **构建陷阱（本轮两事故）**：本机 ninja 对 `video_reader.cc.obj` 无头依赖
+    （`ninja -C build-081fix -t deps` 显示 `#deps 0`）——改
+    `hybrid_threaded_decoder.h`/`ffmpeg/threaded_decoder.h` 的**类布局**后
+    增量构建不重编 video_reader：①成员移位→构造期访问崩溃；②尾加成员
+    +回退源码→`NeedsPackets` 等内联函数按错布局读成员=**静默行为损坏**
+    （A/B 判定被污染一轮）。**规矩：改这两个头后 `rm` 掉
+    `video_reader.cc.obj`（或 touch 源文件）再构建；换 DLL 的 A/B 两臂都
+    要全对象干净重建**。历史 82c62e3f 经数字比对确认为良性 stale
+    （尾加成员不移位），既往结论不受影响。
   - 重建方式（**不经 cmd.exe**）：在 PS 工具里配 MSVC `PATH`/`INCLUDE`/`LIB`
     ＋ `FFMPEG_DIR`，再以**系统解释器绝对路径**跑
     `python -m pip wheel . --no-deps --no-build-isolation -w dist`。

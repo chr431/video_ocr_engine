@@ -33,7 +33,7 @@
   conclusion: hybrid = decord fork 原生（TRT→hybrid_gpu、CPU→宿主帧）。**收益面 = TRT/设备路径**；**ONNX 宿主路径不反超** → 选 nvdec。可见性重评：h264 2.45×/hevc 17%/av1 30%、无热降；hevc 绑定侧=CPU 臂忙而慢，hevc/av1 剩余差距=GPU 臂调度闲置
   status: active
   premises: 4060/16C32T；0.8.3 已发布（b67f9eb）；忙时计数 fork ≥6da2957
-  revisit: >32 核档位复测 / 份额向 GPU 再倾斜（fork 课题）
+  revisit: >32 核档位复测 / 份额倾斜已由 C-45 落地，残余=每臂混跑干扰
   evidence: log 2026-09-11-hybrid差距分解 §11-§16；log 2026-09-13-hybrid可见性重评
 
 - id: C-06
@@ -87,7 +87,7 @@
   evidence: DECISIONS「P0-6 翻案」
 
 - id: C-15
-  conclusion: **OCR 输入侧参数都不是杠杆**。pad 下限 224 保持（160/320 均证伪）。预处理跳出 gamma 的六变体：唯一非负 +7 帧，其余 −17~−1170。翻转系**实例级边缘判决**——test5/test6 裁切图强度统计近乎相同却对每个色调旋钮反向，同字形对 8→日 一侧修好、另一侧弄坏
+  conclusion: **OCR 输入侧参数都不是杠杆**。pad 下限 224 保持（160/320 均证伪）。预处理六变体：唯一非负 +7 帧，其余 −17~−1170。翻转系**实例级边缘判决**——test5/6 裁切图强度统计近乎相同却对每个色调旋钮反向（同字形 8→日 一侧修好另一侧弄坏）
   status: active
   premises: v6_small + racelog 内容；真实管线（宿主≡GPU）
   revisit: pad/预处理架构变更；换模型或字体/ROI 形态
@@ -165,14 +165,14 @@
   evidence: log 2026-09-13-hybrid可见性重评；bench/hybrid_reeval.json
 
 - id: C-40
-  conclusion: **hybrid 的收益与视频长度相关**（同内容三编码族窗口扫描）：h264 **无交叉点**（500 帧起即胜，6000 帧 +111%）；hevc/av1 **交叉点在 1500~3000 帧**（≈13~25 秒 @120fps），更长则稳定领先（6000 帧 hevc +12% / av1 +40%）；短窗劣势的**暖态**量级仅 0.06~0.10s（见 C-41，进程首跑另计 ~0.2s）。对纯 CPU 臂，三编码全片均胜（1.10× / 2.76× / 1.81×）
+  conclusion: **hybrid 收益与视频长度相关**（三码窗口扫描）：h264 无交叉点（500 帧起胜，6000 帧 +111%）；hevc/av1 交叉点 1500~3000 帧，更长稳定领先（hevc +12%/av1 +40%）；短窗暖态劣势仅 0.06~0.10s（C-41，首跑另计 ~0.2s）。对纯 CPU 臂三码全片均胜（1.10×/2.76×/1.81×）
   status: active
   premises: 4060/16C32T；每臂独立子进程 + min-of-2（两臂同刻，差值消掉约 0.85s 的进程/引擎固定开销）；ocr=trt 隔离解码
   revisit: 换卡（NVDEC 与 CPU 相对速率变）/ 关键帧间隔差异大的片源 / 超短片（<500 帧）
   evidence: log 2026-09-13-hybrid解码率与理论并联和 §续七
 
 - id: C-41
-  conclusion: **短窗缺口的量级与归因（已更正，原"盲阶段采样块"归因被证伪）**：暖态同进程下 hybrid 相对纯 GPU 臂仅差 **+0.059s（w=1000）/ +0.096s（w=500）**，w=3000 已反超 −0.103s；进程内**首次**抽取差 +0.18~0.28s，但那属 hybrid 解码器实例化/引擎 init，与调度无关。证伪方式：把 water-filling 计划提前到首个 keyframe（速率播种，消除盲阶段 CPU 采样块）后 w=1000 0.6325 vs 0.6198、w=3000 1.5602 vs 1.4379 —— **不改善反而变差**，改动已回退
+  conclusion: **短窗缺口量级与归因（已更正）**：暖态同进程 hybrid−纯GPU臂 仅 +0.059s(w=1000)/+0.096s(w=500)，w=3000 反超 −0.103s；进程首次抽取差 +0.18~0.28s 属解码器实例化/引擎 init 非调度。速率播种实验证伪"盲阶段采样块"归因（w=1000/3000 均变差），改动已回退
   status: active
   premises: 4060/16C32T；同进程 3 次取暖态均值（首次含 engine_init 不入账）；hevc/test6_hevc；对照臂 = hybrid 内 FORCE_SIDE=gpu
   revisit: 换卡 / fork 实例化优化后重测 / 需"进程首跑"口径时单独测
@@ -193,8 +193,12 @@
   evidence: log 2026-09-13-填充宽度重测；`_probe_acc_ab.py` 已自动复刻真值头配置
 
 - id: C-44
-  conclusion: **计划重规划（`DECORD_HYBRID_REPLAN_PCT`，默认关）编码相关**：hevc 全片 −5.42%（符号 6/6）、h264 **+1.11%**（6/6，真回归）、av1 中性、hevc 3000 帧不可判定。机理：长片实测速率漂 CPU −3~+17%/GPU +4~+28%，冻结计划把块留在慢腿；h264 的 CPU 腿本快 3.7×，而混跑实测含自我争用 ⇒ 份额挪向 GPU 反而错
+  status: superseded
+  replaced_by: C-45
+
+- id: C-45
+  conclusion: **hybrid 并联缺口收口（fork 4cebeef）**：可修成分=①CPU 臂银行帽 1536 系全帧字节残留且 raw/frame 合并计价（h264 对侧值日期 27% 闲置）②计划冻结用 rg 爬升值（±13% 漂）→hevc 份额偏 CPU、GPU 队尾闲置。修复=queue 按 ROI 字节重算+raw 全帧 768MB 解耦+滑动视界 4096（`DECORD_HYBRID_PLAN_HORIZON=0` 回退；REPLAN_PCT 删）。fork 全片（干净对干净）hevc +12.8%（77→87%）、h264 +14.8%（68→78%）、av1 +3.0%（88→90%，GPU 臂=物理瓶颈）；金标 28/28。残余=每臂混跑干扰（CPU busy-rate −15~17%，32T 最优），上限 ≈87/78/90%
   status: active
-  premises: 4060/16C32T；fork f42e22e；A/B 走 `_probe_dll_ab.py`（每臂独立进程+交错+配对差分）；PCT=25/GAP=8
-  revisit: 有可靠的"哪条腿快"判据后可做按编码自动开关 / 争用结构改变 / 换卡
-  evidence: log 2026-09-13-计划重规划
+  premises: 4060/16C32T；fork 4cebeef（已装 wheel）；hybrid_gpu 口径；引擎干净对 A/B：hevc −4.8%（23/28）、av1 −2.9%（7/8）、h264 平价（引擎税+暖启+消费端吃掉 fork 收益）
+  revisit: 换卡 / fork 换代 / >32 核 / 绑核立项
+  evidence: log 2026-09-13-hybrid并联缺口收口（bench/gap_decomp.json、dll_ab.json）
