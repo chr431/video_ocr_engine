@@ -35,11 +35,15 @@ sys.stdout.reconfigure(encoding="utf-8")
 path, roi_s, fs, fe = sys.argv[1:5]
 roi = tuple(int(x) for x in roi_s.split(','))
 from video_ocr_engine import FieldExtractor
+# 填充宽度扫描入口（2026-09-13）：fill_width 无 env 旋钮（只能改常量），
+# 故经本 env 传给构造参数；0/未设 = 用引擎默认。配合 --knob PROBE_FILL_WIDTH=...
+_fw = int(os.environ.get("PROBE_FILL_WIDTH", "0") or 0)
+_fw_kw = {"fill_width": _fw} if _fw > 0 else {}
 ex = FieldExtractor(path, roi, frame_start=int(fs), frame_end=int(fe),
                     sample_stride=1, decode_backend="auto",
                     ocr_backend="auto", keep_crops=False,
                     merge_similar=os.environ.get(
-                        "PROBE_MERGE_SIMILAR", "1") == "1")
+                        "PROBE_MERGE_SIMILAR", "1") == "1", **_fw_kw)
 t0 = time.perf_counter()
 r = ex.extract()
 wall = time.perf_counter() - t0

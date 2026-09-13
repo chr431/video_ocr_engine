@@ -451,14 +451,23 @@ def preprocess_standard(crop: np.ndarray, force_aspect: float = 0.0,
     new_w = max(1, int(w * target_h / h)) if h > 0 else w
     if force_aspect > 0:
         new_w = max(1, int(round(target_h * force_aspect)))
+    if gamma is None:
+        gamma = config.env_float(config.OCR_GAMMA_ENV, float(config.OCR_GAMMA))
+    # 灰度先行（2026-09-13）：双线性是线性算子 →「先灰度后 resize」与
+    # 「先 resize 后灰度」**数学等价**，但前者只插值 1 个通道 → resize
+    # 工作量降到 1/3（实测 resize 占预处理 span 的 80%，其 96% 代价在插值）。
+    # 实测输出等价：逐段文本 28/28 相同、段数 0 差异、置信度最大漂移
+    # 0.000000（30064 段次）、金标 --verify 28/28。端到端当前无收益
+    # （CPU+CPU 墙钟由推理聚合吞吐决定，消费者线程有等待余量），
+    # 按用户裁定保留：其他环节加速后此项可能兑现。
+    _gray_first = (gamma > 0 and crop.ndim == 3 and crop.shape[-1] >= 3)
+    src = (crop @ _GRAY_W) if _gray_first else crop
     if new_w == w and abs(target_h - h) <= config.OCR_RESIZE_TOL * target_h:
         # 目标尺寸已一致（或高差在容差内）→ 跳过无谓 resize；宽高任一需变
         # 都必须走 _np_resize（force_aspect 改宽时不能只比高度）
-        resized = crop.astype(np.float32)
+        resized = src.astype(np.float32)
     else:
-        resized = _np_resize(crop, new_w, target_h)
-    if gamma is None:
-        gamma = config.env_float(config.OCR_GAMMA_ENV, float(config.OCR_GAMMA))
+        resized = _np_resize(src, new_w, target_h)
     if gamma > 0:
         # 灰度 + gamma（正式预处理）：RGB 逐通道 gamma 视觉差异小、回归多
         # （tools/_gamma_misread_montage 对比），灰度版视觉更清晰、回归少。
