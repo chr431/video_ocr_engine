@@ -91,14 +91,53 @@ def load_truth(p: Path):
     return roi, fs, fe, rows
 
 
+def load_prov(p: Path) -> dict:
+    """真值文件头记录的**生成配置**（force_aspect / fill_width / backend / model）。
+
+    2026-09-13 新增。此前本 harness 不读它，于是用 force_aspect=0 的运行去比
+    force_aspect=1.5 的参考（test5_ref/test6_ref 都是 1.5），得出方向相反的
+    结论。现在基线臂默认按真值头复刻，被 --knob 覆盖时另打印告警。
+    """
+    prov: dict = {}
+    for line in p.read_text(encoding="utf-8-sig").splitlines():
+        if not line.startswith("#"):
+            break
+        m = re.search(r"force_aspect=([-\d.]+)", line)
+        if m:
+            prov["force_aspect"] = float(m.group(1))
+        m = re.search(r"fill_width=(\d+)", line)
+        if m:
+            prov["fill_width"] = int(m.group(1))
+        m = re.search(r"backend=([^,\s]+)", line)
+        if m:
+            prov["backend"] = m.group(1)
+        m = re.search(r"model=([^,\s]+)", line)
+        if m:
+            prov["model"] = m.group(1)
+    return prov
+
+
+def prov_env(prov: dict) -> dict:
+    """真值头配置 → WORKER 认的 env（作为基线默认，可被 --knob 覆盖）。"""
+    out = {}
+    if "force_aspect" in prov:
+        out["PROBE_FORCE_ASPECT"] = str(prov["force_aspect"])
+    if "fill_width" in prov:
+        out["PROBE_FILL_WIDTH"] = str(prov["fill_width"])
+    return out
+
+
 def strip_zeros(t: str) -> str:
     return t.lstrip("0") or "0"
 
 
-def run_case(video: str, roi, fs, fe, envx: dict, timeout: int = 900):
+def run_case(video: str, roi, fs, fe, envx: dict, prov: dict | None = None,
+             timeout: int = 900):
     env = dict(os.environ)
     env["PROBE_ROOT"] = str(ROOT)
-    env.update(envx)
+    if prov:
+        env.update(prov_env(prov))      # 先按真值头复刻生成配置
+    env.update(envx)                    # 再让显式档位覆盖
     try:
         p = subprocess.run(
             [sys.executable, "-c", WORKER, str(_VDIR / video),
@@ -161,6 +200,7 @@ def main() -> int:
              for t in args.videos.split(",")} if args.videos else None)
 
     report = {"knob": name, "arms": arms, "baseline": base,
+              "ref_config_matched": True,   # 见 main 的 ⚠️ 告警
               "boundary_k": args.boundary_k, "cases": {}}
     for video, truthf, kind in PAIRS:
         if want and video not in want:
@@ -173,9 +213,22 @@ def main() -> int:
         if len(truth) < n * 0.5:
             print("跳过 %s：真值行 %d < 帧窗一半" % (video, len(truth)))
             continue
+        prov = load_prov(_TRUTH / truthf)
+        print("    真值头配置: %s" % (prov or "未记录"))
+        if name in ("PROBE_FORCE_ASPECT", "PROBE_FILL_WIDTH"):
+            _key = ("force_aspect" if name == "PROBE_FORCE_ASPECT"
+                    else "fill_width")
+            _pv = prov.get(_key)
+            if _pv is not None:
+                _bad = [a for a in arms
+                        if abs(float(a) - float(_pv)) > 1e-9]
+                if _bad:
+                    print("    ⚠️ 配置不匹配：真值头记 %s=%s，本臂要跑 %s"
+                          " —— 结论可能与生产口径方向相反"
+                          % (_key, _pv, "/".join(_bad)))
         per_arm = {}
         for a in arms:
-            r = run_case(video, roi, fs, fe, {name: a})
+            r = run_case(video, roi, fs, fe, {name: a}, prov)
             if r is None:
                 per_arm[a] = None
                 continue
