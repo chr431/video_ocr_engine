@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **91 个 `.py`**（15,229 行），其中 80 个是探针
+`tools/` 现有 **91 个 `.py`**（15,240 行），其中 80 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -144,7 +144,7 @@
 | `_probe_gamma_sweep.py` | 138 | 2026-09-12 | 误读帧的**离线单帧** gamma/对比度变体扫描（落 `bench/gamma_sweep.json`）。⚠️ 其结论未在真实管线复现（见 log），仅作线索探针保留 |
 | `_probe_text_ab.py` | 81 | 2026-09-12 | 字幕场景 A/B：`text_test.mp4` 时间戳式真值按 fps 映射区间取多数文本；门开关两侧字幕行命中 125/198 **完全相同**、墙钟不变（段数 403→1175）|
 | `_probe_golden_drift.py` | 64 | 2026-09-12 | 金标漂移的**定性**核对：复用 `record.summarize` 口径逐用例比对唯一文本集——重锚前必须证明「段数变了但没丢文本」（实测 28 用例丢 0 / 增 3）|
-| `_probe_hybrid_reeval.py` | 235 | 2026-09-13 | **hybrid 重评 harness**：引擎全片 nvdec/hybrid 双臂 × 三码，一次 run 同时拿 NVML（时钟/热降）与 hybrid-stats（每臂忙时）——忙而慢 vs 调度闲置的归因工具（C-39）|
+| `_probe_hybrid_reeval.py` | 246 | 2026-09-13 | **hybrid 重评 harness**：引擎全片 nvdec/hybrid 双臂 × 三码，一次 run 同时拿 NVML（时钟/热降）与 hybrid-stats（每臂忙时）——忙而慢 vs 调度闲置的归因工具（C-39）|
 | `_probe_busy_overhead.py` | 96 | 2026-09-13 | busy 计数器**零开销确认**：fork dll vs wheel 交错配对（轮转先后）——h264 −0.02%、hevc +3.9%（符号混合，噪声内）|
 | `_probe_prep_ab.py` | 283 | 2026-09-12 | **预处理重设计 A/B**（全管线，monkeypatch `preprocess_standard`，宿主路径两侧）：6 变体全测 → 只有双三次 +7 帧，逐图拉伸 −49 / unsharp −99 / 局部平场 −1170；`base` 复现 GPU 数字做自检 |
 | `_probe_crop_stats.py` | 76 | 2026-09-12 | 代表帧裁切图强度分布：test5/test6 几乎完全相同（Otsu 均 121、文字占比均 0.181）却对每个色调旋钮反向 ⇒ 逐图自适应在信息上不可行（C-15 的依据）|

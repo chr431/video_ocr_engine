@@ -50,10 +50,12 @@ import os, sys, time, json
 sys.path.insert(0, os.environ["PROBE_ROOT"])
 sys.stdout.reconfigure(encoding="utf-8")
 path, roi_s, backend = sys.argv[1], sys.argv[2], sys.argv[3]
+_fe = int(sys.argv[4]) if len(sys.argv) > 4 else 0
 roi = tuple(int(x) for x in roi_s.split(","))
 from video_ocr_engine import FieldExtractor
+_kw = {"frame_end": _fe} if _fe > 0 else {}
 ex = FieldExtractor(path, roi, decode_backend=backend,
-                    ocr_backend="tensorrt", keep_crops=False)
+                    ocr_backend="tensorrt", keep_crops=False, **_kw)
 t0 = time.perf_counter()
 r = ex.extract()
 wall = time.perf_counter() - t0
@@ -93,7 +95,7 @@ def parse_stats(err: str) -> dict:
     return st
 
 
-def run(case, vid, roi, backend, extra_env=None):
+def run(case, vid, roi, backend, extra_env=None, window=0):
     env = dict(os.environ)
     env["PROBE_ROOT"] = str(ROOT)
     env["VOE_TELEMETRY"] = "full"
@@ -101,8 +103,10 @@ def run(case, vid, roi, backend, extra_env=None):
     env["DECORD_LIBRARY_PATH"] = FORK
     if extra_env:
         env.update(extra_env)
-    p = subprocess.run([sys.executable, "-c", WORKER,
-                        str(_VDIR / vid), ",".join(map(str, roi)), backend],
+    _argv = [str(_VDIR / vid), ",".join(map(str, roi)), backend]
+    if window:
+        _argv.append(str(window))
+    p = subprocess.run([sys.executable, "-c", WORKER] + _argv,
                        env=env, capture_output=True, text=True,
                        encoding="utf-8", errors="replace", timeout=900)
     out = None
@@ -133,11 +137,16 @@ def share_sweep(args) -> int:
                 envx = {}
             elif sh.startswith("side:"):
                 envx = {"DECORD_HYBRID_FORCE_SIDE": sh.split(":", 1)[1]}
+            elif sh.startswith("env:"):
+                envx = {}
+                for kv in sh[4:].split("+"):
+                    k, _, v = kv.partition("=")
+                    envx[k.strip()] = v.strip()
             else:
                 envx = {"DECORD_HYBRID_FORCE_SHARE": sh}
             best = None
             for _ in range(args.reps):
-                r, err = run(case, vid, roi, "hybrid", envx)
+                r, err = run(case, vid, roi, "hybrid", envx, args.window)
                 if r is None:
                     print("  %-8s FAIL %s" % (sh, err[-120:]))
                     continue
@@ -183,6 +192,8 @@ def main():
                          "side:gpu / side:cpu = FORCE_SIDE（有效）")
     ap.add_argument("--cases", default="",
                     help="只跑指定编码，逗号分隔（h264,hevc,av1）")
+    ap.add_argument("--window", type=int, default=0,
+                    help="帧窗上限（0=全片）；用于量化启动期摊销")
     args = ap.parse_args()
     if args.share:
         return share_sweep(args)
@@ -193,7 +204,7 @@ def main():
         for be in backends:
             runs = []
             for i in range(args.reps):
-                r, err = run(case, vid, roi, be)
+                r, err = run(case, vid, roi, be, window=args.window)
                 if r is None:
                     print("  %s/%s FAIL: %s" % (case, be, err[-160:]))
                     continue
