@@ -72,7 +72,7 @@ elif ctx_name == "gpu":
     ctx = decord.gpu(0)
 else:
     ctx = decord.cpu(0)
-kw = {"num_threads": threads} if ctx_name in ("hybrid", "cpu") else {}
+kw = {"num_threads": threads} if ctx_name != "gpu" else {}
 vr = VideoReader(path, ctx=ctx, output_format="gray", roi=roi, **kw)
 frames = list(range(n))
 first = None
@@ -82,7 +82,9 @@ for bstart in range(0, len(frames), batch):
     t0 = time.perf_counter()
     nds = vr.get_batch(frames[bstart:bend])
     dt = time.perf_counter() - t0
-    nfr = len(nds) if nds is not None else (bend - bstart)
+    nfr = int(nds.shape[0]) if getattr(nds, "shape", None) else (bend - bstart)
+    # ⚠️ 不能用 len(nds)：decord 的 NDArray.__len__ 返回**元素总数**
+    # （= 批帧数 × H × W × 通道），不是批帧数——首版即栽在这里（fps 虚高 3456×）。
     if first is None:
         first = dt
     else:
@@ -104,12 +106,13 @@ def run_arm(ctx_name: str, codec: str, frames: int, reps: int) -> dict:
     vid, roi = VIDS[codec]
     path = str(_VDIR / vid)
     threads = THREADS[codec]
-    # DECODE_BATCH 由引擎常量给出（与 device.py 同粒度）；缺省 200
+    # 批大小取引擎常量 DECODE_BATCH_SIZE（=16），与 engine 的 get_batch 粒度一致；
+    # ⚠️ 不是 DECODE_BATCH（无此名）。
     try:
         from video_ocr_engine.config import constants as cfg
-        batch = int(cfg.DECODE_BATCH)
+        batch = int(cfg.DECODE_BATCH_SIZE)
     except Exception:
-        batch = 200
+        batch = 16
     env = dict(os.environ)
     env["PROBE_ROOT"] = str(ROOT)
     rows = []

@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **92 个 `.py`**（15,410 行），其中 80 个是探针
+`tools/` 现有 **92 个 `.py`**（15,413 行），其中 80 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -154,7 +154,7 @@
 | 文件 | 行 | 改于 | 支撑 |
 |---|---:|---|---|
 | `_probe_path_survey.py` | 141 | 2026-09-13 | **路径普查**（测量非 A/B）：五条路径单臂各跑一次、只取 std 档报告，一次给出时间去向 + 背压分诊（`get_wait`/`put_block` 的总量·次数·单次最长）。首轮结论：hybrid/TRT 比 nvdec/TRT 快 1.6~1.8×、decode 占 wall 83~87%、hybrid/cpu 是唯一生产者也被压的路径（瓶颈翻转到下游 OCR）|
-| `_probe_decode_rate.py` | 170 | 2026-09-13 | **只解码速率**（工作项 0，扩展 `_probe_path_survey.py`：那条测引擎路径的时间去向，本条测 fork 侧纯解码吞吐）：与引擎 GPU 管线同参数（ctx/gray/ROI-first/线程档/DECODE_BATCH 粒度）但**不做 analyze/分段/OCR**，按 ctx 分离 fork 侧吞吐——判定 hybrid 稳态封顶（三码趋同 2214~2285 fps）落在 fork 还是引擎生产者链 |
+| `_probe_decode_rate.py` | 173 | 2026-09-13 | **只解码速率**（工作项 0，扩展 `_probe_path_survey.py`：那条测引擎路径的时间去向，本条测 fork 侧纯解码吞吐）：与引擎 GPU 管线同参数（ctx/gray/ROI-first/线程档/DECODE_BATCH 粒度）但**不做 analyze/分段/OCR**，按 ctx 分离 fork 侧吞吐——判定 hybrid 稳态封顶（三码趋同 2214~2285 fps）落在 fork 还是引擎生产者链 |
 
 ### 2026-09-10 D1/D2 调查（gpu/host 段数分歧 · 线程优先级）
 
