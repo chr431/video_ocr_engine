@@ -104,6 +104,11 @@
     `[hybrid-stats] plan` 行含 `horizon=4096 rebuilds=N`。
   - dev dll：`build-081fix/decord.dll` = `bc7c27a1…`（同源 4cebeef 干净
     重建；MSVC 非确定性 → md5 与 wheel 内不同属正常）。
+  - **✅ 2026-09-14：GOP 派工架构合入并发布（C-46）**：wheel 重建安装，
+    包内 `decord/decord.dll` md5 **`6ec5b1ea…`**（判据：stats 行含
+    `cache_peak=/late=/strag=`）。三码引擎 A/B hevc −6.29%（6/6）/h264
+    −4.78%（6/6）/av1 平价；18/18 段数恒定；金标 28/28×2。回滚 =
+    `dist/prepatch/` 旧 wheel 或 fork `4cebeef`。
   - **构建陷阱（本轮两事故）**：本机 ninja 对 `video_reader.cc.obj` 无头依赖
     （`ninja -C build-081fix -t deps` 显示 `#deps 0`）——改
     `hybrid_threaded_decoder.h`/`ffmpeg/threaded_decoder.h` 的**类布局**后
