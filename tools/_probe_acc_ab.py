@@ -37,8 +37,9 @@ roi = tuple(int(x) for x in roi_s.split(','))
 from video_ocr_engine import FieldExtractor
 # 填充宽度扫描入口（2026-09-13）：fill_width 无 env 旋钮（只能改常量），
 # 故经本 env 传给构造参数；0/未设 = 用引擎默认。配合 --knob PROBE_FILL_WIDTH=...
-_fw = int(os.environ.get("PROBE_FILL_WIDTH", "0") or 0)
-_fw_kw = {"fill_width": _fw} if _fw > 0 else {}
+_fw_raw = os.environ.get("PROBE_FILL_WIDTH")
+_fw_kw = ({"fill_width": int(_fw_raw)}
+          if _fw_raw not in (None, "") else {})
 ex = FieldExtractor(path, roi, frame_start=int(fs), frame_end=int(fe),
                     sample_stride=1, decode_backend="auto",
                     ocr_backend="auto", keep_crops=False,

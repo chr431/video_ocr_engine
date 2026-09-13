@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **91 个 `.py`**（15,096 行），其中 80 个是探针
+`tools/` 现有 **91 个 `.py`**（15,103 行），其中 80 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -48,7 +48,7 @@
 | `_probe_roadmap_ocr.py` | 191 | 路线图轮 OCR rec 微基准：ONNX/TRT × 批大小扫描 + `_resize_norm` 单帧成本 + FP32/FP16×max_b 实验引擎构建（TRT 11 无 FP16 builder flag 的实证） | 本轮路线图（2026-09-10） |
 | `_probe_roadmap_profile.py` | 62 | 路线图轮 ENGINE_PROFILE 分相打印驱动（单配置一次 extract，输出 producer.*/ocr.* 全分相） | 本轮路线图（2026-09-10） |
 | `_probe_r3_infer_split.py` | 58 | R3 调查：hybrid vs nvdec 的 OCR worker infer 差异分解（ENGINE_PROFILE + TRT SUBPROBE 双跑） | 路线图执行轮（2026-09-10） |
-| `bench.py` | 680 | **S6 性能轮的原生度量入口**（§8.6 N-4）：`run` 跑配置矩阵并落 `bench/registry.jsonl`、`diff` 按 D10 双档逐指标对比、`ab` 交错 A/B（对抗 GPU 热降漂移——同码两次实测可差 7.7%）、`telemetry-check` = PI-15 门禁（**同进程交替 + 档位轮转 + 同轮配对差分均值 + 符号多数一致**，`--aa` 标定本机噪声带、阈值 = \|偏差\|+3×SE）、`show` 打印报告细目 | AGENTS.md 性能节 / v2 §8.6 / log 2026-09-11-资源层与门控校准 §4 |
+| `bench.py` | 686 | **S6 性能轮的原生度量入口**（§8.6 N-4）：`run` 跑配置矩阵并落 `bench/registry.jsonl`、`diff` 按 D10 双档逐指标对比、`ab` 交错 A/B（对抗 GPU 热降漂移——同码两次实测可差 7.7%）、`telemetry-check` = PI-15 门禁（**同进程交替 + 档位轮转 + 同轮配对差分均值 + 符号多数一致**，`--aa` 标定本机噪声带、阈值 = \|偏差\|+3×SE）、`show` 打印报告细目 | AGENTS.md 性能节 / v2 §8.6 / log 2026-09-11-资源层与门控校准 §4 |
 | `_probe_golden_diff.py` | 50 | 金标分歧定位：同进程连跑两次（冷/热池）逐段对比，区分"结构漂移"与"置信度浮点敏感"（F-8 的工具） | tests/golden/FINDINGS.md F-8 |
 | `_probe_trt_maxbatch.py` | 101 | **否定/定量**：同一份 ONNX 构建 batch 6 与 18 两个 profile，同批 1116 张走同一提交路径 → 0.663s vs 0.557s（**−16%**）；支撑 `TRT_PROFILE_BATCH=18`（S6） | log 2026-09-10-S6性能轮 §7；FINDINGS F-10 |
 | `_probe_engine_ab.py` | 121 | 引擎产物端到端交错 A/B（worker 子进程 monkeypatch `_engine_candidates`，产品代码零开关）：h264-cpu 热轮 −5.85%、`ocr.infer` −33% | log §7；FINDINGS F-10 |
@@ -138,7 +138,7 @@
 | 文件 | 行 | 改于 | 支撑 |
 |---|---:|---|---|
 | `_probe_acc_baseline.py` | 214 | 2026-09-12 | 六片真值逐帧准确率基线 + 误差分类（边界类/段中类），落 `bench/acc_baseline.json` |
-| `_probe_acc_ab.py` | 215 | 2026-09-12 | **准确率 A/B harness**：参数化 env 旋钮跑真实引擎全片比对（`--knob OCR_GAMMA=2.0,1.0`），落 `bench/acc_ab_<knob>.json` |
+| `_probe_acc_ab.py` | 216 | 2026-09-12 | **准确率 A/B harness**：参数化 env 旋钮跑真实引擎全片比对（`--knob OCR_GAMMA=2.0,1.0`），落 `bench/acc_ab_<knob>.json` |
 | `_probe_merge_log.py` | 103 | 2026-09-12 | merge_similar 逐次判定插桩（mean/npx/win3/merged）：证明 test5 33/33、test6 94/94 次合并全部 win3=9（稠密簇被吞） |
 | `_probe_roi_dump.py` | 111 | 2026-09-12 | ROI 放大导出（6×，帧号标注）+ `--pad` 看框外内容 + `--montage` 拼竖排长图——真值可疑时目视核实原始像素的工具（2026-09-12 §2 的三处裁定都由它复现） |
 | `_probe_gamma_sweep.py` | 138 | 2026-09-12 | 误读帧的**离线单帧** gamma/对比度变体扫描（落 `bench/gamma_sweep.json`）。⚠️ 其结论未在真实管线复现（见 log），仅作线索探针保留 |

@@ -68,7 +68,8 @@ CONFIGS = {
 def _round(cfg_name: str, window: int, telemetry: str, keep_crops: bool,
            ocr_backend: str, rep_format: str = "",
            buffer_size: int | None = None,
-           decode_override: str = "") -> dict:
+           decode_override: str = "",
+           fill_width: int | None = None) -> dict:
     from video_ocr_engine import FieldExtractor
     cfg = CONFIGS[cfg_name]
     vid = cfg["video"]
@@ -77,6 +78,8 @@ def _round(cfg_name: str, window: int, telemetry: str, keep_crops: bool,
         kw["rep_crop_format"] = rep_format
     if buffer_size:
         kw["buffer_size"] = buffer_size
+    if fill_width is not None:
+        kw["fill_width"] = fill_width     # 0 = 关闭填充（批内自适应）
     ex = FieldExtractor(VIDS[vid], ROI["test5" if vid == "test5" else "test6"],
                         frame_start=0, frame_end=window,
                         decode_backend=(decode_override
@@ -117,7 +120,8 @@ def cmd_run(args) -> int:
         for i in range(args.rounds):
             rec = _round(name, args.window, args.telemetry, args.keep_crops,
                          args.ocr_backend, args.rep_format, args.buffer_size,
-                         getattr(args, "decode_backend", ""))
+                         getattr(args, "decode_backend", ""),
+                         getattr(args, "fill_width", None))
             rec["round"] = i + 1
             rounds.append(rec)
             print("  %-12s round %d  %.4fs  %d 段" % (
@@ -609,6 +613,8 @@ def main() -> int:
     r.add_argument("--rep-format", default="", help="yuv|gray（默认按引擎规则）")
     r.add_argument("--buffer-size", type=int, default=0, help="生产者队列深度")
     r.add_argument("--label", required=True)
+    r.add_argument("--fill-width", type=int, default=None,
+                   help="OCR 输入 pad 下限（px）；0 = 关闭填充（批内自适应）")
     r.add_argument("--decode-backend", default="",
                    choices=("", "auto", "cpu", "nvdec", "hybrid"),
                    help="覆盖 config 的解码后端（空=用 config 值）。"

@@ -72,7 +72,15 @@ def ocr_pad_floor(variant: str, fill_width: int,
                   pad_floor_env: "int | None" = None) -> int:
     """OCR 输入 pad 宽度下限（**唯一出处**：批识别与 GPU 直通两条路径共用）。
 
-    优先级：env `OCR_PAD_SMALL` > 用户 `fill_width` > 模型下限。旧实现把
+    优先级：env `OCR_PAD_SMALL` > 用户 `fill_width` > 模型下限。
+    `fill_width` 取值语义（2026-09-13 改）：
+      · None / 未指定 → 模型下限（原行为）
+      · > 0           → 该值即下限
+      · 0             → 关闭填充：不设下限，批宽只由批内最大内容宽
+                        决定（0 读作「关」比负数直观）
+    实测（六视频，段数不变）：ref 集上关闭填充明显更准（test5 误读
+    28→3、test6 23441 帧零误读），且 padded_cols −39.4%。
+    旧实现把
     fill_width 放在最前，而 extractor 默认就传 224 → env 旋钮其实是死的
     （README 自称排查陷阱之一）。
     """
@@ -80,7 +88,12 @@ def ocr_pad_floor(variant: str, fill_width: int,
             else config.env_int(config.OCR_PAD_SMALL_ENV, 0))
     if _env > 0:
         return int(_env)
-    if fill_width and fill_width > 0:
+    if fill_width is not None and fill_width <= 0:
+        # 0（或负值）= 关闭填充。返回 1 而非 0：批宽公式是
+        # max(floor/48, 批内最大内容宽比)，1/48 必被内容宽比盖过
+        # → 等价于没有下限，且不会退化出 0 宽。
+        return 1
+    if fill_width:
         return int(fill_width)
     return int(config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(variant,
                                                     config.OCR_PAD_WIDTH_MIN))
@@ -93,7 +106,8 @@ class OcrEngine:
         variant: "v6_small"（唯一模型，v2.13 起）
         engine_type: "onnxruntime" | "tensorrt"
         progress_cb: 构建引擎等耗时阶段的进度消息回调 (str)。
-        fill_width: OCR 输入 pad 宽度下限（px）。0 = 用 config 默认。速度窄图
+        fill_width: OCR 输入 pad 宽度下限（px）。None = 模型下限；
+            0 = 关闭填充（批内自适应）；>0 = 指定下限。速度窄图
             对宽 pad 更准，用户可调（GUI 160-320）。
         num_threads: ONNX 推理线程数。None = OCR_THREADS env →
             默认物理核/2（仅直接构造 OcrEngine 时）；生产管线会显式传入
@@ -103,7 +117,7 @@ class OcrEngine:
     def __init__(self, variant: str = "v6_small",
                  engine_type: str = "onnxruntime",
                  progress_cb: "callable | None" = None,
-                 fill_width: int = 0,
+                 fill_width: int | None = None,
                  num_threads: int | None = None,
                  pad_floor_env: "int | None" = None,
                  gamma: "float | None" = None,
@@ -513,7 +527,7 @@ _POOL_MAX_TOTAL = 16             # 限制所有 key 的空闲引擎总数
 
 def acquire_ocr_engine(variant: str = "v6_small",
                        engine_type: str = "onnxruntime", *,
-                       fill_width: int = 0,
+                       fill_width: int | None = None,
                        num_threads: int | None = None,
                        pad_floor_env: "int | None" = None,
                        gamma: "float | None" = None,
