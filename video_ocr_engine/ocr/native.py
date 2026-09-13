@@ -78,8 +78,11 @@ def ocr_pad_floor(variant: str, fill_width: int,
       · > 0           → 该值即下限
       · 0             → 关闭填充：不设下限，批宽只由批内最大内容宽
                         决定（0 读作「关」比负数直观）
-    实测（六视频，段数不变）：ref 集上关闭填充明显更准（test5 误读
-    28→3、test6 23441 帧零误读），且 padded_cols −39.4%。
+    ⚠️ 方向依赖 force_aspect（2026-09-13 复测修正）：**真值同配置
+    （force_aspect=1.5，生产口径）下 224 是完美档、降到 0 反而变差**
+    （test5 0→29 误读、test6 0→210 误读，各 7223 / 23441 帧）；仅在
+    force_aspect=0（内容按原宽高比）时关闭填充更准。与 `config.
+    DEFAULT_FILL_WIDTH` 既有注释一致：force_aspect>0 时下限越大越准。
     旧实现把
     fill_width 放在最前，而 extractor 默认就传 224 → env 旋钮其实是死的
     （README 自称排查陷阱之一）。
