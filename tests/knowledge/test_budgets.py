@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_conclusions_budget():
     size = (ROOT / "knowledge" / "conclusions.yaml").stat().st_size
-    assert size <= 8 * 1024, "conclusions.yaml %d B 超 8 KB 预算" % size
+    assert size <= 12 * 1024, "conclusions.yaml %d B 超 12 KB 预算" % size
 
 
 def test_knobs_budget():

@@ -163,3 +163,31 @@
   premises: full 档 + fork ≥6da2957；本机单卡
   revisit: 换卡（NVDEC% 语义随驱动/卡型变）/ fork 换代
   evidence: log 2026-09-13-hybrid可见性重评；bench/hybrid_reeval.json
+
+- id: C-40
+  conclusion: **hybrid 的收益与视频长度相关**（同内容三编码族窗口扫描）：h264 **无交叉点**（500 帧起即胜，6000 帧 +111%）；hevc/av1 **交叉点在 1500~3000 帧**（≈13~25 秒 @120fps），更长则稳定领先（6000 帧 hevc +12% / av1 +40%）。对纯 CPU 臂，三编码全片均胜（1.10× / 2.76× / 1.81×）
+  status: active
+  premises: 4060/16C32T；每臂独立子进程 + min-of-2（两臂同刻，差值消掉约 0.85s 的进程/引擎固定开销）；ocr=trt 隔离解码
+  revisit: 换卡（NVDEC 与 CPU 相对速率变）/ 关键帧间隔差异大的片源 / 超短片（<500 帧）
+  evidence: log 2026-09-13-hybrid解码率与理论并联和 §续七
+
+- id: C-41
+  conclusion: **短窗缺口 = 慢腿首个采样块在保序交付上的暴露**（冷态 0.17s / 热态 0.37s，同一对臂两套 harness 之差源于"引擎是否预热"）：盲阶段 rc 未学得时无条件把首块交给 CPU，而 rc 需 CPU 首块落地 16 帧才就位 ⇒ 队头被慢腿串行占住。量级自洽：t_cpu(块) 0.30s − t_gpu(块) 0.13s ≈ 0.17s
+  status: active
+  premises: 同内容 hevc 族（块≈247 帧）；fork 盲阶段"无条件 CPU 采样"策略；独立进程=冷、bench ab 热池=热
+  revisit: 关键帧间隔变小（块变小则缺口缩小）/ fork 盲阶段策略变更 / 引擎预热策略变更
+  evidence: log 2026-09-13-hybrid解码率与理论并联和 §续八 §续十；DECORD_HYBRID_DEBUG 路由行
+
+- id: C-42
+  conclusion: **段边界的相似判定是引擎生产者链上最重的一笔**：每段边界一次 grid=1 launch + sync（消费线程内串行），hevc 8340 次 × 313µs = 2.61s ≈ 墙钟 **21%**、h264 0.94s ≈ **27%**；同期消费者 q_get_wait 占 84~87%（余量极大）
+  status: active
+  premises: GPU 管线（gray + NVDEC/CPU 解码 + TRT）；代表帧设备侧驻留
+  revisit: 批量化/异步化落地后重测 / ONNX 宿主路径（无此 span）
+  evidence: log 2026-09-13-hybrid解码率与理论并联和 §续二；ENGINE_PROFILE 分相
+
+- id: C-43
+  conclusion: **fill_width 与 force_aspect 强交互**（重测修正了"关填充更准"的无条件表述，与 C-15 一致：224 保持）：生产口径 force_aspect=1.5 下 **224 是零误读档**（test5+test6 共 30664 帧零误读），降到 0 反而变差（test5 0→29、test6 0→210 误读）；**仅 force_aspect=0** 时关闭填充更准（test5 误读 28→3）。`fill_width=0` 作为**关闭填充**的加法开关保留，默认值不动
+  status: active
+  premises: 六片真值；真值头记生成配置（test5/6_ref force_aspect=1.5；test2 =0 且 fill_width=320）
+  revisit: 换片源（内容宽/字号分布变）/ OCR 模型换代 / 默认 force_aspect 变更
+  evidence: log 2026-09-13-填充宽度重测；`_probe_acc_ab.py` 已自动复刻真值头配置
