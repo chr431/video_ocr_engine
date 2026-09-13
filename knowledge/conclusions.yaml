@@ -191,3 +191,10 @@
   premises: 六片真值；真值头记生成配置（test5/6_ref force_aspect=1.5；test2 =0 且 fill_width=320）
   revisit: 换片源（内容宽/字号分布变）/ OCR 模型换代 / 默认 force_aspect 变更
   evidence: log 2026-09-13-填充宽度重测；`_probe_acc_ab.py` 已自动复刻真值头配置
+
+- id: C-44
+  conclusion: **计划重规划（`DECORD_HYBRID_REPLAN_PCT`，默认关）编码相关**：hevc 全片 −5.42%（符号 6/6）、h264 **+1.11%**（6/6，真回归）、av1 中性、hevc 3000 帧不可判定。机理：长片实测速率漂 CPU −3~+17%/GPU +4~+28%，冻结计划把块留在慢腿；h264 的 CPU 腿本快 3.7×，而混跑实测含自我争用 ⇒ 份额挪向 GPU 反而错
+  status: active
+  premises: 4060/16C32T；fork f42e22e；A/B 走 `_probe_dll_ab.py`（每臂独立进程+交错+配对差分）；PCT=25/GAP=8
+  revisit: 有可靠的"哪条腿快"判据后可做按编码自动开关 / 争用结构改变 / 换卡
+  evidence: log 2026-09-13-计划重规划
