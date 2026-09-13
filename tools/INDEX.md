@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **91 个 `.py`**（15,240 行），其中 80 个是探针
+`tools/` 现有 **92 个 `.py`**（15,410 行），其中 80 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -154,6 +154,7 @@
 | 文件 | 行 | 改于 | 支撑 |
 |---|---:|---|---|
 | `_probe_path_survey.py` | 141 | 2026-09-13 | **路径普查**（测量非 A/B）：五条路径单臂各跑一次、只取 std 档报告，一次给出时间去向 + 背压分诊（`get_wait`/`put_block` 的总量·次数·单次最长）。首轮结论：hybrid/TRT 比 nvdec/TRT 快 1.6~1.8×、decode 占 wall 83~87%、hybrid/cpu 是唯一生产者也被压的路径（瓶颈翻转到下游 OCR）|
+| `_probe_decode_rate.py` | 170 | 2026-09-13 | **只解码速率**（工作项 0，扩展 `_probe_path_survey.py`：那条测引擎路径的时间去向，本条测 fork 侧纯解码吞吐）：与引擎 GPU 管线同参数（ctx/gray/ROI-first/线程档/DECODE_BATCH 粒度）但**不做 analyze/分段/OCR**，按 ctx 分离 fork 侧吞吐——判定 hybrid 稳态封顶（三码趋同 2214~2285 fps）落在 fork 还是引擎生产者链 |
 
 ### 2026-09-10 D1/D2 调查（gpu/host 段数分歧 · 线程优先级）
 
@@ -185,7 +186,7 @@
 | `_split_perf_md.py` | 194 | 2026-08-31 按「活/归档」把 PERFORMANCE.md 切出 `docs/log/ARCHIVE.md`。**已完成，可删** |
 | `_fix_probe_paths.py` | 416 | 2026-08-31 把探针里写死的路径改成 `__file__` 推导 / 环境变量。**已完成，可删** |
 
-## 探针状态（L2）：live 5 / frozen 75（共 80）
+## 探针状态（L2）：live 6 / frozen 75（共 81）
 
 **默认 frozen**——不在下表 `live` 名单里的探针一律视为历史证据，豁免活性检查、不做修复义务。
 一个探针进 `live` 必须写清理由（被在用载体引用 / 本轮在用）；重构时的修复义务**只覆盖 live 集合**。
@@ -196,6 +197,7 @@
 | `_probe_discipline_audit.py` | AGENTS.md、tools/_audit_ext.py、tools/_probe_discipline_audit.py、tests/ |
 | `_probe_index_audit.py` | AGENTS.md、tests/ |
 | `_probe_path_survey.py` | 本轮新工具：路径普查，当前优化轮的取证入口 |
+| `_probe_decode_rate.py` | 本轮新工具：工作项 0（hybrid 封顶归因）的取证入口 |
 | `_probe_run_setup_cost.py` | tests/ |
 
 frozen 75 个（按 §A–§D 各节原样保留）：`_probe_acc_ab.py`、`_probe_acc_baseline.py`、`_probe_autocrop_ab.py`、`_probe_autocrop_truth.py`、`_probe_batch_coldstart.py`、`_probe_busy_overhead.py`、`_probe_ceiling.py`、`_probe_cluster_dtype.py`、`_probe_cr_roundtrip.py`、`_probe_crop_miscut.py`、`_probe_crop_stats.py`、`_probe_d1_prim_diff.py`、`_probe_d1_trace.py`、`_probe_d1_trace2.py`、`_probe_decode_batch_ab.py`、`_probe_decode_contention.py`、`_probe_drop_nonref.py`、`_probe_e2e_ab.py`、`_probe_e2e_mode.py`、`_probe_engine_ab.py`、`_probe_ffmpeg.py`、`_probe_final.py`、`_probe_gamma_sweep.py`、`_probe_golden_diff.py`、`_probe_golden_drift.py`、`_probe_gpu_ctc.py`、`_probe_guard_clean.py`、`_probe_hol_stats.py`、`_probe_hybrid_ab.py`、`_probe_hybrid_axis.py`、`_probe_hybrid_bitwise.py`、`_probe_hybrid_cpu_profile.py`、`_probe_hybrid_engine_loss.py`、`_probe_hybrid_gap.py`、`_probe_hybrid_reeval.py`、`_probe_hybrid_sum_gap.py`、`_probe_hybrid_threads_e2e.py`、`_probe_hybrid_trace.py`、`_probe_lifecycle_repeat.py`、`_probe_mem_bw.py`、`_probe_merge_log.py`、`_probe_mp_scale.py`、`_probe_nvdec_interference.py`、`_probe_onnx_dcd_sweep.py`、`_probe_pad_width.py`、`_probe_perf_baseline.py`、`_probe_perf_sweep.py`、`_probe_perframe.py`、`_probe_phase_cores.py`、`_probe_prep_ab.py`、`_probe_python_cost.py`、`_probe_r3_infer_split.py`、`_probe_release_gate.py`、`_probe_roadmap_decode.py`、`_probe_roadmap_ocr.py`、`_probe_roadmap_profile.py`、`_probe_roi_decode.py`、`_probe_roi_dump.py`、`_probe_roi_segcost.py`、`_probe_roi_whitespace.py`、`_probe_roi_width.py`、`_probe_round4_bw.py`、`_probe_round4_wall.py`、`_probe_seg_share.py`、`_probe_skip_frame.py`、`_probe_slf_adjudicate.py`、`_probe_slf_diff.py`、`_probe_slf_vis.py`、`_probe_stress_harness.py`、`_probe_text_ab.py`、`_probe_threads.py`、`_probe_trt_maxbatch.py`、`_probe_truth_env.py`、`_probe_upload_chain.py`、`_probe_yuv_tax.py`

@@ -102,7 +102,7 @@
 |---|---|
 | RunReport **schema v2** | `report_version` 1→2，**只加键**：`resources`（std+：每相位平均并行核数/线程数/RSS·VRAM 增量/磁盘读写速率 + 每来源真出处或 `unavailable:原因`）、`hardware`（仅 full 档采样过才出现：GPU%/NVDEC%/显存 min·p50·p99·max）。按 v1 解析的旧读者不受影响；金标只记 `meta` 键名，故无需重录（28/28 逐位一致已验） |
 | `hybrid` CPU 线程档位 | 默认 12→**16**（核数//2 钳 [8,16]），并取消按 decord 版本号的门控（对 `DECORD_LIBRARY_PATH` 换 dll 的情形判错）。交错 A/B：h264-hybrid −6.5%、hevc-hybrid −12.7%；`HYBRID_CPU_THREADS` 显式覆盖仍有效 |
-| PI-15 门禁校准 | 判据改"同进程交替 + 档位轮转 + 同轮配对差分**均值** + 符号多数一致"，阈值按本机 A/A 标定（**+0.85%**；规则 `\|偏差\|+3×SE`）。§13.2 设计目标 +0.1%/+1% 仍打印。**换机器后需 `bench.py telemetry-check --aa` 重标**。µs 级严格性移至 `tests/config/test_telemetry_cost.py`（插桩路径重放 ≤2ms/run） |
+| PI-15 门禁校准 | 判据改"同进程交替 + 档位轮转 + 同轮配对差分**均值** + 符号多数一致"，阈值按本机 A/A 标定（**2026-09-13 重标：std +0.30% / full +1.20%**；规则 `\|偏差\|+3×SE`）。§13.2 设计目标 +0.1%/+1% 仍打印。**换机器后需 `bench.py telemetry-check --aa` 重标**。µs 级严格性移至 `tests/config/test_telemetry_cost.py`（插桩路径重放 ≤2ms/run） |
 | 环境指纹 GPU 来源 | 改走 NVML（43.1ms→20.8ms、免子进程），失败回退 nvidia-smi；新增 `environment["gpu_source"]`（`nvml`/`nvidia-smi`/`unavailable`） |
 | **不新增**：PCIe 速率 | 本机不可直读，v2 报告**不产该字段**（原承诺收窄为 L3 推导：counter 字节 ÷ 相位墙钟，由使用者自行换算） |
 

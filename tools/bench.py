@@ -32,7 +32,7 @@ from pathlib import Path
 #     的确定性成本守卫承担——那里有 10⁴ 倍于墙钟的分辨力）。
 #   - 判失败还需**符号多数一致**（70%），落在噪声带里的差值不再误报。
 #   - 换机器/换窗口/改配对数 n 后必须 `telemetry-check --aa` 重标（SE∝1/√n）。
-PI15_LIMITS = {"std_pct": 0.85, "full_pct": 0.85, "sign_majority": 0.70}
+PI15_LIMITS = {"std_pct": 0.30, "full_pct": 1.20, "sign_majority": 0.70}
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))

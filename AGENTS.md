@@ -80,7 +80,8 @@ python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.
 
 ⚠️ **A/B 必须交错**（`bench ab`）：同码连跑两次实测可差 **7.7%**（GPU 热降），
 顺序跑会把漂移记到 B 头上。⚠️ **门禁阈值 ≥ 本机可分辨下限**：先
-`bench telemetry-check --aa` 标定（本机 A/A \|Δ\|p95 1.8%），阈值 =
+`bench telemetry-check --aa` 标定（本机 A/A \|Δ\|p95 0.484%，2026-09-13
+重标，n=25/inner=3 → std 限 +0.30% / full 限 +1.20%），阈值 =
 \|偏差\|+3×SE，判据 = 同轮配对差分**均值** + 符号多数一致；µs 级严格性见
 `tests/config/test_telemetry_cost.py`。执行体在脚本（`knowledge/rules.yaml`）。
 
