@@ -444,6 +444,10 @@ class OcrSession:
                     if b_crops[i] is not None]
                 if host_sel:
                     _t_p = time.perf_counter()
+                    # 子相位累加：每批上报一次，**不在逐项循环里调 prof_end**
+                    # （那是热路径）。_acc_l=YUV→luma，_acc_a=全分辨率裁切，
+                    # _acc_r=降采样后的 resize+gamma。
+                    _acc_l = _acc_a = _acc_r = 0.0
                     # 内容宽度自适应裁切（统一实现见 segmentation.
                     # crop_to_content / crop_after_aspect）。
                     prepped = []
@@ -451,23 +455,40 @@ class OcrSession:
                         c = b_crops[i]
                         if spec.yuv_output:
                             from video_ocr_engine.domain.video_utils import _nv12_luma_full
+                            _t = time.perf_counter()
                             c = _nv12_luma_full(
                                 c, spec.color_range)[..., None]
+                            _acc_l += time.perf_counter() - _t
                         if spec.force_aspect and spec.force_aspect > 0:
                             # force_aspect>0：**先定比例、后裁**（顺序 ⑦）。
                             # 反序会因内容宽高比被改变而引入畸变。
+                            _t = time.perf_counter()
                             p = preprocess_standard(
                                 c, force_aspect=spec.force_aspect,
                                 gamma=spec.gamma)
+                            _acc_r += time.perf_counter() - _t
+                            _t = time.perf_counter()
                             p = spec.crop_after_aspect(p)
+                            _acc_a += time.perf_counter() - _t
                         else:
+                            _t = time.perf_counter()
+                            c = spec.crop_to_content(c)
+                            _acc_a += time.perf_counter() - _t
+                            _t = time.perf_counter()
                             p = preprocess_standard(
-                                spec.crop_to_content(c),
-                                force_aspect=spec.force_aspect,
+                                c, force_aspect=spec.force_aspect,
                                 gamma=spec.gamma)
+                            _acc_r += time.perf_counter() - _t
                         prepped.append((i, p))
                     if spec.prof_end is not None:
                         spec.prof_end('ocr', 'preprocess', _t_p)
+                        # 合成 t0 = now - 累加值（_prof_end 语义即 now - t0），
+                        # 这样无需给 SessionSpec 增加新钩子。
+                        _now = time.perf_counter()
+                        if _acc_l:
+                            spec.prof_end('ocr', 'preproc_luma', _now - _acc_l)
+                        spec.prof_end('ocr', 'preproc_autocrop', _now - _acc_a)
+                        spec.prof_end('ocr', 'preproc_resize', _now - _acc_r)
                     # 跨批按宽度分组：pad 宽 = 批内最大宽，顺序分批时
                     # 每批都被满宽成员顶上去，只有把宽度相近的段分到
                     # 同一批才真的降下来（-23.9%）。

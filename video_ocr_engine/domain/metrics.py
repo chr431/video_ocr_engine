@@ -63,6 +63,11 @@ _SEED = (
     ("ocr.engine_reuse", "counter", "次", "ocr", "PI-10"),
     ("ocr.infer", "span", "s", "ocr", ""),
     ("ocr.preprocess", "span", "s", "ocr", ""),
+    # 预处理三个可分代价（2026-09-13 细分）：糊在一个 span 里无法判断该
+    # 优化谁——autocrop 在**全分辨率**上做，resize+gamma 在降采样后做。
+    ("ocr.preproc_luma", "span", "s", "ocr", ""),
+    ("ocr.preproc_autocrop", "span", "s", "ocr", ""),
+    ("ocr.preproc_resize", "span", "s", "ocr", ""),
     ("ocr.ctc_decode", "span", "s", "ocr", ""),
     ("ocr.chunks", "counter", "chunk", "ocr", ""),
     ("ocr.sub_chunks", "counter", "子批", "ocr", "PI-3"),
@@ -137,6 +142,9 @@ PROFILE_SPANS = {
     ("producer", "bin_batch"): "decode.binarize_batch",
     ("ocr", "infer"): "ocr.infer",
     ("ocr", "preprocess"): "ocr.preprocess",
+    ("ocr", "preproc_luma"): "ocr.preproc_luma",
+    ("ocr", "preproc_autocrop"): "ocr.preproc_autocrop",
+    ("ocr", "preproc_resize"): "ocr.preproc_resize",
     ("ocr", "ctc_decode"): "ocr.ctc_decode",
 }
 #: 无界（每段/每帧调用）→ std 档只累加总量（`totals` 段）；full 档另采样
