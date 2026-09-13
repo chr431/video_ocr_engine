@@ -179,11 +179,11 @@
   evidence: log 2026-09-13-份额旋钮修复与换DLL-A-B §四（含证伪链）
 
 - id: C-42
-  conclusion: **段边界的相似判定是引擎生产者链上最重的一笔**：每段边界一次 grid=1 launch + sync（消费线程内串行），hevc 8340 次 × 313µs = 2.61s ≈ 墙钟 **21%**、h264 0.94s ≈ **27%**；同期消费者 q_get_wait 占 84~87%（余量极大）
+  conclusion: 段边界的相似判定单次 **232µs**（launch 113 / memcpy+sync 109 / 排空仅 6 / Buffer 3），全片累计 ≈ 墙钟 21% —— **但它不在关键路径上**：把该判定短路成"恒不相似"（零 GPU 调用、分段结果逐位相同的窗口）后 wall **无改善**（2.849s vs 2.672s，方向为噪声）⇒ 消费者 q_get_wait 84~87% 把它完全吸收。**故以"占墙钟 21%"推算其优化收益是错的，此路不值得做**
   status: active
-  premises: GPU 管线（gray + NVDEC/CPU 解码 + TRT）；代表帧设备侧驻留
-  revisit: 批量化/异步化落地后重测 / ONNX 宿主路径（无此 span）
-  evidence: log 2026-09-13-hybrid解码率与理论并联和 §续二；ENGINE_PROFILE 分相
+  premises: GPU 管线；hevc/test6_hevc 6000 帧；该窗口 merges=0（短路前后段数均 2101）
+  revisit: 消费者不再空等的配置（OCR 极慢 / batch 极大）/ 段边界密度大幅上升的素材 / 换卡后 GPU 争用格局变化
+  evidence: log 2026-09-13-merge判定代价与短路实验；ENGINE_PROFILE 分相
 
 - id: C-43
   conclusion: **fill_width 与 force_aspect 强交互**（重测修正了"关填充更准"的无条件表述，与 C-15 一致：224 保持）：生产口径 force_aspect=1.5 下 **224 是零误读档**（test5+test6 共 30664 帧零误读），降到 0 反而变差（test5 0→29、test6 0→210 误读）；**仅 force_aspect=0** 时关闭填充更准（test5 误读 28→3）。`fill_width=0` 作为**关闭填充**的加法开关保留，默认值不动
