@@ -77,7 +77,11 @@
   **该 DLL 已过金标 28/28**（含 C-hevc-hybrid）。重建方式（不经 cmd.exe）：
   在 PS 工具里直接配 `PATH`/`INCLUDE`/`LIB` 后跑 `ninja`（见
   `docs/log/2026-09-13-hybrid解码率与理论并联和.md`「续六」）。
-  ⚠️ 该提交**未推送、未发 wheel** —— 与本文件"本地开发 dll"同政策。开发态用 `DECORD_LIBRARY_PATH=D:\Repo\decord\build-081fix`
+  ⚠️ 该提交**未推送、未发 wheel** —— 与本文件"本地开发 dll"同政策。
+  ⚠️ **默认加载的不是它**：pip wheel 内的 `decord.dll`（md5 `4116fb4a…`）
+  才是产品默认路径的二进制；本仓工具链（`bench.py` / `_probe_hybrid_reeval.py`）
+  显式设 `DECORD_LIBRARY_PATH` 才切到 dev 构建。故 `f946d72` 要进产品须
+  重建并安装 wheel。开发态用 `DECORD_LIBRARY_PATH=D:\Repo\decord\build-081fix`
   切换；重建 `rebuild_dev.bat`（FFMPEG_DIR=D:/Software/ffmpeg-n9.0-...）。
   pip wheel 0.8.2 与引擎当前代码兼容（已验证 sha 逐位一致），仅缺该崩溃
   修复。诊断构建 `configure_asan.bat`（ASAN）。
