@@ -60,6 +60,8 @@ wall = time.perf_counter() - t0
 rep = r.meta.get("report") or {}
 hw = rep.get("hardware") or {}
 out = {"wall": round(wall, 3), "segs": len(r.segments),
+       "decode_s": round((rep.get("spans", {}) or {}).get(
+           "pipeline.decode", {}).get("sum", 0.0), 3),
        "backend": r.meta.get("backend"),
        "nvdec_util": hw.get("nvdec_util_pct"),
        "gpu_util": hw.get("gpu_util_pct"),
@@ -91,12 +93,14 @@ def parse_stats(err: str) -> dict:
     return st
 
 
-def run(case, vid, roi, backend):
+def run(case, vid, roi, backend, extra_env=None):
     env = dict(os.environ)
     env["PROBE_ROOT"] = str(ROOT)
     env["VOE_TELEMETRY"] = "full"
     env["DECORD_HYBRID_STATS"] = "1"
     env["DECORD_LIBRARY_PATH"] = FORK
+    if extra_env:
+        env.update(extra_env)
     p = subprocess.run([sys.executable, "-c", WORKER,
                         str(_VDIR / vid), ",".join(map(str, roi)), backend],
                        env=env, capture_output=True, text=True,
@@ -111,11 +115,77 @@ def run(case, vid, roi, backend):
     return out, ""
 
 
+def share_sweep(args) -> int:
+    """扫 `DECORD_HYBRID_FORCE_SHARE`（CPU 侧份额），找 wall 最低点。
+
+    "auto" = 不设 env（用 fork 按实测速率算的默认份额）。
+    """
+    shares = [s.strip() for s in args.share.split(",") if s.strip()]
+    out: dict = {}
+    for case in (args.cases.split(",") if args.cases else list(CASES)):
+        vid, roi = CASES[case]
+        print("\n== %s（%s）==" % (case, vid))
+        print("%-8s %8s %8s %9s %9s %10s %7s" % (
+            "share", "wall", "decode", "busy_g%", "busy_c%", "hol_c_ms", "segs"))
+        rows = []
+        for sh in shares:
+            if sh == "auto":
+                envx = {}
+            elif sh.startswith("side:"):
+                envx = {"DECORD_HYBRID_FORCE_SIDE": sh.split(":", 1)[1]}
+            else:
+                envx = {"DECORD_HYBRID_FORCE_SHARE": sh}
+            best = None
+            for _ in range(args.reps):
+                r, err = run(case, vid, roi, "hybrid", envx)
+                if r is None:
+                    print("  %-8s FAIL %s" % (sh, err[-120:]))
+                    continue
+                if best is None or r["wall"] < best["wall"]:
+                    best = r
+            if best is None:
+                continue
+            st, wall = best["stats"], best["wall"]
+            wg = st.get("gpu_us", 0) / 1e6
+            wc = st.get("cpu_us", 0) / 1e6
+            print("%-8s %8.3f %8.3f %9.1f %9.1f %10.1f %7d" % (
+                sh, wall, best.get("decode_s") or 0.0,
+                100 * wg / wall if wall else 0, 100 * wc / wall if wall else 0,
+                st.get("hol_us_c", 0) / 1000.0, best["segs"]))
+            rows.append({"share": sh, "wall": wall,
+                         "decode_s": best.get("decode_s"),
+                         "busy_g_pct": 100 * wg / wall if wall else 0,
+                         "busy_c_pct": 100 * wc / wall if wall else 0,
+                         "busy_g_fps": st.get("pics", 0) / wg if wg else 0,
+                         "busy_c_fps": st.get("pkts", 0) / wc if wc else 0,
+                         "hol_us_c": st.get("hol_us_c"),
+                         "hol_us_g": st.get("hol_us_g"),
+                         "stats": {k: v for k, v in st.items()
+                                   if k not in ("stats",)}})
+        out[case] = rows
+        if rows:
+            b = min(rows, key=lambda x: x["wall"])
+            print("  → 最优 share=%s（wall %.3fs）" % (b["share"], b["wall"]))
+    dst = ROOT / "bench" / "hybrid_share_sweep.json"
+    dst.write_text(json.dumps(out, ensure_ascii=False, indent=1),
+                   encoding="utf-8", newline="\n")
+    print("\n落盘 %s" % dst)
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--reps", type=int, default=2)
     ap.add_argument("--backends", default="nvdec,hybrid")
+    ap.add_argument("--share", default="",
+                    help="份额/路由扫描：逗号列表。auto=默认；数字=FORCE_SHARE"
+                         "（⚠️ fork 里该形参未参与分配，实测无效）；"
+                         "side:gpu / side:cpu = FORCE_SIDE（有效）")
+    ap.add_argument("--cases", default="",
+                    help="只跑指定编码，逗号分隔（h264,hevc,av1）")
     args = ap.parse_args()
+    if args.share:
+        return share_sweep(args)
     backends = args.backends.split(",")
     rep = {}
     for case, (vid, roi) in CASES.items():
