@@ -425,19 +425,57 @@ def _gpu_frame_stream_nvdec(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
             for s0, nds in vr.get_batch_stream(
                     frames[ctx.calib_n:], roi=roi, batch=DECODE_BATCH):
                 yield s0, nds
-        else:
-            for bstart in range(ctx.calib_n, len(frames), DECODE_BATCH):
-                bend = min(bstart + DECODE_BATCH, len(frames))
+            return
+        # ── 层4 排空线程（GPU_PIPELINE_DRAINER，redesign 分支默认开）──
+        # get_batch 独占一线程预取（深 4 批），生产者的 analyze/sync 不再
+        # 阻塞解码排空——decode.batch 引擎税的构成为"生产者分析期间无人
+        # 拉动解码，fork 侧银行反压停转"。线程安全性：get_batch 全部调用
+        # 恒在此线程（decord Push/pump 单线程不变量保持）；calibrate 的
+        # next_roi 在此流启动前已结束。
+        # 默认关：实测零收益（引擎税源于线程争用而非排空阻塞，与
+        # C-10 流水发射同判）；留旋钮供复评。
+        _drainer_on = config.env_bool(config.GPU_PIPELINE_DRAINER_ENV,
+                                      default=False)
+        bstarts = range(ctx.calib_n, len(frames), DECODE_BATCH)
+        if not _drainer_on:
+            for bstart in bstarts:
                 # roi 不随批传：打开 reader 时 SetRoi 已生效；hybrid 原生
                 # 路径每次 get_batch 传 roi 会触发 fork 侧 SetRoi/池深重算
                 # （2026-09-10 实测 hybrid av1 2487→2264 fps，-9%；
                 # _probe_roi_decode 已证 CPU 路径两种传法等价）。
                 _t_dec = time.perf_counter()
-                nds = vr.get_batch(frames[bstart:bend])
-                # S6-d：解码 vs analyze 的相位划分（双缓冲 A/B 的判据；
-                # 两者都在生产者线程内串行，重叠空间 = min(两者)）
+                nds = vr.get_batch(frames[bstart:bstart + DECODE_BATCH])
                 ex._prof_end('producer', 'decode_batch', _t_dec)
                 yield bstart, nds
+            return
+        import queue as _queue
+        import threading as _threading
+        _q: "_queue.Queue" = _queue.Queue(maxsize=4)
+        _err: list = []
+
+        def _drain() -> None:
+            try:
+                for bstart in bstarts:
+                    bend = min(bstart + DECODE_BATCH, len(frames))
+                    _t_dec = time.perf_counter()
+                    nds = vr.get_batch(frames[bstart:bend])
+                    ex._prof_end('producer', 'decode_batch', _t_dec)
+                    _q.put((bstart, nds))
+            except BaseException as e:  # noqa: BLE001
+                _err.append(e)
+            finally:
+                _q.put(None)
+
+        _dt = _threading.Thread(target=_drain, daemon=True,
+                                name='voe-decode-drainer')
+        _dt.start()
+        while True:
+            item = _q.get()
+            if item is None:
+                if _err:
+                    raise _err[0]
+                return
+            yield item
 
     for bstart, nds in _batch_iter():
         bend = bstart + int(nds.shape[0])
