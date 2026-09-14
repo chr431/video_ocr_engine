@@ -55,10 +55,6 @@ KNOBS = Registry(knobs=(
          note="raw 直通批深度 2 延迟收集（提交不等待、结果滞后一批、"
               "提交序交付）；治 launch 裸奔（运行期 SM ~40%）；"
               "门禁=文本 sha 逐位+段数+bench ab"),
-    Knob("ocr.cpu_backend", "OCR_CPU_BACKEND_ENV", "OCR_CPU_BACKEND",
-         "str", "openvino", "ocr", ("cpu",), "ocr/native.py:_init_onnx",
-         note="CPU 推理引擎：openvino（默认，2.1×/argmax 全一致）或 "
-              "onnxruntime（消融回退）；未装 openvino 自动回落"),
     # ── segment ──
     Knob("segment.text_sep_merge", "TEXT_SEP_MERGE_ENV", "TEXT_SEP_MERGE", "str",
          "binary", "segment", _ALL, "ec:229",

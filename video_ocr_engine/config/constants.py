@@ -411,11 +411,6 @@ TRT_FP16_ENV: str = "TRT_FP16"
 # 一批交付、顺序=提交序；单流次序保证设备缓冲复用安全，Y 帧 owner
 # 随批保活到 collect。门禁：文本 sha 逐位一致 + 段数恒定 + bench ab。
 TRT_DEFER_SYNC_ENV: str = "TRT_DEFER_SYNC"
-# OCR_CPU_BACKEND（env，默认 openvino）：CPU 推理引擎选择——openvino
-# （2026-09-14 起默认，模型级 2.1× 于 ORT + argmax 全一致，真值门禁见
-# log 2026-09-14-OpenVINO模型级A-B/集成轮）或 onnxruntime（消融回退；
-# openvino 未安装时自动回落）。输入/输出同构，预处理/CTC 零改动。
-OCR_CPU_BACKEND_ENV: str = "OCR_CPU_BACKEND"
 TRT_PROFILE_MIN_W: int = 32
 TRT_PROFILE_OPT_W: int = 320
 TRT_PROFILE_MAX_W: int = 2048

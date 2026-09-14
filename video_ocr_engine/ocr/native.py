@@ -2,7 +2,7 @@
 
 与 rapidocr 的 TextRecognizer 输出逐字节对齐（预处理/CTC 后处理复刻）：
 - 预处理: resize 到 48 高 + (x/255 - 0.5) / 0.5 归一化 + pad 到 batch 最大宽
-- 推理:   ONNX (onnxruntime, 动态 batch) / TensorRT（引擎实现见 ocr_trt.py）
+- 推理:   OpenVINO（CPU，动态 batch）/ TensorRT（GPU，引擎实现见 ocr_trt.py）
 - 后处理: argmax(axis=2) + max(axis=2) + CTC 去重 + blank(0) 过滤 + 字符映射
 - 字符表: assets/ocr_models/ppocrv6_dict.txt（18708 字符 + 末尾空格 + 开头 blank = 18710）
 
@@ -107,7 +107,7 @@ class OcrEngine:
 
     Args:
         variant: "v6_small"（唯一模型，v2.13 起）
-        engine_type: "onnxruntime" | "tensorrt"
+        engine_type: "onnxruntime"(CPU 路径历史标识) | "tensorrt"
         progress_cb: 构建引擎等耗时阶段的进度消息回调 (str)。
         fill_width: OCR 输入 pad 宽度下限（px）。None = 模型下限；
             0 = 关闭填充（批内自适应）；>0 = 指定下限。速度窄图
@@ -175,11 +175,8 @@ class OcrEngine:
 
     @property
     def backend_name(self) -> str:
-        """实际推理后端：'tensorrt' / 'openvino' / 'onnxruntime'（CSV 头/日志使用）。"""
-        if self._trt is not None:
-            return "tensorrt"
-        return "openvino" if getattr(self, "_ov", None) is not None \
-            else "onnxruntime"
+        """实际推理后端：'tensorrt' / 'openvino'（CSV 头/日志使用）。"""
+        return "tensorrt" if self._trt is not None else "openvino"
 
     def release(self) -> None:
         """释放设备资源（TRT 缓冲 / GPU 预处理器）。重复调用安全。"""
@@ -198,16 +195,16 @@ class OcrEngine:
                 pass
             self._trt = None
 
-    # ═══════════════ ONNX 后端（OpenVINO 默认，onnxruntime 回退）═══════════════
+    # ═══════════════ CPU 后端（OpenVINO 唯一，onnxruntime 已移除）═══════════════
 
     def _init_onnx(self, models: Path, size: str) -> None:
-        # CPU 推理引擎二选一：OpenVINO（2026-09-14 起默认；模型级 2.1×
-        # 于 ORT，随机输入 argmax 全一致，见 log 2026-09-14-OpenVINO模型级
-        # A-B 与集成轮）或 onnxruntime（OCR_CPU_BACKEND=onnxruntime 消融
-        # 回退；openvino 未安装时自动回落并告警）。两者输入/输出同构
-        # （(B,3,48,W)→(B,S,C) float32），预处理/CTC/批切零改动。
-        # 直接构造 OcrEngine（未传 num_threads）时默认物理核/2：避免 ONNX
-        # 推理占满全部逻辑核并与解码器抢核。生产管线 SegmentPipeline.
+        # CPU 推理引擎 = OpenVINO（模型级 2.1× 于已移除的 onnxruntime，
+        # 真值门禁三内容族零差，见 log 2026-09-14-OpenVINO模型级A-B/集成
+        # 轮/移除轮）。输入/输出同构（(B,3,48,W)→(B,S,C) float32），
+        # 预处理/CTC/批切沿用 ONNX 路径。engine_type 字符串 "onnxruntime"
+        # 保留为 CPU 路径标识（历史 API 值，MIGRATION §1）。
+        # 直接构造 OcrEngine（未传 num_threads）时默认物理核/2：避免推理
+        # 占满全部逻辑核并与解码器抢核。生产管线 SegmentPipeline.
         # _ocr_num_threads 显式传 auto_ocr_thread_count()（全物理核），
         # 所以 CPU/GPU 解码场景统一走显式线程预算，不走此默认。
         physical = cpu_physical_cores()
@@ -219,28 +216,18 @@ class OcrEngine:
             _env_t = config.env_int(config.OCR_THREADS_ENV, 0)
             if _env_t:
                 n = max(1, _env_t)
+        try:
+            import openvino as ov  # type: ignore[import-not-found]
+        except ImportError as e:
+            raise RuntimeError(
+                "CPU OCR 需要 openvino（pip install openvino）；"
+                "onnxruntime 后端已移除（log 2026-09-14-OpenVINO移除轮）"
+            ) from e
         model_path = models / f"PP-OCRv6_rec_{size}.onnx"
-        want = os.environ.get(config.OCR_CPU_BACKEND_ENV,
-                              "openvino").strip().lower()
-        if want != "onnxruntime":
-            try:
-                import openvino as ov  # type: ignore[import-not-found]
-                self._ov = ov.Core().compile_model(
-                    str(model_path), "CPU",
-                    {"INFERENCE_NUM_THREADS": str(n)})
-                self._ov_out = self._ov.outputs[0]
-                return
-            except ImportError:
-                logging.getLogger(__name__).warning(
-                    "openvino 不可用（OCR_CPU_BACKEND=%s），回落 "
-                    "onnxruntime", want)
-        import onnxruntime as ort
-        so = ort.SessionOptions()
-        so.intra_op_num_threads = n
-        so.inter_op_num_threads = 2
-        self._session = ort.InferenceSession(
-            str(model_path), sess_options=so,
-            providers=["CPUExecutionProvider"])
+        self._ov = ov.Core().compile_model(
+            str(model_path), "CPU",
+            {"INFERENCE_NUM_THREADS": str(n)})
+        self._ov_out = self._ov.outputs[0]
 
     # ═══════════════ 预处理（复刻 rapidocr resize_norm_img）═══════════════
 
@@ -317,14 +304,12 @@ class OcrEngine:
                     batch_np[i:i + n], out_host=preds[i:i + n])
             self._trt.synchronize()
             return preds
-        # ONNX 动态 batch 无上限：超大输入会让中间激活内存爆炸
-        # （MaxPool bad allocation）。分片限制单批帧数，输出形状不变。
-        # 16（原 64）为历史最优：小片更快且 ORT arena 峰值更低
-        # （64: 920MB vs 16: 300MB，(3,48,320) small 模型 992 帧实测）。
+        # CPU 动态 batch 无上限：超大输入会让中间激活内存爆炸
+        # （MaxPool bad allocation，ORT 时代实测；OV 同理）。分片限制单批
+        # 帧数，输出形状不变。16 为历史最优（小片更快、峰值更低）。
         onnx_max = config.OCR_ONNX_CHUNK
         _ov = getattr(self, "_ov", None)
         if _ov is not None:
-            # OpenVINO：同批切（激活内存同理），输出同构 (B,S,C) f32。
             if len(batch_np) <= onnx_max:
                 return np.asarray(
                     _ov(batch_np)[self._ov_out], dtype=np.float32)
@@ -333,15 +318,6 @@ class OcrEngine:
                            dtype=np.float32)
                 for i in range(0, len(batch_np), onnx_max)]
             return np.concatenate(outs, axis=0)
-        if len(batch_np) <= onnx_max:
-            return np.asarray(self._session.run(None, {"x": batch_np})[0],
-                              dtype=np.float32)
-        outs = []
-        for i in range(0, len(batch_np), onnx_max):
-            outs.append(np.asarray(
-                self._session.run(None, {"x": batch_np[i:i + onnx_max]})[0],
-                dtype=np.float32))
-        return np.concatenate(outs, axis=0)
 
     # ═══════════════ 后处理（复刻 CTCLabelDecode）═══════════════
 

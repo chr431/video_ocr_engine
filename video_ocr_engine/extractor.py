@@ -993,7 +993,7 @@ class FieldExtractor:
         return c.shape[0] == roi_h and c.shape[1] == roi_w
 
     def _ocr_engine_type(self) -> str:
-        """OCR 推理后端：auto/tensorrt → tensorrt（OcrEngine 失败回退 onnx），cpu → onnxruntime。"""
+        """OCR 推理后端：auto/tensorrt → tensorrt（OcrEngine 失败回退 CPU 路径），cpu → openvino。"""
         return 'onnxruntime' if (self._ocr_backend or 'auto').lower() == 'cpu' else 'tensorrt'
 
     def _ocr_num_threads(self) -> int:

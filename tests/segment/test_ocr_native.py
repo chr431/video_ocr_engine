@@ -12,18 +12,10 @@ def engine():
     return OcrEngine("v6_small", "onnxruntime", fill_width=224, num_threads=2)
 
 
-def test_backend_name_reports_real_runtime(monkeypatch):
-    # 默认（openvino 可用）报 openvino；OCR_CPU_BACKEND=onnxruntime 消融
-    # 回退报 onnxruntime（2026-09-14 OV 集成，见 log 同名轮）。
-    e = OcrEngine("v6_small", "onnxruntime", fill_width=224, num_threads=2)
-    try:
-        import openvino  # noqa: F401
-        assert e.backend_name == "openvino"
-    except ImportError:
-        assert e.backend_name == "onnxruntime"
-    monkeypatch.setenv("OCR_CPU_BACKEND", "onnxruntime")
-    e2 = OcrEngine("v6_small", "onnxruntime", fill_width=224, num_threads=2)
-    assert e2.backend_name == "onnxruntime"
+def test_backend_name_is_openvino(engine):
+    # onnxruntime 后端已移除（2026-09-14，log OpenVINO移除轮）：
+    # CPU 路径唯一引擎 = OpenVINO。
+    assert engine.backend_name == "openvino"
 
 
 def test_onnx_backend_returns_one_result_per_input(engine):
