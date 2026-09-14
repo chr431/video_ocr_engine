@@ -415,8 +415,11 @@ TRT_PROFILE_MIN_W: int = 32
 TRT_PROFILE_OPT_W: int = 320
 TRT_PROFILE_MAX_W: int = 2048
 TRT_WORKSPACE_BYTES: int = 1 << 30
-# TRT 引擎缓存文件的 SM 后缀（引擎与 GPU 架构绑定）
-TRT_ENGINE_SM: str = "sm89"
+# TRT 引擎缓存文件的 SM 后缀（引擎与 GPU 架构绑定）。
+# 2026-09-14 起运行期探测（cudaDeviceGetAttribute compute capability），
+# 探测失败（无 CUDA 绑定/无设备）回落本常量。探测在 trt.py 的
+# engine_sm() 实现——constants 不 import CUDA（保持无副作用 import）。
+TRT_ENGINE_SM: str = "sm89"   # 回落值（本机 RTX 4060 = Ada = sm89）
 # ═══════════════════ 少核 CPU 解码线程分核预算（v2.15.2 实验） ═══════════════════
 # CPU 软解 + 物理核 ≤ CPU_CORES_SPLIT_THRESHOLD 时，OCR 线程与 decord
 # FFmpeg 线程各分 cores//2（显式分核），避免 FFmpeg 2 帧线程（fork 默认，

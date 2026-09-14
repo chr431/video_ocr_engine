@@ -37,6 +37,34 @@ def _sp_tick(key: str, t0: float) -> None:
 _models_dir = config.models_dir
 
 
+_ENGINE_SM_CACHE: "tuple[str, str] | None" = None
+
+
+def engine_sm() -> str:
+    """本机 GPU 的 sm 后缀（缓存；探测失败回落 TRT_ENGINE_SM）。
+
+    引擎缓存名按架构区分（换卡不撞名/不误载）；无 CUDA 环境（纯 CPU
+    部署构建名）回落常量——那里 TRT 路径本就不可用。"""
+    global _ENGINE_SM_CACHE
+    if _ENGINE_SM_CACHE is not None:
+        return _ENGINE_SM_CACHE[0]
+    sm = config.TRT_ENGINE_SM
+    try:
+        from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
+        _e, dev = cudart.cudaGetDevice()
+        if not _e:
+            _e2, major = cudart.cudaDeviceGetAttribute(
+                cudart.cudaDeviceAttr.cudaDevAttrComputeCapabilityMajor, dev)
+            _e3, minor = cudart.cudaDeviceGetAttribute(
+                cudart.cudaDeviceAttr.cudaDevAttrComputeCapabilityMinor, dev)
+            if not _e2 and not _e3:
+                sm = "sm%d%d" % (major, minor)
+    except Exception:  # noqa: BLE001 — 探测失败回落常量（无 CUDA/无设备）
+        pass
+    _ENGINE_SM_CACHE = (sm, "")
+    return sm
+
+
 def _fp16_on() -> bool:
     """TRT_FP16 env（调用时读，子进程 A/B 可逐臂切换）。"""
     return config.env_bool(config.TRT_FP16_ENV, default=False)
@@ -170,7 +198,7 @@ class TrtEngine:
         不一致）。代价是首次使用重建一次（本机 68s，一次性）。
         """
         prec = ("sttyped_fp16" if _fp16_on() else "fp32_tf32unset")
-        name = (f"multi_PP-OCRv6_rec_{size}_{config.TRT_ENGINE_SM}"
+        name = (f"multi_PP-OCRv6_rec_{size}_{engine_sm()}"
                 f"_{prec}_b{int(config.TRT_PROFILE_BATCH)}.engine")
         cands = [_models_dir() / "models" / name]
         cands.append(config.app_data_dir() / "ocr_engines" / name)
