@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import sys
 import threading
+from collections import deque
 from dataclasses import dataclass
 from typing import NamedTuple
 from typing import Callable
@@ -344,35 +345,60 @@ class OcrSession:
 
             def infer_worker(eng) -> None:
                 self._bump_priority()
+                # TRT_DEFER_SYNC（默认关）：单 TRT 引擎 + raw 直通批走深度 2
+                # 延迟收集——提交不等待，结果滞后一批交付（提交序 FIFO，
+                # 协议见 ocr/native.py 延迟收集组）。pending 记已提交未交付
+                # 的批，与引擎侧 FIFO 一一对应。
+                defer_on = (len(engines) == 1
+                            and getattr(eng, '_defer_sync', False)
+                            and eng is engines[0]
+                            and getattr(eng, '_trt', None) is not None)
+                pending = deque()
+
+                def _deliver(item, res) -> None:
+                    _t_c = time.perf_counter()
+                    for idx, rep, r, frac in zip(
+                            item.idxs, item.reps, res, item.fracs):
+                        if hasattr(r, 'txts'):
+                            raw_text = (str(r.txts[0])
+                                        if r.txts and r.txts[0] else None)
+                            scores = getattr(r, 'scores', [])
+                            ocr_conf = (float(scores[0])
+                                        if scores else 0.0)
+                        else:
+                            raw_text, ocr_conf = (None, 0.0)
+                        self.results[idx] = OcrResult(
+                            raw_text, ocr_conf, rep)
+                        _report_ocr_progress(idx, frac)
+                    if spec.prof_end is not None:
+                        spec.prof_end('ocr', 'ctc_decode', _t_c)
+
                 try:
                     while True:
                         item = infer_q.get()
                         if item is None:
+                            if defer_on:
+                                res = eng._gpu_raw_collect()
+                                if res is not None and pending:
+                                    _deliver(pending.popleft(), res)
                             return
                         _t_i = time.perf_counter()
-                        if item.infos is not None:
-                            res = eng.call_gpu_raw(
+                        if item.infos is not None and defer_on:
+                            eng._gpu_raw_submit(
                                 item.infos, force_aspect=item.force_aspect)
+                            pending.append(item)
+                            res = eng._gpu_raw_collect()
+                            if res is not None and pending:
+                                _deliver(pending.popleft(), res)
                         else:
-                            res = eng(item.procs)
+                            res = (eng.call_gpu_raw(
+                                       item.infos,
+                                       force_aspect=item.force_aspect)
+                                   if item.infos is not None
+                                   else eng(item.procs))
+                            _deliver(item, res)
                         if spec.prof_end is not None:
                             spec.prof_end('ocr', 'infer', _t_i)
-                        _t_c = time.perf_counter()
-                        for idx, rep, r, frac in zip(
-                                item.idxs, item.reps, res, item.fracs):
-                            if hasattr(r, 'txts'):
-                                raw_text = (str(r.txts[0])
-                                            if r.txts and r.txts[0] else None)
-                                scores = getattr(r, 'scores', [])
-                                ocr_conf = (float(scores[0])
-                                            if scores else 0.0)
-                            else:
-                                raw_text, ocr_conf = (None, 0.0)
-                            self.results[idx] = OcrResult(
-                                raw_text, ocr_conf, rep)
-                            _report_ocr_progress(idx, frac)
-                        if spec.prof_end is not None:
-                            spec.prof_end('ocr', 'ctc_decode', _t_c)
                 except Exception as e:
                     self.err.append(e)
 

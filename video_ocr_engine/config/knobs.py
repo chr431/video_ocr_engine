@@ -50,6 +50,11 @@ KNOBS = Registry(knobs=(
          "ocr", ("gpu",), "ocr/trt.py:_fp16_on",
          note="fp16 ONNX（keep_io_types）+ STRONGLY_TYPED 引擎（层内 half、"
               "IO fp32）；准确率门禁 _probe_acc_ab --knob TRT_FP16=0,1"),
+    Knob("ocr.trt_defer_sync", "TRT_DEFER_SYNC_ENV", "TRT_DEFER_SYNC",
+         "bool", False, "ocr", ("gpu",), "ocr/trt.py 延迟收集环",
+         note="raw 直通批深度 2 延迟收集（提交不等待、结果滞后一批、"
+              "提交序交付）；治 launch 裸奔（运行期 SM ~40%）；"
+              "门禁=文本 sha 逐位+段数+bench ab"),
     # ── segment ──
     Knob("segment.text_sep_merge", "TEXT_SEP_MERGE_ENV", "TEXT_SEP_MERGE", "str",
          "binary", "segment", _ALL, "ec:229",

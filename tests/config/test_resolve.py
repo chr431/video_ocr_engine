@@ -17,15 +17,15 @@ ENV_NAMES = KNOBS.env_names()
 # ── env 契约：19 个 v1 风格旋钮名 + v2 新增 ─────────────────────────
 def test_env_contract_covers_all_v1_knobs():
     v1_names = {getattr(config, n) for n in dir(config) if n.endswith("_ENV")}
-    assert len(v1_names) == 21          # 18 v1 + SEG_MERGE_DENSE_GATE + TRT_FP16 + GPU_PIPELINE_DRAINER
+    assert len(v1_names) == 22          # +TRT_DEFER_SYNC（深度2延迟收集，2026-09-14）
     assert set(ENV_NAMES) >= v1_names          # v1 全部迁入，一个不丢
     # v2 新增仅两个：r5 telemetry 三档 + S6-0 报告 sidecar（§8.6 N-3）
     assert set(ENV_NAMES) - v1_names == {"VOE_TELEMETRY", "VOE_REPORT_FILE"}
 
 
 def test_knob_registry_shape():
-    # 18 v1 + merge_dense_gate + telemetry + report_file
-    assert len(KNOBS.knobs) == 23
+    # 18 v1 + merge_dense_gate + telemetry + report_file + trt_defer_sync
+    assert len(KNOBS.knobs) == 24
     for k in KNOBS.knobs:
         assert k.rationale_id, k.name          # 每个旋钮有依据锚点（D5）
 

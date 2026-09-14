@@ -27,8 +27,7 @@ class RunConfig:
     ocr_instances: bool = True
     ocr_gpu_ctc: bool = True
     ocr_trt_fp16: bool = False              # fp16 ONNX + STRONGLY_TYPED 引擎
-    ocr_trt_cuda_graph: bool = False        # argmax+D2H 段图（init 期预热）
-    ocr_trt_cuda_graph: bool = False         # CUDA Graph 单子批捕获（验证期）
+    ocr_trt_defer_sync: bool = False        # raw 批深度 2 延迟收集（滞后一批交付）
     # ── segment ──
     segment_text_sep_merge: str = "binary"
     segment_merge_dense_gate: int = 5      # 0=关；>0=差异图 win3 阈值（稠密簇门）

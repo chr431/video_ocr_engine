@@ -124,6 +124,7 @@ class TrtEngine:
     def release(self) -> None:
         """释放设备缓冲、归约器及本对象拥有的 stream；重复调用安全。"""
         from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
+        self.release_defer_ring()
         stream = getattr(self, "_stream", None)
         if stream is not None:
             try:
@@ -481,4 +482,139 @@ class TrtEngine:
             else prob_parts[0]
         seq = idx_all.size // max(B, 1)
         return idx_all.reshape(B, seq), prob_all.reshape(B, seq)
+
+    # ── 深度 2 延迟收集（TRT_DEFER_SYNC，默认关）────────────────────
+    # 生产批逐批"提交-等完"：GPU 在 CPU 侧（预处理提交/TRT enqueue/CTC）
+    # 期间空转（launch 裸奔，SM 实测仅 ~40%）。本组方法把等待挪到下一批
+    # 之后：submit 提交整批（TRT+argmax+D2H 到 pinned 双环槽）并记录
+    # 事件即返回；collect 只同步**上一批**的事件（当前批仍在飞）——CPU
+    # 提交与 GPU 执行跨批重叠。设备侧缓冲复用全部由单流次序保证安全
+    # （TRT_N 写 dev_out → argmax_N 读 → TRT_{N+1} 写，串行）；唯一要
+    # 滞后的是宿主侧：pinned 双槽 + Y 帧 owner 引用（keep）随批持有到
+    # collect，防止 _DevBatch GC 归还池后被复用。
+
+    def _ensure_defer_ring(self) -> None:
+        if getattr(self, "_defer_ring", None) is not None:
+            return
+        from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
+        self._defer_ring = []
+        for _ in range(2):
+            _e, ev = cudart.cudaEventCreate()
+            self._defer_ring.append(
+                {"event": ev, "idx": None, "prob": None, "rows": 0,
+                 "ptr": (0, 0)})
+        self._defer_prev = None   # (slot_idx, rows, shape, keep)
+
+    def _defer_slot_ensure(self, slot: dict, rows: int) -> None:
+        if slot["idx"] is not None and slot["rows"] >= rows:
+            return
+        import ctypes
+        from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
+        if slot["ptr"][0]:
+            cudart.cudaFreeHost(slot["ptr"][0])
+            cudart.cudaFreeHost(slot["ptr"][1])
+        nbytes = rows * 4
+        _e, pi = cudart.cudaHostAlloc(nbytes, 0)
+        _e, pp = cudart.cudaHostAlloc(nbytes, 0)
+        slot["ptr"] = (int(pi), int(pp))
+        slot["idx"] = np.frombuffer(
+            (ctypes.c_char * nbytes).from_address(pi), dtype=np.int32)
+        slot["prob"] = np.frombuffer(
+            (ctypes.c_char * nbytes).from_address(pp), dtype=np.float32)
+        slot["rows"] = rows
+
+    def submit_argmax_deferred(self, dev_input: int, shape: tuple,
+                               keep=None) -> bool:
+        """提交一批（不等待）；结果经 collect_argmax_deferred 滞后一批取回。
+
+        返回 False = 本批不可延迟（B 超 max_batch 需多子批，或在途批形状
+        不同）：调用方须先 collect 再走同步路径。True = 已提交并记录事件；
+        keep 随批保活（Y 帧 owner），collect 时释放。
+        """
+        from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
+        B = int(shape[0])
+        if B > self.max_batch:
+            return False
+        prev = getattr(self, "_defer_prev", None)
+        if prev is not None and tuple(prev[2]) != tuple(shape):
+            return False
+        self._ensure_defer_ring()
+        stream = self._ensure_stream()
+        reducer = getattr(self, "_reducer", None)
+        if reducer is None:
+            reducer = GpuOutputReducer(stream=stream)
+            self._reducer = reducer
+        out_shape = self._prepare_shape(tuple(shape))
+        out_nbytes = int(np.prod(out_shape)) * 4
+        if self._dev_out is None or out_nbytes > self._out_nbytes:
+            # 输出缓冲需增长：在途批可能仍在读旧缓冲，不能原地释放——
+            # 有在途时回退同步路径（先 collect 再由它排干+重分配）。
+            if self._dev_out is not None and prev is not None:
+                return False
+            if self._dev_out is not None:
+                cudart.cudaFree(self._dev_out)
+            _, self._dev_out = cudart.cudaMalloc(out_nbytes)
+            self._out_nbytes = out_nbytes
+        self.context.set_tensor_address(self.in_name, dev_input)
+        self.context.set_tensor_address(self.out_name, self._dev_out)
+        self.context.execute_async_v3(stream)
+        slot_i = 0 if prev is None else 1 - prev[0]
+        slot = self._defer_ring[slot_i]
+        rows = int(np.prod(out_shape[:-1], dtype=np.int64))
+        self._defer_slot_ensure(slot, rows)
+        reducer.reduce_into(self._dev_out, out_shape, slot["ptr"][0],
+                            slot["ptr"][1])
+        cudart.cudaEventRecord(slot["event"], stream)
+        self._defer_prev = (slot_i, rows, tuple(shape), keep)
+        return True
+
+    def collect_argmax_deferred(self):
+        """取回上一批的 (idx int32[rows], prob f32[rows])；无在途返回 None。
+
+        只等上一批的事件（当前批若已提交仍在飞，不受影响）；返回副本，
+        槽位随后即可被下一批复用。keep 引用在此释放。
+        """
+        from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
+        prev = getattr(self, "_defer_prev", None)
+        if prev is None:
+            return None
+        slot_i, rows, shape, keep = prev
+        slot = self._defer_ring[slot_i]
+        cudart.cudaEventSynchronize(slot["event"])
+        self._defer_prev = None
+        del keep          # Y 帧 owner 归还池（引用计数路径）
+        # 与 execute_device_argmax 同口径：(rows,) → (B, S) 二维
+        B = int(shape[0])
+        return (slot["idx"][:rows].reshape(B, -1).copy(),
+                slot["prob"][:rows].reshape(B, -1).copy())
+
+    def has_deferred(self) -> bool:
+        """是否有延迟收集路径的在途批（穿插同步执行前的判据）。"""
+        return getattr(self, "_defer_prev", None) is not None
+
+    def release_defer_ring(self) -> None:
+        """释放 pinned 环槽与事件（release() 收尾调用；重复调用安全）。"""
+        from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
+        self._defer_prev = None
+        ring = getattr(self, "_defer_ring", None)
+        if ring is None:
+            return
+        for slot in ring:
+            try:
+                cudart.cudaEventDestroy(slot["event"])
+            except Exception:  # noqa: BLE001
+                pass  # 事件销毁失败不阻断环释放（进程退出兜底）
+            if slot["ptr"][0]:
+                try:
+                    cudart.cudaFreeHost(slot["ptr"][0])
+                except Exception:  # noqa: BLE001
+                    pass  # pinned 释放失败不阻断（驱动回收）
+                try:
+                    cudart.cudaFreeHost(slot["ptr"][1])
+                except Exception:  # noqa: BLE001
+                    pass  # 同上
+            slot["idx"] = slot["prob"] = None
+            slot["ptr"] = (0, 0)
+            slot["rows"] = 0
+        self._defer_ring = None
 

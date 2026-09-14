@@ -404,6 +404,13 @@ TRT_PROFILE_BATCH: int = 18
 # 构建半精度引擎（层内 half、IO fp32）。文件名带 sttyped_fp16 标记。
 # 准确率门禁：_probe_acc_ab.py --knob TRT_FP16=0,1（逐帧对齐真值）。
 TRT_FP16_ENV: str = "TRT_FP16"
+# TRT_DEFER_SYNC（env，默认关）：raw 直通批深度 2 延迟收集——整批提交
+# （TRT+argmax+D2H 到 pinned 双环槽）不等待，下一批提交后才同步上一批
+# 的事件：CPU 提交与 GPU 执行跨批重叠（治"launch 裸奔"：h264 生产
+# ocr.infer p50 12.3ms vs 裸流水 5.6ms，运行期 SM 仅 ~40%）。结果滞后
+# 一批交付、顺序=提交序；单流次序保证设备缓冲复用安全，Y 帧 owner
+# 随批保活到 collect。门禁：文本 sha 逐位一致 + 段数恒定 + bench ab。
+TRT_DEFER_SYNC_ENV: str = "TRT_DEFER_SYNC"
 TRT_PROFILE_MIN_W: int = 32
 TRT_PROFILE_OPT_W: int = 320
 TRT_PROFILE_MAX_W: int = 2048

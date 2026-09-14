@@ -14,7 +14,7 @@ import logging
 import math
 import os
 import threading
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from pathlib import Path
 
 import numpy as np
@@ -156,6 +156,13 @@ class OcrEngine:
         self._gpu_ctc_mode = (engine_type == "tensorrt" and
                               (gpu_ctc if gpu_ctc is not None else
                                config.env_bool(config.GPU_CTC_ENV, default=True)))
+        # TRT_DEFER_SYNC（默认关）：raw 直通批深度 2 延迟收集——整批提交
+        # 不等待，结果滞后一批取回（提交与 GPU 执行跨批重叠）。交付顺序
+        # 由 _defer_fifo（提交序 FIFO）保证，穿插的宿主批/不可延迟批也
+        # 走同一队列。消费者契约见 ocr_stage.infer_worker。
+        self._defer_sync = config.env_bool(config.TRT_DEFER_SYNC_ENV,
+                                           default=False)
+        self._defer_fifo = deque()
         if engine_type == "tensorrt":
             try:
                 self._trt = TrtEngine(models, size, progress_cb=self._progress_cb)
@@ -267,6 +274,7 @@ class OcrEngine:
 
     def _infer_locked(self, batch_np: np.ndarray) -> np.ndarray:
         if self._trt is not None:
+            self._drain_defer_to_fifo()
             first_batch = batch_np[:min(len(batch_np), self._trt.max_batch)]
             out_shape = self._trt._prepare_shape(first_batch.shape)
             # 预分配整批输出并让每个子批直接写进对应切片，免去逐批 host_out
@@ -437,6 +445,9 @@ class OcrEngine:
         GPU_CTC=1 时进一步在 GPU 上完成 vocab 维 argmax/max，输出
         不落 RAM（DtoH 仅 B*seq*8 字节），宿主 CTC 直接吃小数组。
         """
+        # 同步语义入口：若延迟路径有在途批（外部直接调用者），先排干——
+        # execute_device_argmax 可能改 context 形状，不允许 in-flight。
+        self._drain_defer_to_fifo()
         self._get_gpu_pre()
         src_h = int(infos[0].h)
         src_w = int(infos[0].w)
@@ -471,6 +482,66 @@ class OcrEngine:
             for k in range(len(preds)):
                 results.append(self._ctc_decode(preds[k]))
         return results
+
+    # ── 深度 2 延迟收集（TRT_DEFER_SYNC）：提交/收集协议 ──────────────
+    # 消费者契约（ocr_stage.infer_worker）：逐批 _gpu_raw_submit 后
+    # _gpu_raw_collect 取回**最旧未交付**批的结果（滞后一批交付，顺序=
+    # 提交序）；流末（哨兵批）再 collect 一次交付最后一批。
+
+    def _drain_defer_to_fifo(self) -> None:
+        """把在途延迟批收进 FIFO（穿插宿主批/同步批前的护栏）。
+
+        同步路径会改 context 形状——TRT 不允许 in-flight 改形状，必须先
+        排干；结果按提交序进 FIFO，由后续 _gpu_raw_collect 交付。
+        """
+        if not (self._defer_sync and self._trt is not None
+                and self._trt.has_deferred()):
+            return
+        idx2d, prob2d = self._trt.collect_argmax_deferred()
+        if idx2d is not None:
+            self._defer_fifo.append(self._ctc_from_idxprob(idx2d, prob2d))
+
+    def _gpu_raw_submit(self, infos: list, force_aspect: float) -> None:
+        """深度 2 第一半：prep+TRT+argmax+D2H 整批提交，不等待。
+
+        不可延迟（B 超子批上限/形状变/输出缓冲需增长）时：在途批排进
+        FIFO，本批走同步路径并把结果同样入 FIFO——交付顺序恒为提交序。
+        """
+        self._get_gpu_pre()
+        src_h = int(infos[0].h)
+        _floor = ocr_pad_floor(self._variant, self._fill_width,
+                               self._pad_floor_env)
+        if force_aspect and force_aspect > 0:
+            _ratio = float(force_aspect)
+        else:
+            _ratio = max(float(t.span[1]) for t in infos) / float(src_h)
+        max_wh = max(_floor / config.OCR_TARGET_H, _ratio)
+        out_width = int(config.OCR_TARGET_H * max_wh)
+        dev_ptr, shape = self._gpu_pre.process_gray_raw(
+            infos, out_width, force_aspect=float(force_aspect))
+        if not self._trt.submit_argmax_deferred(dev_ptr, shape, keep=infos):
+            self._drain_defer_to_fifo()
+            idx2d, prob2d = self._trt.execute_device_argmax(dev_ptr, shape)
+            self._defer_fifo.append(self._ctc_from_idxprob(idx2d, prob2d))
+
+    def _gpu_raw_collect(self) -> "list | None":
+        """深度 2 第二半：取回最旧未交付批的结果；无在途返回 None。"""
+        if self._defer_fifo:
+            return self._defer_fifo.popleft()
+        if not (self._defer_sync and self._trt is not None
+                and self._trt.has_deferred()):
+            return None
+        idx2d, prob2d = self._trt.collect_argmax_deferred()
+        if idx2d is None:
+            return None
+        return self._ctc_from_idxprob(idx2d, prob2d)
+
+    def drain_deferred(self) -> None:
+        """排干并**丢弃**在途/暂存延迟结果（引擎归还池前的安全护栏：
+        只做事件同步与释放，不产生交付）。"""
+        self._defer_fifo.clear()
+        self._drain_defer_to_fifo()
+        self._defer_fifo.clear()
 
     def _ctc_from_idxprob(self, idx: "np.ndarray",
                           prob: "np.ndarray") -> list:
@@ -559,6 +630,10 @@ def acquire_ocr_engine(variant: str = "v6_small",
 
 def checkin_ocr_engine(engine: OcrEngine) -> None:
     """归还引擎入池；超过单 key 或总空闲上限时淘汰最旧引擎。"""
+    # 延迟收集护栏：归还前必须无在途批（事件同步 + 丢弃暂存），否则
+    # 下一个 checkout 者会在未知在途状态上续跑。
+    if getattr(engine, "_defer_sync", False):
+        engine.drain_deferred()
     key = getattr(engine, "_pool_key", None)
     if key is None:
         engine.release()
