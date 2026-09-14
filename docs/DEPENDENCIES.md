@@ -141,12 +141,6 @@
 - `DECORD_SKIP_LOOP_FILTER` 透传（关去块滤波，可选的速度/准确率取舍旋钮）
   需要 fork ≥v0.7.13；旧版忽略该 env。
 
-### onnxruntime
-- TRT/CUDA provider DLL 不通过 ORT provider 使用；TRT 由 `ocr_trt.TrtEngine`
-  直接调用。
-- 1.29 新增参数（`ORT_INTRA/INTER_OP_NUM_THREADS`、parallel 执行、spin off）
-  实测无收益，未启用。
-
 ### TensorRT
 - `find_lib()` 只搜 `os.environ["PATH"]`，不认 `os.add_dll_directory()`；
   `TrtEngine` 初始化前会调用 `gpu_setup.ensure_gpu_initialized()` 更新 PATH。
