@@ -158,7 +158,7 @@
 
 ## 模型资产
 
-- `assets/ocr_models/PP-OCRv6_rec_small.onnx`
+- `assets/ocr_models/PP-OCRv6_rec_small.onnx`（**fp16 权重版，2026-09-14 起唯一分发模型**：与 TRT fp16 路径共用；六片 47134 帧真值代价 ±1 帧/片、方向随机，log 2026-09-14-OV读fp16模型评估；onnx/onnxconverter_common 依赖全路径归零）
 - `assets/ocr_models/ppocrv6_dict.txt`
 
 `ocr_native._models_dir()` / `ocr_trt._models_dir()` 支持：

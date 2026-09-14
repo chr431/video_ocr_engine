@@ -45,6 +45,7 @@
   从未随版本发布，零迁移面）。**onnxruntime 依赖移除**：CPU 路径用户
   需 `pip install openvino`（缺席时构造报错并提示）。
 - `engine_type="onnxruntime"` 字符串保留为 CPU 路径标识（API 不变）。
+- **模型文件 = fp16 权重版**（2026-09-14）：canonical `PP-OCRv6_rec_small.onnx` 即半精度权重（21.2→10.7MB）；真值代价 ±1 帧/片（六片 47134 帧双向抖动，无系统回退）。
 - 证据链：log 2026-09-14-OpenVINO模型级A-B / 集成轮 / 移除轮。
 
 ### 2.1 配置在构造期一次冻结（D6）

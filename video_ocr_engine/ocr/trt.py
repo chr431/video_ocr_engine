@@ -236,21 +236,14 @@ class TrtEngine:
         builder = trt.Builder(logger)  # type: ignore[attr-defined]
         # TRT 11 移除了 EXPLICIT_BATCH（隐式 batch 自 10 起已删，显式为默认），
         # getattr 回退保持 10/11 双兼容；TRT 11 下 flags=0 语义即显式 batch。
+        # 2026-09-14 起 canonical 模型即 fp16 权重版（log 同日「OV读fp16模型
+        # 评估」：30664 帧真值代价 1 帧边界，换 10.5MB 体积）——fp16 构建
+        # 直接用 canonical（本就是 convert_float_to_float16(keep_io_types)
+        # 的产物），onnx/onnxconverter_common 依赖在所有路径归零。
+        onnx_path = models / f"PP-OCRv6_rec_{size}.onnx"
         if _fp16_on():
             # TRT 11.2 已删全部精度 builder flag：半精度唯一正路 =
-            # fp16 ONNX（keep_io_types，IO 仍 fp32）+ STRONGLY_TYPED 网络。
-            # 转换产物缓存到模型目录旁（PP-OCRv6_rec_<size>_fp16.onnx）。
-            onnx_path = models / f"PP-OCRv6_rec_{size}_fp16.onnx"
-            if not onnx_path.exists():
-                import onnx as _onnx
-                from onnxconverter_common import float16 as _f16
-                _src = models / f"PP-OCRv6_rec_{size}.onnx"
-                _m = _f16.convert_float_to_float16(
-                    _onnx.load(str(_src)), keep_io_types=True)
-                _onnx.save(_m, str(onnx_path))
-        else:
-            onnx_path = models / f"PP-OCRv6_rec_{size}.onnx"
-        if _fp16_on():
+            # fp16 ONNX + STRONGLY_TYPED 网络（层内 half、IO fp32）。
             network = builder.create_network(
                 1 << int(trt.NetworkDefinitionCreationFlag.STRONGLY_TYPED))  # type: ignore[attr-defined]
         else:
