@@ -1,15 +1,18 @@
 {
- "except_pass_by_file": {
-  "tools/_fix_probe_paths.py": 2,
-  "tools/_probe_discipline_audit.py": 2,
-  "tools/_probe_lifecycle_repeat.py": 1,
-  "tools/_probe_mem_bw.py": 3,
-  "tools/e2e_smoke.py": 1,
-  "video_ocr_engine/_gpu_kernels.py": 9,
-  "video_ocr_engine/extractor.py": 6,
-  "video_ocr_engine/gpu/context.py": 3,
-  "video_ocr_engine/ocr/native.py": 4,
-  "video_ocr_engine/ocr/trt.py": 5,
-  "video_ocr_engine/gpu/device.py": 19
- }
+  "except_pass_by_file": {
+    "tools/_fix_probe_paths.py": 2,
+    "tools/_probe_discipline_audit.py": 2,
+    "tools/_probe_lifecycle_repeat.py": 1,
+    "tools/_probe_mem_bw.py": 3,
+    "tools/e2e_smoke.py": 1,
+    "video_ocr_engine/_gpu_kernels.py": 10,
+    "video_ocr_engine/domain/diagnostics.py": 3,
+    "video_ocr_engine/gpu/context.py": 3,
+    "video_ocr_engine/gpu/device.py": 5,
+    "video_ocr_engine/ocr/native.py": 4,
+    "video_ocr_engine/ocr/trt.py": 6,
+    "video_ocr_engine/pipeline/gpu_backend.py": 5,
+    "video_ocr_engine/pipeline/host_backend.py": 5,
+    "video_ocr_engine/pipeline/ocr_stage.py": 4
+  }
 }

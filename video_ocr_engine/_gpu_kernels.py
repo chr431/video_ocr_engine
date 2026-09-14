@@ -519,6 +519,49 @@ extern "C" __global__ void argmax_last(
         self._stream = None
         self._owns_stream = False
 
+    def _launch_argmax(self, preds_dev: int, out_shape: tuple):
+        """argmax 内核段（无分配、无同步、无 D2H）——CUDA Graph 捕获用。"""
+        import numpy as np
+        rows = int(np.prod(out_shape[:-1], dtype=np.int64))
+        cdim = int(out_shape[-1])
+        nbytes = rows * 4
+        self._ensure_argmax_bufs(nbytes)
+        block = 256
+        grid = (rows + block - 1) // block
+        self._launch(self._stream,
+                     self._launch_cls(grid=grid, block=block),
+                     self._kernel,
+                     self._buffer_cls.from_handle(int(preds_dev),
+                                                  rows * cdim * 4),
+                     self._buffer_cls.from_handle(self._idx_dev, nbytes),
+                     self._buffer_cls.from_handle(self._prob_dev, nbytes),
+                     np.int64(rows), np.int32(cdim))
+        return rows, nbytes
+
+    def _ensure_argmax_bufs(self, nbytes: int) -> None:
+        from cuda.bindings import runtime as cudart
+        if self._idx_size < nbytes:
+            if self._idx_dev is not None:
+                cudart.cudaFree(self._idx_dev)
+            if self._prob_dev is not None:
+                cudart.cudaFree(self._prob_dev)
+            _err, self._idx_dev = cudart.cudaMalloc(nbytes)
+            self._idx_size = nbytes
+            _err, self._prob_dev = cudart.cudaMalloc(nbytes)
+            self._argmax_epoch = getattr(self, "_argmax_epoch", 0) + 1
+
+    def reduce_into(self, preds_dev: int, out_shape: tuple,
+                    idx_host: int, prob_host: int) -> int:
+        """图捕获段：argmax + 异步 D2H 到给定 pinned 宿主（不分配/不同步）。"""
+        from cuda.bindings import runtime as cudart
+        rows, nbytes = self._launch_argmax(preds_dev, out_shape)
+        _d2h = cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost
+        cudart.cudaMemcpyAsync(idx_host, self._idx_dev, nbytes,
+                               _d2h, self._stream)
+        cudart.cudaMemcpyAsync(prob_host, self._prob_dev, nbytes,
+                               _d2h, self._stream)
+        return rows
+
     def reduce(self, preds_dev: int, out_shape: tuple):
         """对显存中的 (B,S,C) 输出做归约，回传 (idx int32[B*S], prob f32[B*S])。
 
@@ -530,37 +573,14 @@ extern "C" __global__ void argmax_last(
         """
         import numpy as np
         from cuda.bindings import runtime as cudart
-        rows = int(np.prod(out_shape[:-1], dtype=np.int64))
-        cdim = int(out_shape[-1])
-        nbytes_idx = rows * 4
-        if self._idx_size < nbytes_idx:
-            if self._idx_dev is not None:
-                cudart.cudaFree(self._idx_dev)
-            if self._prob_dev is not None:
-                cudart.cudaFree(self._prob_dev)
-            _err, self._idx_dev = cudart.cudaMalloc(nbytes_idx)
-            self._idx_size = nbytes_idx
-            self._prob_dev = None
-        if self._prob_dev is None:
-            _err, self._prob_dev = cudart.cudaMalloc(nbytes_idx)
-        idx_buf = self._buffer_cls.from_handle(self._idx_dev, nbytes_idx)
-        prob_buf = self._buffer_cls.from_handle(self._prob_dev, nbytes_idx)
-        block = 256
-        grid = (rows + block - 1) // block
-        self._launch(self._stream,
-                     self._launch_cls(grid=grid, block=block),
-                     self._kernel,
-                     self._buffer_cls.from_handle(int(preds_dev),
-                                                  rows * cdim * 4),
-                     idx_buf, prob_buf,
-                     np.int64(rows), np.int32(cdim))
+        rows, nbytes = self._launch_argmax(preds_dev, out_shape)
         idx = np.empty(rows, dtype=np.int32)
         prob = np.empty(rows, dtype=np.float32)
         _d2h = cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost
-        cudart.cudaMemcpyAsync(idx.ctypes.data, self._idx_dev, nbytes_idx,
+        cudart.cudaMemcpyAsync(idx.ctypes.data, self._idx_dev, nbytes,
                                _d2h, self._stream)
         cudart.cudaMemcpyAsync(prob.ctypes.data, self._prob_dev,
-                               nbytes_idx, _d2h, self._stream)
+                               nbytes, _d2h, self._stream)
         cudart.cudaStreamSynchronize(self._stream)
         return idx, prob
 

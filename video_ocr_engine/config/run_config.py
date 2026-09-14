@@ -26,6 +26,7 @@ class RunConfig:
     ocr_reorder_window: int = 64
     ocr_instances: bool = True
     ocr_gpu_ctc: bool = True
+    ocr_trt_cuda_graph: bool = False         # CUDA Graph 单子批捕获（验证期）
     # ── segment ──
     segment_text_sep_merge: str = "binary"
     segment_merge_dense_gate: int = 5      # 0=关；>0=差异图 win3 阈值（稠密簇门）
