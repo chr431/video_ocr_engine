@@ -46,10 +46,10 @@ KNOBS = Registry(knobs=(
          "ocr", ("cpu",), "ec:77", note="仅 ONNX 双实例路径"),
     Knob("ocr.gpu_ctc", "GPU_CTC_ENV", "GPU_CTC", "bool", True,
          "ocr", ("gpu",), "ec:83", note="仅 TRT 输出归约"),
-    Knob("ocr.trt_cuda_graph", "TRT_CUDA_GRAPH_ENV", "TRT_CUDA_GRAPH",
-         "bool", False, "ocr", ("gpu",), "ocr/trt.py:_cuda_graph_on",
-         "CUDA Graph 单子批捕获（跑通验证期默认关）；捕获区不含任何 "
-         "cudaMalloc/set_input_shape——缓冲图外暖分配是硬前置"),
+    Knob("ocr.trt_fp16", "TRT_FP16_ENV", "TRT_FP16", "bool", False,
+         "ocr", ("gpu",), "ocr/trt.py:_fp16_on",
+         note="fp16 ONNX（keep_io_types）+ STRONGLY_TYPED 引擎（层内 half、"
+              "IO fp32）；准确率门禁 _probe_acc_ab --knob TRT_FP16=0,1"),
     # ── segment ──
     Knob("segment.text_sep_merge", "TEXT_SEP_MERGE_ENV", "TEXT_SEP_MERGE", "str",
          "binary", "segment", _ALL, "ec:229",

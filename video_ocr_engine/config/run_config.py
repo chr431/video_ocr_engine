@@ -26,6 +26,8 @@ class RunConfig:
     ocr_reorder_window: int = 64
     ocr_instances: bool = True
     ocr_gpu_ctc: bool = True
+    ocr_trt_fp16: bool = False              # fp16 ONNX + STRONGLY_TYPED 引擎
+    ocr_trt_cuda_graph: bool = False        # argmax+D2H 段图（init 期预热）
     ocr_trt_cuda_graph: bool = False         # CUDA Graph 单子批捕获（验证期）
     # ── segment ──
     segment_text_sep_merge: str = "binary"

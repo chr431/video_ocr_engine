@@ -84,12 +84,12 @@
   rationale: ec:83
   note: 仅 TRT 输出归约
 
-- name: ocr.trt_cuda_graph
-  env: TRT_CUDA_GRAPH
+- name: ocr.trt_fp16
+  env: TRT_FP16
   type: bool
   default: False
-  rationale: ocr/trt.py:_cuda_graph_on
-  note: CUDA Graph 单子批捕获（跑通验证期默认关）；捕获区不含任何 cudaMalloc/set_input_shape——缓冲图外暖分配是硬前置
+  rationale: ocr/trt.py:_fp16_on
+  note: fp16 ONNX（keep_io_types）+ STRONGLY_TYPED 引擎（层内 half、IO fp32）；准确率门禁 _probe_acc_ab --knob TRT_FP16=0,1
 
 - name: segment.text_sep_merge
   env: TEXT_SEP_MERGE

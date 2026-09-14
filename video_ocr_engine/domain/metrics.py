@@ -73,8 +73,6 @@ _SEED = (
     ("ocr.sub_chunks", "counter", "子批", "ocr", "PI-3"),
     ("ocr.syncs", "counter", "次", "ocr", "PI-3"),
     ("ocr.syncs_per_chunk", "gauge", "次/chunk", "ocr", "PI-3"),
-    ("ocr.graph_hits", "counter", "次", "ocr", "S7-G"),   # CUDA Graph 命中
-    ("ocr.graph_misses", "counter", "次", "ocr", "S7-G"),  # 回落常规（首跳暖分配/捕获失败）
     # 填充率（R5/S6-f）：pad 宽是 rec 模型的计算宽度，content 是真实内容宽度
     ("ocr.rows", "counter", "行", "ocr", ""),
     ("ocr.padded_cols", "counter", "列", "ocr", ""),

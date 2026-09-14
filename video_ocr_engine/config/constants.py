@@ -400,11 +400,10 @@ OCR_CTC_CHUNK: int = 64
 #   ⚠️ 该值进**引擎文件名**（见 trt._engine_candidates）：改它 = 换引擎产物，
 #   首次使用会重建（本机 68s，一次性；不做静默复用旧 profile 的缓存）。
 TRT_PROFILE_BATCH: int = 18
-# TRT_CUDA_GRAPH（env，默认关=跑通验证期）：TRT 单子批 enqueue+argmax+D2H
-# 按 (shape,in,out,epoch) 捕获。硬前置：dev_out 与 reducer idx/prob 缓冲
-# 必须在图外完成分配（捕获区内 cudaMalloc = TRT reformat 401/901，且失败
-# 捕获会毒化 CUDA 上下文）——首跳常规路径暖分配，第二跳起走图。
-TRT_CUDA_GRAPH_ENV: str = "TRT_CUDA_GRAPH"
+# TRT_FP16（env，默认关）：fp16 ONNX（keep_io_types）+ STRONGLY_TYPED 网络
+# 构建半精度引擎（层内 half、IO fp32）。文件名带 sttyped_fp16 标记。
+# 准确率门禁：_probe_acc_ab.py --knob TRT_FP16=0,1（逐帧对齐真值）。
+TRT_FP16_ENV: str = "TRT_FP16"
 TRT_PROFILE_MIN_W: int = 32
 TRT_PROFILE_OPT_W: int = 320
 TRT_PROFILE_MAX_W: int = 2048

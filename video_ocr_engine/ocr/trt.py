@@ -37,6 +37,11 @@ def _sp_tick(key: str, t0: float) -> None:
 _models_dir = config.models_dir
 
 
+def _fp16_on() -> bool:
+    """TRT_FP16 env（调用时读，子进程 A/B 可逐臂切换）。"""
+    return config.env_bool(config.TRT_FP16_ENV, default=False)
+
+
 class TrtEngine:
     """反序列化 TRT 引擎 + 执行上下文 + 输入/输出显存缓冲复用。"""
 
@@ -55,11 +60,6 @@ class TrtEngine:
 
         self._progress_cb = progress_cb
         self.engine_path: Path | None = None
-        # CUDA Graph 缓存（ocr.trt_cuda_graph，默认关）：
-        # key=(shape,in,out,dev_out_epoch,reducer_epoch)；缓冲 realloc →
-        # epoch++ 全图失效（防悬垂指针）。硬前置：所有缓冲图外暖分配。
-        self._graphs: dict = {}
-        self._graph_epoch = 0
 
         # 逐个候选尝试加载：已存在的引擎可能是 TRT 版本/GPU 架构不匹配的
         # 陈旧产物。加载失败 → 删除（可写目录），尝试下一个候选；
@@ -120,6 +120,7 @@ class TrtEngine:
         # 稳定开销；缓冲按需增长，不主动释放）。
         self._out_host: "np.ndarray | None" = None
 
+
     def release(self) -> None:
         """释放设备缓冲、归约器及本对象拥有的 stream；重复调用安全。"""
         from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
@@ -167,8 +168,9 @@ class TrtEngine:
         用户仍跑 batch=6 的旧引擎，改动只在少数新机器上生效（最难发现的一类
         不一致）。代价是首次使用重建一次（本机 68s，一次性）。
         """
+        prec = ("sttyped_fp16" if _fp16_on() else "fp32_tf32unset")
         name = (f"multi_PP-OCRv6_rec_{size}_{config.TRT_ENGINE_SM}"
-                f"_fp32_tf32unset_b{int(config.TRT_PROFILE_BATCH)}.engine")
+                f"_{prec}_b{int(config.TRT_PROFILE_BATCH)}.engine")
         cands = [_models_dir() / "models" / name]
         cands.append(config.app_data_dir() / "ocr_engines" / name)
         return cands
@@ -233,13 +235,30 @@ class TrtEngine:
         builder = trt.Builder(logger)  # type: ignore[attr-defined]
         # TRT 11 移除了 EXPLICIT_BATCH（隐式 batch 自 10 起已删，显式为默认），
         # getattr 回退保持 10/11 双兼容；TRT 11 下 flags=0 语义即显式 batch。
-        try:
-            flags = 1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)  # type: ignore[attr-defined]
-        except AttributeError:
-            flags = 0
-        network = builder.create_network(flags)
+        if _fp16_on():
+            # TRT 11.2 已删全部精度 builder flag：半精度唯一正路 =
+            # fp16 ONNX（keep_io_types，IO 仍 fp32）+ STRONGLY_TYPED 网络。
+            # 转换产物缓存到模型目录旁（PP-OCRv6_rec_<size>_fp16.onnx）。
+            onnx_path = models / f"PP-OCRv6_rec_{size}_fp16.onnx"
+            if not onnx_path.exists():
+                import onnx as _onnx
+                from onnxconverter_common import float16 as _f16
+                _src = models / f"PP-OCRv6_rec_{size}.onnx"
+                _m = _f16.convert_float_to_float16(
+                    _onnx.load(str(_src)), keep_io_types=True)
+                _onnx.save(_m, str(onnx_path))
+        else:
+            onnx_path = models / f"PP-OCRv6_rec_{size}.onnx"
+        if _fp16_on():
+            network = builder.create_network(
+                1 << int(trt.NetworkDefinitionCreationFlag.STRONGLY_TYPED))  # type: ignore[attr-defined]
+        else:
+            try:
+                flags = 1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)  # type: ignore[attr-defined]
+            except AttributeError:
+                flags = 0
+            network = builder.create_network(flags)
         parser = trt.OnnxParser(network, logger)  # type: ignore[attr-defined]
-        onnx_path = models / f"PP-OCRv6_rec_{size}.onnx"
         with open(onnx_path, "rb") as f:
             if not parser.parse(f.read()):
                 raise RuntimeError(f"ONNX 解析失败: {onnx_path}")
@@ -404,92 +423,6 @@ class TrtEngine:
             SUBPROBE['n'] += 1
         return host_out
 
-    @staticmethod
-    def _cuda_graph_on() -> bool:
-        from video_ocr_engine.config import constants as _cfg
-        return _cfg.env_bool(_cfg.TRT_CUDA_GRAPH_ENV, default=False)
-
-    def _graph_execute(self, reducer, dev_input: int, out_shape: tuple):
-        """CUDA Graph（argmax+D2H 段，2026-09-14 跑通版）。
-
-        ⚠️ TRT enqueueV3 **不进图**：TRT 11.2 对含输入 reformat 的引擎，
-        捕获期调用 enqueueV3 会触发 genericReformat 的 capture-invalidation
-        （CUDA_ERROR_STREAM_CAPTURE_INVALIDATED），失败捕获还会毒化上下文
-        （decord 生产者线程 initialization error 整线崩）。故图只捕获
-        argmax 归约 + D2H 两步（TRT 完成后其输出指针即入参）。
-        硬前置：reducer idx/prob 缓冲图外暖分配（捕获区 cudaMalloc 同样
-        禁止）；key 含缓冲 epoch，realloc 全图失效。
-        """
-        import numpy as np
-        import ctypes
-        from cuda.bindings import runtime as cudart
-        stream = self._ensure_stream()
-        if self._dev_out is None or reducer is None:
-            return None
-        r_epoch = int(getattr(reducer, "_argmax_epoch", 0) or 0)
-        if r_epoch == 0:
-            return None   # reducer 未暖分配 → 常规路径先跑一次
-        rows = int(np.prod(out_shape[:-1], dtype=np.int64))
-        nbytes = rows * 4
-        key = (tuple(int(v) for v in out_shape),
-               int(self._dev_out), r_epoch)
-        entry = self._graphs.get(key)
-        if entry is None:
-            if len(self._graphs) >= 32:
-                self._graphs.clear()
-            rc_i = cudart.cudaHostAlloc(nbytes, 1)
-            rc_p = cudart.cudaHostAlloc(nbytes, 1)
-            idx_host = rc_i[1] if isinstance(rc_i, tuple) else rc_i
-            prob_host = rc_p[1] if isinstance(rc_p, tuple) else rc_p
-            if not idx_host or not prob_host:
-                return None
-            try:
-                # Relaxed 模式（2026-09-14 定稿）：ThreadLocal 下，同进程
-                # decord 独立 CUDA 上下文的合法并发操作会让捕获序列失效
-                #（CUDA_ERROR_STREAM_CAPTURE_INVALIDATED，实测 100% 复现）；
-                # Relaxed 明确允许潜在不安全调用与捕获共存——本图的节点
-                # 全在本流（argmax+D2H），无跨流依赖，Relaxed 语义安全。
-                _M = cudart.cudaStreamCaptureMode  # 枚举在命名空间下
-                _e_begin = cudart.cudaStreamBeginCapture(
-                    stream, _M.cudaStreamCaptureModeRelaxed)
-                _e_begin_v = _e_begin[0] if isinstance(_e_begin, tuple)                     else _e_begin
-                if int(_e_begin_v) != 0:
-                    return None
-                reducer.reduce_into(int(self._dev_out), out_shape,
-                                    int(idx_host), int(prob_host))
-                _e_end, graph = cudart.cudaStreamEndCapture(stream)
-                if int(_e_end) != 0 or not graph:
-                    return None
-                rc3 = cudart.cudaGraphInstantiate(graph, 0)
-                gexec = rc3[1] if isinstance(rc3, tuple) else rc3
-                if not gexec:
-                    return None
-            except Exception:
-                # 捕获失败本身已有"回落常规路径"承接（return None）；
-                # EndCapture 清理失败无需上报——流状态由下一次 BeginCapture
-                # 前的 guard 重置，图缓存 key 含 epoch 不会命中悬垂图。
-                try:
-                    cudart.cudaStreamEndCapture(stream)
-                except Exception:  # noqa: BLE001 清理失败可忽略（理由见上）
-                    pass
-                return None
-            entry = (gexec, idx_host, prob_host, rows, nbytes)
-            self._graphs[key] = entry
-        gexec, idx_host, prob_host, rows, nbytes = entry
-        _e_launch = cudart.cudaGraphLaunch(gexec, stream)
-        _e_launch_v = _e_launch[0] if isinstance(_e_launch, tuple)             else _e_launch
-        if int(_e_launch_v) != 0:
-            self._graphs.pop(key, None)
-            return None
-        cudart.cudaStreamSynchronize(stream)
-        idx = np.frombuffer(
-            (ctypes.c_char * nbytes).from_address(int(idx_host)),
-            dtype=np.int32).copy()
-        prob = np.frombuffer(
-            (ctypes.c_char * nbytes).from_address(int(prob_host)),
-            dtype=np.float32).copy()
-        return idx, prob
-
     def execute_device_argmax(self, dev_input: int, shape: tuple):
         """显存全驻留：执行 TRT 并在 GPU 完成 vocab 维 argmax/max。
 
@@ -510,23 +443,6 @@ class TrtEngine:
         _m = getattr(self, '_metrics', None)
         _n_sync = 0
         _n_sub = 0
-        if (B <= self.max_batch and self._cuda_graph_on()
-                and reducer is not None and self._dev_out is not None):
-            out_shape_g = self._prepare_shape(shape)
-            # TRT enqueue 留在图外（TRT11 捕获不兼容，见 _graph_execute）
-            self.context.set_tensor_address(self.in_name, int(dev_input))
-            self.context.set_tensor_address(self.out_name,
-                                            int(self._dev_out))
-            self.context.execute_async_v3(stream)
-            g = self._graph_execute(reducer, self._dev_out, out_shape_g)
-            if g is not None:
-                if _m is not None and getattr(_m, 'enabled', False):
-                    _m.counter('ocr.graph_hits', 1)
-                idx_all, prob_all = g
-                seq = idx_all.size // max(B, 1)
-                return (idx_all.reshape(B, seq), prob_all.reshape(B, seq))
-            if _m is not None and getattr(_m, 'enabled', False):
-                _m.counter('ocr.graph_misses', 1)
         for i in range(0, B, self.max_batch):
             nb = min(self.max_batch, B - i)
             if i > 0 and nb < self.max_batch:
@@ -543,7 +459,6 @@ class TrtEngine:
                     cudart.cudaFree(self._dev_out)
                 _, self._dev_out = cudart.cudaMalloc(out_nbytes)
                 self._out_nbytes = out_nbytes
-                self._graph_epoch += 1   # realloc → 图悬垂，全失效
             self.context.set_tensor_address(
                 self.in_name, dev_input + i * elem_floats * 4)
             self.context.set_tensor_address(self.out_name, self._dev_out)
