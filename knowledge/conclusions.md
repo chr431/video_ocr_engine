@@ -226,7 +226,7 @@
   evidence: log 2026-09-14-TRT延迟收集流水；_probe_ocr_phase_split.py
 
 - id: C-48
-  conclusion: **CPU OCR 默认引擎 = OpenVINO（OCR_CPU_BACKEND=onnxruntime 回退）**：模型级 2.1×；真值三内容族零差（test5/6 双满分、test2 +0.0003）；h264-cpu 热池 −27.96%（3/3）；金标 A-cpu 六例重录
+  conclusion: **CPU OCR 引擎 = OpenVINO 唯一（onnxruntime 已移除，openvino 缺席报错装）**：模型级 2.1×；真值三内容族零差（test5/6 双满分、test2 +0.0003）；h264-cpu 热池 −27.96%（3/3）；冻结包可剪至 73MB
   status: active
   premises: 4060/Zen4；openvino 2026.3.1；仅 CPU 路径
   revisit: 换 CPU（尤其非 x86）/ openvino 换代 / 内容族大变

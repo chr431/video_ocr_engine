@@ -8,7 +8,6 @@
 | 包 | 当前版本 | 来源 | 说明 |
 | --- | --- | --- | --- |
 | numpy | 2.x | PyPI | 预处理/信号计算，纯 numpy 无 scipy |
-| onnxruntime | 1.29.x | PyPI | CPU OCR 回退后端（`OCR_CPU_BACKEND=onnxruntime`；openvino 缺席时自动回落）；1.28 含 protobuf CVE 修复；1.29.0 实测升级安全、性能持平 |
 | openvino | 2026.3.1 | PyPI | **CPU OCR 默认后端**（2026-09-14 起）：模型级 2.1× 于 ORT + argmax 全一致（log 2026-09-14-OpenVINO模型级A-B/集成轮）；wheel ~76MB，仅 CPU 插件。**冻结分发可剪至 73MB**（删 NPU/GPU/异构前端等，配方与等价性实证见 log 2026-09-14-OpenVINO冻结瘦身） |
 | psutil | 6+ | PyPI | 物理核数探测 / RSS 采样（缺失时降级） |
 | decord | **0.8.3（已发布 [v0.8.3](https://github.com/chr431/decord/releases/tag/v0.8.3)，含 §16/§17 死锁修复）** | chr431/decord release | NVDEC 硬解 + CPU 软解；**PyPI 官方版不支持** `next_roi` / ROI-first / GPU gray / YUV420 / `sample_stride` 等差步长快速路径；fork 自 0.8.2 起发布 cp39–cp314 全版本 wheel，`pip install <wheel>` 即用 |

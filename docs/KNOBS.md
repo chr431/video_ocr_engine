@@ -16,7 +16,6 @@
 | `ocr.gpu_ctc` | `GPU_CTC` | bool | `True` | ec:83 |
 | `ocr.trt_fp16` | `TRT_FP16` | bool | `False` | ocr/trt.py:_fp16_on |
 | `ocr.trt_defer_sync` | `TRT_DEFER_SYNC` | bool | `False` | ocr/trt.py 延迟收集环 |
-| `ocr.cpu_backend` | `OCR_CPU_BACKEND` | str | `openvino` | ocr/native.py:_init_onnx |
 | `segment.text_sep_merge` | `TEXT_SEP_MERGE` | str | `binary` | ec:229 |
 | `segment.merge_dense_gate` | `SEG_MERGE_DENSE_GATE` | int | `5` | log:2026-09-12-准确项-§2 |
 | `pipeline.gpu` | `GPU_PIPELINE` | bool|none | `None` | ec:81 |

@@ -38,6 +38,15 @@
 
 ## 2. 行为变更（§10.2 声明项）
 
+### 2.0 CPU OCR 引擎：onnxruntime → OpenVINO（2026-09-14，0.14.0）
+- **旧**：CPU 推理 = onnxruntime（`ocr_backend="cpu"`）。
+- **新**：CPU 推理 = **OpenVINO 唯一**（模型级 2.1×、真值门禁三内容族
+  零差、h264-cpu 热池 −27.96%；`OCR_CPU_BACKEND` 旋钮随移除删除——
+  从未随版本发布，零迁移面）。**onnxruntime 依赖移除**：CPU 路径用户
+  需 `pip install openvino`（缺席时构造报错并提示）。
+- `engine_type="onnxruntime"` 字符串保留为 CPU 路径标识（API 不变）。
+- 证据链：log 2026-09-14-OpenVINO模型级A-B / 集成轮 / 移除轮。
+
 ### 2.1 配置在构造期一次冻结（D6）
 - **v1**：几乎全部 env 旋钮调用期读取，README 称"构造之后再改 env 同样
   生效"。
