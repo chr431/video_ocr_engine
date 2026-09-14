@@ -44,8 +44,10 @@ _fw_raw = os.environ.get("PROBE_FILL_WIDTH")
 _fw_kw = ({"fill_width": int(_fw_raw)}
           if _fw_raw not in (None, "") else {})
 ex = FieldExtractor(path, roi, frame_start=int(fs), frame_end=int(fe),
-                    sample_stride=1, decode_backend="auto",
-                    ocr_backend="auto", keep_crops=False,
+                    sample_stride=1,
+                    decode_backend=os.environ.get("PROBE_DECODE", "auto"),
+                    ocr_backend=os.environ.get("PROBE_OCR", "auto"),
+                    keep_crops=False,
                     merge_similar=os.environ.get(
                         "PROBE_MERGE_SIMILAR", "1") == "1", **_fw_kw, **_fa_kw)
 t0 = time.perf_counter()

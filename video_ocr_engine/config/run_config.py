@@ -28,6 +28,7 @@ class RunConfig:
     ocr_gpu_ctc: bool = True
     ocr_trt_fp16: bool = False              # fp16 ONNX + STRONGLY_TYPED 引擎
     ocr_trt_defer_sync: bool = False        # raw 批深度 2 延迟收集（滞后一批交付）
+    ocr_cpu_backend: str = "openvino"       # CPU 推理引擎（openvino|onnxruntime）
     # ── segment ──
     segment_text_sep_merge: str = "binary"
     segment_merge_dense_gate: int = 5      # 0=关；>0=差异图 win3 阈值（稠密簇门）
