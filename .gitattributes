@@ -1,1 +1,5 @@
 tests/golden/** text eol=lf
+AGENTS.md text eol=lf
+knowledge/*.md text eol=lf
+knowledge/*.yaml text eol=lf
+docs/**/*.md text eol=lf
