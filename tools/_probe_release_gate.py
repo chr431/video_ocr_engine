@@ -224,14 +224,25 @@ def main() -> int:
             shutil.rmtree(_CORRUPT_DIR, ignore_errors=True)
 
     if "ablation" in steps:
+        # 2026-09-14（C-46）复测：泵内流序 kick 在新架构里是**纯优化而非
+        # 承重**——DECORD_HYBRID_KICK_OFF=1 全禁后，离场侧 DPB 尾帧由其
+        # 下一个被供 GOP 的 IDR 天然冲刷、经 stash/expected 正确交付
+        #（实测 h264+cpu 段数 8340 不变、wall 持平）。旧版"期望挂死"的
+        # 债务克隆承重判别随机制删除而作废。本步改为**优雅降级守护**：
+        # 禁 kick 必须仍以正确段数完成——若退化成挂死/缺帧，说明无 kick
+        # 回退路径被破坏（回归到"kick 是唯一活路"的脆弱形态）。
         rc, out, err, to = sh(
             [sys.executable, str(ROOT / "tools" / "_probe_e2e_mode.py"),
              "test6_h264.mp4", "hybrid", "cpu"],
-            args.timeout_ablation,
-            env=gate_env({"DECORD_HYBRID_KICK_BURST": "0",
+            args.timeout_e2e,
+            env=gate_env({"DECORD_HYBRID_KICK_OFF": "1",
                           **({"DECORD_LIBRARY_PATH": args.fork}
                              if args.fork else {})}))
-        ok, note = to, "挂死如预期(机制承重)" if to else "健康完成=修复缺失!"
+        m = _RE_E2E.search(out or "")
+        segs = int(m.group(4)) if m else -1
+        ok = (not to) and rc == 0 and segs == E2E_CASES["test6_h264.mp4"]
+        note = ("优雅降级✓ segs=%d" % segs if ok else
+                ("挂死(无kick回退被破坏)" if to else "segs=%d≠8340" % segs))
         results.append(("ablation", note, ok))
         print("  [ablation] %s" % note)
 

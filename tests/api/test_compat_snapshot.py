@@ -105,7 +105,7 @@ def test_package_exports_and_root_modules():
 def test_env_name_constants_frozen():
     import engine_config as config
     names = sorted(n for n in dir(config) if n.endswith("_ENV"))
-    assert len(names) == 19
+    assert len(names) == 20   # +GPU_PIPELINE_DRAINER（redesign 2026-09-14）
     # 名字快照（附录 C 全表的键集合 + SEG_MERGE_DENSE_GATE_ENV）
     assert names == sorted([
         "OCR_THREADS_ENV", "OCR_BATCH_ENV", "OCR_GAMMA_ENV",
@@ -115,7 +115,8 @@ def test_env_name_constants_frozen():
         "SEG_MERGE_DENSE_GATE_ENV",
         "DECODE_THREADS_ENV", "GPU_PIPELINE_ENV", "GPU_PIPELINE_STREAM_ENV",
         "GPU_CTC_ENV", "ENGINE_PROFILE_ENV", "TRT_SUBPROBE_ENV",
-        "DEBUG_BOUNDS_ENV", "HYBRID_CPU_THREADS_ENV"])
+        "DEBUG_BOUNDS_ENV", "HYBRID_CPU_THREADS_ENV",
+        "GPU_PIPELINE_DRAINER_ENV"])
 
 
 DELETED_NAMES = {

@@ -111,7 +111,7 @@ python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.
   1.7~2.8×（C-04），但弱 CPU 可能反慢且必带争用/功耗代价；批量互补仍需**显式**
   `decode_backend="cpu"`（C-07/C-08）
 - GPU 分段 + ONNX OCR 无净收益，门控只放行 NVDEC+TRT（PERF §9）
-- hybrid 已迁 **decord 原生**；现役架构 = **包缓存 + 供料期 GOP 派工**（C-46，fork fef3c4b 已随 wheel 发布）：Push 只入压缩包缓存（512MB），泵按当下速率贪心派工 GOP（前瞻+同侧保序）；**kick 必须经泵按流序注入**（错位=IDR 冲掉重排窗→遮蔽损坏，fork 级测不出）；引擎 A/B hevc −6.29%/h264 −4.78%/av1 平价，fork 对并联和 95/78/93%。**收益面 = TRT/设备路径；ONNX 宿主路径不反超**（选 nvdec）；h264 峰值走显式 `cpu`（C-08）。GPU 侧余量=OCR（h264 已 OCR-bound，OCR_BATCH 非杠杆；TRT 大 max_batch/fp16 建议立项）。旧机制（计划/视界/REPLAN/债务克隆）已删除
+- hybrid 已迁 **decord 原生**；现役架构 = **包缓存 + 供料期 GOP 派工**（C-46，fork fef3c4b 已随 wheel 发布）：Push 只入压缩包缓存（512MB），泵按当下速率贪心派工 GOP（前瞻+同侧保序）；**kick 必须经泵按流序注入**（错位=IDR 冲掉重排窗→遮蔽损坏，fork 级测不出）；引擎 A/B hevc −6.29%/h264 −4.78%/av1 平价，fork 对并联和 95/78/93%。**收益面 = TRT/设备路径；ONNX 宿主路径不反超**（选 nvdec）；h264 峰值走显式 `cpu`（C-08）。GPU 侧余量=OCR：h264 已 OCR-bound 且瓶颈=launch 裸奔（单发 12.2ms vs 吞吐 5.6ms）；CUDA Graph 独立成立但 TRT11 genericReformat 捕获失败会毒化上下文（已回退）；fp16 被 TRT11 删 flag 堵死（fp16 ONNX 强类型路留档）。旧机制（计划/视界/REPLAN/债务克隆）已删除
 - **racelog_test 全部视频测量/验证一律 `sample_stride=1`**（2026-09-10 重申，
   防漏信息）；stride>1 仅用于字幕场景（字幕更新频率慢，如批量剧集字幕提取）
 - **合并判定默认带「稠密簇门」**（`segment.merge_dense_gate`）：遥测内容不再合并，

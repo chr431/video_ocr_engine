@@ -32,6 +32,7 @@ class RunConfig:
     # ── pipeline ──
     pipeline_gpu: bool | None = None       # None=规则判定
     pipeline_gpu_stream: bool = False
+    pipeline_gpu_drainer: bool = False     # 层4 排空线程（实测零收益默认关）
     # ── diag ──
     diag_profile: bool = False
     diag_subprobe: bool = False

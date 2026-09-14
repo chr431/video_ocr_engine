@@ -112,6 +112,13 @@
   rationale: ec:82
   note: C-10 判零收益，opt-in
 
+- name: pipeline.gpu_drainer
+  env: GPU_PIPELINE_DRAINER
+  type: bool
+  default: False
+  rationale: gpu/device.py:_batch_iter
+  note: 层4 排空线程（get_batch 独占线程预取深 4 批）；实测零收益默认关（引擎税=线程争用而非排空阻塞，同 C-10 判例）
+
 - name: diag.profile
   env: ENGINE_PROFILE
   type: bool

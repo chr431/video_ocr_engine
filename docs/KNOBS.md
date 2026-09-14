@@ -18,6 +18,7 @@
 | `segment.merge_dense_gate` | `SEG_MERGE_DENSE_GATE` | int | `5` | log:2026-09-12-准确项-§2 |
 | `pipeline.gpu` | `GPU_PIPELINE` | bool|none | `None` | ec:81 |
 | `pipeline.gpu_stream` | `GPU_PIPELINE_STREAM` | bool | `False` | ec:82 |
+| `pipeline.gpu_drainer` | `GPU_PIPELINE_DRAINER` | bool | `False` | gpu/device.py:_batch_iter |
 | `diag.profile` | `ENGINE_PROFILE` | bool | `False` | ec:84 |
 | `diag.subprobe` | `TRT_SUBPROBE` | bool | `False` | ec:85 |
 | `diag.bounds_debug` | `DEBUG_BOUNDS` | bool | `False` | ec:86 |

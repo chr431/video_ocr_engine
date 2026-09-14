@@ -62,6 +62,11 @@ KNOBS = Registry(knobs=(
          note="三态：未设 None=规则 / falsy 关 / truthy 强制 / 非法=关（非 None）"),
     Knob("pipeline.gpu_stream", "GPU_PIPELINE_STREAM_ENV", "GPU_PIPELINE_STREAM",
          "bool", False, "pipeline", ("gpu",), "ec:82", note="C-10 判零收益，opt-in"),
+    Knob("pipeline.gpu_drainer", "GPU_PIPELINE_DRAINER_ENV",
+         "GPU_PIPELINE_DRAINER", "bool", False, "pipeline", ("gpu",),
+         "gpu/device.py:_batch_iter",
+         note="层4 排空线程（get_batch 独占线程预取深 4 批）；实测零收益"
+              "默认关（引擎税=线程争用而非排空阻塞，同 C-10 判例）"),
     # ── diag ──
     Knob("diag.profile", "ENGINE_PROFILE_ENV", "ENGINE_PROFILE", "bool", False,
          "diag", _ALL, "ec:84", note="v1 读于构造期；v2 统一构造期一次（§10.2）"),
