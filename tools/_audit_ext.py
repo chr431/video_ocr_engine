@@ -147,7 +147,7 @@ def check_no_import_side_effects() -> str | None:
 
 def check_docs_budget() -> str | None:
     """[18] 知识库与活文档预算（§14.2）。"""
-    limits = (("knowledge/conclusions.yaml", 12 * 1024),
+    limits = (("knowledge/conclusions.md", 12 * 1024),
               ("knowledge/knobs.yaml", 24 * 1024),
               ("AGENTS.md", 14 * 1024))
     for rel, cap in limits:

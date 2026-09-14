@@ -1,5 +1,5 @@
-# 活动结论（唯一事实源；docs/CONCLUSIONS.md 为渲染产物）
-# 规则（Q7）：每条含 status/premises/revisit/evidence；superseded 只留指针；dead 降级 docs/log/。
+# 活动结论（唯一事实源，按行解析非 YAML；docs/CONCLUSIONS.md 为渲染产物）
+# 规则（Q7）：每条以 `- id:` 起含 status/premises/revisit/evidence；superseded 只留指针；dead 降级 docs/log/。
 
 - id: C-01
   conclusion: 并发退化真因 = NVDEC 会话数（单硬件单元串行）；NVDEC∥CPU 互补聚合 1.83–1.87×，双 NVDEC 仅 1.01–1.20×
@@ -130,7 +130,7 @@
   status: superseded
   replaced_by: C-08
 - id: C-34
-  conclusion: S7 复评（Q4）：单视频仍受解码供给限制（h264-gpu ≈ NVDEC 1013fps），ExtractionPool 互补配对前提成立；但为新增 API，待显式立项
+  conclusion: S7 复评（Q4）：单视频受解码供给限制；ExtractionPool 互补配对已交付（pool.py），同温批量零增益（OCR-GPU-bound）故不推荐批量场景
   status: active
   premises: 2026-09-10 S0/S6 bench（本机 4060/8GB）；触发条件①已满足
   revisit: 出现多视频批量场景 / S5 内联后解码格局变化 / 显式立项请求
@@ -212,8 +212,8 @@
   evidence: log 2026-09-13-hybrid并联缺口收口（bench/gap_decomp.json、dll_ab.json）
 
 - id: C-46
-  conclusion: **hybrid = 包缓存 + 供料期 GOP 派工（fork fef3c4b，已随 wheel 发布）**：Push 只入压缩包缓存（512MB），泵在分配时点按当下速率贪心派工整个 GOP（前瞻+同侧保序）；**kick 必须经泵按流序注入**（错位=IDR 重置冲掉重排窗→~50 帧遮蔽→段数漂移，fork 级测不出）。引擎 A/B：hevc −6.29%（6/6）、h264 −4.78%（6/6）、av1 平价；fork 对并联和 95/78/93%；18/18 段数恒定、金标 28/28。旧机制（计划/视界/盲窗/REPLAN/债务克隆）全删
+  conclusion: **hybrid = 包缓存 + 供料期 GOP 派工（fork fef3c4b，已随 wheel 发布）**：Push 只入压缩包缓存（512MB），泵在分配时点按当下速率贪心派工整个 GOP（前瞻+同侧保序）；**kick 必须经泵按流序注入**（错位=IDR 重置冲掉重排窗→~50 帧遮蔽→段数漂移，fork 级测不出）。引擎 A/B：hevc −6.29%（6/6）、h264 −4.78%（6/6）、av1 平价；fork 对并联和 **96/92/96%**（hevc/h264/av1 fps_b；同会话三臂定稿，旧 78/87 系跨会话伪影）；18/18 段数恒定、金标 28/28。旧机制（计划/视界/盲窗/REPLAN/债务克隆）全删
   status: active
-  premises: 4060/16C32T；旋钮 PKT_CACHE_MB/KICK_OFF/KICK_BURST/AV1_CPU/DECODE_CORES；AV1 混跑保留
+  premises: 4060/16C32T；达成率=同会话三臂（wheel 6ec5b1ea）；旋钮 PKT_CACHE_MB/KICK_OFF/KICK_BURST/AV1_CPU/DECODE_CORES；AV1 混跑保留
   revisit: 换卡 / fork 换代 / 截断流·bf16 酷刑流重跑 / >32 核
-  evidence: log 2026-09-13-hybrid重设计分支 §8；bench/dll_ab.json、gap_decomp.json
+  evidence: log 2026-09-13-hybrid重设计分支 §8、2026-09-14-hybrid达成率定稿测量

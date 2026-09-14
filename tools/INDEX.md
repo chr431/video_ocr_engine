@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **97 个 `.py`**（16,215 行），其中 87 个是探针
+`tools/` 现有 **98 个 `.py`**（16,634 行），其中 88 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -159,6 +159,7 @@
 | `_probe_gap_decomp.py` | 213 | 2026-09-13 | **hybrid 并联缺口分解**（`_probe_decode_rate.py` 的分臂账目版）：全片 + `[hybrid-stats]` 解析，一次拿 delivered c/g、busy、plan rc/rg/份额、HOL——把 fork 级缺口拆成「CPU 臂银行帽 / 计划份额失真 / 每臂混跑干扰」三成分（C-45 的取证入口；支持 `--threads` 扫描） |
 | `_probe_pool_pairing.py` | 132 | 2026-09-14 | **跨视频互补配对 A/B**（层5）：pool.run 的 pair（编码感知+LPT）vs 全 nvdec 顺序，交错 + 段/文本逐位门禁；同温零增益（OCR-GPU-bound）的取证入口 |
 | `_probe_quant_static.py` | 158 | 2026-09-14 | **静态 INT8 QDQ 量化评测**（压缩轮，已判死）：校准=真帧生产预处理；全图/仅Conv 两变体——argmax 格一致 0.58、CTC 一致 0、速度 +30~81%——与动态量化（20x 劣化，ARCHIVE）同命；ORT 1.29/Win-x64 上量化方向关闭，OpenVINO EP 为 CPU 提速正路（需立项） |
+| `_probe_h264_hybrid.py` | 419 | 2026-09-14 | **hybrid 达成率定稿测量**（对两解码器并联和）：同会话三臂（cpu/gpu/hybrid）逐轮交错 + min-of-N + 机器忙闲污染门（>40% 当轮重试）+ fps_b/wall 双口径 + 外部重负载进程扫描；`--landscape` 线程扫描 / `--shares` 份额扫描 / `--arm` 自定义臂。C-46 达成率数字的复测载体（达成率定稿协议见 log 2026-09-14） |
 
 ### 2026-09-10 D1/D2 调查（gpu/host 段数分歧 · 线程优先级）
 
@@ -190,7 +191,7 @@
 | `_split_perf_md.py` | 194 | 2026-08-31 按「活/归档」把 PERFORMANCE.md 切出 `docs/log/ARCHIVE.md`。**已完成，可删** |
 | `_fix_probe_paths.py` | 416 | 2026-08-31 把探针里写死的路径改成 `__file__` 推导 / 环境变量。**已完成，可删** |
 
-## 探针状态（L2）：live 11 / frozen 75（共 86）
+## 探针状态（L2）：live 12 / frozen 75（共 87）
 
 **默认 frozen**——不在下表 `live` 名单里的探针一律视为历史证据，豁免活性检查、不做修复义务。
 一个探针进 `live` 必须写清理由（被在用载体引用 / 本轮在用）；重构时的修复义务**只覆盖 live 集合**。
@@ -204,6 +205,7 @@
 | `_probe_decode_rate.py` | 本轮新工具：工作项 0（hybrid 封顶归因）的取证入口 |
 | `_probe_dll_ab.py` | 本轮新工具：工作项 5（换 DLL 交错 A/B），fork 改动的判据工具 |
 | `_probe_gap_decomp.py` | 本轮新工具：并联缺口分解（C-45），fork 改动的归因入口 |
+| `_probe_h264_hybrid.py` | C-46 达成率定稿口径的载体：fork 换代/换卡复评直跑（同会话三臂交错协议） |
 | `_probe_content_det.py` | 本轮新工具：hybrid 输出内容确定性对照（帧级 hash，C-46 kick 落位根因的取证入口） |
 | `_probe_quant_static.py` | 本轮新工具：静态 QDQ 量化评测（已判死；OpenVINO 复评时直跑） |
 | `_probe_pool_pairing.py` | 本轮新工具：层5 配对 A/B |

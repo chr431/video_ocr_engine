@@ -1,7 +1,9 @@
 """knowledge/ 结构化知识库渲染器（S2-文档-2 首版，v2 §8.1/§14.2）。
 
-yaml 是唯一事实源；docs/CONCLUSIONS.md / docs/KNOBS.md 为渲染产物
-（render.py --check 校验一致性，防手写漂移——v1 的 INDEX.md 之病）。
+conclusions.md（结论唯一事实源，`- id:` 字段块按行解析、非严格 YAML）
+与 config/knobs.py（旋钮事实源）→ docs/CONCLUSIONS.md / docs/KNOBS.md /
+knobs.yaml 为渲染产物（render.py --check 校验一致性，防手写漂移——
+v1 的 INDEX.md 之病）。
 预算（tests/knowledge/test_budgets.py 守护）：conclusions ≤ 12 KB、
 knobs ≤ 24 KB；AGENTS.md ≤ 14 KB。
 """
@@ -17,8 +19,8 @@ KNOW = ROOT / "knowledge"
 
 
 def load_conclusions() -> list[dict]:
-    """解析 conclusions.yaml（手写极简解析：每条以 '- id:' 起）。"""
-    text = (KNOW / "conclusions.yaml").read_text(encoding="utf-8")
+    """解析 conclusions.md（手写极简解析：每条以 '- id:' 起）。"""
+    text = (KNOW / "conclusions.md").read_text(encoding="utf-8")
     entries, cur = [], None
     for line in text.split("\n"):
         m = re.match(r"- id: (\S+)", line)
@@ -39,10 +41,10 @@ def render_conclusions_md(entries: list[dict]) -> str:
     sup = [e for e in entries if e.get("status") == "superseded"]
     lines = ["# 现役结论索引（L1，唯一规范性结论地）",
              "",
-             "> 本文件由 knowledge/render.py 从 knowledge/conclusions.yaml 渲染",
+             "> 本文件由 knowledge/render.py 从 knowledge/conclusions.md 渲染",
              "> （人不得手写；--check 校验一致性）。状态取值：active / superseded",
              "> （被取代，只留指针）/ dead（已降级 docs/log 历史）。规则与完整",
-             "> 说明见 yaml 头部注释。",
+             "> 说明见 conclusions.md 头部注释。",
              "",
              "| ID | 结论 | 前提/边界 | 复评触发 | 证据 |",
              "|----|------|-----------|----------|------|"]
@@ -96,7 +98,7 @@ def check() -> int:
     have = (ROOT / "docs" / "CONCLUSIONS.md").read_text(encoding="utf-8")
     if want.strip() != have.strip():
         bad += 1
-        print("✗ docs/CONCLUSIONS.md 与 conclusions.yaml 不一致（重渲染："
+        print("✗ docs/CONCLUSIONS.md 与 conclusions.md 不一致（重渲染："
               "python knowledge/render.py --write）")
     else:
         print("✓ CONCLUSIONS.md 一致")

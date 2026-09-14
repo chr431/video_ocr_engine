@@ -9,8 +9,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_conclusions_budget():
-    size = (ROOT / "knowledge" / "conclusions.yaml").stat().st_size
-    assert size <= 12 * 1024, "conclusions.yaml %d B 超 12 KB 预算" % size
+    size = (ROOT / "knowledge" / "conclusions.md").stat().st_size
+    assert size <= 12 * 1024, "conclusions.md %d B 超 12 KB 预算" % size
 
 
 def test_knobs_budget():
@@ -37,7 +37,7 @@ def test_superseded_pointers_resolve():
     因为 replaced_by 只在渲染时拼成一行、没有任何门禁看它是否解析得到。
     """
     import re
-    text = (ROOT / "knowledge" / "conclusions.yaml").read_text(encoding="utf-8")
+    text = (ROOT / "knowledge" / "conclusions.md").read_text(encoding="utf-8")
     ids: set[str] = set()
     sup: dict[str, str] = {}
     cur: str | None = None
@@ -54,6 +54,6 @@ def test_superseded_pointers_resolve():
         m = re.match(r"  replaced_by: (.*)", line)
         if m and cur in sup:
             sup[cur] = m.group(1).strip()
-    assert sup, "未解析到 superseded 条目——解析逻辑与 yaml 格式已脱节"
+    assert sup, "未解析到 superseded 条目——解析逻辑与源文件格式已脱节"
     bad = {k: v for k, v in sup.items() if v == "?" or v not in ids}
     assert not bad, "悬空 replaced_by（应为现存 id）：%s" % bad
