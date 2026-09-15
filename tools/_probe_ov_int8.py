@@ -49,12 +49,13 @@ def collect_real_batches(frames: int) -> list[np.ndarray]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--calib-frames", type=int, default=300)
+    ap.add_argument("--model", default="PP-OCRv6_rec_small.onnx")
     args = ap.parse_args()
     import openvino as ov
     import nncf
 
     core = ov.Core()
-    model_path = str(ROOT / "assets/ocr_models/PP-OCRv6_rec_small.onnx")
+    model_path = str(ROOT / "assets/ocr_models") + "/" + args.model         if not args.model.startswith("D:") else args.model
     print("收集真实校准数据…", flush=True)
     calib_batches = collect_real_batches(args.calib_frames)
     print("校准批数:", len(calib_batches))
