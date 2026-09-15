@@ -413,6 +413,9 @@ TRT_FP16_ENV: str = "TRT_FP16"
 TRT_DEFER_SYNC_ENV: str = "TRT_DEFER_SYNC"
 TRT_PROFILE_MIN_W: int = 32
 TRT_PROFILE_OPT_W: int = 320
+# 2026-09-15 实测：opt=320 对生产 W=224 输入是最优 tactics（p50 9.01ms）；
+# "对齐" opt=224 反而慢 32%（11.93ms，原生重建验证）——宽 opt 点选出的
+# kernel 覆盖 224 更快。勿按直觉对齐 opt 与实际形状（负优化案例留档）。
 TRT_PROFILE_MAX_W: int = 2048
 TRT_WORKSPACE_BYTES: int = 1 << 30
 # TRT 引擎缓存文件的 SM 后缀（引擎与 GPU 架构绑定）。

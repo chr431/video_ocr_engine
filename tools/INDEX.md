@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **102 个 `.py`**（17,133 行），其中 92 个是探针
+`tools/` 现有 **103 个 `.py`**（17,282 行），其中 93 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -163,7 +163,8 @@
 | `_probe_ocr_phase_split.py` | 137 | 2026-09-14 | **OCR 批延迟拆相**（TRT 流水轮取证）：生产 ocr.infer 按相拆解——prep 提交 / TRT 调用（enqueue+argmax+D2H+sync）或深度 2 的 submit/collect / 宿主 CTC；`--runs` 冷热两轮。定量出 trt_call 13.9ms/批占 87%、CTC 0.4ms（launch 裸奔归因的测量入口，结论见 log 2026-09-14-TRT延迟收集流水） |
 | `_probe_ov_cpu_ab.py` | 97 | 2026-09-14 | **OCR CPU 后端 A/B：onnxruntime vs OpenVINO**（模型级）：同模型同线程（物理核）同形状，生产 ORT 配置 vs OV CPU 插件——本机 Zen4 实测 OV 快 **2.1×**（47.8→23.0ms@B18W224）且随机输入 argmax 100% 一致；OpenVINO 立项（ocr_backend 扩展）的裁决入口 |
 | `_probe_ov_prep_fusion.py` | 130 | 2026-09-14 | **gamma/resize 换序 + OV preproc 融合赌局**（判死留档）：模型级生产语义 +1.1% 平价（−17.4% 系直拉语义假象）；⚠️ 教训载体——其引擎级猴子补丁因形状臆造静默回落 legacy 产生假胜利，已更正刻进探针注释（对照法必须断言分支真的走到） |
-| `_probe_ffmpeg_min_perf.py` | 133 | 2026-09-15 | **FFmpeg 极简集 vs GPL 全家桶解码性能对照**（健壮性验证）：双 decord 包副本 + 子进程 worker 全片 ROI gray，三码×双臂交错 min-of-3；NVDEC 健全性对照。结论=CPU 软解 −0.4~−1.6%（av1 含 dav1d vs native 换算）、NVDEC 零差异——瘦身无实质回退（log 见 bench/ffmpeg_min_perf.log） |
+| `_probe_ffmpeg_min_perf.py` | 175 | 2026-09-15 | **FFmpeg 极简集 vs GPL 全家桶解码性能对照**（健壮性验证）：双 decord 包副本 + 子进程 worker 全片 ROI gray，三码×双臂交错 min-of-3；NVDEC 健全性对照。结论=CPU 软解 −0.4~−1.6%（av1 含 dav1d vs native 换算）、NVDEC 零差异——瘦身无实质回退（log 见 bench/ffmpeg_min_perf.log） |
+| `_probe_ov_int8.py` | 107 | 2026-09-15 | **OV INT8（NNCF PTQ）模型级裁决**（判死留档）：真实预处理数据校准 + 三形状速度/数值对照——INT8 反慢 6% 且真实批 argmax 仅 95%（Zen4/动态形状下无收益，方向关闭）；`nncf.Dataset(列表)` 口径 |
 
 ### 2026-09-10 D1/D2 调查（gpu/host 段数分歧 · 线程优先级）
 
