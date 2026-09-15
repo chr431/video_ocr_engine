@@ -142,6 +142,8 @@
   需要 fork ≥v0.7.13；旧版忽略该 env。
 
 ### TensorRT
+- 11.3.0.99 评估（2026-09-15，log TRT113评估）：推理持平/无收益，留 11.2；
+  升级时必须删引擎缓存（MVC 兼容加载会稀释成假数字）。
 - `find_lib()` 只搜 `os.environ["PATH"]`，不认 `os.add_dll_directory()`；
   `TrtEngine` 初始化前会调用 `gpu_setup.ensure_gpu_initialized()` 更新 PATH。
 - 首次构建 FP32 引擎约 1 分钟；FP16 构建慢 2.2 倍且推理无提升，不推荐。
