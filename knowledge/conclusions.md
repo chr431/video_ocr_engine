@@ -200,17 +200,6 @@
   status: superseded
   replaced_by: C-46
 
-- id: C-44
-  status: superseded
-  replaced_by: C-45
-
-- id: C-45
-  conclusion: **hybrid 并联缺口收口（fork 4cebeef）**：可修成分=①CPU 臂银行帽 1536 系全帧字节残留且 raw/frame 合并计价②计划冻结用 rg 爬升值（±13% 漂）→hevc 份额偏 CPU、GPU 队尾闲置。修复=queue 按 ROI 字节重算+raw 768MB 解耦+滑动视界 4096（HORIZON=0 回退）。fork 全片 hevc +12.8%/h264 +14.8%/av1 +3.0%（达成率 77→87/68→78/88→90%）；金标 28/28。残余=每臂混跑干扰（busy-rate −15~17%，32T 最优）
-  status: active
-  premises: 4060/16C32T；fork 4cebeef；引擎干净对：hevc −4.8%（23/28）、av1 −2.9%（7/8）、h264 平价
-  revisit: 换卡 / fork 换代 / >32 核 / 绑核立项
-  evidence: log 2026-09-13-hybrid并联缺口收口（bench/gap_decomp.json）
-
 - id: C-46
   conclusion: **hybrid = 包缓存 + 供料期 GOP 派工（fork fef3c4b，已随 wheel 发布）**：Push 只入压缩包缓存（512MB），泵按当下速率贪心派工 GOP（前瞻+同侧保序）；**kick 必须经泵按流序注入**（错位=IDR 冲重排窗→段数漂移，fork 级测不出）。引擎 A/B：hevc −6.29%（6/6）、h264 −4.78%（6/6）、av1 平价；fork 对并联和 **96/92/96%**（hevc/h264/av1 fps_b；同会话三臂定稿，旧 78/87 系跨会话伪影）；18/18 段数恒定、金标 28/28。旧机制（计划/视界/盲窗/REPLAN/债务克隆）全删
   status: active
@@ -231,3 +220,10 @@
   premises: 4060/Zen4；openvino 2026.3.1；仅 CPU 路径
   revisit: 换 CPU（尤其非 x86）/ openvino 换代 / 内容族大变
   evidence: log 2026-09-14-OpenVINO模型级A-B/集成轮
+
+- id: C-49
+  conclusion: **换依赖无剩余性能空间（瓶颈已分别绑定）**：GPU 三码**全解码绑定**（OCR 推理换零成本 Δwall +0.1~0.2%=噪声）、h264-cpu **生产者绑定**（零成本 OCR 仅 −18.35%、预处理 −1.21%）。解码侧 fork **已超外部参考**（NVDEC 989fps > ffmpeg cuvid 901fps；ROI-first 值 1.75×，通用库均无）；PyNvVideoCodec 独立进程裸解码 **493fps（近 2× 慢）**且全帧、与 decord 同进程 DLL 冲突。cv2 resize 快 19× 而**墙钟 −0.26%**（符号乱、低于噪声带）——C-42 判例复现
+  status: active
+  premises: 4060/16C32T/Zen4；fork 0.8.3；入口 _probe_{binding,decode_ceiling,preproc_ab}
+  revisit: 换卡 / 出现带 ROI-first 的解码绑定 / 预处理升为关键路径 / 断言"某依赖是瓶颈"前先跑绑定实验
+  evidence: log 2026-09-15-依赖替换裁决

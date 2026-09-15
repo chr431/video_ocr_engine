@@ -15,7 +15,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 dependencies = [
     "numpy>=2",
-    "onnxruntime>=1.28",  # CPU OCR 后端
+    "openvino>=2026.3",  # CPU OCR 唯一后端（onnxruntime 已于 2026-09-14 移除，C-48）
     "psutil>=6",
 ]
 # 说明：decord（自建 fork chr431/decord）、cuda-python / TensorRT 为运行时

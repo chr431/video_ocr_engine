@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **103 个 `.py`**（17,283 行），其中 93 个是探针
+`tools/` 现有 **115 个 `.py`**（19,203 行），其中 105 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -165,6 +165,18 @@
 | `_probe_ov_prep_fusion.py` | 130 | 2026-09-14 | **gamma/resize 换序 + OV preproc 融合赌局**（判死留档）：模型级生产语义 +1.1% 平价（−17.4% 系直拉语义假象）；⚠️ 教训载体——其引擎级猴子补丁因形状臆造静默回落 legacy 产生假胜利，已更正刻进探针注释（对照法必须断言分支真的走到） |
 | `_probe_ffmpeg_min_perf.py` | 175 | 2026-09-15 | **FFmpeg 极简集 vs GPL 全家桶解码性能对照**（健壮性验证）：双 decord 包副本 + 子进程 worker 全片 ROI gray，三码×双臂交错 min-of-3；NVDEC 健全性对照。结论=CPU 软解 −0.4~−1.6%（av1 含 dav1d vs native 换算）、NVDEC 零差异——瘦身无实质回退（log 见 bench/ffmpeg_min_perf.log） |
 | `_probe_ov_int8.py` | 108 | 2026-09-15 | **OV INT8（NNCF PTQ）模型级裁决**（判死留档）：真实预处理数据校准 + 三形状速度/数值对照——INT8 反慢 6% 且真实批 argmax 仅 95%（Zen4/动态形状下无收益，方向关闭）；`nncf.Dataset(列表)` 口径 |
+| `_probe_binding.py` | 171 | 2026-09-15 | **绑定约束判定（决定性实验）**：把 OCR 推理/预处理分别换成零成本，看墙钟动不动——GPU 三条路径（h264/hevc/av1）全部 **解码绑定**（Δwall +0.1~0.2% = 噪声），h264-cpu 为**生产者绑定**（零成本 OCR 仅 −18.35%、零成本预处理 −1.21%）。"换依赖能否再快"的裁决入口 |
+| `_probe_critical_path.py` | 129 | 2026-09-15 | **关键路径判定**：纯解码产能（decord 直扫）vs 全管线墙钟 vs 生产者队列阻塞三口径并列——h264-cpu 纯解码 1.24s 而 producer 2.10s、OCR 空等 1.46s（解码非绑定、消费者饥饿） |
+| `_probe_span_dump.py` | 83 | 2026-09-15 | **全 span 细目转储**：热轮报告 spans/counters/gauges 全表按 sum 降序——定位「producer 2.10s 里 decode.batch 只占 1.35s」的缺口起点 |
+| `_probe_producer_gap.py` | 164 | 2026-09-15 | **生产者缺口分解**：consumer_total − 已计 span 之和 = 缺口（h264-cpu 0.60s / 29%）；nocluster/nomerge 短路臂。⚠️ nocluster **不可用于归因**（改判据→段数 3000→工作量+93%），归因须靠 `_probe_feed_cost.py` |
+| `_probe_feed_cost.py` | 112 | 2026-09-15 | **分段状态机逐帧成本**：真实 ROI 形状微基准 × 帧数折算——证明状态机只占缺口 **3%**（0.018s），把缺口指向 `_segments_similar`/`_np_resize`（见 `_probe_producer_profile.py`） |
+| `_probe_producer_profile.py` | 102 | 2026-09-15 | **生产者 cProfile 定位**：热轮单次 extract 的 tottime 排序——缺口真身 = `_segments_similar` 0.329s + `_cluster_win3` 0.211s + `_np_resize` 0.179s（全为 numpy 热内核） |
+| `_probe_preproc_dep.py` | 297 | 2026-09-15 | **预处理 resize 依赖替换评估**：生产真实形状采集（33×106→154×48，1090 次/3000 帧）+ 候选 µbench（numpy-take 基线 / cv2 / 可分两遍反例）。cv2 快 **19×**（105.3→5.5µs）但非逐位一致；反例留档可选分两遍改分组顺序 |
+| `_probe_preproc_ab.py` | 178 | 2026-09-15 | **预处理替换的引擎级交错 A/B**：A=numpy-take 基线 / B=进程内 monkeypatch cv2，独立子进程 + 热池 + 段数/文本 sha 门禁。实测 resize −59.5% 而**墙钟仅 −0.26%**（符号 --+ 不一致，低于本机噪声带 0.484%）——C-42 判例复现 |
+| `_probe_decode_ceiling.py` | 179 | 2026-09-15 | **解码天花板三路取证**：① ffmpeg 自带 cuvid/软解作外部参考（decord NVDEC 989fps **已超** ffmpeg cuvid 901fps）② ROI-first 价值 1.75×（通用库均无）③ 批大小扫描（64/128 无差 → 无固定开销瓶颈） |
+| `_probe_pynv_vs_decord.py` | 179 | 2026-09-15 | **PyNvVideoCodec（NVIDIA 第一方）vs decord fork**：⚠️ 发现 **decord 与 PyNv 同进程 DLL 冲突**（先 import decord → PyNv `ImportError: DLL load failed`，反向亦然）→ 必须独立进程口径 |
+| `_probe_pynv_isolated.py` | 167 | 2026-09-15 | **PyNvVideoCodec 独立进程裸解码**（对它最有利口径）：批量取帧 **493fps** vs decord fork **989fps**（近 2× 慢），且全帧/无 gray/无 hybrid。⚠️ 三个 API 坑已刻注释（模块级 `CreateSimpleDecoder` 被同名 pybind 类遮蔽→须用包装类 `nvc.SimpleDecoder`；方法名是 `get_batch_frames_by_index` 而非 `DecodeNextPacket`；CUDA13 cudart 在 `bin\x64` 且需 `CUDA_PATH`） |
+| `_probe_numpy_kernels.py` | 159 | 2026-09-15 | **numpy 版本热内核对照**（跨解释器口径）：把 `_cluster_win3`/`_np_resize`/相似判定数学原样复制进来，两个解释器各跑一次对比。2.4.6 vs 2.5.3 **无收益**（resize 反慢 7%），逐位指纹相同——numpy 升级非杠杆 |
 
 ### 2026-09-10 D1/D2 调查（gpu/host 段数分歧 · 线程优先级）
 
@@ -196,7 +208,7 @@
 | `_split_perf_md.py` | 194 | 2026-08-31 按「活/归档」把 PERFORMANCE.md 切出 `docs/log/ARCHIVE.md`。**已完成，可删** |
 | `_fix_probe_paths.py` | 416 | 2026-08-31 把探针里写死的路径改成 `__file__` 推导 / 环境变量。**已完成，可删** |
 
-## 探针状态（L2）：live 14 / frozen 75（共 89）
+## 探针状态（L2）：live 14 / frozen 91（共 105）
 
 **默认 frozen**——不在下表 `live` 名单里的探针一律视为历史证据，豁免活性检查、不做修复义务。
 一个探针进 `live` 必须写清理由（被在用载体引用 / 本轮在用）；重构时的修复义务**只覆盖 live 集合**。
@@ -218,7 +230,7 @@
 | `_probe_pool_pairing.py` | 本轮新工具：层5 配对 A/B |
 | `_probe_run_setup_cost.py` | tests/ |
 
-frozen 75 个（按 §A–§D 各节原样保留）：`_probe_acc_ab.py`、`_probe_acc_baseline.py`、`_probe_autocrop_ab.py`、`_probe_autocrop_truth.py`、`_probe_batch_coldstart.py`、`_probe_busy_overhead.py`、`_probe_ceiling.py`、`_probe_cluster_dtype.py`、`_probe_cr_roundtrip.py`、`_probe_crop_miscut.py`、`_probe_crop_stats.py`、`_probe_d1_prim_diff.py`、`_probe_d1_trace.py`、`_probe_d1_trace2.py`、`_probe_decode_batch_ab.py`、`_probe_decode_contention.py`、`_probe_drop_nonref.py`、`_probe_e2e_ab.py`、`_probe_e2e_mode.py`、`_probe_engine_ab.py`、`_probe_ffmpeg.py`、`_probe_final.py`、`_probe_gamma_sweep.py`、`_probe_golden_diff.py`、`_probe_golden_drift.py`、`_probe_gpu_ctc.py`、`_probe_guard_clean.py`、`_probe_hol_stats.py`、`_probe_hybrid_ab.py`、`_probe_hybrid_axis.py`、`_probe_hybrid_bitwise.py`、`_probe_hybrid_cpu_profile.py`、`_probe_hybrid_engine_loss.py`、`_probe_hybrid_gap.py`、`_probe_hybrid_reeval.py`、`_probe_hybrid_sum_gap.py`、`_probe_hybrid_threads_e2e.py`、`_probe_hybrid_trace.py`、`_probe_lifecycle_repeat.py`、`_probe_mem_bw.py`、`_probe_merge_log.py`、`_probe_mp_scale.py`、`_probe_nvdec_interference.py`、`_probe_onnx_dcd_sweep.py`、`_probe_pad_width.py`、`_probe_perf_baseline.py`、`_probe_perf_sweep.py`、`_probe_perframe.py`、`_probe_phase_cores.py`、`_probe_prep_ab.py`、`_probe_python_cost.py`、`_probe_r3_infer_split.py`、`_probe_release_gate.py`、`_probe_roadmap_decode.py`、`_probe_roadmap_ocr.py`、`_probe_roadmap_profile.py`、`_probe_roi_decode.py`、`_probe_roi_dump.py`、`_probe_roi_segcost.py`、`_probe_roi_whitespace.py`、`_probe_roi_width.py`、`_probe_round4_bw.py`、`_probe_round4_wall.py`、`_probe_seg_share.py`、`_probe_skip_frame.py`、`_probe_slf_adjudicate.py`、`_probe_slf_diff.py`、`_probe_slf_vis.py`、`_probe_stress_harness.py`、`_probe_text_ab.py`、`_probe_threads.py`、`_probe_trt_maxbatch.py`、`_probe_truth_env.py`、`_probe_upload_chain.py`、`_probe_yuv_tax.py`
+frozen 91 个（按 §A–§D 各节原样保留）：`_probe_acc_ab.py`、`_probe_acc_baseline.py`、`_probe_autocrop_ab.py`、`_probe_autocrop_truth.py`、`_probe_batch_coldstart.py`、`_probe_binding.py`、`_probe_busy_overhead.py`、`_probe_ceiling.py`、`_probe_cluster_dtype.py`、`_probe_cr_roundtrip.py`、`_probe_critical_path.py`、`_probe_crop_miscut.py`、`_probe_crop_stats.py`、`_probe_d1_prim_diff.py`、`_probe_d1_trace.py`、`_probe_d1_trace2.py`、`_probe_decode_batch_ab.py`、`_probe_decode_ceiling.py`、`_probe_decode_contention.py`、`_probe_drop_nonref.py`、`_probe_e2e_ab.py`、`_probe_e2e_mode.py`、`_probe_engine_ab.py`、`_probe_feed_cost.py`、`_probe_ffmpeg.py`、`_probe_final.py`、`_probe_gamma_sweep.py`、`_probe_golden_diff.py`、`_probe_golden_drift.py`、`_probe_gpu_ctc.py`、`_probe_guard_clean.py`、`_probe_hol_stats.py`、`_probe_hybrid_ab.py`、`_probe_hybrid_axis.py`、`_probe_hybrid_bitwise.py`、`_probe_hybrid_cpu_profile.py`、`_probe_hybrid_engine_loss.py`、`_probe_hybrid_gap.py`、`_probe_hybrid_reeval.py`、`_probe_hybrid_sum_gap.py`、`_probe_hybrid_threads_e2e.py`、`_probe_hybrid_trace.py`、`_probe_lifecycle_repeat.py`、`_probe_mem_bw.py`、`_probe_merge_log.py`、`_probe_mp_scale.py`、`_probe_numpy_kernels.py`、`_probe_nvdec_interference.py`、`_probe_onnx_dcd_sweep.py`、`_probe_pad_width.py`、`_probe_perf_baseline.py`、`_probe_perf_sweep.py`、`_probe_perframe.py`、`_probe_phase_cores.py`、`_probe_prep_ab.py`、`_probe_preproc_ab.py`、`_probe_preproc_dep.py`、`_probe_producer_gap.py`、`_probe_producer_profile.py`、`_probe_pynv_isolated.py`、`_probe_pynv_vs_decord.py`、`_probe_python_cost.py`、`_probe_r3_infer_split.py`、`_probe_release_gate.py`、`_probe_roadmap_decode.py`、`_probe_roadmap_ocr.py`、`_probe_roadmap_profile.py`、`_probe_roi_decode.py`、`_probe_roi_dump.py`、`_probe_roi_segcost.py`、`_probe_roi_whitespace.py`、`_probe_roi_width.py`、`_probe_round4_bw.py`、`_probe_round4_wall.py`、`_probe_seg_share.py`、`_probe_skip_frame.py`、`_probe_slf_adjudicate.py`、`_probe_slf_diff.py`、`_probe_slf_vis.py`、`_probe_span_dump.py`、`_probe_stress_harness.py`、`_probe_text_ab.py`、`_probe_threads.py`、`_probe_trt_maxbatch.py`、`_probe_truth_env.py`、`_probe_upload_chain.py`、`_probe_yuv_tax.py`
 ## 清理判据（想删探针时按这个顺序）
 
 1. `grep -rn "<文件名>" README.md AGENTS.md docs/ tools/` —— 有命中就不删。
