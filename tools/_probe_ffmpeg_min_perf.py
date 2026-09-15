@@ -49,8 +49,15 @@ import decord
 from decord import VideoReader
 roi = tuple(int(v) for v in roi_s.split(","))
 n = int(n)
-ctx = decord.gpu(0) if ctx_name == "gpu" else decord.cpu(0)
+if ctx_name == "hybrid":
+    ctx = decord.hybrid_gpu(0)
+elif ctx_name == "gpu":
+    ctx = decord.gpu(0)
+else:
+    ctx = decord.cpu(0)
 kw = {} if ctx_name == "gpu" else {"num_threads": 16}
+if ctx_name == "hybrid":
+    kw = {"num_threads": 32}
 vr = VideoReader(path, ctx=ctx, output_format="gray", roi=roi, **kw)
 from video_ocr_engine.config import constants as cfg
 batch = int(cfg.DECODE_BATCH_SIZE)
@@ -71,20 +78,32 @@ print(json.dumps({"fps": f_sum / t_sum if t_sum else 0.0}))
 """
 
 
-def run_arm(pkg_parent: str, codec: str, ctx_name: str) -> float:
+_RE_FRAMES = None
+
+
+def run_arm(pkg_parent: str, codec: str, ctx_name: str):
     vid, roi, n = VIDS[codec]
-    env = {"PYTHONPATH": pkg_parent, "PROBE_ROOT": str(ROOT),
-           "SYSTEMROOT": __import__("os").environ.get("SYSTEMROOT", "")}
-    import os
+    import os, re
+    global _RE_FRAMES
+    if _RE_FRAMES is None:
+        _RE_FRAMES = re.compile(r"frames c=(\d+) g=(\d+)")
+    env = {"PYTHONPATH": pkg_parent, "PROBE_ROOT": str(ROOT)}
     env = {**os.environ, **env}
+    if ctx_name == "hybrid":
+        env["DECORD_HYBRID_STATS"] = "1"
     p = subprocess.run([sys.executable, "-c", WORKER, pkg_parent, vid,
                         ",".join(map(str, roi)), str(n), ctx_name],
                        capture_output=True, text=True, encoding="utf-8",
                        env=env, timeout=600)
+    fps = None
     for ln in p.stdout.splitlines():
         if ln.startswith("{"):
-            return json.loads(ln)["fps"]
-    raise RuntimeError(p.stderr[-300:])
+            fps = json.loads(ln)["fps"]
+    if fps is None:
+        raise RuntimeError(p.stderr[-300:])
+    m = _RE_FRAMES.search(p.stderr or "")
+    cg = (int(m.group(1)), int(m.group(2))) if m else None
+    return fps, cg
 
 
 def main() -> int:
@@ -105,7 +124,8 @@ def main() -> int:
         for r in range(args.reps):
             seq = order if r % 2 == 0 else order[::-1]
             for arm, pp in seq:
-                per[arm].append(run_arm(pp, codec, "cpu"))
+                fps, _cg = run_arm(pp, codec, "cpu")
+                per[arm].append(fps)
         mn_fps, gpl_fps = min(per["min"]), min(per["gpl"])
         ratio = mn_fps / gpl_fps
         pairs = " ".join("(%.0f,%.0f)" % (a, b)
@@ -113,14 +133,36 @@ def main() -> int:
         print("%-5s %-5s %10.0f %10.0f %7.1f%%   %s"
               % (codec, "cpu", mn_fps, gpl_fps, ratio * 100, pairs), flush=True)
 
+    print("== hybrid 混跑（调度按实测 rc/rg 供水；对照分臂交付）==")
+    for codec in VIDS:
+        per = {"min": [], "gpl": []}
+        cg = {"min": None, "gpl": None}
+        order = [("min", mn), ("gpl", gpl)]
+        for r in range(args.reps):
+            seq = order if r % 2 == 0 else order[::-1]
+            for arm, pp in seq:
+                fps, c = run_arm(pp, codec, "hybrid")
+                per[arm].append(fps)
+                cg[arm] = c
+        mn_fps, gpl_fps = min(per["min"]), min(per["gpl"])
+        pairs = " ".join("(%.0f,%.0f)" % (a, b)
+                         for a, b in zip(per["min"], per["gpl"]))
+        print("%-5s %-5s %10.0f %10.0f %7.1f%%   %s   交付c/g min=%s gpl=%s"
+              % (codec, "hyb", mn_fps, gpl_fps,
+                 (mn_fps / gpl_fps) * 100, pairs, cg["min"], cg["gpl"]),
+              flush=True)
+
     print("== NVDEC（demux=avformat；解码=原生 cuvid，健全性对照）==")
     for codec in VIDS:
+        if args.gpu_reps <= 0:
+            continue
         per = {"min": [], "gpl": []}
         order = [("min", mn), ("gpl", gpl)]
         for r in range(args.gpu_reps):
             seq = order if r % 2 == 0 else order[::-1]
             for arm, pp in seq:
-                per[arm].append(run_arm(pp, codec, "gpu"))
+                fps, _cg = run_arm(pp, codec, "gpu")
+                per[arm].append(fps)
         mn_fps, gpl_fps = min(per["min"]), min(per["gpl"])
         print("%-5s %-5s %10.0f %10.0f %7.1f%%"
               % (codec, "gpu", mn_fps, gpl_fps,
