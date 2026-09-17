@@ -659,6 +659,129 @@ def cmd_show(args) -> int:
     return 0
 
 
+def _pair_idx(label: str) -> int:
+    """从 ab 的 `label#i@runid` 取配对轮号 i（归因配对键的组成部分）。"""
+    m = _re.search(r"#(\d+)@", label)
+    return int(m.group(1)) if m else -1
+
+
+def _paired_metric_diffs(reports_a: list, reports_b: list,
+                         mode: str = "hot") -> dict:
+    """W5 归因：逐对配对差分的**指标级**口径（与 wall 判据同款统计纪律）。
+
+    `reports_*` = [(label, round, valid, report)]。配对键 = **(对序号, 轮号)**
+    ——对序号从 label 的 `#i@` 解析。⚠️ 此前按裸 round 号配对是错的：6 对
+    的 12 份报告被塌缩成 2 个键，表里的 "n=2" 实为两个塌缩伪样本（同码
+    都能"显著"出 −44%±52% 的伪强信号，2026-09-17 实测后修正）。
+
+    mode="hot"：round>1 ∧ 时钟门禁 valid（与 wall 判定同口径）；
+    mode="cold"：round==1（冷轮不过门禁——时钟爬坡正是冷启动的一部分）。
+
+    为什么不用"两臂跨轮中位数相减"（v4 及以前）：那正是 PI-15 早期被否决的
+    口径——公共漂移没减掉，而配对口径把同轮的机器状态差掉了。
+    """
+    import math
+    slots = []
+    for reports, is_hot in ((reports_a, True), (reports_b, True)):
+        d: dict = {}
+        for lab, rn, valid, rep in reports:
+            if is_hot:
+                if rn < 2 or not valid:
+                    continue
+            elif rn != 1:
+                continue
+            d[(_pair_idx(lab), rn)] = rep
+        slots.append(d)
+    ka, kb = slots
+    out: dict = {}
+    for key in sorted(set(ka) & set(kb)):
+        fa = _flatten(ka[key])
+        fb = _flatten(kb[key])
+        for k in set(fa) & set(fb):
+            base = fa[k]
+            if base in (0, 0.0):
+                continue
+            rec = out.get(k)
+            if rec is None:
+                rec = out[k] = {"vals": [], "base": []}
+            rec["vals"].append((fb[k] - base) / base * 100.0)
+            rec["base"].append(base)
+    res: dict = {}
+    for k, rec in out.items():
+        vals = rec["vals"]
+        if len(vals) < 2:
+            continue
+        mean = statistics.fmean(vals)
+        sd = statistics.stdev(vals)
+        se = sd / math.sqrt(len(vals))
+        av = sorted(abs(x) for x in vals)
+        res[k] = {"n": len(vals), "mean": mean, "sd": sd, "se": se,
+                  "pos": sum(1 for x in vals if x > 0),
+                  "p95abs": av[min(len(av) - 1, int(0.95 * len(av)))],
+                  "base": statistics.median(rec["base"])}
+    return res
+
+
+def _attr_report(name: str, ra: dict, rb: dict, pairs: list,
+                 limit: float) -> None:
+    """W5 逐指标归因表：逐对配对差分 + 显著性标记（**只归因，不判失败**）。
+
+    判据（与 wall 判据同款，但只用于"这个指标动了没有"的陈述）：
+      - `CI 排零`：|mean| > 3×SE（单侧 ~99.7%，与 `_limit_from_band` 同源）
+      - `符号多数`：正号或负号 ≥ 70% 配对（对消位置效应后的稳定性）
+    两者同时成立标 `**`（强归因）；仅幅值超限标 `~`（方向不稳）。
+    ⚠️ C-42：归因≠可回收量——占比/差分只说明"谁动了"，可回收量必须靠
+    绑定实验（`_probe_binding.py` 的零成本替换口径）判定。
+
+    样本量门：**有效配对数 < max(3, ⌈pairs/3⌉) 的键不出表**——2 个样本的
+    SE 没有意义（实测出现过 n=2 却算出 "−44%±52%" 的伪强信号）。样本不足
+    会在表尾如实统计（不静默丢弃）。符号多数的分母用**该键的有效 n**，
+    不是请求的对数（个别对缺键/被门禁剔除时诚实缩表）。
+    """
+    ra_list = ra.get(name, [])
+    rb_list = rb.get(name, [])
+    diffs = _paired_metric_diffs(ra_list, rb_list, mode="hot")
+    if not diffs:
+        return
+    n_min = max(3, -(-len(pairs) // 3))          # ⌈pairs/3⌉ 上取整
+    rows, skipped = [], []
+    for k, v in diffs.items():
+        if v["n"] < n_min:
+            skipped.append((k, v["n"]))
+            continue
+        need = max(2, int(round(v["n"] * PI15_LIMITS["sign_majority"] + 0.5)))
+        sig_ci = abs(v["mean"]) > max(3 * v["se"], 0.05)
+        pos, n = v["pos"], v["n"]
+        sig_sign = pos >= need or (n - pos) >= need
+        mark = "**" if (sig_ci and sig_sign) else ("~" if sig_ci else "  ")
+        rows.append((mark, k, v))
+    if not rows:
+        # 全被样本门挡下：如实说明（不静默）——4 对以下几乎必然发生，
+        # 归因表要 ≥6 对才有统计意义（判据线本身也按对数缩放）。
+        print("逐指标归因：跳过（有效配对不足，%d 键全部 n<%d——归因请用 "
+              "--repeat ≥6）" % (len(skipped), n_min))
+        return
+    rows.sort(key=lambda t: -abs(t[2]["mean"]))
+    strong = [r for r in rows if r[0] == "**"]
+    weak = [r for r in rows if r[0] != "**"]
+    show = (strong + weak)[:18]
+    nz = len(strong)
+    print("逐指标归因（W5 逐对配对差分，热轮口径；** = |均值|>3×SE ∧ 符号多数"
+          "≥70%（按该键有效 n）；~ = 幅值够但方向不稳；符号列=正号数/n）：" )
+    print("  %-30s %11s %11s %8s %7s %5s  %s"
+          % ("指标", "A(中位)", "Δ均值%", "SE%", "p95|Δ|%", "符号", ""))
+    for mark, k, v in show:
+        print("  %-30s %11.4f %+10.2f%% %7.2f%% %6.2f%% %2d/%-2d %s"
+              % (k, v["base"], v["mean"], v["se"], v["p95abs"], v["pos"], v["n"],
+                 mark))
+    if skipped:
+        print("  （样本不足未列 %d 键：%s）"
+              % (len(skipped), ", ".join("%s n=%d" % (k, n)
+                                        for k, n in skipped[:6])))
+    print("  强归因 %d 项（**）；⚠ C-42：归因≠可回收量，可回收量须跑绑定实验"
+          % nz)
+
+
 def cmd_ab(args) -> int:
     """交错 A/B（S6 口径 → P1 加固：臂序轮转 + 时钟门禁 + 自动判定）。
 
@@ -738,13 +861,16 @@ def cmd_ab(args) -> int:
         return out
 
     def _arm_reports(labels: set) -> dict:
+        """config → [(label, round, valid, report)]（W5 归因逐对配对用）。"""
         out: dict = {}
         for line in REGISTRY.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             rec = json.loads(line)
             if rec.get("label") in labels and rec.get("report"):
-                out.setdefault(rec["config"], []).append(rec["report"])
+                out.setdefault(rec["config"], []).append(
+                    (rec.get("label"), rec.get("round", 1),
+                     _gpu_valid(rec.get("gpu")), rec["report"]))
         return out
 
     wa = _arm_rounds({row["A"] for row in pairs})
@@ -759,6 +885,7 @@ def cmd_ab(args) -> int:
         print("\n=== %s（每 variant %d 次独立进程；冷=第 1 轮，热=第 2 轮起）==="
               % (name, args.repeat))
         hot_diffs: list = []
+        cold_diffs: list = []
         for mode in ("cold", "hot"):
             print("\n-- %s --" % ("冷启动（进程内首个 extract，未过门禁）"
                                   if mode == "cold"
@@ -798,6 +925,8 @@ def cmd_ab(args) -> int:
                      if anomaly else ""))
             if mode == "hot":
                 hot_diffs = [(b_ - a_) / a_ * 100.0 for a_, b_ in per_pair]
+            else:
+                cold_diffs = [(b_ - a_) / a_ * 100.0 for a_, b_ in per_pair]
         if not hot_diffs:
             continue
         # 热轮自动判定 / A/A 标定
@@ -814,6 +943,18 @@ def cmd_ab(args) -> int:
                      band["se"], pos, neg))
             print("  → 建议 --hard 阈值 = +%.2f%%（|均值偏差|+3×SE 上取整 "
                   "0.05%%，下限 %.2f%%）" % (rec_, PI15_FLOOR_PCT))
+            # W6：冷启动带同表标定（引擎构建期 + 时钟爬坡，噪声面远大于热轮）
+            if cold_diffs:
+                cb = _band(cold_diffs)
+                crec = _limit_from_band(cb)
+                cneed = max(2, int(round(len(cold_diffs)
+                                         * PI15_LIMITS["sign_majority"] + 0.5)))
+                print("  冷启动带（%d 对）：均值 %+.3f%%  |Δ|p95 %.3f%%  "
+                      "sd=%.3f%%  SE=%.3f%%  符号 %d/%d"
+                      % (cb["n"], cb["mean"], cb["p95abs"], cb["sd"], cb["se"],
+                         cb["pos"], cb["n"] - cb["pos"]))
+                print("  → 建议 --hard-cold 阈值 = +%.2f%%（同规则；%d/%d 符号多数）"
+                      % (crec, cneed, cb["n"]))
             continue
         if args.no_verdict:
             print("\n判定关闭（--no-verdict）：均值 %+.3f%%（SE %.3f%%）符号 %d/%d"
@@ -832,18 +973,29 @@ def cmd_ab(args) -> int:
                 print("\n判定：不可判定（落在噪声带内；均值 %+.3f%%，SE %.3f%%，"
                       "限 ±%.2f%%，符号 %d/%d）"
                       % (band["mean"], band["se"], lim, pos, neg))
-        # 逐 span 归因（只展示不判；C-42：占比/差分≠可回收量，绑定实验才是口径）
+            # W6 冷启动判定：单独阈值（冷带含引擎构建 + 时钟爬坡，幅值大得多）
+            if cold_diffs and args.hard_cold > 0:
+                cb = _band(cold_diffs)
+                cneed = max(2, int(round(len(cold_diffs)
+                                         * PI15_LIMITS["sign_majority"] + 0.5)))
+                cpos = cb["pos"]
+                cneg = cb["n"] - cpos
+                clim = args.hard_cold
+                if cb["mean"] > clim and cpos >= cneed:
+                    print("冷启动判定：**B 显著慢 %+.2f%%**（均值 %+.3f%%，SE "
+                          "%.3f%%，限 +%.2f%%，符号 %d/%d）"
+                          % (cb["mean"], cb["mean"], cb["se"], clim, cpos, cneg))
+                    rc = max(rc, 1)
+                elif cb["mean"] < -clim and cneg >= cneed:
+                    print("冷启动判定：B 显著快 %+.2f%%（均值 %+.3f%%，符号 %d/%d）"
+                          % (cb["mean"], cb["mean"], cneg, cb["n"]))
+                else:
+                    print("冷启动判定：不可判定（均值 %+.3f%%，SE %.3f%%，限 "
+                          "±%.2f%%，符号 %d/%d）"
+                          % (cb["mean"], cb["se"], clim, cpos, cneg))
+        # W5 逐指标归因（只归因不判失败；C-42：归因≠可回收量）
         if args.telemetry != "off":
-            fa = _median_flat(ra_all.get(name, []))
-            fb = _median_flat(rb_all.get(name, []))
-            moved = [(k, fa[k], fb[k]) for k in sorted(set(fa) & set(fb))
-                     if fa[k] not in (0, 0.0)
-                     and abs((fb[k] - fa[k]) / fa[k] * 100) > 1.0]
-            if moved:
-                print("逐 span 归因（中位，|Δ|>1%；⚠ C-42 归因≠可回收量）：")
-                for k, va_, vb_ in moved[:20]:
-                    print("  %-40s %12.4f → %12.4f  %+7.2f%%"
-                          % (k, va_, vb_, (vb_ - va_) / va_ * 100))
+            _attr_report(name, ra_all, rb_all, pairs, args.hard)
     if not aa:
         print("\n判读补充：符号一致=可信；符号混乱=落在漂移内。A=%s B=%s"
               % (args.a, args.b))
@@ -945,6 +1097,10 @@ def main() -> int:
     ab.add_argument("--hard", type=float, default=1.0,
                     help="自动判定阈值 %%（B 慢过此值且符号多数 → 退出码 1）；"
                          "建议先跑 ab --aa 标定再回填（默认 1.0）")
+    ab.add_argument("--hard-cold", type=float, default=0.0,
+                    help="冷启动判定阈值 %%（W6）；0=不判冷（默认）。冷带含"
+                         "引擎构建/时钟爬坡，幅值远大于热轮——用 `ab --aa` "
+                         "输出的「建议 --hard-cold」回填")
     ab.add_argument("--cooldown", type=float, default=8.0,
                     help="每组之间的冷却秒数（对抗 GPU 热降）")
     ab.add_argument("--no-verdict", action="store_true",

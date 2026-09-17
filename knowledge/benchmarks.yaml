@@ -377,3 +377,19 @@
           勿当上载臂读数
   next: 供给侧唯一有效杠杆仍是线程档位（§14）；剩余性能空间已穷尽，
         后续转向准确项
+# ── 2026-09-17 续：ab 归因显著性与冷启动判定标定（§8）────────────────────
+- metric: ab_gate_calibration            # bench ab 的热/冷带标定（子进程协议）
+  hot_gpu_6pairs: {mean: +0.032, sd: 0.277, se: 0.113, p95abs: 0.145, hard: 0.40}
+  hot_cpu_6pairs: {mean: +0.032, sd: 1.399, se: 0.571, p95abs: 1.738, hard: 1.75}
+  cold_gpu_6pairs: {mean: -0.662, sd: 2.231, se: 0.911, p95abs: 2.864, hard_cold: 3.40}
+  cold_cpu_6pairs: {mean: -1.332, sd: 2.114, se: 0.863, p95abs: 3.274, hard_cold: 3.95}
+  note: 8 对历史值（第一段轮）GPU hot sd 0.254/1.45、CPU hot sd 1.22/1.75 级；
+        冷带含引擎构建+时钟爬坡，幅值为热带 4~8 倍。换机器/窗口须重标。
+- metric: w5_attribution_ground_truth    # 归因显著性的真值对照（C-50 机制）
+  case: DECODE_THREADS=10 vs 32（h264-cpu，6 对，修复配对塌缩 bug 后）
+  wall_verdict: 不可判定（-1.32%，SE 1.44%，符号 3/3）
+  cold_verdict: B 显著慢 +5.78%（符号 6/6，限 4.0）
+  attribution: decode.batch -80.52%±0.26（0/6 符号）**；q_get_wait -93.2%**；
+               consume_feed +156%**；preprocess +76%**；infer +43%**；
+               merge_pair +57%**——与 C-50 的 GIL 争用转移机制逐项吻合
+  note: wall 判不了→冷判定抓冷启退化→归因给机制，三层口径互补的样例
