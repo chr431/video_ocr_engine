@@ -393,3 +393,23 @@
                consume_feed +156%**；preprocess +76%**；infer +43%**；
                merge_pair +57%**——与 C-50 的 GIL 争用转移机制逐项吻合
   note: wall 判不了→冷判定抓冷启退化→归因给机制，三层口径互补的样例
+# ── 2026-09-17 四段：分辨率压档与"不可分辨"结论复查（§9）────────────────
+- metric: pi15_floor_evidence           # 地板 0.30→0.20 的证据链
+  limit_calc_pct_by_round: [0.291, 0.209, 0.274, 0.198]   # |均值|+3SE 四轮
+  n50_calibration: {mean: +0.006, sd: 0.451, se: 0.064, p95abs: 0.867, maxabs: 1.953}
+  new_floor_pct: 0.20
+  note: 低于 0.30 的建议值仅 n≥50 标定出现；PI15_LIMITS 0.30 为默认门禁限（n=25 匹配）
+- metric: c47_defer_recheck             # C-47 复查（新遥测工具，8 对，full 档）
+  wall: 不可判定（+0.167%±0.144%，符号 5/3，限 0.40）
+  cold: 不可判定（-0.31%±0.93%）
+  subphase_sync: {trt_enq: 0.244, trt_reduce_wait: 0.126, total: 0.370}
+  subphase_defer: {trt_submit: 0.282, trt_collect_wait: 0.085, total: 0.367}
+  verdict: C-47 维持——等待挪出 -32% 但 submit +15% 吃回，净持平；解码绑定吸收
+- metric: c10_stream_recheck            # C-10 复查（8 对）
+  wall: 不可判定（-0.094%±0.094%）；冷不可判定
+  attribution: decode.stream_analyze +9.3%（7/8 **，基数 9.1ms/全片）
+  verdict: C-10 维持默认关——零收益结论成立且开销首次被 span 定位
+- metric: priority_meta_experiment      # §19 优先级隔离的判据层复查
+  aa_with_above_normal_6pairs: {hot_sd: 0.530, cold_sd: 2.386, mean: -0.242}
+  baseline_no_priority: {hot_sd_6p: 0.277, hot_sd_8p: 0.254}
+  verdict: ABOVE_NORMAL 不收窄噪声带（无收益证据）——不为门禁采用，维持 opt-in

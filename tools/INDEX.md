@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **126 个 `.py`**（21,846 行），其中 116 个是探针
+`tools/` 现有 **126 个 `.py`**（21,882 行），其中 116 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -48,7 +48,7 @@
 | `_probe_roadmap_ocr.py` | 191 | 路线图轮 OCR rec 微基准：ONNX/TRT × 批大小扫描 + `_resize_norm` 单帧成本 + FP32/FP16×max_b 实验引擎构建（TRT 11 无 FP16 builder flag 的实证） | 本轮路线图（2026-09-10） |
 | `_probe_roadmap_profile.py` | 62 | 路线图轮 ENGINE_PROFILE 分相打印驱动（单配置一次 extract，输出 producer.*/ocr.* 全分相） | 本轮路线图（2026-09-10） |
 | `_probe_r3_infer_split.py` | 58 | R3 调查：hybrid vs nvdec 的 OCR worker infer 差异分解（ENGINE_PROFILE + TRT SUBPROBE 双跑） | 路线图执行轮（2026-09-10） |
-| `bench.py` | 1123 | **S6 性能轮的原生度量入口**（§8.6 N-4）：`run` 跑配置矩阵并落 `bench/registry.jsonl`、`diff` 按 D10 双档逐指标对比、`ab` 交错 A/B（对抗 GPU 热降漂移——同码两次实测可差 7.7%）、`telemetry-check` = PI-15 门禁（**同进程交替 + 档位轮转 + 同轮配对差分均值 + 符号多数一致**，`--aa` 标定本机噪声带、阈值 = \|偏差\|+3×SE）、`show` 打印报告细目 | AGENTS.md 性能节 / v2 §8.6 / log 2026-09-11-资源层与门控校准 §4 |
+| `bench.py` | 1127 | **S6 性能轮的原生度量入口**（§8.6 N-4）：`run` 跑配置矩阵并落 `bench/registry.jsonl`、`diff` 按 D10 双档逐指标对比、`ab` 交错 A/B（对抗 GPU 热降漂移——同码两次实测可差 7.7%）、`telemetry-check` = PI-15 门禁（**同进程交替 + 档位轮转 + 同轮配对差分均值 + 符号多数一致**，`--aa` 标定本机噪声带、阈值 = \|偏差\|+3×SE）、`show` 打印报告细目 | AGENTS.md 性能节 / v2 §8.6 / log 2026-09-11-资源层与门控校准 §4 |
 | `_probe_golden_diff.py` | 50 | 金标分歧定位：同进程连跑两次（冷/热池）逐段对比，区分"结构漂移"与"置信度浮点敏感"（F-8 的工具） | tests/golden/FINDINGS.md F-8 |
 | `_probe_trt_maxbatch.py` | 101 | **否定/定量**：同一份 ONNX 构建 batch 6 与 18 两个 profile，同批 1116 张走同一提交路径 → 0.663s vs 0.557s（**−16%**）；支撑 `TRT_PROFILE_BATCH=18`（S6） | log 2026-09-10-S6性能轮 §7；FINDINGS F-10 |
 | `_probe_engine_ab.py` | 121 | 引擎产物端到端交错 A/B（worker 子进程 monkeypatch `_engine_candidates`，产品代码零开关）：h264-cpu 热轮 −5.85%、`ocr.infer` −33% | log §7；FINDINGS F-10 |
@@ -192,7 +192,7 @@
 | `_probe_wide_roi_binding.py` | 156 | 2026-09-17 | **宽 ROI（字幕）场景绑定判定** + resize 替换收益上限核算 |
 | `_probe_cycle_quant.py` | 184 | 2026-09-17 | **测量学证据（§8 固化）**：`process_time` 15.625ms tick 量化（20 万采样仅一种增量）+ `QueryProcessCycleTime` 语义（sleep 不增/多线程求和）+ cycles/wall CV 0.014% 与自校准频率双窗口一致 0.017%——resources.py cycle 口径的依据 |
 | `_probe_clock_gate.py` | 125 | 2026-09-17 | **GPU 时钟门禁校准**：连跑 8 轮逐轮包 NvmlSampler——冷轮 sm_min/最大SM≈0.145、热轮≈0.870（CV 6.6%→0.12%，×55.6），k=0.75 分离带中段；bench.py 时钟门禁的依据 |
-| `_probe_trace_view.py` | 205 | 2026-09-17 | **P4 trace/timeline 采集+视图**：`VOE_TRACE_FILE` 全事件时间线 → 文本甘特/线程重叠矩阵/空洞清单/NVML 时钟排；两路径验收（host 会话线程 94.2% 忙、GPU decode.batch 95.5% 占满生产者） |
+| `_probe_trace_view.py` | 237 | 2026-09-17 | **P4 trace/timeline 采集+视图**：`VOE_TRACE_FILE` 全事件时间线 → 文本甘特/线程重叠矩阵/空洞清单/NVML 时钟排；两路径验收（host 会话线程 94.2% 忙、GPU decode.batch 95.5% 占满生产者） |
 
 ### 2026-09-10 D1/D2 调查（gpu/host 段数分歧 · 线程优先级）
 

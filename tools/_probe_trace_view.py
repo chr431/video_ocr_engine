@@ -42,7 +42,7 @@ def _merge(intervals: list) -> list:
     return out
 
 
-def analyze(d: dict) -> None:
+def analyze(d: dict, args_frame=None) -> None:
     evs = d["events"]
     wall = d.get("wall_s") or (evs[-1][2] if evs else 0.0)
     names = [e[0] for e in evs]
@@ -124,8 +124,11 @@ def analyze(d: dict) -> None:
                     j += 1
             row.append("%7.1f%%" % (ov / wall * 100))
         print("  %-5s %s" % (str(ta)[-5:], "".join(r.ljust(9) for r in row)))
-    # 4) 空洞清单（每线程最大 3 段空闲；只看事件覆盖 ≥ wall 90% 的线程）
-    print("\n── 空洞清单（空闲 ≥ 50ms 才列）──")
+    # 4) 空洞清单（空闲 ≥ 50ms 才列；W8：空洞映射到帧区间——
+    #    consume_feed 每帧一条、按序对应帧号，空洞与哪些帧窗口相交即"第
+    #    几帧在等谁"的起点）
+    print("\n── 空洞清单（空闲 ≥ 50ms 才列；帧号=consume_feed 序数）──")
+    feed = [(t0, t1) for n, t0, t1, _t in evs if n == "pipeline.consume_feed"]
     for tid in tids[:8]:
         cov = _merge([(t0, t1) for _, t0, t1 in by_thread[tid]])
         busy = thread_busy[tid]
@@ -140,9 +143,36 @@ def analyze(d: dict) -> None:
         if busy / wall < 0.10 or not gaps:
             continue
         gaps.sort(reverse=True)
-        print("  tid %-10s 最大空洞: %s" % (
-            tid, "; ".join("%.0fms@%.2fs" % (g * 1e3, p)
-                           for g, p in gaps[:3])))
+        rows = []
+        for g, p in gaps[:3]:
+            k0 = sum(1 for t0, t1 in feed if t1 <= p)
+            k1 = sum(1 for t0, t1 in feed if t0 < p + g)
+            fr = ("帧 %d-%d" % (k0, max(k0, k1 - 1))) if k1 > k0 else "帧外"
+            rows.append("%.0fms@%.2fs(%s)" % (g * 1e3, p, fr))
+        print("  tid %-10s 最大空洞: %s" % (tid, "; ".join(rows)))
+    # 4b) W8 单帧视图：--frame K 时打印该帧窗口内各线程的活动
+    if args_frame is not None and feed:
+        k = args_frame
+        if 0 <= k < len(feed):
+            a, b = feed[k]
+            print("\n── 帧 %d 窗口 [%.3f, %.3f]（%.1fms）各线程活动 ──"
+                  % (k, a, b, (b - a) * 1e3))
+            for tid in tids[:8]:
+                evs_in = [(n, t0, t1) for n, t0, t1 in by_thread[tid]
+                          if t0 < b and t1 > a]
+                if not evs_in:
+                    continue
+                # 按与帧窗口的重叠时长降序——长 span（pipeline.run 等）不挤前排
+                evs_in.sort(key=lambda e: -(min(e[2], b) - max(e[1], a)))
+                busy = sum(min(t1, b) - max(t0, a) for _n, t0, t1 in evs_in)
+                top = "; ".join("%s(%.2fms)" % (n, (t1 - t0) * 1e3)
+                                for n, t0, t1 in evs_in[:4])
+                print("  tid %-10s 忙 %5.2fms  %s%s"
+                      % (tid, busy * 1e3, top,
+                         " …+%d 事件" % (len(evs_in) - 4)
+                         if len(evs_in) > 4 else ""))
+        else:
+            print("\n帧 %d 超出范围（0..%d）" % (k, len(feed) - 1))
 
 
 def run_and_trace(args) -> Path:
@@ -186,6 +216,8 @@ def run_and_trace(args) -> Path:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--trace", default="", help="分析已有时间线 JSON")
+    ap.add_argument("--frame", type=int, default=None,
+                    help="W8：打印指定帧窗口内各线程的活动明细")
     ap.add_argument("--video", default="test5")
     ap.add_argument("--frames", type=int, default=3000)
     ap.add_argument("--decode", default="cpu")
@@ -195,7 +227,7 @@ def main() -> int:
         src = Path(args.trace)
     else:
         src = run_and_trace(args)
-    analyze(json.loads(src.read_text(encoding="utf-8")))
+    analyze(json.loads(src.read_text(encoding="utf-8")), args.frame)
     print("\n→ %s" % src)
     return 0
 

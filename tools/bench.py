@@ -33,8 +33,12 @@ from pathlib import Path
 #   - 判失败还需**符号多数一致**（70%），落在噪声带里的差值不再误报。
 #   - 换机器/换窗口/改配对数 n 后必须 `telemetry-check --aa` 重标（SE∝1/√n）。
 PI15_LIMITS = {"std_pct": 0.30, "full_pct": 1.20, "sign_majority": 0.70}
-#: 阈值下限（P1 抽成常量）：P3 重标后按新 A/A 证据更新（只收紧不放松）。
-PI15_FLOOR_PCT = 0.30
+#: 阈值下限（P1 抽成常量）：0.30 → 0.20（2026-09-17 续，四轮标定证据：
+#: |均值|+3SE = 0.291/0.209/0.274/0.198%，n=50 时 0.198 已触 0.20——
+#: 旧地板开始 Masking 真实分辨率）。低于 0.30 的建议值只在 n≥50 标定
+#: （门禁 --rounds 50 与标定 n 一致）时出现；默认 n=25 建议值仍多为
+#: 0.25~0.30。PI15_LIMITS 的 0.30 是**默认门禁限**，与 n=25 匹配。
+PI15_FLOOR_PCT = 0.20
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))

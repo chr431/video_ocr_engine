@@ -48,10 +48,10 @@ SPAN_RELATIONS: dict = {
                            "ocr.preproc_resize"),
     },
     "gpu": {
-        # W2：TRT 三子相位（full 档才有值；std 档缺席记 0，_other 退化为
-        # 与 v4 相同口径——关系表静态声明，取值按在场与否）
+        # W2+W9：TRT 子相位（full 档才有值；同步路径=enq/reduce/concat，
+        # defer 路径=submit/collect——每 run 只走其一，缺席侧记 0）
         "ocr.infer": ("ocr.ctc_decode", "ocr.trt_enq", "ocr.trt_reduce",
-                      "ocr.trt_concat"),
+                      "ocr.trt_concat", "ocr.trt_submit", "ocr.trt_collect"),
         "ocr.preprocess": ("ocr.preproc_luma", "ocr.preproc_autocrop",
                            "ocr.preproc_resize"),
     },

@@ -100,6 +100,11 @@ _SEED = (
     ("ocr.trt_enq", "span", "s", "ocr", ""),
     ("ocr.trt_reduce", "span", "s", "ocr", ""),
     ("ocr.trt_concat", "span", "s", "ocr", ""),
+    # W9：defer 路径（TRT_DEFER_SYNC=1）的对位子相位——submit=整批异步
+    # 提交（不等待），collect=等上一批完成。与同步路径的 enq/reduce 互补：
+    # 两路径每 run 只走其一，relations 里同列（缺席侧记 0）。
+    ("ocr.trt_submit", "span", "s", "ocr", ""),
+    ("ocr.trt_collect", "span", "s", "ocr", ""),
     ("ocr.preprocess", "span", "s", "ocr", ""),
     # 预处理三个可分代价（2026-09-13 细分）：糊在一个 span 里无法判断该
     # 优化谁——autocrop 在**全分辨率**上做，resize+gamma 在降采样后做。

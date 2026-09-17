@@ -591,6 +591,9 @@ class TrtEngine:
             self._out_nbytes = out_nbytes
         self.context.set_tensor_address(self.in_name, dev_input)
         self.context.set_tensor_address(self.out_name, self._dev_out)
+        _m = getattr(self, '_metrics', None)
+        _subdetail = bool(_m is not None and _m.enabled and _m.detailed)
+        _t_sub = time.perf_counter() if _subdetail else 0.0
         self.context.execute_async_v3(stream)
         slot_i = 0 if prev is None else 1 - prev[0]
         slot = self._defer_ring[slot_i]
@@ -599,6 +602,11 @@ class TrtEngine:
         reducer.reduce_into(self._dev_out, out_shape, slot["ptr"][0],
                             slot["ptr"][1])
         cudart.cudaEventRecord(slot["event"], stream)
+        if _subdetail:
+            # W9 复查补桩：defer 路径与同步路径（execute_device_argmax 的
+            # trt_enq/trt_reduce）同权可见——否则 defer 臂的 trt_* 全缺，
+            # 归因会把"结构转移"误读成残差膨胀。
+            _m.record_span('ocr.trt_submit', time.perf_counter() - _t_sub)
         self._defer_prev = (slot_i, rows, tuple(shape), keep)
         return True
 
@@ -614,7 +622,14 @@ class TrtEngine:
             return None
         slot_i, rows, shape, keep = prev
         slot = self._defer_ring[slot_i]
+        _m = getattr(self, '_metrics', None)
+        _subdetail = bool(_m is not None and _m.enabled and _m.detailed)
+        _t_col = time.perf_counter() if _subdetail else 0.0
         cudart.cudaEventSynchronize(slot["event"])
+        if _subdetail:
+            # trt_collect = 等上一批完成（事件同步 + 拷贝）——与同步路径的
+            # trt_reduce（当场等）对位，比较两者即"等待是否被挪出关键路径"。
+            _m.record_span('ocr.trt_collect', time.perf_counter() - _t_col)
         self._defer_prev = None
         del keep          # Y 帧 owner 归还池（引用计数路径）
         # 与 execute_device_argmax 同口径：(rows,) → (B, S) 二维
