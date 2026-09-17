@@ -509,3 +509,15 @@
           decode 相位 cores_avg 16.42 的大头即越窗解码）；nvdec 独净
   waste_form: cpu 越窗解码在 32 线程里并行烧掉（不进 wall，进核秒/功耗/
             与消费 GIL 争用）——C-50/C-52 的 GIL 争用放大器
+- metric: overread_fix_verification        # §11.11 cpu NeedsPackets 如实化验证
+  fix: FFMPEGThreadedDecoder::NeedsPackets 覆盖（PendingDepth+QueueDepth < 256，
+       DECORD_INFLIGHT_CAP 可调）+ retry 循环幻影计数修复
+  post_fix_overread: {cpu: {w64: 291, w500: 291, w3000: 291, full: 0},
+                      nvdec: 不变(30), hybrid: 不变(自有门控)}
+  wall_regression: bare 同DLL交替 cap256 中位 1.518 vs 旧行为 1.534（-1.0%
+                   且散布更紧）；引擎 ab +1.41% 符号 5/1 不可判定——无回归
+  correctness: 段数 1090、金标 28/28、纪律审计 0
+  attribution_correction: §11.10"cores_avg 大头=越窗解码"被修复实验证伪
+    （关掉后 16.42→16.45 不变）——越窗包大多死在 pkt_queue（close 丢弃，
+    ROI 解码太便宜），真实代价=demux I/O+pkt_queue 内存（160MB→6MB）；
+    decode 相位 16 核构成另立开放问题
