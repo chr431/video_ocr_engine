@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **126 个 `.py`**（21,882 行），其中 116 个是探针
+`tools/` 现有 **126 个 `.py`**（21,911 行），其中 116 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -157,7 +157,7 @@
 | `_probe_decode_rate.py` | 173 | 2026-09-13 | **只解码速率**（工作项 0，扩展 `_probe_path_survey.py`：那条测引擎路径的时间去向，本条测 fork 侧纯解码吞吐）：与引擎 GPU 管线同参数（ctx/gray/ROI-first/线程档/DECODE_BATCH 粒度）但**不做 analyze/分段/OCR**，按 ctx 分离 fork 侧吞吐——判定 hybrid 稳态封顶（三码趋同 2214~2285 fps）落在 fork 还是引擎生产者链 |
 | `_probe_dll_ab.py` | 206 | 2026-09-13 | **换 DLL 的交错 A/B**（工作项 5）：`bench ab` 是同进程内跑两臂、而换 DLL 必须每臂新进程，本探针补这个缺口——逐轮交错 + 轮转先后 + 配对差分均值/SE/符号多数，可分辨下限取 PI-15 标定值。⚠️ 实测噪声带 sd 4.6%（冷启动，比同进程 ab 大一个量级）⇒ 判 1% 级效应需 ≥20 轮 |
 | `_probe_gap_decomp.py` | 213 | 2026-09-13 | **hybrid 并联缺口分解**（`_probe_decode_rate.py` 的分臂账目版）：全片 + `[hybrid-stats]` 解析，一次拿 delivered c/g、busy、plan rc/rg/份额、HOL——把 fork 级缺口拆成「CPU 臂银行帽 / 计划份额失真 / 每臂混跑干扰」三成分（C-45 的取证入口；支持 `--threads` 扫描） |
-| `_probe_pool_pairing.py` | 132 | 2026-09-14 | **跨视频互补配对 A/B**（层5）：pool.run 的 pair（编码感知+LPT）vs 全 nvdec 顺序，交错 + 段/文本逐位门禁；同温零增益（OCR-GPU-bound）的取证入口 |
+| `_probe_pool_pairing.py` | 161 | 2026-09-17 | **跨视频互补配对三臂 A/B/C**（层5）：pair（编码感知+LPT×2w）vs nv2（全 nvdec×2w，原 seq 臂名不副实）vs nv1（真串行）；拉丁轮转 + >10% 偏离中位瞬态剔除（首跑 2 次环境瞬态曾拖垮均值的教训）+ 逐视频 wall/backend 落盘。C-52 翻案载体（−20.6%/−21.0%，4/4）；同温零增益（OCR-GPU-bound）的取证入口 |
 | `_probe_quant_static.py` | 158 | 2026-09-14 | **静态 INT8 QDQ 量化评测**（压缩轮，已判死）：校准=真帧生产预处理；全图/仅Conv 两变体——argmax 格一致 0.58、CTC 一致 0、速度 +30~81%——与动态量化（20x 劣化，ARCHIVE）同命；ORT 1.29/Win-x64 上量化方向关闭，OpenVINO EP 为 CPU 提速正路（需立项） |
 | `_probe_h264_hybrid.py` | 419 | 2026-09-14 | **hybrid 达成率定稿测量**（对两解码器并联和）：同会话三臂（cpu/gpu/hybrid）逐轮交错 + min-of-N + 机器忙闲污染门（>40% 当轮重试）+ fps_b/wall 双口径 + 外部重负载进程扫描；`--landscape` 线程扫描 / `--shares` 份额扫描 / `--arm` 自定义臂。C-46 达成率数字的复测载体（达成率定稿协议见 log 2026-09-14） |
 | `_probe_ocr_phase_split.py` | 137 | 2026-09-14 | **OCR 批延迟拆相**（TRT 流水轮取证）：生产 ocr.infer 按相拆解——prep 提交 / TRT 调用（enqueue+argmax+D2H+sync）或深度 2 的 submit/collect / 宿主 CTC；`--runs` 冷热两轮。定量出 trt_call 13.9ms/批占 87%、CTC 0.4ms（launch 裸奔归因的测量入口，结论见 log 2026-09-14-TRT延迟收集流水） |

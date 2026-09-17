@@ -116,7 +116,8 @@ python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.
 - 并发退化真因 = **NVDEC 会话数**；互补配对首选 NVDEC∥CPU，聚合 1.87×（PERF §21）
 - `auto` **恒为 NVDEC 优先**（刻意决策，2026-09-10 重申）：本机 h264 CPU 软解虽快
   1.7~2.8×（C-04），但弱 CPU 可能反慢且必带争用/功耗代价；批量互补仍需**显式**
-  `decode_backend="cpu"`（C-07/C-08）
+  `decode_backend="cpu"`（C-07/C-08）；**批量吞吐用 `pool.run(backends="pair")`
+  −20.6%（编码感知派工是收益主体，并发零贡献；C-52/C-34 翻案）**
 - GPU 分段 + ONNX OCR 无净收益，门控只放行 NVDEC+TRT（PERF §9）
 - hybrid 已迁 **decord 原生**；现役架构 = **包缓存 + 供料期 GOP 派工**（C-46，fork fef3c4b 已随 wheel 发布）：Push 只入压缩包缓存（512MB），泵按当下速率贪心派工 GOP（前瞻+同侧保序）；**kick 必须经泵按流序注入**（错位=IDR 冲掉重排窗→遮蔽损坏，fork 级测不出）；引擎 A/B hevc −6.29%/h264 −4.78%/av1 平价，fork 对并联和 96/92/96%（同会话三臂交错口径）。**收益面 = TRT/设备路径；ONNX 宿主路径不反超**（选 nvdec）；h264 峰值走显式 `cpu`（C-08）。GPU 侧余量=OCR：h264 已 OCR-bound；**fp16 已产品化（TRT_FP16=1，opt-in）**——fp16 ONNX+STRONGLY_TYPED 路线，真值准确率 1.0000（30664 帧）+热池 −3%/−1%；CUDA Graph e2e 无收益且 hevc 崩，已移除（TRT 换代后重评）。旧机制（计划/视界/REPLAN/债务克隆）已删除
 - **racelog_test 全部视频测量/验证一律 `sample_stride=1`**（2026-09-10 重申，

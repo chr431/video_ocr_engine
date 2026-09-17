@@ -413,3 +413,17 @@
   aa_with_above_normal_6pairs: {hot_sd: 0.530, cold_sd: 2.386, mean: -0.242}
   baseline_no_priority: {hot_sd_6p: 0.277, hot_sd_8p: 0.254}
   verdict: ABOVE_NORMAL 不收窄噪声带（无收益证据）——不为门禁采用，维持 opt-in
+# ── 2026-09-17 五段：C-34 翻案（批量互补配对）──────────────────────────
+- metric: pool_pairing_recheck          # C-34 复查 → 翻案（三臂，4 轮）
+  material: racelog 三码族全片（7761/23970/23970 帧，roi 106×32，stride=1）
+  arms_s: {pair: 27.0, nv2_all_nvdec_2w: 34.0, nv1_true_sequential: 34.2}
+  gain_pct: {vs_nv2: -20.6, vs_nv1: -21.0}
+  per_item_s: {h264_cpu: 2.51, h264_nvdec: 7.95, hevc_nvdec_solo: 11.7,
+               av1_nvdec_solo: 14.1, hevc_2w: 24.0, av1_2w: 26.5}
+  attribution: 收益主体=编码感知派工（h264→cpu）；并发零贡献（nv1≈nv2，
+               双 NVDEC 各退化 ~2.1× = C-01 复证）；pair 27.0≈makespan 地板
+  correctness: 三臂段数+唯一文本集逐位一致（4/4 轮）
+  why_flipped: 旧判（2026-09-10）前提 OCR-GPU-bound 已被 C-48（OCR 2.1×）
+               +C-49（decode-bound）颠覆
+  probe_fixed: seq 臂名不副实（实为 2w 并发）→ 三臂制；新增 >10% 偏离中位
+               的瞬态剔除（首跑 2 次 pair=34s 环境瞬态曾拖垮均值至 -2.2%）
