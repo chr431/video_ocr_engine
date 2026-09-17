@@ -492,8 +492,20 @@
               seek_accurate 重锚循环上界 4096 Pop（≈2 GOP 最坏）
   position_test: cpu [0,3000)=1.736/[3000,6000)=1.640/[4761,7761)=1.752；
               nvdec 3.130/3.059/3.310——位置无关，无窗口比例分量
-  evidence_note: cpu/nvdec 无 stats API（hybrid_stats=None），本审计为
-              间接口径（墙钟缩放+位置无关性+源码上界）；包级直证需与
-              hybrid 同款打桩（未做）
-  verdict: 有界小越界（左≤1 GOP + 右≤8 包），零窗口比例分量——
-          病态全文件越窗为 hybrid 独有
+  evidence_note: （已被下条包级直证推翻）间接口径漏掉了 retry 循环推包
+- metric: overread_definitive_matrix       # 包级直证（DecodeStats 打桩）
+  instrument: VideoReader::DecodeStats() → pkts_pushed/frames_popped（穿透
+              版+本轮打桩；注意 EOF 后 PushNext 空推也计数，数字略虚增）
+  matrix_overread_pkts:
+    cpu:   {w64: 2882, w500: 7390, w3000: 7423, full: 7420}
+    nvdec: {w64: 30, w500: 30, w3000: 30, full: 46}
+    hybrid: {w64: 3147, w500: 7262, w3000: 4762, full: 1}
+    cpu_full_note: cpu 全片总推 15181 = 全文件双读
+  mechanism: retry 循环 NeedsPackets 对基础 CPU 解码器恒真 → 消费者自旋
+            每次推一包、无上界，CPU Push 入深队列不阻塞 → demux 读完整
+            文件；NVDEC Push 受 20 surface 硬背压 → demux 节流跟随消费
+  reversal: 推翻"cpu/nvdec 有界"的间接口径——cpu 与 hybrid 同病（demux
+          全文件 + 越窗解码并行烧核，wall 被并行吸收故此前未察觉；
+          decode 相位 cores_avg 16.42 的大头即越窗解码）；nvdec 独净
+  waste_form: cpu 越窗解码在 32 线程里并行烧掉（不进 wall，进核秒/功耗/
+            与消费 GIL 争用）——C-50/C-52 的 GIL 争用放大器
