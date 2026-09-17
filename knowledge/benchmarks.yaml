@@ -484,3 +484,16 @@
             采用自 09-11 前后——全部 hybrid 短窗测量史都在污染面上。
   tainted: C-40 交叉点与短窗劣势数字、C-41 短窗缺口（含税读数）；
           full-file 协议结论（C-46/C-53 hevc/av1、C-52）与 golden 干净
+- metric: cpu_nvdec_overread_audit        # §11.8 续：cpu/nvdec 越界量化
+  right_edge: prefetch 基础深度恒 8 包（DECORD_PREFETCH_DEPTH_BASE，
+              video_reader.cc:84）；EOF 锚定窗口无额外代价
+  left_edge:  keyframe seek-back 固有（解码必须自关键帧起）——racelog
+              test5 GOP max 299/mean 288 帧 ≈ 0.09s@cpu；引擎
+              seek_accurate 重锚循环上界 4096 Pop（≈2 GOP 最坏）
+  position_test: cpu [0,3000)=1.736/[3000,6000)=1.640/[4761,7761)=1.752；
+              nvdec 3.130/3.059/3.310——位置无关，无窗口比例分量
+  evidence_note: cpu/nvdec 无 stats API（hybrid_stats=None），本审计为
+              间接口径（墙钟缩放+位置无关性+源码上界）；包级直证需与
+              hybrid 同款打桩（未做）
+  verdict: 有界小越界（左≤1 GOP + 右≤8 包），零窗口比例分量——
+          病态全文件越窗为 hybrid 独有
