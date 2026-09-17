@@ -225,7 +225,7 @@
   evidence: log 2026-09-14-OpenVINO模型级A-B/集成轮
 
 - id: C-49
-  conclusion: **换依赖无剩余性能空间**：GPU 三码解码绑定（零成本 OCR≈噪声）、h264-cpu 生产者绑定（−18.35%）；fork 超外部参考（NVDEC 989>cuvid 901fps；ROI-first 1.75×）；PyNv 493fps+DLL 冲突；cv2 resize 墙钟 −0.26%
+  conclusion: **换依赖无剩余性能空间**：GPU 三码解码绑定（零成本 OCR≈噪声）、h264-cpu 生产者绑定；fork 超外部参考（NVDEC 989>cuvid 901fps；ROI-first 1.75×）；PyNv 493fps+DLL 冲突；cv2 resize 墙钟 −0.26%
   status: active
   premises: 4060/16C32T/Zen4；fork 0.8.3；入口 _probe_{binding,decode_ceiling,preproc_ab}
   revisit: 换卡 / 带 ROI-first 的解码绑定 / 预处理升为关键路径 / 断言瓶颈前先跑绑定实验
@@ -246,7 +246,7 @@
   evidence: log 2026-09-17-重设计 §7
 
 - id: C-53
-  conclusion: **hybrid 基线=目标码最快纯臂（口径规则）**：h264 基线=CPU（1.102s），hybrid 1.688s **+53.6% 慢**（弱 GPU 臂+HOL 税拖 CPU 臂）；hevc/av1 基线=NVDEC，hybrid **−23.0%/−33.8%**（全片 6/6）→ **h264 选 cpu、hevc/av1 选 hybrid**（与 C-52 自洽）；fork 遥测 vr.hybrid_stats() 直通 report 'hybrid' 段。⚠️ 窗口须越 C-40 交叉点
+  conclusion: **hybrid 基线=目标码最快纯臂（口径规则）**：h264 基线=CPU，hybrid w3000 +53.6%/全片 +11.4% 慢（机制=供给耦合+暖机为主、超额争用为辅；解码单跑反 +17%，泵欠供 cache 15MB vs 127MB）；hevc/av1 基线=NVDEC，hybrid **−23%/−34%** → **h264 选 cpu、hevc/av1 选 hybrid**；fork 遥测直通 report 'hybrid' 段。⚠️ 窗口须越 C-40 交叉点
   status: active
   premises: 4060/TRT；fork 穿透版；hevc/av1 全片；h264 曾错用 nvdec 基线
   revisit: 换卡 / h264 CPU 臂速率变 / fork 换代 / OCR 变慢改瓶颈

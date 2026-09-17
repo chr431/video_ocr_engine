@@ -450,3 +450,13 @@
                av1 CPU 份额 25→33% 爬升（泵适应轨迹首次可见）
   caliber_note: C-46 的"−6.29%/−4.78%"经核对是 fork 新旧机制 A/B，非
                hybrid vs nvdec e2e——口径混用自此澄清
+- metric: h264_hybrid_engine_reversal_decomp  # §11.7：解码单跑赢→引擎反转的成分分解
+  probe_today: {cpu_single_fpsb: 3613, gpu_single: 991, hybrid: 4213,
+                hybrid_cpu_arm_busy: 3214, hol_g_s: 0.80}   # 定稿协议全复现
+  engine: {cpu_decode_fps: 3363, hybrid_w3000_wall: 1.636, hybrid_cpu_arm_busy: 1452,
+           cache_peak_mb: 15, tight_loop_cache_mb: 127}
+  window: {w3000_vs_cpu: +53.6, full_vs_cpu_32T: +11.4, full_vs_cpu_10T: +25.8}
+  thread_sweep_w3000: {32T: 1.636, 16T: 1.459, 10T: 1.416}
+  verdict: 主因=供给-调度耦合（消费者批量拉取使 demux 半饿、泵欠供+暖机）；
+          次因=线程超额（短窗 −13.5% 降线程好，长窗反向要线程）；HOL 小
+  fix_directions: 供给解耦（预拉/深 prefetch）或暖机加速（速率先验）——未实施
