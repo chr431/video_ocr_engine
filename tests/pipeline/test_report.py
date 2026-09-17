@@ -47,8 +47,9 @@ def _std_metrics():
 # ── schema 快照 ────────────────────────────────────────────────────────
 def test_report_version_is_pinned():
     # v1→v2：+resources/+hardware；v2→v3：+diagnostics；v3→v4：+span_relations
-    # 与 `<parent>_other` 派生 span（均为只加键）
-    assert REPORT_VERSION == 4
+    # 与 `<parent>_other` 派生 span；v4→v5：+histograms/histograms_meta
+    # （full 档专属，均为只加键）
+    assert REPORT_VERSION == 5
 
 
 def test_report_schema_snapshot():
@@ -95,6 +96,29 @@ def test_other_span_derivation_host_vs_gpu():
     m2.record_span("ocr.ctc_decode", 0.05)
     rep3 = build_report(m2, wall=1.0, span_path="gpu")
     assert rep3["spans"]["ocr.infer_other"]["sum"] == pytest.approx(0.45)
+
+
+def test_host_consume_feed_relations_and_histograms():
+    """W1/W2：consume_feed ⊃ merge_pair+q_put（宿主）；full 档直方图段。"""
+    m = _std_metrics()
+    m.record_span("pipeline.consume_feed", 0.60)
+    m.gauge("segment.merge_pair", 0.25)          # TOTALS 汇总为 gauge
+    m.gauge("pipeline.q_put_block", 0.05)
+    rep = build_report(m, wall=1.0, span_path="host")
+    other = rep["spans"]["pipeline.consume_feed_other"]
+    assert other["sum"] == pytest.approx(0.30)
+    # std 档不写 histograms（缺席 ≠ 空值）
+    assert "histograms" not in rep
+    mf = Metrics("full")
+    mf.histogram("pipeline.consume_feed_hist", 0.001)
+    mf.histogram("pipeline.consume_feed_hist", 0.002)
+    mf.histogram("pipeline.consume_feed_hist", 0.5)
+    repf = build_report(mf, wall=1.0, span_path="host")
+    h = repf["histograms"]["pipeline.consume_feed_hist"]
+    assert h["n"] == 3 and sum(h["buckets"]) == 3
+    assert repf["histograms_meta"]["n_buckets"] == len(h["buckets"])
+    # 1ms 与 2ms 同桶（×2 分箱），0.5s 远离
+    assert h["buckets"] == h["buckets"] and h["buckets"][-1] == 0
 
 
 def test_off_tier_emits_no_report():

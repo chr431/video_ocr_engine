@@ -50,7 +50,7 @@ from ._helpers import (  # noqa: F401
 from .config import resolve
 from .domain.metrics import (
     NULL_METRICS, PROFILE_GAUGES, PROFILE_SPANS, PROFILE_TOTALS,
-    PROFILE_TOTALS_MAX, PROFILE_TOTALS_N, make_metrics,
+    PROFILE_TOTALS_HIST, PROFILE_TOTALS_MAX, PROFILE_TOTALS_N, make_metrics,
 )
 from .pipeline.engine import SegmentEngine
 from .pipeline.gpu_backend import GpuRunSpec, run_gpu_pipeline
@@ -647,6 +647,10 @@ class FieldExtractor:
                     self._metric_max[_mx] = elapsed
             if m.detailed:
                 m.record_span(name, elapsed)   # full 档另留逐次样本
+                # W1：分布形状（full 档专属；每事件 0.165µs，std 预算付不起）
+                _h = PROFILE_TOTALS_HIST.get((group, key))
+                if _h is not None:
+                    m.histogram(_h, elapsed)
             return name
         return None
 

@@ -82,15 +82,27 @@ def _round(cfg_name: str, window: int, telemetry: str, keep_crops: bool,
         kw["buffer_size"] = buffer_size
     if fill_width is not None:
         kw["fill_width"] = fill_width     # 0 = 关闭填充（批内自适应）
-    ex = FieldExtractor(VIDS[vid], ROI["test5" if vid == "test5" else "test6"],
-                        frame_start=0, frame_end=window,
-                        decode_backend=(decode_override
-                                        or cfg["decode_backend"]),
-                        ocr_backend=ocr_backend, keep_crops=keep_crops,
-                        sample_stride=cfg.get("sample_stride", 1), **kw)
-    t0 = time.perf_counter()
-    r = ex.extract()
-    wall = time.perf_counter() - t0
+    # 遥测档位经 env 进引擎（resolve 的 env 优先级链）——此前 `telemetry`
+    # 参数被收下却从未使用：`bench run --telemetry full` 一直是静默无效
+    # （2026-09-17 续轮 W1 排查直方图缺失时暴露）。进程内改 os.environ
+    # 与 telemetry-check 的 in-process 口径一致。
+    _prev_tier = os.environ.get("VOE_TELEMETRY")
+    os.environ["VOE_TELEMETRY"] = telemetry
+    try:
+        ex = FieldExtractor(
+            VIDS[vid], ROI["test5" if vid == "test5" else "test6"],
+            frame_start=0, frame_end=window,
+            decode_backend=(decode_override or cfg["decode_backend"]),
+            ocr_backend=ocr_backend, keep_crops=keep_crops,
+            sample_stride=cfg.get("sample_stride", 1), **kw)
+        t0 = time.perf_counter()
+        r = ex.extract()
+        wall = time.perf_counter() - t0
+    finally:
+        if _prev_tier is None:
+            os.environ.pop("VOE_TELEMETRY", None)
+        else:
+            os.environ["VOE_TELEMETRY"] = _prev_tier
     return {"wall": round(wall, 4), "n_segments": len(r.segments),
             "timing": {k: round(v, 4) for k, v in r.timing.items()},
             "report": r.meta.get("report")}

@@ -81,12 +81,14 @@ python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.
 ⚠️ **A/B 必须交错**（`bench ab`，2026-09-17 起含臂序轮转 + GPU 时钟门禁
 + 自动判定）：同码连跑两次实测可差 **7.7%**（GPU 热降），顺序跑会把漂移
 记到 B 头上。⚠️ **门禁阈值 ≥ 本机可分辨下限**：先
-`bench telemetry-check --aa` 标定（本机 A/A \|Δ\|p95 0.734%，2026-09-17
+`bench telemetry-check --aa` 标定（本机 A/A \|Δ\|p95 0.654%，2026-09-17
 重标，n=25/inner=3 → std 限 +0.30% / full 限 +1.20%，仍由 0.30% 地板
 绑定）；**ab 子进程协议另有标定**（`ab --aa`：GPU sd 0.254% → --hard
-0.55% 级；纯 CPU 配置 sd 1.22% → 1.45% 级），阈值 =
+0.55% 级；纯 CPU 配置 sd 0.5~2.6% 随桌面状态浮动 → 1.45% 级起），阈值 =
 \|偏差\|+3×SE，判据 = 同轮配对差分**均值** + 符号多数一致；µs 级严格性见
 `tests/config/test_telemetry_cost.py`。执行体在脚本（`knowledge/rules.yaml`）。
+⚠️ **遥测档位只在 full 档新增**（直方图/TRT 子相位——第 7 节 W1/W2 的
+预算决策）：std 档面保持 2ms/run 内，改动 std 档必跑成本守卫 + 重标。
 
 **现役并行维度只有一个**：`decode_backend="hybrid"` 的 CPU+NVDEC 双解码，
 **已由 decord fork 原生实现**（v0.7.15+ 的 `hybrid`/`hybrid_gpu` ctx，引擎只

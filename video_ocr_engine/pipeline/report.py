@@ -23,7 +23,9 @@ from pathlib import Path
 # v4（2026-09-17 重设计）：新增 `span_relations`（静态父子表 + 路径标记）与
 # 派生 span `<parent>_other`（= parent.sum − Σ在场子项 sum），产品化
 # "consumer − 已计 span = 缺口"的手工归因算术；spans 表只加键。
-REPORT_VERSION = 4
+# v5（2026-09-17 续）：新增 `histograms`（无界 TOTALS 键的耗时分布，**full
+# 档专属**——std 档该段缺席，不是空值冒充）+ `histograms_meta`（分箱自述）。
+REPORT_VERSION = 5
 
 #: v4：span 嵌套关系（代码级核对，2026-09-17 勘察）。**子项互不重叠**是
 #: 硬约束——嵌套更深的键（如宿主 merge_pair/q_put_block 在 consume_feed
@@ -39,12 +41,17 @@ SPAN_RELATIONS: dict = {
         "pipeline.consumer": ("decode.batch", "decode.luma_batch",
                               "decode.sharp_batch", "decode.binarize_batch",
                               "pipeline.consume_feed"),
+        "pipeline.consume_feed": ("segment.merge_pair",
+                                  "pipeline.q_put_block"),
         "ocr.infer": ("ocr.ctc_decode",),
         "ocr.preprocess": ("ocr.preproc_luma", "ocr.preproc_autocrop",
                            "ocr.preproc_resize"),
     },
     "gpu": {
-        "ocr.infer": ("ocr.ctc_decode",),
+        # W2：TRT 三子相位（full 档才有值；std 档缺席记 0，_other 退化为
+        # 与 v4 相同口径——关系表静态声明，取值按在场与否）
+        "ocr.infer": ("ocr.ctc_decode", "ocr.trt_enq", "ocr.trt_reduce",
+                      "ocr.trt_concat"),
         "ocr.preprocess": ("ocr.preproc_luma", "ocr.preproc_autocrop",
                            "ocr.preproc_resize"),
     },
@@ -214,6 +221,21 @@ def build_report(metrics, *, wall: float, config_digest: str = "",
             rep["resources"] = res
     if hardware is not None:
         rep["hardware"] = hardware
+    # v5：分布形状（full 档专属；std 档不写该键——缺席 ≠ 空值）
+    hists = snap.get("histograms") or {}
+    if hists:
+        from video_ocr_engine.domain.metrics import (
+            HIST_BUCKET_LOWER, HIST_EXP_BIAS, HIST_N_BUCKETS)
+        rep["histograms"] = {
+            k: {"n": v["n"], "buckets": list(v["buckets"])}
+            for k, v in hists.items()}
+        rep["histograms_meta"] = {
+            "n_buckets": HIST_N_BUCKETS,
+            "exp_bias": HIST_EXP_BIAS,
+            "bucket_lower_s": [round(x, 8) for x in HIST_BUCKET_LOWER],
+            "note": "桶号 = frexp(秒)指数 + %d；桶 i 覆盖 [lower[i], "
+                    "lower[i+1])，末桶含上溢；读数=事件次数" % HIST_EXP_BIAS,
+        }
     # v3：诊断段（未 arming 时不写该键，而不是写空值冒充）
     if diagnostics:
         rep["diagnostics"] = dict(diagnostics)

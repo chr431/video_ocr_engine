@@ -173,11 +173,27 @@ class _HostCounters:
             self.sources["cycles"] = "unavailable:%s" % repr(e)[:60]
 
     def sample(self) -> dict:
-        """一次边界采样：全部字段都是 None 或真值（不可用≠0）。"""
+        """一次边界采样：全部字段都是 None 或真值（不可用≠0）。
+
+        `sm_mhz`（W3）：只在 NVML 会话**已经存在**时读（`nvml_handle` 的
+        缓存态判据），绝不因采样而初始化 NVML——GPU 路径必然已初始化
+        （环境指纹/采样器），宿主纯 CPU 路径天然为 None。这是"这一相位
+        跑在什么时钟上"的直接读数（C-39 边界：NVDEC% 不能当占空比，
+        时钟/throttle 位才是有效信号）。
+        """
         s = {"t": time.perf_counter(), "cpu": time.process_time(),
              "rss": None, "rb": None, "wb": None, "vram": None,
-             "cycles": None,
+             "cycles": None, "sm_mhz": None,
              "threads": threading.active_count()}
+        if _NVML["state"]:                     # 已初始化才读（无则零成本）
+            try:
+                import ctypes
+                nvml, h = _NVML["state"]
+                c = ctypes.c_uint()
+                if int(nvml.nvmlDeviceGetClockInfo(h, 1, ctypes.byref(c))) == 0:
+                    s["sm_mhz"] = int(c.value)
+            except Exception:
+                pass  # 单次时钟读数失败：留 None（不可用≠0），不上抛
         if self._get_cycles is not None:
             s["cycles"] = self._get_cycles()
         if self._get_rss is not None:
@@ -244,6 +260,8 @@ class ResourceProbe:
         s = dict(self._counters.sources)
         s["vram"] = _VRAM_STATE["why"]      # 真值来源或不可用原因（不猜）
         s["threads"] = "threading.active_count"
+        s["sm_mhz"] = ("nvmlDeviceGetClockInfo(SM)；仅当 NVML 会话已存在"
+                       "（GPU 路径）——宿主纯 CPU 路径为 None，不主动初始化")
         return s
 
     def checkpoint(self, phase: str) -> None:
@@ -285,6 +303,12 @@ class ResourceProbe:
             if f_run > 0 and ca is not None and cb is not None:
                 row["cores_avg_cycles"] = round(
                     max(0, cb - ca) / dt / f_run, 2)
+            # W3：相位**终点**的 SM 时钟（GPU 路径相位差分才有；起点读数
+            # 用于人工对齐——时钟爬坡期一个相位内前后差上千 MHz 是常态）
+            if sb.get("sm_mhz") is not None:
+                row["sm_mhz_at_end"] = sb["sm_mhz"]
+            if sa.get("sm_mhz") is not None:
+                row["sm_mhz_at_start"] = sa["sm_mhz"]
             if sa["rss"] is not None and sb["rss"] is not None:
                 row["rss_delta_mib"] = round(
                     (sb["rss"] - sa["rss"]) / 1048576.0, 1)

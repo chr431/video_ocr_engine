@@ -106,16 +106,34 @@ def test_profile_mapping_targets_are_registered():
 
 
 def test_totals_n_max_cover_all_totals_keys():
-    """P2b：TOTALS 全键分诊——N/MAX 映射与 TOTALS 键集合一致（成对出现）。"""
+    """P2b：TOTALS 全键分诊——N/MAX/HIST 映射与 TOTALS 键集合一致。"""
     from video_ocr_engine.domain.metrics import (
-        PROFILE_TOTALS, PROFILE_TOTALS_MAX, PROFILE_TOTALS_N)
+        HIST_N_BUCKETS, PROFILE_TOTALS, PROFILE_TOTALS_HIST,
+        PROFILE_TOTALS_MAX, PROFILE_TOTALS_N, hist_bucket)
     assert set(PROFILE_TOTALS_N) == set(PROFILE_TOTALS)
     assert set(PROFILE_TOTALS_MAX) == set(PROFILE_TOTALS)
+    # W1：直方图映射同样全键覆盖
+    assert set(PROFILE_TOTALS_HIST) == set(PROFILE_TOTALS)
+    # 桶数学：×2 分箱、边界与溢出（桶号 = frexp 指数 + HIST_EXP_BIAS）
+    assert hist_bucket(0.0) == 0 and hist_bucket(-1.0) == 0
+    assert hist_bucket(2.0 ** -21) == 0            # 下溢进 0 桶
+    assert hist_bucket(2.0 ** -20) == 1            # frexp 指数 -19
+    assert hist_bucket(1.0) == 21                  # frexp(1.0)=0.5×2^1
+    assert hist_bucket(0.5) == 20                  # 1.0 与 0.5 分属两桶
+    assert hist_bucket(0.25) == 19
+    assert hist_bucket(1e6) == HIST_N_BUCKETS - 1  # 上溢进末桶
+    assert 0 <= hist_bucket(1e-9) < HIST_N_BUCKETS
+    # ×2 分箱：同一 [2^k, 2^(k+1)) 区间内的值同桶
+    assert hist_bucket(0.001) == hist_bucket(0.0019)    # 都在 [2^-10,2^-9)
+    assert hist_bucket(0.001) != hist_bucket(0.0021)    # 跨到 [2^-9,2^-8)
 
 
 def test_registry_cap():
-    from video_ocr_engine.domain.metrics import MetricRegistry
+    from video_ocr_engine.domain.metrics import METRIC_CAP, MetricRegistry
     specs = tuple(MetricSpec("x.%d" % i, "counter", "", "x", "")
-                  for i in range(65))
+                  for i in range(METRIC_CAP + 1))
     with pytest.raises(AssertionError):
         MetricRegistry(specs)
+    # 现役注册表不得逼近上限（留 20% 余量给后续扩展）
+    from video_ocr_engine.domain.metrics import METRICS
+    assert len(METRICS.names()) <= METRIC_CAP * 0.8

@@ -229,15 +229,15 @@
   evidence: log 2026-09-15-依赖替换裁决
 
 - id: C-50
-  conclusion: **DECODE_THREADS 10→32 无热路径收益**（8 对交错 A/B 不可判定：+0.97%<1.45%、符号 4/4；冷启 t32 一致慢 +4.03%）。机制：32T 使 decode.batch 阻塞 −82%（decord 预取重叠）但 GIL 争用把消费/OCR 拖慢 35~120% 全对冲——**维持 10 档**
+  conclusion: **DECODE_THREADS 10→32 无收益**（8 对交错 A/B 不可判定：+0.97%<1.45%、符号 4/4；冷启 t32 一致慢 +4.03%）。机制：32T 使 decode.batch 阻塞 −82%（decord 预取重叠）但 GIL 争用把消费/OCR 拖慢 35~120% 全对冲——**维持 10 档**
   status: active
-  premises: 16C32T 共享桌面；openvino CPU OCR；h264
-  revisit: 换 CPU 核数格局 / OCR 侧再提速 / decord 预取变化
-  evidence: log 2026-09-17-性能监测系统重设计 §5
+  premises: 16C32T；openvino CPU OCR；h264
+  revisit: 核数格局变 / OCR 再提速 / decord 预取变
+  evidence: log 2026-09-17-重设计 §5§7
 
 - id: C-51
-  conclusion: **监测系统新基线（2026-09-17 重设计）**：bench 时钟门禁（sm_min≥0.75×最大SM）+ ab 臂序轮转/自动判定/--aa；report v4（span_relations+缺口派生+cores_avg_cycles cycle 口径+TOTALS 全键 n/max）；重标后 std 阈值 0.30% 地板仍绑定（A/A p95 0.734%）、ab 协议 GPU sd 0.254%/CPU 1.22%；trace（VOE_TRACE_FILE）opt-in 保留，关=零成本
+  conclusion: **监测系统新基线（2026-09-17 重设计+续轮）**：bench 时钟门禁（sm_min≥0.75×最大SM）+ab 轮转/自动判定/--aa；report v5=span_relations+缺口派生+cores_avg_cycles+TOTALS n/max+**histograms（仅 full：0.165µs/事件×6270 超 std 预算）**+相位 sm_clock；子相位闭合（trt_enq/reduce/concat：infer_other 92%→16%；consume_feed⊃merge_pair+q_put 闭到 0.220s）；std 0.30% 地板三轮绑定；ab GPU sd 0.254%/CPU 1.22%；trace opt-in（GPU 8/8 符号 +0.31%<限，关=零成本）
   status: active
-  premises: 4060；共享桌面；n=25·inner3 与 8 对口径
-  revisit: 换卡/驱动 / 换机器全重标 / bench 协议再改即 --aa 重标 / trace 转正需成本证据
-  evidence: log 2026-09-17-性能监测系统重设计
+  premises: 4060（max3105/平台2700）；共享桌面
+  revisit: 换卡/驱动 / 换机器重标 / 协议改即 --aa 重标 / trace 转正需锁频/n≥30
+  evidence: log 2026-09-17-重设计 §7

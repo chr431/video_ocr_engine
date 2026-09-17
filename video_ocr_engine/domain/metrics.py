@@ -12,6 +12,7 @@ snapshot 时遍历登记表（每线程一次加锁，之后全无锁）。
 """
 from __future__ import annotations
 
+import math
 import threading
 import time
 from contextlib import contextmanager
@@ -21,7 +22,27 @@ from typing import Iterator, Literal
 from .resources import NvmlSampler, ResourceProbe
 
 MetricKind = Literal["span", "counter", "gauge", "histogram"]
-METRIC_CAP = 64
+METRIC_CAP = 96
+
+#: 直方图分箱（W1，2026-09-17 续）：**按 2 的指数分箱**（×2 分辨率），
+#: 桶号 = `math.frexp(x)[1] + HIST_EXP_BIAS`，一次 frexp 调用即得——
+#: 实测 0.165µs/事件（log 2026-09-17 §W1 桶成本原型），无 per-event 循环。
+#: 无界 TOTALS 键此前只有 sum/n/max 两端；"偶发长停顿 vs 持续细碎"的
+#: 形状信息需要分布。范围 2^-20≈0.95µs 到 2^11≈2048s。
+HIST_EXP_BIAS = 20
+HIST_N_BUCKETS = 32
+#: 桶 i 的秒级下界（供 report 自述；i=0 覆盖 [0, 2^-20)）
+HIST_BUCKET_LOWER = tuple(
+    (2.0 ** (i - HIST_EXP_BIAS)) if i > 0 else 0.0
+    for i in range(HIST_N_BUCKETS))
+
+
+def hist_bucket(seconds: float) -> int:
+    """事件耗时 → 桶号（0..HIST_N_BUCKETS-1）；非正数入 0 桶。"""
+    if seconds <= 0.0:
+        return 0
+    k = math.frexp(seconds)[1] + HIST_EXP_BIAS
+    return 0 if k < 0 else (HIST_N_BUCKETS - 1 if k >= HIST_N_BUCKETS else k)
 
 # 注册表（§8.6 N-1）：命名空间 = 阶段；pi_binding 指向 §13.2 不变式。
 # 元组 = (name, kind, unit, stage, pi_binding)。
@@ -44,11 +65,14 @@ _SEED = (
     # （consume_feed/emit.*/merge_pair），映射表在 PROFILE_TOTALS_N/_MAX。
     ("pipeline.q_get_wait_n", "counter", "次", "pipeline", "PI-5"),
     ("pipeline.q_get_wait_max", "gauge", "s", "pipeline", "PI-5"),
+    ("pipeline.q_get_wait_hist", "histogram", "次", "pipeline", "PI-5"),
     ("pipeline.q_put_block_n", "counter", "次", "pipeline", "PI-5"),
     ("pipeline.q_put_block_max", "gauge", "s", "pipeline", "PI-5"),
+    ("pipeline.q_put_block_hist", "histogram", "次", "pipeline", "PI-5"),
     ("pipeline.consume_feed", "span", "s", "pipeline", ""),
     ("pipeline.consume_feed_n", "counter", "次", "pipeline", ""),
     ("pipeline.consume_feed_max", "gauge", "s", "pipeline", ""),
+    ("pipeline.consume_feed_hist", "histogram", "次", "pipeline", ""),
     # ── decode：批级（std 档不含 per-frame）──
     ("decode.batch", "span", "s", "decode", ""),
     ("decode.batches", "counter", "批", "decode", ""),
@@ -62,11 +86,20 @@ _SEED = (
     ("segment.merge_pair", "span", "s", "segment", "PI-1"),
     ("segment.merge_pair_n", "counter", "次", "segment", "PI-1"),
     ("segment.merge_pair_max", "gauge", "s", "segment", "PI-1"),
+    ("segment.merge_pair_hist", "histogram", "次", "segment", "PI-1"),
     ("segment.merges", "counter", "次", "segment", ""),
     # ── ocr ──
     ("ocr.engine_init", "gauge", "s", "ocr", "PI-10"),
     ("ocr.engine_reuse", "counter", "次", "ocr", "PI-10"),
     ("ocr.infer", "span", "s", "ocr", ""),
+    # W2 子相位（2026-09-17 续）：`ocr.infer` 的残差此前不可分（host 路径
+    # _other 高达 2.8s）。三键在 **full 档**记录（TRT 调用是热路径，
+    # per-batch × 数十批，std 预算付不起）：trt_enq = execute_async_v3
+    # 提交；trt_reduce = argmax 规约 + D2H（含流同步，即"等 GPU 干完"）；
+    # trt_concat = 多子批拼接（纯宿主）。
+    ("ocr.trt_enq", "span", "s", "ocr", ""),
+    ("ocr.trt_reduce", "span", "s", "ocr", ""),
+    ("ocr.trt_concat", "span", "s", "ocr", ""),
     ("ocr.preprocess", "span", "s", "ocr", ""),
     # 预处理三个可分代价（2026-09-13 细分）：糊在一个 span 里无法判断该
     # 优化谁——autocrop 在**全分辨率**上做，resize+gamma 在降采样后做。
@@ -93,12 +126,15 @@ _SEED = (
     ("emit.autocrop", "span", "s", "emit", ""),
     ("emit.autocrop_n", "counter", "次", "emit", ""),
     ("emit.autocrop_max", "gauge", "s", "emit", ""),
+    ("emit.autocrop_hist", "histogram", "次", "emit", ""),
     ("emit.put", "span", "s", "emit", ""),
     ("emit.put_n", "counter", "次", "emit", ""),
     ("emit.put_max", "gauge", "s", "emit", ""),
+    ("emit.put_hist", "histogram", "次", "emit", ""),
     ("emit.d2h", "span", "s", "emit", ""),
     ("emit.d2h_n", "counter", "次", "emit", ""),
     ("emit.d2h_max", "gauge", "s", "emit", ""),
+    ("emit.d2h_hist", "histogram", "次", "emit", ""),
     # （pools.high_water / frame_batch.* 已出清：零产出点。）
 )
 
@@ -185,6 +221,18 @@ PROFILE_TOTALS = {
     ("ocr", "q_get_wait"): "pipeline.q_get_wait",
     ("producer", "merge_pair"): "segment.merge_pair",
 }
+#: W1 分布形状：TOTALS 键的耗时直方图（**full 档专属**——每事件一次
+#: frexp + 桶加，6270 事件/run 实测 1.0ms，超 std 预算 0.2% 的份额；
+#: full 档的墙钟预算本来就是 ±1.2% 量级，付得起）。std 档仍有 n/max。
+PROFILE_TOTALS_HIST = {
+    ("producer", "q_put_block"): "pipeline.q_put_block_hist",
+    ("ocr", "q_get_wait"): "pipeline.q_get_wait_hist",
+    ("producer", "consume_feed"): "pipeline.consume_feed_hist",
+    ("producer", "emit_autocrop"): "emit.autocrop_hist",
+    ("producer", "emit_put"): "emit.put_hist",
+    ("producer", "emit_d2h"): "emit.d2h_hist",
+    ("producer", "merge_pair"): "segment.merge_pair_hist",
+}
 #: 单值量（只保留末次）：engine_init 是 PI-10 的判据本体
 PROFILE_GAUGES = {
     ("ocr", "engine_init"): "ocr.engine_init",
@@ -192,7 +240,7 @@ PROFILE_GAUGES = {
 
 
 def _empty_bucket() -> dict:
-    return {"spans": {}, "counters": {}, "gauges": {}}
+    return {"spans": {}, "counters": {}, "gauges": {}, "hists": {}}
 
 
 class Metrics:
@@ -322,11 +370,29 @@ class Metrics:
         self._check(name)
         self._bucket()["gauges"][name] = value
 
+    def histogram(self, name: str, seconds: float) -> None:
+        """W1：事件耗时 → 分布桶（**调用方负责只在 detailed 档调**）。
+
+        热路径形状 = 一次 `math.frexp` + 列表索引加（0.165µs/事件实测）；
+        std 档调用方不进来（`_prof_end` 里 `if m.detailed` 守卫），
+        故此处不再重复判档。
+        """
+        if not self.enabled:
+            return
+        self._check(name)
+        b = self._bucket()
+        h = b["hists"]
+        arr = h.get(name)
+        if arr is None:
+            arr = h[name] = [0] * HIST_N_BUCKETS
+        arr[hist_bucket(seconds)] += 1
+
     def snapshot(self) -> dict:
         """合并全部线程桶（drain 语义）并返回聚合快照。
 
         返回 {"spans": {name: {n,sum,min,max,p50,p99}}, "counters": {...},
-        "gauges": {...}}；spans 聚合后丢弃原始样本（报告不需要时间线）。
+        "gauges": {...}, "histograms": {name: {n, buckets, lower}}}；
+        spans 聚合后丢弃原始样本（报告不需要时间线）。
         """
         with self._lock:
             buckets, self._buckets = self._buckets, []
@@ -334,6 +400,7 @@ class Metrics:
         spans: dict = {}
         counters: dict = {}
         gauges: dict = {}
+        hists: dict = {}
         for b in buckets:
             for k, lst in b["spans"].items():
                 agg = spans.get(k)
@@ -345,6 +412,13 @@ class Metrics:
                 counters[k] = counters.get(k, 0) + v
             for k, v in b["gauges"].items():
                 gauges[k] = v
+            for k, arr in b.get("hists", {}).items():
+                agg = hists.get(k)
+                if agg is None:
+                    hists[k] = list(arr)
+                else:
+                    for i, c in enumerate(arr):
+                        agg[i] += c
         out_spans = {}
         for k, lst in spans.items():
             if not lst:
@@ -359,7 +433,10 @@ class Metrics:
                 "p50": xs[n // 2],
                 "p99": xs[min(n - 1, int(n * 0.99))],
             }
-        return {"spans": out_spans, "counters": counters, "gauges": gauges}
+        out_hists = {k: {"n": sum(arr), "buckets": arr}
+                     for k, arr in hists.items() if sum(arr)}
+        return {"spans": out_spans, "counters": counters, "gauges": gauges,
+                "histograms": out_hists}
 
 
 class NullMetrics(Metrics):

@@ -463,6 +463,9 @@ class TrtEngine:
         idx_parts = []
         prob_parts = []
         _m = getattr(self, '_metrics', None)
+        # W2 子相位：只在 full 档记录（per-子批 × 数十批的热路径；
+        # std 预算付不起，且 std 档的 ocr.infer 值本来就够用）。
+        _subdetail = bool(_m is not None and _m.enabled and _m.detailed)
         _n_sync = 0
         _n_sub = 0
         for i in range(0, B, self.max_batch):
@@ -484,11 +487,18 @@ class TrtEngine:
             self.context.set_tensor_address(
                 self.in_name, dev_input + i * elem_floats * 4)
             self.context.set_tensor_address(self.out_name, self._dev_out)
+            _t_enq = time.perf_counter() if _subdetail else 0.0
             self.context.execute_async_v3(stream)
+            if _subdetail:
+                _m.record_span('ocr.trt_enq', time.perf_counter() - _t_enq)
             # S6-c：reduce 的 D2H 走异步 + 每子批一次流同步（原为 2 次
             # 阻塞 cudaMemcpy = 隐式设备级同步，PI-14 守卫 GPU_CTC=0/1
             # 文本 sha 一致；此处计数供 PI-3 的 syncs/chunk 判定）。
+            # W2：reduce 内含流同步等待（"等 GPU 干完"），作为子相位记录。
+            _t_red = time.perf_counter() if _subdetail else 0.0
             idx, prob = reducer.reduce(self._dev_out, out_shape)
+            if _subdetail:
+                _m.record_span('ocr.trt_reduce', time.perf_counter() - _t_red)
             _n_sub += 1
             idx_parts.append(idx)
             prob_parts.append(prob)
@@ -497,10 +507,13 @@ class TrtEngine:
             _m.counter('ocr.sub_chunks', _n_sub)
             _m.gauge('ocr.syncs_per_chunk',
                      (_n_sync + _n_sub) / max(1, _n_sub))
+        _t_cat = time.perf_counter() if _subdetail else 0.0
         idx_all = np.concatenate(idx_parts) if len(idx_parts) > 1 \
             else idx_parts[0]
         prob_all = np.concatenate(prob_parts) if len(prob_parts) > 1 \
             else prob_parts[0]
+        if _subdetail:
+            _m.record_span('ocr.trt_concat', time.perf_counter() - _t_cat)
         seq = idx_all.size // max(B, 1)
         return idx_all.reshape(B, seq), prob_all.reshape(B, seq)
 
