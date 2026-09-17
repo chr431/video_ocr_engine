@@ -33,9 +33,12 @@ def main() -> int:
     ap.add_argument("--decode", default="cpu")
     ap.add_argument("--ocr", default="cpu")
     ap.add_argument("--rounds", type=int, default=2)
+    ap.add_argument("--roi", default="", help="覆盖 ROI（宽 ROI 场景）")
     args = ap.parse_args()
 
     name, roi = VID[args.video]
+    if args.roi:
+        roi = tuple(int(x) for x in args.roi.split(","))
     path = str(Path(os.environ.get("RACELOG_VIDEO_DIR",
                                    r"D:\Videos\racelog_test")) / name)
     from video_ocr_engine import FieldExtractor

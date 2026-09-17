@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="880" viewBox="0 0 1180 880" font-family="'Segoe UI','Microsoft YaHei',sans-serif">
+  <defs>
+    <style>
+      .box { fill:#ffffff; stroke:#5a6572; stroke-width:1.2; rx:8; }
+      .grp { fill:#f7f9fb; stroke:#9aa7b4; stroke-width:1.2; rx:12; }
+      .lbl { fill:#2b3440; font-size:14px; font-weight:600; }
+      .sub { fill:#5a6572; font-size:11.5px; }
+      .code { fill:#8a5a00; font-size:11px; font-family:Consolas,monospace; }
+      .title { fill:#1d2733; font-size:17px; font-weight:700; }
+      .badge { fill:#eef3f8; stroke:#9aa7b4; rx:5; }
+      .lane { fill:#eef3f8; stroke:#b9c4d0; stroke-width:1; rx:4; }
+      .b-dec { fill:#3f7cac; rx:4; }
+      .b-seg { fill:#c47f17; rx:4; }
+      .b-oth { fill:#9aa7b4; rx:4; }
+      .b-idle { fill:#dfe6ee; stroke:#b9c4d0; stroke-width:1; stroke-dasharray:4 3; rx:4; }
+      .b-ocr { fill:#4c8c5f; rx:4; }
+      .bt { fill:#ffffff; font-size:10.5px; font-weight:600; }
+      .bt-d { fill:#2b3440; font-size:10.5px; font-weight:600; }
+      .wall { stroke:#b03030; stroke-width:1.6; stroke-dasharray:6 4; }
+      .note { fill:#5a6572; font-size:11px; }
+    </style>
+  </defs>
+
+  <text x="24" y="32" class="title">video-ocr-engine 流水线分级与实测瓶颈（0.14.0）</text>
+  <rect x="24" y="42" width="952" height="22" class="badge"/>
+  <text x="32" y="58" class="sub">口径：test5.mp4 / 3000 帧 / ROI 843,993,948,1025（106×33）/ 2026-09-17 实测；条长 ∝ 实测秒（同面板共尺度），不表示精确时序对齐</text>
+
+  <!-- ═══ 四级定义条 ═══ -->
+  <rect x="24" y="78" width="1132" height="66" class="grp"/>
+  <text x="38" y="98" class="lbl" font-size="12.5">四级（代码入口）</text>
+  <rect x="38" y="106" width="240" height="30" class="box"/>
+  <text x="46" y="125" class="sub" font-size="11">L1 解码　decord get_batch（唯一入口）</text>
+  <rect x="286" y="106" width="268" height="30" class="box"/>
+  <text x="294" y="125" class="sub" font-size="11">L2 分段　segmentation.py 状态机</text>
+  <rect x="562" y="106" width="240" height="30" class="box"/>
+  <text x="570" y="125" class="sub" font-size="11">L3 OCR　ocr_stage.py · OcrSession</text>
+  <rect x="810" y="106" width="332" height="30" class="box"/>
+  <text x="818" y="125" class="sub" font-size="11">L4 合并　similar_decision（L2 内回调，非独立级）</text>
+
+  <!-- ═══ 面板 A：宿主路径 h264-cpu ═══ -->
+  <rect x="24" y="160" width="1132" height="318" class="grp" style="stroke:#4c8c5f"/>
+  <text x="38" y="184" class="lbl" fill="#386e49">宿主路径 h264-cpu（cpu + openvino；本机最快：wall 2.330s，1090 段）</text>
+
+  <!-- lane 1 -->
+  <text x="190" y="230" text-anchor="end" class="sub" font-size="11.5">消费者线程</text>
+  <text x="190" y="245" text-anchor="end" class="sub" font-size="10.5">（MainThread）</text>
+  <rect x="200" y="212" width="795" height="34" class="lane"/>
+  <rect x="200" y="212" width="502" height="34" class="b-dec"/>
+  <text x="208" y="233" class="bt">L1 解码 get_batch　1.356s（占 wall 58%）</text>
+  <rect x="702" y="212" width="163" height="34" class="b-seg"/>
+  <text x="710" y="233" class="bt">L2/L4 numpy　0.44s</text>
+  <rect x="865" y="212" width="130" height="34" class="b-oth"/>
+  <text x="873" y="233" class="bt">其他 0.35s</text>
+
+  <!-- lane 2 -->
+  <text x="190" y="283" text-anchor="end" class="sub" font-size="11.5">OCR 会话线程</text>
+  <text x="190" y="298" text-anchor="end" class="sub" font-size="10.5">（段队列消费者）</text>
+  <rect x="200" y="265" width="814" height="34" class="lane"/>
+  <rect x="200" y="265" width="548" height="34" class="b-idle"/>
+  <text x="216" y="286" class="bt-d">空等段　1.480s（q_get_wait，无背压）</text>
+  <rect x="748" y="265" width="266" height="34" class="b-ocr"/>
+  <text x="756" y="286" class="bt">L3 预处理 0.718s</text>
+
+  <!-- lane 3 -->
+  <text x="190" y="336" text-anchor="end" class="sub" font-size="11.5">推理线程 ×2</text>
+  <rect x="200" y="318" width="551" height="34" class="lane"/>
+  <rect x="200" y="318" width="551" height="34" class="b-ocr"/>
+  <text x="208" y="339" class="bt">L3 推理　合计 2.973s ÷ 2 实例 ≈ 1.49s/线程（并行）</text>
+
+  <line x1="1062" y1="205" x2="1062" y2="358" class="wall"/>
+  <text x="1066" y="201" class="note" fill="#b03030" font-size="10.5">wall 2.330s</text>
+
+  <text x="38" y="392" class="note">判定：消费者线程 2.147s ÷ wall 2.330s = <tspan font-weight="700">92%</tspan> —— 墙钟即该线程；L1 解码被它<tspan font-weight="700">串行包在里面</tspan>（非独立重叠），只有 L3 真并行。</text>
+  <text x="38" y="412" class="note">绑定实验：L3 推理换零成本 → wall <tspan font-weight="700" fill="#386e49">−18.3%</tspan>（1.931s）；L3 预处理换零成本 → <tspan font-weight="700">−0.27%</tspan>（噪声）⇒ L3 不是绑定级，但仍有可回收余量。</text>
+  <text x="38" y="432" class="note">候选可回收：L2/L4 numpy 判定 0.44s + 解码线程档位（引擎取 10T = 1.539s vs 32T = 1.366s，差 0.173s，见日志「未验证假设」）。</text>
+  <text x="38" y="456" class="note" fill="#8a5a00">⚠ 占比 ≠ 可回收（C-42 判例）：上表条长只说明时间花在哪，能不能回收必须看绑定实验的 Δwall。</text>
+
+  <!-- ═══ 面板 B：GPU 路径 ═══ -->
+  <rect x="24" y="496" width="1132" height="268" class="grp" style="stroke:#3f7cac"/>
+  <text x="38" y="520" class="lbl" fill="#2c5d82">GPU 全驻留路径 nvdec + tensorrt（decode_backend=auto 时的默认：wall 3.203s，1090 段）</text>
+
+  <text x="190" y="566" text-anchor="end" class="sub" font-size="11.5">生产者线程</text>
+  <text x="190" y="581" text-anchor="end" class="sub" font-size="10.5">（_producer）</text>
+  <rect x="200" y="548" width="881" height="34" class="lane"/>
+  <rect x="200" y="548" width="839" height="34" class="b-dec"/>
+  <text x="208" y="569" class="bt">L1 解码（NVDEC）get_batch　3.046s　= wall 的 95%（47 批）</text>
+
+  <text x="190" y="614" text-anchor="end" class="sub" font-size="11.5">主线程消费者</text>
+  <rect x="200" y="596" width="881" height="34" class="lane"/>
+  <rect x="200" y="596" width="61" height="34" class="b-seg"/>
+  <text x="269" y="617" class="bt-d">L2 分段 feed 0.216s（win3 由设备 kernel 算好）· 其余为等货</text>
+
+  <text x="190" y="662" text-anchor="end" class="sub" font-size="11.5">OCR worker</text>
+  <rect x="200" y="644" width="881" height="34" class="lane"/>
+  <rect x="200" y="644" width="130" height="34" class="b-ocr"/>
+  <text x="338" y="665" class="bt-d">L3 推理 0.470s（raw 直通，无宿主预处理）· 空等 3.127s</text>
+
+  <line x1="1081" y1="541" x2="1081" y2="684" class="wall"/>
+  <text x="1085" y="537" class="note" fill="#b03030" font-size="10.5">wall 3.203s</text>
+
+  <text x="38" y="708" class="note">判定：<tspan font-weight="700" fill="#2c5d82">L1 解码是唯一瓶颈</tspan> —— L3 推理换零成本 → wall <tspan font-weight="700" fill="#386e49">−0.02%</tspan>（3.2024→3.2019s，噪声）；预处理换零成本 → +0.18%（噪声，raw 路径本就无宿主预处理）。</text>
+  <text x="38" y="728" class="note">L3 全程空等（q_get_wait 3.127s ≈ wall）：消费者从未反超供给，故 L2/L3/L4 的优化在此路径不可能兑现墙钟（C-49）。</text>
+  <text x="38" y="748" class="note">L1 侧已超外部参考（本次 NVDEC ROI 936 fps；ffmpeg 自带 cuvid 901 fps 系 2026-09-15 口径，本轮 ffmpeg 不在 FFMPEG_DIR 未取到），本篇 ROI-first 1.20×（历史 1.75× 见 2026-09-15 日志）。</text>
+
+  <!-- ═══ 结论条 ═══ -->
+  <rect x="24" y="782" width="1132" height="80" class="grp" style="stroke:#c47f17;stroke-dasharray:6 3"/>
+  <text x="38" y="804" class="lbl" fill="#8a5a00" font-size="13">瓶颈落点（两种配置各不相同，不存在"整条流水线唯一瓶颈级"）</text>
+  <text x="38" y="826" class="sub">① GPU 路径（默认 auto）：瓶颈 = <tspan font-weight="700">L1 解码级</tspan>。L1 占 wall 95%，L3 全换零成本墙钟不动 ⇒ 后续任何 OCR 侧优化都无墙钟空间。</text>
+  <text x="38" y="846" class="sub">② h264 CPU 路径（峰值）：瓶颈 = <tspan font-weight="700">L2 分段所在的那条串行消费线程</tspan>（把 L1 调用收编在内）。L3 已提速到有等待余量 ⇒ 回收面在 L2/L4 的 numpy 与解码线程档位。</text>
+</svg>
