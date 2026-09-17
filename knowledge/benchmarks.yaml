@@ -427,3 +427,26 @@
                +C-49（decode-bound）颠覆
   probe_fixed: seq 臂名不副实（实为 2w 并发）→ 三臂制；新增 >10% 偏离中位
                的瞬态剔除（首跑 2 次 pair=34s 环境瞬态曾拖垮均值至 -2.2%）
+# ── 2026-09-17 六段：fork 遥测穿透 + hybrid 引擎级重测（§11）────────────
+- metric: fork_telemetry_passthrough      # report v6 'hybrid' 段（一次 extract 全拿）
+  fork_side: HybridStatsProbe() 线协议（计数器全量+HOL log2 直方图×24+
+            DECORD_HYBRID_TRACE=1 份额轨迹 1024 点）；五处改动见 log §11.1
+  engine_side: 两后端 close 前取 → report v6 'hybrid' 键（缺席≠空值）
+  smoke: 33 键（frames/chunks/kicks/busy µs/HOL ev+hist/rates/cache_peak）
+  rebuild_notes: SDK 重建（ffmpeg-9.0 树内产物组装）/avdevice 空 def 占位/
+            -DUSE_CUDA=ON 零 Toolkit（导入表无 nvcuvid 属正常，验证看 .obj）
+- metric: hybrid_e2e_remeasure           # hybrid vs **目标码最快纯臂**（新协议；用户纠正口径）
+  caliber_rule: hybrid 对照臂 = 该编码最快纯解码臂（h264→cpu ~2000fps；hevc/av1→nvdec）
+  h264_w3000_vs_cpu: {cpu_s: 1.102, hybrid_s: 1.688, delta_pct: +53.6, n: 8,
+               signs: 0/8 慢, se_pct: 1.7, cold_pct: +41.4}   # hybrid 大败
+  h264_w3000_vs_nvdec_wrongcaliber: {delta_pct: -46.5}   # 错基线（nvdec 非最快臂），仅留档
+  hevc_full23970: {hybrid_s: 9.21, delta_pct: -23.0, n: 6, signs: 6/6,
+                   se_pct: 0.43, cold_pct: -21.4}
+  av1_full23970: {hybrid_s: 9.53, delta_pct: -33.8, n: 6, signs: 6/6,
+                  se_pct: 0.55, cold_pct: -34.2}
+  window_trap: hevc 在 window=3000（C-40 交叉点内侧）hybrid 反而 +94% 慢——
+               hybrid 评估必须越过目标码的交叉点窗口
+  fork_readings: h264 CPU 份额 72→76%；hevc GPU 75% 帧+HOL 757ep；
+               av1 CPU 份额 25→33% 爬升（泵适应轨迹首次可见）
+  caliber_note: C-46 的"−6.29%/−4.78%"经核对是 fork 新旧机制 A/B，非
+               hybrid vs nvdec e2e——口径混用自此澄清

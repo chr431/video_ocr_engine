@@ -116,6 +116,7 @@ class GpuRunResult:
     crops: dict = field(default_factory=dict)
     timing: dict = field(default_factory=dict)
     n_segments: int = 0
+    fork_stats: dict | None = None   # fork 遥测穿透（hybrid 解码器才有）
     fell_back_to_host: bool = False
     fallback_engines: list | None = None    # 回退宿主时透传（避免二次 acquire）
     fallback_vr: object = None              # C10：复用已打开的 reader
@@ -584,6 +585,13 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
         except BaseException:
             logger.debug("ocr_session.finish 清理忽略异常", exc_info=True)
         res.timing['ocr_tail'] = time.perf_counter() - _t_consume_end
+        # fork 遥测穿透（2026-09-17）：close 前取快照（同宿主路径）
+        _fs = getattr(vr, "hybrid_stats", None)
+        if _fs is not None:
+            try:
+                res.fork_stats = _fs() or None
+            except Exception:
+                logger.debug("fork 遥测抓取失败忽略", exc_info=True)
         try:
             vr.close()
         except Exception:

@@ -48,8 +48,8 @@ def _std_metrics():
 def test_report_version_is_pinned():
     # v1→v2：+resources/+hardware；v2→v3：+diagnostics；v3→v4：+span_relations
     # 与 `<parent>_other` 派生 span；v4→v5：+histograms/histograms_meta
-    # （full 档专属，均为只加键）
-    assert REPORT_VERSION == 5
+    # （full 档专属）；v5→v6：+hybrid（fork 遥测直通，均为只加键）
+    assert REPORT_VERSION == 6
 
 
 def test_report_schema_snapshot():
@@ -96,6 +96,17 @@ def test_other_span_derivation_host_vs_gpu():
     m2.record_span("ocr.ctc_decode", 0.05)
     rep3 = build_report(m2, wall=1.0, span_path="gpu")
     assert rep3["spans"]["ocr.infer_other"]["sum"] == pytest.approx(0.45)
+
+
+def test_hybrid_section_from_fork_passthrough():
+    """v6：fork 遥测直通段——extra 注入即出现；缺席≠空值。"""
+    m = _std_metrics()
+    plain = build_report(m, wall=1.0)
+    assert "hybrid" not in plain
+    st = {"frames_c": 100, "frames_g": 200, "hol_hist_c": [0] * 24,
+          "busy_cpu_us": 12345}
+    rep = build_report(m, wall=1.0, extra={"hybrid": st})
+    assert rep["hybrid"] is st and rep["hybrid"]["frames_g"] == 200
 
 
 def test_host_consume_feed_relations_and_histograms():

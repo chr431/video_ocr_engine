@@ -119,7 +119,7 @@ python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.
   `decode_backend="cpu"`（C-07/C-08）；**批量吞吐用 `pool.run(backends="pair")`
   −20.6%（编码感知派工是收益主体，并发零贡献；C-52/C-34 翻案）**
 - GPU 分段 + ONNX OCR 无净收益，门控只放行 NVDEC+TRT（PERF §9）
-- hybrid 已迁 **decord 原生**；现役架构 = **包缓存 + 供料期 GOP 派工**（C-46，fork fef3c4b 已随 wheel 发布）：Push 只入压缩包缓存（512MB），泵按当下速率贪心派工 GOP（前瞻+同侧保序）；**kick 必须经泵按流序注入**（错位=IDR 冲掉重排窗→遮蔽损坏，fork 级测不出）；引擎 A/B hevc −6.29%/h264 −4.78%/av1 平价，fork 对并联和 96/92/96%（同会话三臂交错口径）。**收益面 = TRT/设备路径；ONNX 宿主路径不反超**（选 nvdec）；h264 峰值走显式 `cpu`（C-08）。GPU 侧余量=OCR：h264 已 OCR-bound；**fp16 已产品化（TRT_FP16=1，opt-in）**——fp16 ONNX+STRONGLY_TYPED 路线，真值准确率 1.0000（30664 帧）+热池 −3%/−1%；CUDA Graph e2e 无收益且 hevc 崩，已移除（TRT 换代后重评）。旧机制（计划/视界/REPLAN/债务克隆）已删除
+- hybrid 已迁 **decord 原生**；现役架构 = **包缓存 + 供料期 GOP 派工**（C-46，fork fef3c4b 已随 wheel 发布）：Push 只入压缩包缓存（512MB），泵按当下速率贪心派工 GOP（前瞻+同侧保序）；**kick 必须经泵按流序注入**（错位=IDR 冲掉重排窗→遮蔽损坏，fork 级测不出）；fork 对并联和 96/92/96%（同会话三臂交错口径）。**⚠️ hybrid 的 e2e 评估基线 = 目标码最快纯臂（C-53，勿再用错）**：h264 基线=CPU → hybrid **+53.6% 慢（h264 选显式 cpu）**；hevc/av1 基线=NVDEC → hybrid −23%/−34%（选 hybrid）；窗口须越过该码交叉点（C-40）。fork 遥测经 `vr.hybrid_stats()` 直通 RunReport `hybrid` 段（v6）。GPU 侧余量=OCR：**fp16 已产品化（TRT_FP16=1，opt-in）**——真值准确率 1.0000（30664 帧）+热池 −3%/−1%；CUDA Graph e2e 无收益且 hevc 崩，已移除。旧机制（计划/视界/REPLAN/债务克隆）已删除
 - **racelog_test 全部视频测量/验证一律 `sample_stride=1`**（2026-09-10 重申，
   防漏信息）；stride>1 仅用于字幕场景（字幕更新频率慢，如批量剧集字幕提取）
 - **合并判定默认带「稠密簇门」**（`segment.merge_dense_gate`）：遥测内容不再合并，

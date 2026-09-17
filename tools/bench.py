@@ -972,7 +972,8 @@ def cmd_ab(args) -> int:
                 rc = 1
             elif band["mean"] < -lim and neg >= need:
                 print("\n判定：B 显著快 %+.2f%%（均值 %+.3f%%，SE %.3f%%，符号 "
-                      "%d/%d）" % (band["mean"], band["mean"], band["se"], neg))
+                      "%d/%d）" % (band["mean"], band["mean"], band["se"], neg,
+                                  len(hot_diffs)))
             else:
                 print("\n判定：不可判定（落在噪声带内；均值 %+.3f%%，SE %.3f%%，"
                       "限 ±%.2f%%，符号 %d/%d）"

@@ -25,7 +25,10 @@ from pathlib import Path
 # "consumer − 已计 span = 缺口"的手工归因算术；spans 表只加键。
 # v5（2026-09-17 续）：新增 `histograms`（无界 TOTALS 键的耗时分布，**full
 # 档专属**——std 档该段缺席，不是空值冒充）+ `histograms_meta`（分箱自述）。
-REPORT_VERSION = 5
+# v6（2026-09-17 穿透轮）：新增 `hybrid`（decord fork 遥测直通快照——
+# hybrid 解码器才有，经 vr.hybrid_stats() 在 close 前取走；含 fork 侧
+# 计数器/HOL 直方图/可选份额轨迹，缺席≠空值）。
+REPORT_VERSION = 6
 
 #: v4：span 嵌套关系（代码级核对，2026-09-17 勘察）。**子项互不重叠**是
 #: 硬约束——嵌套更深的键（如宿主 merge_pair/q_put_block 在 consume_feed

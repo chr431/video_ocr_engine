@@ -73,6 +73,7 @@ class HostRunResult:
     fps: float | None = None
     bin_thresh: int = 0
     crops: dict = field(default_factory=dict)
+    fork_stats: dict | None = None   # fork 遥测穿透（hybrid 解码器才有）
     timing: dict = field(default_factory=dict)
     n_segments: int = 0
 
@@ -346,6 +347,14 @@ def run_host_pipeline(spec: HostRunSpec, ocr_engines=None,
         _prof(spec, 'producer', 'consumer_total', t0)
         ocr_session.finish()
         res.timing['ocr_tail'] = time.perf_counter() - _t_consume_end
+        # fork 遥测穿透（2026-09-17）：close 前取快照（原子计数器，此后
+        # 解码器将销毁）；非 hybrid 解码器方法缺席 → 保持 None。
+        _fs = getattr(vr, "hybrid_stats", None)
+        if _fs is not None:
+            try:
+                res.fork_stats = _fs() or None
+            except Exception:
+                logger.debug("fork 遥测抓取失败忽略", exc_info=True)
         try:
             vr.close()   # hybrid 探针/资源释放：显式停止生产者线程
         except Exception:

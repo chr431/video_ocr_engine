@@ -434,6 +434,7 @@ class FieldExtractor:
         self._report = {}
         self._hardware = None
         self._trace = None
+        self._fork_stats = None
         _t_run = time.perf_counter()
         # L2 设备峰值采样：**仅 full 档**建采样线程（B6——std/off 这里是一次
         # 属性比较即返回），run 结束立刻停并丢弃半帧。
@@ -558,7 +559,10 @@ class FieldExtractor:
             backend=self._backend, ocr_backend=self._ocr_backend_used,
             hardware=self._hardware, diagnostics=diag_rep,
             span_path=("gpu" if getattr(self, "_gpu_pipeline_mode", False)
-                       else "host"))
+                       else "host"),
+            # fork 遥测穿透（hybrid 解码器才有；缺席≠空值）
+            extra=({"hybrid": self._fork_stats}
+                   if self._fork_stats else None))
         self._report = rep
         return rep
 
@@ -902,6 +906,7 @@ class FieldExtractor:
         self.timing.update(res.timing)
         self._n_segments = res.n_segments
         self.crops = res.crops
+        self._fork_stats = getattr(res, "fork_stats", None)
         self._ocr_texts = res.texts
         self._ocr_confs = res.confs
         return res.as_tuple()
@@ -1109,6 +1114,7 @@ class FieldExtractor:
         self.timing.update(res.timing)
         self._n_segments = res.n_segments
         self.crops = res.crops
+        self._fork_stats = getattr(res, "fork_stats", None)
         self._ocr_texts = res.texts
         self._ocr_confs = res.confs
         return res.as_tuple()

@@ -173,3 +173,22 @@ pip list --outdated
 2. `python -m pytest tests/ -v`；
 3. 用真实视频跑一次端到端（至少 CPU+CPU 与 GPU+TRT 各一次）；
 4. 对比逐帧文本/置信度指纹，确认无读数漂移。
+
+#### fork 本地开发构建配方（2026-09-17 遥测穿透轮实测，环境漂移后重建档）
+
+原 SDK 目录（`D:/Software/ffmpeg-n9.0-...-gpl-shared-9.0` 与
+`D:/Repo/decord-release-dl/...`）已消失，本机重建流程：
+
+1. **SDK 组装**：ffmpeg-9.0 源码树内构建产物组装 `D:/Software/ffmpeg-9.0-sdk/`
+   （`lib/`←各模块 `*.lib`、`include/<模块名>/`←各模块 `*.h`、`bin/`←`*.dll`）；
+   `libavdevice` 未构建且 decord 不引用（`DECORD_USE_LIBAVDEVICE` 未定义）→
+   `lib /DEF:空.def` 造空 import lib 占位。
+2. **构建**：git-bash 直调 .bat 会因引号转义废掉 vcvars——**脚本落盘后
+   `cmd //c` 跑**；MSVC 升级后旧 build 目录的 CMake 缓存指向已删编译器，
+   清 `CMakeCache.txt`+`CMakeFiles/` 重配：`cmake -B build-081fix -G Ninja
+   -DUSE_CUDA=ON -DFFMPEG_DIR=D:/Software/ffmpeg-9.0-sdk .`。
+   零 Toolkit：驱动 API 动态加载，**导入表无 nvcuvid 属正常——验证看
+   .obj（hybrid_threaded_decoder/improc）而非依赖表**。
+3. **装载**：site-packages 替换 `decord/decord.dll` 与包内 video_reader.py
+   （`*.bak-083` 备份可回滚）。fork 遥测穿透版
+   = `vr.hybrid_stats()`（`HybridStatsProbe` 线协议，report v6 `hybrid` 段）。
