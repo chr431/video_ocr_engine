@@ -460,3 +460,27 @@
   verdict: 主因=供给-调度耦合（消费者批量拉取使 demux 半饿、泵欠供+暖机）；
           次因=线程超额（短窗 −13.5% 降线程好，长窗反向要线程）；HOL 小
   fix_directions: 供给解耦（预拉/深 prefetch）或暖机加速（速率先验）——未实施
+# ── 2026-09-17 七段：hybrid 越窗读问题范围调查（§11.8，不动代码）────────
+- metric: hybrid_window_overread_scan     # assigned帧/窗口帧（穿透版 stats）
+  h264_test5_full7761: {w500: {assigned: 6279, ratio: 12.56, busy_s: 0.70, need_s: 0.15},
+                        w1000: {assigned: 7178, ratio: 7.18, busy_s: 1.00},
+                        w3000: {assigned: 7761, ratio: 2.59, busy_s: 2.34, need_s: 0.88},
+                        full: {assigned: 7761, ratio: 1.00}}
+  hevc_test6_full23970: {w1000: {assigned: 17280, ratio: 17.28},
+                         w3000: {assigned: 23970, ratio: 7.99, busy_s: 2.87},
+                         full: {ratio: 1.00, busy_s: 10.27}}
+  cpu_nvdec_control: 线性（nvdec w3000 3.08s≈理论3.03；cpu 偏差为固定启动
+                     成本非窗口比例）——大规模越窗为 hybrid 独有
+  hevc_engine_crossover: nvdec/hybrid 同窗（含OCR）w1000 0.55/0.91、
+                         w3000 1.51/2.20、full 11.68/8.75 → 交叉点在
+                         (3000, 23970)，与 C-40 的 1500~3000 矛盾
+  mechanism: hybrid demux 由消费驱动、包缓存预算（512MB）≥ 素材体积 →
+            一次性读至 EOF；ROI 模式银行帽 4096/12352 帧从未成为瓶颈。
+            正确性不受影响（逐位一致/golden 干净），代价=纯解码浪费
+            （越窗比×臂速）。
+  timeline: v0.8.0(09-06) hybrid 诞生即带深 prefetch（钳 384，越窗已存在
+            但有界）；v0.8.2 NeedsPackets 雏形；v0.8.3(现役 wheel) 包缓存
+            预算+ROI 银行重算 → 越窗在实践中无上界。引擎 hybrid-native
+            采用自 09-11 前后——全部 hybrid 短窗测量史都在污染面上。
+  tainted: C-40 交叉点与短窗劣势数字、C-41 短窗缺口（含税读数）；
+          full-file 协议结论（C-46/C-53 hevc/av1、C-52）与 golden 干净
