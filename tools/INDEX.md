@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **115 个 `.py`**（19,203 行），其中 105 个是探针
+`tools/` 现有 **126 个 `.py`**（21,678 行），其中 116 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -48,7 +48,7 @@
 | `_probe_roadmap_ocr.py` | 191 | 路线图轮 OCR rec 微基准：ONNX/TRT × 批大小扫描 + `_resize_norm` 单帧成本 + FP32/FP16×max_b 实验引擎构建（TRT 11 无 FP16 builder flag 的实证） | 本轮路线图（2026-09-10） |
 | `_probe_roadmap_profile.py` | 62 | 路线图轮 ENGINE_PROFILE 分相打印驱动（单配置一次 extract，输出 producer.*/ocr.* 全分相） | 本轮路线图（2026-09-10） |
 | `_probe_r3_infer_split.py` | 58 | R3 调查：hybrid vs nvdec 的 OCR worker infer 差异分解（ENGINE_PROFILE + TRT SUBPROBE 双跑） | 路线图执行轮（2026-09-10） |
-| `bench.py` | 686 | **S6 性能轮的原生度量入口**（§8.6 N-4）：`run` 跑配置矩阵并落 `bench/registry.jsonl`、`diff` 按 D10 双档逐指标对比、`ab` 交错 A/B（对抗 GPU 热降漂移——同码两次实测可差 7.7%）、`telemetry-check` = PI-15 门禁（**同进程交替 + 档位轮转 + 同轮配对差分均值 + 符号多数一致**，`--aa` 标定本机噪声带、阈值 = \|偏差\|+3×SE）、`show` 打印报告细目 | AGENTS.md 性能节 / v2 §8.6 / log 2026-09-11-资源层与门控校准 §4 |
+| `bench.py` | 955 | **S6 性能轮的原生度量入口**（§8.6 N-4）：`run` 跑配置矩阵并落 `bench/registry.jsonl`、`diff` 按 D10 双档逐指标对比、`ab` 交错 A/B（对抗 GPU 热降漂移——同码两次实测可差 7.7%）、`telemetry-check` = PI-15 门禁（**同进程交替 + 档位轮转 + 同轮配对差分均值 + 符号多数一致**，`--aa` 标定本机噪声带、阈值 = \|偏差\|+3×SE）、`show` 打印报告细目 | AGENTS.md 性能节 / v2 §8.6 / log 2026-09-11-资源层与门控校准 §4 |
 | `_probe_golden_diff.py` | 50 | 金标分歧定位：同进程连跑两次（冷/热池）逐段对比，区分"结构漂移"与"置信度浮点敏感"（F-8 的工具） | tests/golden/FINDINGS.md F-8 |
 | `_probe_trt_maxbatch.py` | 101 | **否定/定量**：同一份 ONNX 构建 batch 6 与 18 两个 profile，同批 1116 张走同一提交路径 → 0.663s vs 0.557s（**−16%**）；支撑 `TRT_PROFILE_BATCH=18`（S6） | log 2026-09-10-S6性能轮 §7；FINDINGS F-10 |
 | `_probe_engine_ab.py` | 121 | 引擎产物端到端交错 A/B（worker 子进程 monkeypatch `_engine_candidates`，产品代码零开关）：h264-cpu 热轮 −5.85%、`ocr.infer` −33% | log §7；FINDINGS F-10 |
@@ -167,7 +167,7 @@
 | `_probe_ov_int8.py` | 108 | 2026-09-15 | **OV INT8（NNCF PTQ）模型级裁决**（判死留档）：真实预处理数据校准 + 三形状速度/数值对照——INT8 反慢 6% 且真实批 argmax 仅 95%（Zen4/动态形状下无收益，方向关闭）；`nncf.Dataset(列表)` 口径 |
 | `_probe_binding.py` | 171 | 2026-09-15 | **绑定约束判定（决定性实验）**：把 OCR 推理/预处理分别换成零成本，看墙钟动不动——GPU 三条路径（h264/hevc/av1）全部 **解码绑定**（Δwall +0.1~0.2% = 噪声），h264-cpu 为**生产者绑定**（零成本 OCR 仅 −18.35%、零成本预处理 −1.21%）。"换依赖能否再快"的裁决入口 |
 | `_probe_critical_path.py` | 129 | 2026-09-15 | **关键路径判定**：纯解码产能（decord 直扫）vs 全管线墙钟 vs 生产者队列阻塞三口径并列——h264-cpu 纯解码 1.24s 而 producer 2.10s、OCR 空等 1.46s（解码非绑定、消费者饥饿） |
-| `_probe_span_dump.py` | 83 | 2026-09-15 | **全 span 细目转储**：热轮报告 spans/counters/gauges 全表按 sum 降序——定位「producer 2.10s 里 decode.batch 只占 1.35s」的缺口起点 |
+| `_probe_span_dump.py` | 86 | 2026-09-15 | **全 span 细目转储**：热轮报告 spans/counters/gauges 全表按 sum 降序——定位「producer 2.10s 里 decode.batch 只占 1.35s」的缺口起点 |
 | `_probe_producer_gap.py` | 164 | 2026-09-15 | **生产者缺口分解**：consumer_total − 已计 span 之和 = 缺口（h264-cpu 0.60s / 29%）；nocluster/nomerge 短路臂。⚠️ nocluster **不可用于归因**（改判据→段数 3000→工作量+93%），归因须靠 `_probe_feed_cost.py` |
 | `_probe_feed_cost.py` | 112 | 2026-09-15 | **分段状态机逐帧成本**：真实 ROI 形状微基准 × 帧数折算——证明状态机只占缺口 **3%**（0.018s），把缺口指向 `_segments_similar`/`_np_resize`（见 `_probe_producer_profile.py`） |
 | `_probe_producer_profile.py` | 102 | 2026-09-15 | **生产者 cProfile 定位**：热轮单次 extract 的 tottime 排序——缺口真身 = `_segments_similar` 0.329s + `_cluster_win3` 0.211s + `_np_resize` 0.179s（全为 numpy 热内核） |
@@ -177,6 +177,22 @@
 | `_probe_pynv_vs_decord.py` | 179 | 2026-09-15 | **PyNvVideoCodec（NVIDIA 第一方）vs decord fork**：⚠️ 发现 **decord 与 PyNv 同进程 DLL 冲突**（先 import decord → PyNv `ImportError: DLL load failed`，反向亦然）→ 必须独立进程口径 |
 | `_probe_pynv_isolated.py` | 167 | 2026-09-15 | **PyNvVideoCodec 独立进程裸解码**（对它最有利口径）：批量取帧 **493fps** vs decord fork **989fps**（近 2× 慢），且全帧/无 gray/无 hybrid。⚠️ 三个 API 坑已刻注释（模块级 `CreateSimpleDecoder` 被同名 pybind 类遮蔽→须用包装类 `nvc.SimpleDecoder`；方法名是 `get_batch_frames_by_index` 而非 `DecodeNextPacket`；CUDA13 cudart 在 `bin\x64` 且需 `CUDA_PATH`） |
 | `_probe_numpy_kernels.py` | 159 | 2026-09-15 | **numpy 版本热内核对照**（跨解释器口径）：把 `_cluster_win3`/`_np_resize`/相似判定数学原样复制进来，两个解释器各跑一次对比。2.4.6 vs 2.5.3 **无收益**（resize 反慢 7%），逐位指纹相同——numpy 升级非杠杆 |
+
+### 2026-09-17 流水线分级/C-49 依赖裁决（上午）与性能监测系统重设计（下午）
+
+| 文件 | 行 | 改于 | 支撑 |
+|---|---:|---|---|
+| `_probe_gil_check.py` | 196 | 2026-09-17 | **GIL 判定**（决定性实验）：生产者侧 numpy 替换为何不兑现墙钟——`np_resize` 无争用 119.5µs vs 争用 26084µs，numpy 内核被同进程解码/推理线程 GIL 串行化（log 2026-09-17 §6） |
+| `_probe_numpy_all_kernels.py` | 366 | 2026-09-17 | **全量 numpy 热点替换候选 µbench**：真实形状 + 逐位一致性同表（C-49 前置调查） |
+| `_probe_numpy_cost_split.py` | 156 | 2026-09-17 | **生产者侧 numpy 成本非嵌套分解**：`_cluster_win3`/`_segments_similar`/`_np_resize` 引擎内实测（log 2026-09-17 §6 的 22.1% 表） |
+| `_probe_numpy_replace_ab.py` | 275 | 2026-09-17 | **全量 numpy→cv2 替换的引擎级交错 A/B**：内核快 29~57% 而墙钟仅 −1.12%（C-49 裁决入口） |
+| `_probe_patch_verify.py` | 130 | 2026-09-17 | **替换臂执行核实**：monkeypatch 是否真被调用（防假等价，`_probe_ov_prep_fusion` 教训的常态化载体） |
+| `_probe_arm_verify.py` | 162 | 2026-09-17 | **替换臂指纹核实**：cv2 补丁真被调用（arm B/C 指纹断言），`_probe_numpy_replace_ab` 的配套 |
+| `_probe_producer_binding2.py` | 244 | 2026-09-17 | **双侧绑定判定**（5× 冗余计算，输出逐位不变）：生产者侧 wall +5.77%、消费者侧 +5.09%——两侧都钝，与 C-49 互证 |
+| `_probe_wide_roi_binding.py` | 156 | 2026-09-17 | **宽 ROI（字幕）场景绑定判定** + resize 替换收益上限核算 |
+| `_probe_cycle_quant.py` | 184 | 2026-09-17 | **测量学证据（§8 固化）**：`process_time` 15.625ms tick 量化（20 万采样仅一种增量）+ `QueryProcessCycleTime` 语义（sleep 不增/多线程求和）+ cycles/wall CV 0.014% 与自校准频率双窗口一致 0.017%——resources.py cycle 口径的依据 |
+| `_probe_clock_gate.py` | 125 | 2026-09-17 | **GPU 时钟门禁校准**：连跑 8 轮逐轮包 NvmlSampler——冷轮 sm_min/最大SM≈0.145、热轮≈0.870（CV 6.6%→0.12%，×55.6），k=0.75 分离带中段；bench.py 时钟门禁的依据 |
+| `_probe_trace_view.py` | 205 | 2026-09-17 | **P4 trace/timeline 采集+视图**：`VOE_TRACE_FILE` 全事件时间线 → 文本甘特/线程重叠矩阵/空洞清单/NVML 时钟排；两路径验收（host 会话线程 94.2% 忙、GPU decode.batch 95.5% 占满生产者） |
 
 ### 2026-09-10 D1/D2 调查（gpu/host 段数分歧 · 线程优先级）
 
@@ -208,7 +224,7 @@
 | `_split_perf_md.py` | 194 | 2026-08-31 按「活/归档」把 PERFORMANCE.md 切出 `docs/log/ARCHIVE.md`。**已完成，可删** |
 | `_fix_probe_paths.py` | 416 | 2026-08-31 把探针里写死的路径改成 `__file__` 推导 / 环境变量。**已完成，可删** |
 
-## 探针状态（L2）：live 14 / frozen 91（共 105）
+## 探针状态（L2）：live 14 / frozen 102（共 116）
 
 **默认 frozen**——不在下表 `live` 名单里的探针一律视为历史证据，豁免活性检查、不做修复义务。
 一个探针进 `live` 必须写清理由（被在用载体引用 / 本轮在用）；重构时的修复义务**只覆盖 live 集合**。
@@ -230,7 +246,7 @@
 | `_probe_pool_pairing.py` | 本轮新工具：层5 配对 A/B |
 | `_probe_run_setup_cost.py` | tests/ |
 
-frozen 91 个（按 §A–§D 各节原样保留）：`_probe_acc_ab.py`、`_probe_acc_baseline.py`、`_probe_autocrop_ab.py`、`_probe_autocrop_truth.py`、`_probe_batch_coldstart.py`、`_probe_binding.py`、`_probe_busy_overhead.py`、`_probe_ceiling.py`、`_probe_cluster_dtype.py`、`_probe_cr_roundtrip.py`、`_probe_critical_path.py`、`_probe_crop_miscut.py`、`_probe_crop_stats.py`、`_probe_d1_prim_diff.py`、`_probe_d1_trace.py`、`_probe_d1_trace2.py`、`_probe_decode_batch_ab.py`、`_probe_decode_ceiling.py`、`_probe_decode_contention.py`、`_probe_drop_nonref.py`、`_probe_e2e_ab.py`、`_probe_e2e_mode.py`、`_probe_engine_ab.py`、`_probe_feed_cost.py`、`_probe_ffmpeg.py`、`_probe_final.py`、`_probe_gamma_sweep.py`、`_probe_golden_diff.py`、`_probe_golden_drift.py`、`_probe_gpu_ctc.py`、`_probe_guard_clean.py`、`_probe_hol_stats.py`、`_probe_hybrid_ab.py`、`_probe_hybrid_axis.py`、`_probe_hybrid_bitwise.py`、`_probe_hybrid_cpu_profile.py`、`_probe_hybrid_engine_loss.py`、`_probe_hybrid_gap.py`、`_probe_hybrid_reeval.py`、`_probe_hybrid_sum_gap.py`、`_probe_hybrid_threads_e2e.py`、`_probe_hybrid_trace.py`、`_probe_lifecycle_repeat.py`、`_probe_mem_bw.py`、`_probe_merge_log.py`、`_probe_mp_scale.py`、`_probe_numpy_kernels.py`、`_probe_nvdec_interference.py`、`_probe_onnx_dcd_sweep.py`、`_probe_pad_width.py`、`_probe_perf_baseline.py`、`_probe_perf_sweep.py`、`_probe_perframe.py`、`_probe_phase_cores.py`、`_probe_prep_ab.py`、`_probe_preproc_ab.py`、`_probe_preproc_dep.py`、`_probe_producer_gap.py`、`_probe_producer_profile.py`、`_probe_pynv_isolated.py`、`_probe_pynv_vs_decord.py`、`_probe_python_cost.py`、`_probe_r3_infer_split.py`、`_probe_release_gate.py`、`_probe_roadmap_decode.py`、`_probe_roadmap_ocr.py`、`_probe_roadmap_profile.py`、`_probe_roi_decode.py`、`_probe_roi_dump.py`、`_probe_roi_segcost.py`、`_probe_roi_whitespace.py`、`_probe_roi_width.py`、`_probe_round4_bw.py`、`_probe_round4_wall.py`、`_probe_seg_share.py`、`_probe_skip_frame.py`、`_probe_slf_adjudicate.py`、`_probe_slf_diff.py`、`_probe_slf_vis.py`、`_probe_span_dump.py`、`_probe_stress_harness.py`、`_probe_text_ab.py`、`_probe_threads.py`、`_probe_trt_maxbatch.py`、`_probe_truth_env.py`、`_probe_upload_chain.py`、`_probe_yuv_tax.py`
+frozen 102 个（按 §A–§D 各节原样保留）：`_probe_acc_ab.py`、`_probe_acc_baseline.py`、`_probe_arm_verify.py`、`_probe_autocrop_ab.py`、`_probe_autocrop_truth.py`、`_probe_batch_coldstart.py`、`_probe_binding.py`、`_probe_busy_overhead.py`、`_probe_ceiling.py`、`_probe_clock_gate.py`、`_probe_cluster_dtype.py`、`_probe_cr_roundtrip.py`、`_probe_critical_path.py`、`_probe_crop_miscut.py`、`_probe_crop_stats.py`、`_probe_cycle_quant.py`、`_probe_d1_prim_diff.py`、`_probe_d1_trace.py`、`_probe_d1_trace2.py`、`_probe_decode_batch_ab.py`、`_probe_decode_ceiling.py`、`_probe_decode_contention.py`、`_probe_drop_nonref.py`、`_probe_e2e_ab.py`、`_probe_e2e_mode.py`、`_probe_engine_ab.py`、`_probe_feed_cost.py`、`_probe_ffmpeg.py`、`_probe_final.py`、`_probe_gamma_sweep.py`、`_probe_gil_check.py`、`_probe_golden_diff.py`、`_probe_golden_drift.py`、`_probe_gpu_ctc.py`、`_probe_guard_clean.py`、`_probe_hol_stats.py`、`_probe_hybrid_ab.py`、`_probe_hybrid_axis.py`、`_probe_hybrid_bitwise.py`、`_probe_hybrid_cpu_profile.py`、`_probe_hybrid_engine_loss.py`、`_probe_hybrid_gap.py`、`_probe_hybrid_reeval.py`、`_probe_hybrid_sum_gap.py`、`_probe_hybrid_threads_e2e.py`、`_probe_hybrid_trace.py`、`_probe_lifecycle_repeat.py`、`_probe_mem_bw.py`、`_probe_merge_log.py`、`_probe_mp_scale.py`、`_probe_numpy_all_kernels.py`、`_probe_numpy_cost_split.py`、`_probe_numpy_kernels.py`、`_probe_numpy_replace_ab.py`、`_probe_nvdec_interference.py`、`_probe_onnx_dcd_sweep.py`、`_probe_pad_width.py`、`_probe_patch_verify.py`、`_probe_perf_baseline.py`、`_probe_perf_sweep.py`、`_probe_perframe.py`、`_probe_phase_cores.py`、`_probe_prep_ab.py`、`_probe_preproc_ab.py`、`_probe_preproc_dep.py`、`_probe_producer_binding2.py`、`_probe_producer_gap.py`、`_probe_producer_profile.py`、`_probe_pynv_isolated.py`、`_probe_pynv_vs_decord.py`、`_probe_python_cost.py`、`_probe_r3_infer_split.py`、`_probe_release_gate.py`、`_probe_roadmap_decode.py`、`_probe_roadmap_ocr.py`、`_probe_roadmap_profile.py`、`_probe_roi_decode.py`、`_probe_roi_dump.py`、`_probe_roi_segcost.py`、`_probe_roi_whitespace.py`、`_probe_roi_width.py`、`_probe_round4_bw.py`、`_probe_round4_wall.py`、`_probe_seg_share.py`、`_probe_skip_frame.py`、`_probe_slf_adjudicate.py`、`_probe_slf_diff.py`、`_probe_slf_vis.py`、`_probe_span_dump.py`、`_probe_stress_harness.py`、`_probe_text_ab.py`、`_probe_threads.py`、`_probe_trace_view.py`、`_probe_trt_maxbatch.py`、`_probe_truth_env.py`、`_probe_upload_chain.py`、`_probe_wide_roi_binding.py`、`_probe_yuv_tax.py`
 ## 清理判据（想删探针时按这个顺序）
 
 1. `grep -rn "<文件名>" README.md AGENTS.md docs/ tools/` —— 有命中就不删。

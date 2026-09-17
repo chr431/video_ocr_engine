@@ -19,13 +19,16 @@ def test_env_contract_covers_all_v1_knobs():
     v1_names = {getattr(config, n) for n in dir(config) if n.endswith("_ENV")}
     assert len(v1_names) == 22          # OCR_CPU_BACKEND 随 ORT 移除删除
     assert set(ENV_NAMES) >= v1_names          # v1 全部迁入，一个不丢
-    # v2 新增仅两个：r5 telemetry 三档 + S6-0 报告 sidecar（§8.6 N-3）
-    assert set(ENV_NAMES) - v1_names == {"VOE_TELEMETRY", "VOE_REPORT_FILE"}
+    # v2 新增三个：r5 telemetry 三档 + S6-0 报告 sidecar（§8.6 N-3）
+    # + P4 实验性时间线（2026-09-17 重设计，log 同名章节）
+    assert set(ENV_NAMES) - v1_names == {
+        "VOE_TELEMETRY", "VOE_REPORT_FILE", "VOE_TRACE_FILE"}
 
 
 def test_knob_registry_shape():
     # 18 v1 + merge_dense_gate + telemetry + report_file + trt_defer_sync
-    assert len(KNOBS.knobs) == 24
+    # + trace_file（P4）
+    assert len(KNOBS.knobs) == 25
     for k in KNOBS.knobs:
         assert k.rationale_id, k.name          # 每个旋钮有依据锚点（D5）
 

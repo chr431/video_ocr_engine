@@ -97,9 +97,11 @@ class _HostCounters:
         self.sources: dict = {"cpu": "time.process_time"}
         self._get_rss = None
         self._get_io = None
+        self._get_cycles = None
         if not _WIN:
             self.sources.update(rss="unavailable:非 Windows",
-                                disk="unavailable:非 Windows")
+                                disk="unavailable:非 Windows",
+                                cycles="unavailable:非 Windows")
             return
         import ctypes
         try:
@@ -148,12 +150,36 @@ class _HostCounters:
             self.sources["rss"] = "psapi.GetProcessMemoryInfo"
         except Exception as e:  # noqa: BLE001
             self.sources["rss"] = "unavailable:%s" % repr(e)[:60]
+        try:
+            # P2a（2026-09-17 §8.4 落地）：process_time 有 15.625ms（1/64s）
+            # tick 量化，短相位（<0.5s）的 dcpu 只有 1~2 tick，cores_avg 是
+            # ±49%~100% 量化伪影；cycle 计数分辨率 ≈ 单周期且语义恰是
+            # "CPU 时间"（sleep 不增、多线程求和，bench/cycle_quant.json）。
+            qpc = kernel32.QueryProcessCycleTime
+            qpc.restype = ctypes.c_int
+            cyc = ctypes.c_ulonglong()
+            # 伪句柄 -1 直传：GetCurrentProcess 默认 restype 是 c_int，64 位
+            # 伪句柄被截断后调用静默失败（§8.5 实测坑，绕开而非修复）
+            hproc = ctypes.c_void_p(-1)
+
+            def get_cycles(_f=qpc, _h=hproc, _c=cyc):
+                if _f(_h, ctypes.byref(_c)):
+                    return int(_c.value)
+                return None
+
+            self._get_cycles = get_cycles
+            self.sources["cycles"] = "kernel32.QueryProcessCycleTime"
+        except Exception as e:  # noqa: BLE001
+            self.sources["cycles"] = "unavailable:%s" % repr(e)[:60]
 
     def sample(self) -> dict:
         """一次边界采样：全部字段都是 None 或真值（不可用≠0）。"""
         s = {"t": time.perf_counter(), "cpu": time.process_time(),
              "rss": None, "rb": None, "wb": None, "vram": None,
+             "cycles": None,
              "threads": threading.active_count()}
+        if self._get_cycles is not None:
+            s["cycles"] = self._get_cycles()
         if self._get_rss is not None:
             s["rss"] = self._get_rss()
         if self._get_io is not None:
@@ -233,6 +259,19 @@ class ResourceProbe:
     def per_phase(self) -> dict:
         with self._lock:
             rows = list(self._rows)
+        # 自校准频率（P2a）：f_run = 全程 Δcycles / 全程 Δprocess_time，
+        # 即"每 CPU 秒的 cycle 数"。全程墙钟秒级、tick 数上百上千，15.625ms
+        # 量化占比可忽略（bench/cycle_quant.json：双窗口一致到 0.017%）。
+        # cores_avg_cycles = (Δcycles/Δwall) / f_run —— cycle 口径的平均核数，
+        # 无 tick 量化伪影。限界：各相位实际频率不同时按全程均值换算有偏
+        # （turbo 单核相位会偏低估），但短相位下远比 ±1 tick 的量化误差可信。
+        f_run = 0.0
+        if len(rows) >= 2:
+            fa, fb = rows[0][1], rows[-1][1]
+            dcpu_all = float(fb["cpu"] - fa["cpu"])
+            if dcpu_all > 0 and fa.get("cycles") is not None \
+                    and fb.get("cycles") is not None:
+                f_run = (fb["cycles"] - fa["cycles"]) / dcpu_all
         out: dict = {}
         for (a, sa), (_b, sb) in zip(rows, rows[1:]):
             name = _b if _b not in out else "%s→%s" % (a, _b)
@@ -242,6 +281,10 @@ class ResourceProbe:
             row: dict = {"wall": round(dt, 4), "threads": sb["threads"]}
             dcpu = float(sb["cpu"] - sa["cpu"])
             row["cores_avg"] = round(max(0.0, dcpu) / dt, 2)
+            ca, cb = sa.get("cycles"), sb.get("cycles")
+            if f_run > 0 and ca is not None and cb is not None:
+                row["cores_avg_cycles"] = round(
+                    max(0, cb - ca) / dt / f_run, 2)
             if sa["rss"] is not None and sb["rss"] is not None:
                 row["rss_delta_mib"] = round(
                     (sb["rss"] - sa["rss"]) / 1048576.0, 1)
@@ -371,6 +414,14 @@ class NvmlSampler:
         self._th = threading.Thread(target=loop, daemon=True,
                                     name="nvml-sampler")
         self._th.start()
+
+    def points(self) -> list:
+        """原始时间点列的只读拷贝（P4 trace 用；stop() 后仍可取）。
+
+        行结构：(t, gpu%, nvdec%, vram_mib, sm_mhz, mem_mhz, vid_mhz,
+        throttle_mask)——聚合摘要之外唯一的带时间戳序列。
+        """
+        return list(self._pts)
 
     def stop(self) -> dict | None:
         """关停带超时；**丢弃最后一帧不完整间隔**（半帧不可信）。"""

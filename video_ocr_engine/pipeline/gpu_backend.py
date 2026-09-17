@@ -178,6 +178,10 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
         raise
     if spec.prof_end is not None:
         spec.prof_end('producer', 'open_and_fps', _t_open)
+    # P2c 卫生：calibrate 的 t0 从 open 收口处起算。此前用 _t_open 会让
+    # pipeline.calibrate 与 pipeline.setup（同一起点）完全重叠双计——
+    # spans 表 sum 不可加的来源之一（2026-09-17 勘察确认）。
+    _t_calib = time.perf_counter()
     # L1 资源边界（§8.6 r5）：粗相位结束处各采一次，差分见 run report。
     # 记的是**进程级**用量，OCR 与解码并发时核数会互相计入——这是"该相位
     # 平均并行核数"的本意（不是单相位隔离）。off 档此调用为空操作。
@@ -289,7 +293,7 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
     if spec.on_bin_thresh is not None:
         spec.on_bin_thresh(_th)
     if spec.prof_end is not None:
-        spec.prof_end('producer', 'gpu_calib_total', _t_open)
+        spec.prof_end('producer', 'gpu_calib_total', _t_calib)
     _MET.checkpoint('calibrate')
     # B5（真装配点）：y_pool 依赖校准产出的 src_h/src_w；生产者未启动，
     # 此处赋值先行于一切并发读者。
@@ -310,13 +314,20 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
     producer_err: list = []
 
     def _put_q(item) -> bool:
-        while not producer_stop.is_set():
-            try:
-                producer_q.put(item, timeout=0.2)
-                return True
-            except Full:
-                continue
-        return False
+        # P2c 覆盖：生产者侧背压此前无对应物（宿主路径 q_put_block 一直
+        # 有）——FULL 重试等待正是"OCR 消费不动生产者"的直接证据。
+        _t_put = time.perf_counter()
+        try:
+            while not producer_stop.is_set():
+                try:
+                    producer_q.put(item, timeout=0.2)
+                    return True
+                except Full:
+                    continue
+            return False
+        finally:
+            if spec.prof_end is not None:
+                spec.prof_end('producer', 'q_put_block', _t_put)
 
     def _producer() -> None:
         try:

@@ -88,4 +88,9 @@ KNOBS = Registry(knobs=(
     Knob("diag.report_file", "VOE_REPORT_FILE", "VOE_REPORT_FILE", "str", "",
          "diag", _ALL, "v2:8.6-N3",
          note="RunReport 细档 JSON sidecar 输出路径；空=不写（写文件是副作用，须显式 opt-in）"),
+    Knob("diag.trace_file", "VOE_TRACE_FILE", "VOE_TRACE_FILE", "str", "",
+         "diag", _ALL, "log:2026-09-17-性能监测系统重设计",
+         note="P4 实验性全事件时间线 JSON 路径；空=关（关闭零成本：_prof_end "
+              "一次 is-not-None 判断）；需 VOE_TELEMETRY!=off；开启时自带 "
+              "NVML 0.2s 点列"),
 ))

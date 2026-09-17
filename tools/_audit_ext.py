@@ -161,12 +161,16 @@ def check_docs_budget() -> str | None:
 
 
 def check_metrics_coverage() -> str | None:
-    """[19] 指标注册表：上限 + v1 现役键不丢。"""
+    """[19] 指标注册表：上限 + v1 现役键不丢。
+
+    v1 清单更新（2026-09-17）：pipeline.producer 已出清（全仓零产出点，
+    死键只稀释报告），以同代现役键 pipeline.consumer 顶替守卫位。
+    """
     from video_ocr_engine.domain.metrics import METRICS, METRIC_CAP
     if len(METRICS.names()) > METRIC_CAP:
         return "指标注册表超 %d 上限" % METRIC_CAP
     for name in ("pipeline.decode", "pipeline.ocr", "pipeline.ocr_tail",
-                 "pipeline.producer", "pipeline.q_get_wait"):
+                 "pipeline.consumer", "pipeline.q_get_wait"):
         if name not in METRICS:
             return "v1 现役指标 %s 从注册表丢失" % name
     return None

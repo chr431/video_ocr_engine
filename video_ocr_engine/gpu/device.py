@@ -554,8 +554,13 @@ def _gpu_frame_stream_cpu(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
     for bstart in range(calib_n, len(frames), DECODE_BATCH):
         bend = min(bstart + DECODE_BATCH, len(frames))
         B = bend - bstart
+        # P2c 覆盖缺口：CPU 解码分支此前零打桩（decode.*/stream_analyze
+        # 只在 NVDEC 分支产出）。键语义与宿主路径对齐：decode_batch =
+        # get_batch + asnumpy（宿主同款）；gray_batch = 灰度转换。
+        _t_dec = time.perf_counter()
         nds = vr.get_batch(frames[bstart:bend], roi=roi)
         crops = nds.asnumpy()
+        ex._prof_end('producer', 'decode_batch', _t_dec)
         if yuv:
             if crops.ndim != 3:
                 raise RuntimeError(
@@ -564,7 +569,9 @@ def _gpu_frame_stream_cpu(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
             if crops.ndim != 4 or crops.shape[-1] != 1:
                 raise RuntimeError(
                     "GPU 分段仅支持 decord gray 输出")
+        _t_gray = time.perf_counter()
         g = np.ascontiguousarray(ex._batch_luma(crops))
+        ex._prof_end('producer', 'gray_batch', _t_gray)
         if g.shape != (B, src_h, src_w):
             raise RuntimeError(
                 f"GPU(CPU解码) 灰度形状不符: {g.shape} != "
@@ -576,9 +583,11 @@ def _gpu_frame_stream_cpu(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
         base = owner.ptr
         prev_buf = analyzer._ensure_prev(
             max(B, DECODE_BATCH) * fnb)
+        _t_an = time.perf_counter()
         _gpu_fill_prev(analyzer, prev_buf, base, B, fnb, prev_ptr)
         sums = analyzer.analyze_batch(
             base, prev_buf, B, src_h, src_w, th)
+        ex._prof_end('producer', 'stream_analyze', _t_an)
         for k in range(B):
             yield (frames[bstart + k],
                    DeviceRef(ptr=base + k * fnb, h=src_h, w=src_w,

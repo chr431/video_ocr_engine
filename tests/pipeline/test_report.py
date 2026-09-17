@@ -46,15 +46,16 @@ def _std_metrics():
 
 # ── schema 快照 ────────────────────────────────────────────────────────
 def test_report_version_is_pinned():
-    # v1→v2：+resources/+hardware；v2→v3：+diagnostics（均为只加键）
-    assert REPORT_VERSION == 3
+    # v1→v2：+resources/+hardware；v2→v3：+diagnostics；v3→v4：+span_relations
+    # 与 `<parent>_other` 派生 span（均为只加键）
+    assert REPORT_VERSION == 4
 
 
 def test_report_schema_snapshot():
     rep = build_report(_std_metrics(), wall=0.5, config_digest="deadbeef",
                        n_segments=7, backend="decord/GPU",
                        ocr_backend="tensorrt")
-    assert set(rep) == REPORT_KEYS | {"resources"}
+    assert set(rep) == REPORT_KEYS | {"resources", "span_relations"}
     assert rep["report_version"] == REPORT_VERSION
     assert rep["tier"] == "std"
     assert rep["wall_s"] == pytest.approx(0.5)
@@ -64,12 +65,36 @@ def test_report_schema_snapshot():
     assert rep["gauges"]["ocr.engine_init"] == pytest.approx(0.0002)
     assert rep["pipeline"]["n_segments"] == 7
     assert rep["pipeline"]["config_digest"] == "deadbeef"
+    # v4：关系表自述（路径 + 派生口径），供读者复核 _other 算术
+    assert rep["span_relations"]["path"] == "host"
+    assert "pipeline.consumer" in rep["span_relations"]["parent_children"]
     # health 每项都是 {metric, value, limit, ok} 形态（§13.2 N-5 可判定）
     assert "PI-10" in rep["health"]
     for k, v in rep["health"].items():
         assert {"metric", "value", "limit", "ok"} <= set(v), k
     assert rep["environment"]["python"].startswith("3.")
     assert set(rep["resources"]) == RESOURCE_KEYS
+
+
+def test_other_span_derivation_host_vs_gpu():
+    """v4 缺口派生：host 才有 consumer 关系；子项缺席记 0；不越出父和。"""
+    m = _std_metrics()
+    m.record_span("pipeline.consumer", 2.0)
+    m.record_span("decode.batch", 1.2)
+    rep = build_report(m, wall=2.5, span_path="host")
+    other = rep["spans"]["pipeline.consumer_other"]
+    assert other["n"] == 1
+    assert other["sum"] == pytest.approx(0.8)        # 2.0 − 1.2 − 缺席记 0
+    assert "min" not in other and "p50" not in other  # 缺口不伪造分位数
+    # gpu 路径无 consumer 关系 → 不派生该键
+    rep2 = build_report(_std_metrics(), wall=2.5, span_path="gpu")
+    assert "pipeline.consumer_other" not in rep2["spans"]
+    # ocr.infer ⊃ ctc_decode 两路径同构
+    m2 = _std_metrics()
+    m2.record_span("ocr.infer", 0.5)
+    m2.record_span("ocr.ctc_decode", 0.05)
+    rep3 = build_report(m2, wall=1.0, span_path="gpu")
+    assert rep3["spans"]["ocr.infer_other"]["sum"] == pytest.approx(0.45)
 
 
 def test_off_tier_emits_no_report():
@@ -107,6 +132,9 @@ def test_per_phase_deltas_are_sane():
     row = r["decode"]
     assert row["wall"] > 0
     assert row["cores_avg"] >= 0.0               # Δcpu/Δwall：本机应 ≈1
+    # P2a：cycle 口径的核数（无 15.625ms tick 量化）；单线程忙等相位 ≈1 核，
+    # 量测含主线程以外的极小开销，放宽到 (0, 2)。
+    assert 0.0 < row.get("cores_avg_cycles", 0.0) < 2.0
     assert row["threads"] >= 1
     if "rss_delta_mib" in row:
         assert isinstance(row["rss_delta_mib"], float)

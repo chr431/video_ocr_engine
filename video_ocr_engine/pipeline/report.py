@@ -20,7 +20,58 @@ from pathlib import Path
 # v2（S6 续轮）：新增 `resources`（L1 相位边界差分）与 `hardware`（L2 NVML
 # 峰值因子，仅 full 档采样过才出现）——都是**新增键**，按 v1 解析的旧读者不受影响。
 # v3（2026-09-13）：新增 `diagnostics`（看门狗/崩溃日志/停顿落盘），同样**只加键**。
-REPORT_VERSION = 3
+# v4（2026-09-17 重设计）：新增 `span_relations`（静态父子表 + 路径标记）与
+# 派生 span `<parent>_other`（= parent.sum − Σ在场子项 sum），产品化
+# "consumer − 已计 span = 缺口"的手工归因算术；spans 表只加键。
+REPORT_VERSION = 4
+
+#: v4：span 嵌套关系（代码级核对，2026-09-17 勘察）。**子项互不重叠**是
+#: 硬约束——嵌套更深的键（如宿主 merge_pair/q_put_block 在 consume_feed
+#: 内部）不得重复列入，否则 _other 会被双重扣减。
+#: - host：consumer 线程墙钟内串行包含 decode.*（流生成器在 feed 循环内
+#:   被拉动）+ 状态机 feed（consume_feed；merge_pair/q_put_block 嵌套于
+#:   其中，不单列）。pipeline.decode ≡ pipeline.consumer（同区间双键，
+#:   遗留等价键，读表时知悉）。
+#: - gpu：pipeline.consumer 不产出（生产者线程成本由 pipeline.decode 表达），
+#:   故无 consumer 关系；ocr 两对关系两路径同构。
+SPAN_RELATIONS: dict = {
+    "host": {
+        "pipeline.consumer": ("decode.batch", "decode.luma_batch",
+                              "decode.sharp_batch", "decode.binarize_batch",
+                              "pipeline.consume_feed"),
+        "ocr.infer": ("ocr.ctc_decode",),
+        "ocr.preprocess": ("ocr.preproc_luma", "ocr.preproc_autocrop",
+                           "ocr.preproc_resize"),
+    },
+    "gpu": {
+        "ocr.infer": ("ocr.ctc_decode",),
+        "ocr.preprocess": ("ocr.preproc_luma", "ocr.preproc_autocrop",
+                           "ocr.preproc_resize"),
+    },
+}
+
+
+def _derive_other_spans(spans: dict, gauges: dict, path: str) -> dict:
+    """v4：派生 `<parent>_other`（父 span 中未被已计子项覆盖的缺口）。
+
+    子项取值顺序：spans 表（有界相位）→ TOTALS 汇总 gauge（无界键在
+    std 档是 sum gauge）。缺席子项记 0（= 该键本次 run 没花时间）。
+    条目只有 {n, sum}——不对缺口伪造 min/p50/max 分位数。
+    """
+    out: dict = {}
+    for parent, children in SPAN_RELATIONS.get(path, {}).items():
+        p = spans.get(parent)
+        if not p:
+            continue
+        acc = 0.0
+        for c in children:
+            v = spans.get(c, {}).get("sum")
+            if v is None:
+                v = gauges.get(c)
+            acc += float(v or 0.0)
+        out[parent + "_other"] = {"n": p["n"],
+                                  "sum": _num(max(0.0, p["sum"] - acc))}
+    return out
 
 #: PI 守卫阈值（§13.2 N-5：散文 → 指标名 + 阈值）
 PI_LIMITS = {
@@ -109,7 +160,8 @@ def build_report(metrics, *, wall: float, config_digest: str = "",
                  n_segments: int = 0, backend: str = "",
                  ocr_backend: str = "", extra: dict | None = None,
                  hardware: dict | None = None,
-                 diagnostics: dict | None = None) -> dict:
+                 diagnostics: dict | None = None,
+                 span_path: str = "host") -> dict:
     """组装 RunReport（telemetry=off 时返回 {}）。"""
     if not getattr(metrics, "enabled", False):
         return {}
@@ -119,20 +171,31 @@ def build_report(metrics, *, wall: float, config_digest: str = "",
     _content = snap["counters"].get("ocr.content_cols", 0)
     if _pad:
         snap["gauges"]["ocr.fill_pct"] = 100.0 * _content / _pad
+    spans = {k: {kk: _num(vv) for kk, vv in v.items()}
+             for k, v in snap["spans"].items()}
+    gauges = {k: _num(v) for k, v in snap["gauges"].items()}
+    # v4：缺口派生（只加键；条目形状 {n,sum}，不伪造分位数）
+    derived = _derive_other_spans(spans, gauges, span_path)
+    spans.update(derived)
     rep = {
         "report_version": REPORT_VERSION,
         "tier": metrics.tier,
         "wall_s": _num(wall),
-        "spans": {k: {kk: _num(vv) for kk, vv in v.items()}
-                  for k, v in snap["spans"].items()},
+        "spans": spans,
         "counters": dict(snap["counters"]),
-        "gauges": {k: _num(v) for k, v in snap["gauges"].items()},
+        "gauges": gauges,
         "health": health(snap),
         "environment": environment(),
         "pipeline": {"backend": backend, "ocr_backend": ocr_backend,
                      "n_segments": n_segments,
                      "config_digest": config_digest},
         "degradations": list(degradations or []),
+        "span_relations": {
+            "path": span_path,
+            "parent_children": dict(SPAN_RELATIONS.get(span_path, {})),
+            "note": "_other = parent.sum − Σ在场子项 sum（缺席记 0；子项互"
+                    "不重叠；host 路径 pipeline.decode ≡ pipeline.consumer"
+                    "为遗留同值键）"},
     }
     # §8.6 r5 资源层（**report_version 2 的新增段，只加不改**）：
     # resources = L1 相位边界差分（std+ 即有）；hardware = L2 NVML 峰值因子
@@ -142,9 +205,12 @@ def build_report(metrics, *, wall: float, config_digest: str = "",
         if res:
             res = dict(res)
             res["notes"] = ("L1 为进程级差分，OCR 与解码并发时核数互相计入"
-                            "（相位平均并行核数的本意）；本机自测口径，跨机"
-                            "不可比；PCIe 本机不可直读，只能由 counter 字节 ÷"
-                            "相位墙钟推算（L3 推导区，本表不产该字段）")
+                            "（相位平均并行核数的本意）；cores_avg_cycles 为"
+                            "cycle 口径（无 process_time 15.625ms tick 量化，"
+                            "短相位可信；按全程平均频率换算，变频相位有偏）；"
+                            "本机自测口径，跨机不可比；PCIe 本机不可直读，"
+                            "只能由 counter 字节 ÷ 相位墙钟推算（L3 推导区，"
+                            "本表不产该字段）")
             rep["resources"] = res
     if hardware is not None:
         rep["hardware"] = hardware

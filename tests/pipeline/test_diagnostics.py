@@ -148,13 +148,13 @@ def test_tick_overhead_is_sub_microsecond_scale():
 
 
 def test_report_gains_diagnostics_key_only_when_armed():
-    """schema v3：只加键、且未 arming 时不写空值冒充。"""
+    """schema 演进只加键、且未 arming 时不写空值冒充。"""
     from video_ocr_engine.domain.metrics import make_metrics
     from video_ocr_engine.pipeline.report import REPORT_VERSION, build_report
     m = make_metrics("std")
     m.record_span("pipeline.run", 1.0)
     plain = build_report(m, wall=1.0)
-    assert REPORT_VERSION == 3
+    assert REPORT_VERSION == 4
     assert "diagnostics" not in plain
     armed = build_report(m, wall=1.0, diagnostics={"armed": True, "stalls": 0})
     assert armed["diagnostics"]["armed"] is True

@@ -41,6 +41,7 @@ class RunConfig:
     diag_bounds_debug: bool = False
     diag_telemetry: str = "std"            # off/std/full（§8.6 r5）
     diag_report_file: str = ""             # RunReport sidecar 路径（§8.6 N-3）
+    diag_trace_file: str = ""              # P4 实验性时间线路径（默认关）
     # ── 指纹 ──
     config_digest: str = ""
 

@@ -182,6 +182,7 @@ class FieldExtractor:
         self._diag = NULL_DIAG
         self._metric_totals: dict = {}
         self._report: dict = {}
+        self._trace = None
         self._validate_params()
         self._ensure_roi_capable_decoder()
         roi_w = max(1, self._roi[2] - self._roi[0] + 1)
@@ -432,10 +433,21 @@ class FieldExtractor:
         self._metric_max = {}
         self._report = {}
         self._hardware = None
+        self._trace = None
         _t_run = time.perf_counter()
         # L2 设备峰值采样：**仅 full 档**建采样线程（B6——std/off 这里是一次
         # 属性比较即返回），run 结束立刻停并丢弃半帧。
         self._metrics.start_hardware()
+        # P4 实验性全事件时间线（VOE_TRACE_FILE，默认关）：off 档 + trace
+        # 同设 → 警告并忽略（trace 事件源就是遥测脊柱，off 档脊柱不产名）。
+        _tf = (self._rc.diag_trace_file or "").strip()
+        if _tf:
+            if self._metrics.enabled:
+                from .domain.trace import TraceRecorder
+                self._trace = TraceRecorder()
+                self._trace.start_hardware()
+            else:
+                logger.warning("VOE_TRACE_FILE 需 VOE_TELEMETRY != off，已忽略")
         try:
             _outcome = self._run_pipelined()   # S9-6：RunOutcome（裸 5 元组已退场）
         finally:
@@ -454,12 +466,19 @@ class FieldExtractor:
                           if self._keep_crops else None))
             for i, seg in enumerate(segs)
         ]
+        meta = self._build_meta(segments, _wall)
+        if self._trace is not None:
+            # 收尾：顶层 run 事件（真实锚点）+ 落盘（含 NVML 点列）
+            self._trace.record_run(_t_run, _wall)
+            _info = self._trace.dump(
+                self._rc.diag_trace_file, meta=meta, wall=_wall)
+            logger.debug("trace 时间线已落盘：%s", _info)
         return ExtractionResult(
             segments=segments,
             frames=frames if self._keep_frames else [],
             fps=self._fps or 0.0,
             timing=dict(self.timing),
-            meta=self._build_meta(segments, _wall))
+            meta=meta)
 
     def _build_meta(self, segments: list, wall: float) -> dict:
         """meta 组装（§10.1 的 9 键逐字不变 + S6-0 增补 report，只增不改）。"""
@@ -520,13 +539,26 @@ class FieldExtractor:
             _v = self.timing.get(_k)
             if _v is not None:
                 m.record_span(_name, float(_v))
+        # P4 trace：timing 派生段的近似锚点（t1=组装时刻；误差=ocr_tail+
+        # 组装时长，dump note 里有说明——真实锚点由 pipeline.run/consumer
+        # 等脊柱事件提供）
+        if self._trace is not None:
+            _now = time.perf_counter()
+            for _k, _name in (("decode", "pipeline.decode"),
+                              ("ocr", "pipeline.ocr"),
+                              ("ocr_tail", "pipeline.ocr_tail")):
+                _v = self.timing.get(_k)
+                if _v is not None:
+                    self._trace.record(_name, _now - float(_v), _now)
         # 诊断收尾：停看门狗、冲刷崩溃日志（未 arming 时是空字典）
         diag_rep = self._diag.stop() if self._diag.armed else {}
         rep = build_report(
             m, wall=wall, config_digest=self._rc.config_digest,
             degradations=self._degraded, n_segments=n_segments,
             backend=self._backend, ocr_backend=self._ocr_backend_used,
-            hardware=self._hardware, diagnostics=diag_rep)
+            hardware=self._hardware, diagnostics=diag_rep,
+            span_path=("gpu" if getattr(self, "_gpu_pipeline_mode", False)
+                       else "host"))
         self._report = rep
         return rep
 
@@ -578,22 +610,30 @@ class FieldExtractor:
                 d = self.profile.setdefault(group, {})
                 d[key] = d.get(key, 0.0) + elapsed
         if met:
-            self._metric_from_profile(group, key, elapsed)
+            name = self._metric_from_profile(group, key, elapsed)
+            # P4 trace（默认关）：t1 复用已算好的 t0+elapsed，不另取时钟；
+            # 关闭时这条 = 一次 is-not-None 判断（成本守卫背书零成本）。
+            if self._trace is not None and name is not None:
+                self._trace.record(name, t0, t0 + elapsed)
             if self._diag.armed:      # 进展心跳：挂死时可归因到相位
                 self._diag.tick("%s.%s" % (group, key),
                                 "%.4fs" % elapsed)
 
-    def _metric_from_profile(self, group: str, key: str, elapsed: float) -> None:
-        """(group, key) → 注册指标名（映射表在 domain/metrics.py，单一出处）。"""
+    def _metric_from_profile(self, group: str, key: str,
+                             elapsed: float) -> str | None:
+        """(group, key) → 注册指标名（映射表在 domain/metrics.py，单一出处）。
+
+        返回主指标名（P4 trace 用）；未映射键返回 None。
+        """
         m = self._metrics
         name = PROFILE_GAUGES.get((group, key))
         if name is not None:
             m.gauge(name, elapsed)          # 单值量：末次即本 run 的 engine_init
-            return
+            return name
         name = PROFILE_SPANS.get((group, key))
         if name is not None:
             m.record_span(name, elapsed)    # 有界相位：std 档逐次采样
-            return
+            return name
         name = PROFILE_TOTALS.get((group, key))
         if name is not None:
             t = self._metric_totals
@@ -607,6 +647,8 @@ class FieldExtractor:
                     self._metric_max[_mx] = elapsed
             if m.detailed:
                 m.record_span(name, elapsed)   # full 档另留逐次样本
+            return name
+        return None
 
     def _open_vr(self):
         """按 decode_backend 打开解码器（auto/cpu/nvdec/hybrid）。

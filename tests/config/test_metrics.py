@@ -14,9 +14,11 @@ from video_ocr_engine.domain.metrics import (
 
 
 def test_registry_covers_v1_keys():
+    # pipeline.producer 已出清（2026-09-17：全仓零产出点），
+    # v1 观测键里补一个仍然现役的无界键 consume_feed。
     for name in ("pipeline.decode", "pipeline.ocr", "pipeline.ocr_tail",
-                 "pipeline.producer", "pipeline.q_get_wait",
-                 "pipeline.q_put_block"):
+                 "pipeline.consumer", "pipeline.consume_feed",
+                 "pipeline.q_get_wait", "pipeline.q_put_block"):
         assert name in METRICS
 
 
@@ -94,10 +96,21 @@ def test_detailed_only_in_full_tier():
 def test_profile_mapping_targets_are_registered():
     """§8.6 N-2：单一计时脊柱的映射表只能指向注册名（防映射漂移）。"""
     from video_ocr_engine.domain.metrics import (
-        PROFILE_GAUGES, PROFILE_SPANS, PROFILE_TOTALS)
+        PROFILE_GAUGES, PROFILE_SPANS, PROFILE_TOTALS,
+        PROFILE_TOTALS_MAX, PROFILE_TOTALS_N)
     for name in (list(PROFILE_SPANS.values()) + list(PROFILE_TOTALS.values())
-                 + list(PROFILE_GAUGES.values())):
+                 + list(PROFILE_GAUGES.values())
+                 + list(PROFILE_TOTALS_N.values())
+                 + list(PROFILE_TOTALS_MAX.values())):
         assert name in METRICS, name
+
+
+def test_totals_n_max_cover_all_totals_keys():
+    """P2b：TOTALS 全键分诊——N/MAX 映射与 TOTALS 键集合一致（成对出现）。"""
+    from video_ocr_engine.domain.metrics import (
+        PROFILE_TOTALS, PROFILE_TOTALS_MAX, PROFILE_TOTALS_N)
+    assert set(PROFILE_TOTALS_N) == set(PROFILE_TOTALS)
+    assert set(PROFILE_TOTALS_MAX) == set(PROFILE_TOTALS)
 
 
 def test_registry_cap():

@@ -27,11 +27,12 @@ METRIC_CAP = 64
 # 元组 = (name, kind, unit, stage, pi_binding)。
 _SEED = (
     # ── pipeline：编排三段 + v1 现役键（迁移不丢观测）──
+    # （pipeline.producer 已出清：全仓零产出点，注册不注册都从不出现——
+    #   2026-09-17 勘察确认；死键只稀释报告与 diff 视图。）
     ("pipeline.run", "span", "s", "pipeline", ""),
     ("pipeline.setup", "span", "s", "pipeline", ""),
     ("pipeline.calibrate", "span", "s", "pipeline", ""),
     ("pipeline.decode", "span", "s", "pipeline", ""),
-    ("pipeline.producer", "span", "s", "pipeline", ""),
     ("pipeline.consumer", "span", "s", "pipeline", ""),
     ("pipeline.ocr", "span", "s", "pipeline", ""),
     ("pipeline.ocr_tail", "span", "s", "pipeline", ""),
@@ -39,11 +40,15 @@ _SEED = (
     ("pipeline.q_put_block", "gauge", "s", "pipeline", "PI-5"),
     # 背压分诊（std 档即有）：总时长只说明"堵了多久"，次数与单次最长
     # 才区分"偶发长停顿"与"持续细碎互锁"——前者查尾帧，后者查调度。
+    # P2b（2026-09-17）把同一分诊口径推广到**全部无界 TOTALS 键**
+    # （consume_feed/emit.*/merge_pair），映射表在 PROFILE_TOTALS_N/_MAX。
     ("pipeline.q_get_wait_n", "counter", "次", "pipeline", "PI-5"),
     ("pipeline.q_get_wait_max", "gauge", "s", "pipeline", "PI-5"),
     ("pipeline.q_put_block_n", "counter", "次", "pipeline", "PI-5"),
     ("pipeline.q_put_block_max", "gauge", "s", "pipeline", "PI-5"),
     ("pipeline.consume_feed", "span", "s", "pipeline", ""),
+    ("pipeline.consume_feed_n", "counter", "次", "pipeline", ""),
+    ("pipeline.consume_feed_max", "gauge", "s", "pipeline", ""),
     # ── decode：批级（std 档不含 per-frame）──
     ("decode.batch", "span", "s", "decode", ""),
     ("decode.batches", "counter", "批", "decode", ""),
@@ -53,10 +58,10 @@ _SEED = (
     ("decode.binarize_batch", "span", "s", "decode", ""),
     ("decode.stream_analyze", "span", "s", "decode", "PI-13"),
     # ── segment ──
-    ("segment.emit", "span", "s", "segment", ""),
-    ("segment.emit_batch", "span", "s", "segment", ""),
     ("segment.segments", "counter", "段", "segment", ""),
     ("segment.merge_pair", "span", "s", "segment", "PI-1"),
+    ("segment.merge_pair_n", "counter", "次", "segment", "PI-1"),
+    ("segment.merge_pair_max", "gauge", "s", "segment", "PI-1"),
     ("segment.merges", "counter", "次", "segment", ""),
     # ── ocr ──
     ("ocr.engine_init", "gauge", "s", "ocr", "PI-10"),
@@ -79,20 +84,22 @@ _SEED = (
     ("ocr.content_cols", "counter", "列", "ocr", ""),
     ("ocr.fill_pct", "gauge", "%", "ocr", ""),
     # ── emit：消费端提交（第一阶段性能目标，§7.6）──
+    # （emit.h2d_bytes / emit.launches 已出清：零产出点，同 pipeline.producer）
     ("emit.d2h_bytes", "counter", "B", "emit", "PI-14"),
-    ("emit.h2d_bytes", "counter", "B", "emit", "PI-14"),
     ("emit.d2h_calls", "counter", "次", "emit", "PI-9"),
-    ("emit.launches", "counter", "次", "emit", "PI-8"),
     ("emit.syncs", "counter", "次", "emit", "PI-8"),
     ("emit.keep_crops_d2h", "counter", "次", "emit", "PI-9"),
     ("emit.keep_crops_batched", "counter", "次", "emit", "PI-9"),
     ("emit.autocrop", "span", "s", "emit", ""),
+    ("emit.autocrop_n", "counter", "次", "emit", ""),
+    ("emit.autocrop_max", "gauge", "s", "emit", ""),
     ("emit.put", "span", "s", "emit", ""),
+    ("emit.put_n", "counter", "次", "emit", ""),
+    ("emit.put_max", "gauge", "s", "emit", ""),
     ("emit.d2h", "span", "s", "emit", ""),
-    # ── 池与帧契约 ──
-    ("pools.high_water", "gauge", "个", "pools", "PI-5"),
-    ("frame_batch.inflight", "gauge", "个", "frame_batch", "PI-6"),
-    ("frame_batch.leaks", "counter", "个", "frame_batch", "PI-6"),
+    ("emit.d2h_n", "counter", "次", "emit", ""),
+    ("emit.d2h_max", "gauge", "s", "emit", ""),
+    # （pools.high_water / frame_batch.* 已出清：零产出点。）
 )
 
 
@@ -148,14 +155,26 @@ PROFILE_SPANS = {
     ("ocr", "ctc_decode"): "ocr.ctc_decode",
 }
 #: 无界（每段/每帧调用）→ std 档只累加总量（`totals` 段）；full 档另采样
-#: TOTALS 的伴随观测（std 档即有）：出现次数 / 单次最长
+#: TOTALS 的伴随观测（std 档即有）：出现次数 / 单次最长。
+#: P2b：推广到**全部** TOTALS 键（此前只有两个队列键）——无 sum 只有次数
+#: 与最长，才分得出"偶发长停顿 vs 持续细碎"。
 PROFILE_TOTALS_N = {
     ("producer", "q_put_block"): "pipeline.q_put_block_n",
     ("ocr", "q_get_wait"): "pipeline.q_get_wait_n",
+    ("producer", "consume_feed"): "pipeline.consume_feed_n",
+    ("producer", "emit_autocrop"): "emit.autocrop_n",
+    ("producer", "emit_put"): "emit.put_n",
+    ("producer", "emit_d2h"): "emit.d2h_n",
+    ("producer", "merge_pair"): "segment.merge_pair_n",
 }
 PROFILE_TOTALS_MAX = {
     ("producer", "q_put_block"): "pipeline.q_put_block_max",
     ("ocr", "q_get_wait"): "pipeline.q_get_wait_max",
+    ("producer", "consume_feed"): "pipeline.consume_feed_max",
+    ("producer", "emit_autocrop"): "emit.autocrop_max",
+    ("producer", "emit_put"): "emit.put_max",
+    ("producer", "emit_d2h"): "emit.d2h_max",
+    ("producer", "merge_pair"): "segment.merge_pair_max",
 }
 PROFILE_TOTALS = {
     ("producer", "consume_feed"): "pipeline.consume_feed",

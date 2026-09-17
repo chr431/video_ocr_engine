@@ -78,10 +78,13 @@ python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.
 | 分相打桩 | `video_ocr_engine/extractor.py` 的 `_prof_end`（**单一计时脊柱**：同一 t0 喂 profile 与指标） |
 | 性能 A/B | `tools/bench.py`（`run`/`diff`/`show`/`ab`/`telemetry-check`；报告落 `bench/registry.jsonl`） |
 
-⚠️ **A/B 必须交错**（`bench ab`）：同码连跑两次实测可差 **7.7%**（GPU 热降），
-顺序跑会把漂移记到 B 头上。⚠️ **门禁阈值 ≥ 本机可分辨下限**：先
-`bench telemetry-check --aa` 标定（本机 A/A \|Δ\|p95 0.484%，2026-09-13
-重标，n=25/inner=3 → std 限 +0.30% / full 限 +1.20%），阈值 =
+⚠️ **A/B 必须交错**（`bench ab`，2026-09-17 起含臂序轮转 + GPU 时钟门禁
++ 自动判定）：同码连跑两次实测可差 **7.7%**（GPU 热降），顺序跑会把漂移
+记到 B 头上。⚠️ **门禁阈值 ≥ 本机可分辨下限**：先
+`bench telemetry-check --aa` 标定（本机 A/A \|Δ\|p95 0.734%，2026-09-17
+重标，n=25/inner=3 → std 限 +0.30% / full 限 +1.20%，仍由 0.30% 地板
+绑定）；**ab 子进程协议另有标定**（`ab --aa`：GPU sd 0.254% → --hard
+0.55% 级；纯 CPU 配置 sd 1.22% → 1.45% 级），阈值 =
 \|偏差\|+3×SE，判据 = 同轮配对差分**均值** + 符号多数一致；µs 级严格性见
 `tests/config/test_telemetry_cost.py`。执行体在脚本（`knowledge/rules.yaml`）。
 
@@ -147,7 +150,7 @@ python tools/_probe_index_audit.py               # tools/INDEX.md 数字一致�
 - **产品代码的 print 必须受 debug 开关保护**（`env_bool(DEBUG_BOUNDS_ENV)` /
   `self._probe`），否则走 `logging`。docstring 里的用法示例不算。
 - **未使用的 import**：有意 re-export 加 `# noqa: F401`，否则删掉。
-- **探针分层（L2）**：`tools/INDEX.md` 的「探针状态」小节是唯一权威——**只有 `live` 名单里的探针有修复义务**，其余默认 `frozen`（证据已产出、结论已封板 → 豁免活性检查，重构时不必修）。新增 live 须写理由。现状 live 5 / frozen 75 —— 这就是抑制「探针无限堆积 + 失效修复成本无限增高」的机制。
+- **探针分层（L2）**：`tools/INDEX.md` 的「探针状态」小节是唯一权威——**只有 `live` 名单里的探针有修复义务**，其余默认 `frozen`（证据已产出、结论已封板 → 豁免活性检查，重构时不必修）。新增 live 须写理由。现状 live 14 / frozen 102 —— 这就是抑制「探针无限堆积 + 失效修复成本无限增高」的机制。
 - **不得引用六个废弃根模块 shim**（`engine_config` / `gpu_setup` /
   `ocr_native` / `ocr_trt` / `segmentation` / `video_utils`）——审计项 22，
   白名单只有两个冻结 shim 可导入性的契约测试；迁移表 `docs/MIGRATION.md` §1。

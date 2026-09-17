@@ -33,6 +33,8 @@ from pathlib import Path
 #   - 判失败还需**符号多数一致**（70%），落在噪声带里的差值不再误报。
 #   - 换机器/换窗口/改配对数 n 后必须 `telemetry-check --aa` 重标（SE∝1/√n）。
 PI15_LIMITS = {"std_pct": 0.30, "full_pct": 1.20, "sign_majority": 0.70}
+#: 阈值下限（P1 抽成常量）：P3 重标后按新 A/A 证据更新（只收紧不放松）。
+PI15_FLOOR_PCT = 0.30
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -95,16 +97,133 @@ def _round(cfg_name: str, window: int, telemetry: str, keep_crops: bool,
 
 
 def _gpu_state() -> str:
-    """GPU 状态串（A/B 记录用）：掉频/热降是本地最大噪声源。"""
+    """GPU 状态串（A/B 记录用）：掉频/热降是本地最大噪声源。
+
+    NVML 直读（nvidia-smi 子进程实测 43.1ms/次；NVML 会话进程级复用后
+    微秒级，与 report 环境指纹共用 `resources.nvml_handle`）。
+    """
     try:
-        out = subprocess.run(
-            ["nvidia-smi",
-             "--query-gpu=temperature.gpu,clocks.sm,power.draw,utilization.gpu",
-             "--format=csv,noheader"], capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=10).stdout.strip()
-        return out
+        import ctypes
+        from video_ocr_engine.domain.resources import nvml_handle
+        nvml, h = nvml_handle()
+        temp, sm, pw = ctypes.c_uint(), ctypes.c_uint(), ctypes.c_uint()
+        parts = []
+        if int(nvml.nvmlDeviceGetTemperature(h, 0, ctypes.byref(temp))) == 0:
+            parts.append("temp=%dC" % temp.value)
+        if int(nvml.nvmlDeviceGetClockInfo(h, 1, ctypes.byref(sm))) == 0:
+            parts.append("sm=%dMHz" % sm.value)
+        if int(nvml.nvmlDeviceGetPowerUsage(h, ctypes.byref(pw))) == 0:
+            parts.append("power=%dmW" % (pw.value // 1000))
+        return " ".join(parts) or "n/a"
     except Exception:  # noqa: BLE001
         return "n/a"
+
+
+# ── 时钟门禁（2026-09-17 §8.6 落地，P1 协议降噪）──────────────────────
+# 判据层：把 NVML sm_clock min 与主动压频位登记进每一轮读数，"时钟未起"
+# 的轮次不进聚合——不可比读数应当剔除，而不是被平均掉（§8.2 实测：冷轮
+# sm_min 345~450MHz，弃冷后噪声带收窄 54×）。
+# k 校准（tools/_probe_clock_gate.py → bench/clock_gate.json）：冷轮
+# sm_min/最大SM ≈ 0.145、热轮平台 ≈ 0.870（boost 上限 3105、负载平台
+# 2700），k=0.75 居分离带中段（两侧 >10pp 余量；k=0.85 仅剩 2.3% 余量，
+# k=0.9 会把热轮全拒——见探针 k 扫描）。
+CLOCK_GATE_K = 0.75
+#: 主动压频位（resources.py THROTTLE_BITS 的"非常态"集合：gpu_idle/
+#: apps_clocks_setting/sync_boost 为常态）。任一出现 = 该 tick 主动压时钟。
+_THROTTLE_BAD = 0x4 | 0x8 | 0x20 | 0x40 | 0x80 | 0x100
+
+
+def _sm_max_clock() -> int | None:
+    """nvmlDeviceGetMaxClockInfo(SM)；不可用 → None（门禁降级为"无信号"）。"""
+    try:
+        import ctypes
+        from video_ocr_engine.domain.resources import nvml_handle
+        nvml, h = nvml_handle()
+        c = ctypes.c_uint()
+        if int(nvml.nvmlDeviceGetMaxClockInfo(h, 1, ctypes.byref(c))) != 0:
+            return None
+        return int(c.value)
+    except Exception:  # noqa: BLE001 无 NVML = 本机不可判，不是错误
+        return None
+
+
+def _gpu_valid(gpu: dict | None) -> bool:
+    """记录级门禁判定：无 gpu 字段（历史）/ gate=off/unavailable → True。
+
+    门禁只在有明确低时钟/压频证据时剔除（fail-open），且**不追溯改判**
+    历史记录——它们写库时还没有这个字段。
+    """
+    if not gpu:
+        return True
+    return bool(gpu.get("valid", True))
+
+
+class _RoundClockWatch:
+    """cmd_run 每轮的 GPU 时钟观察：NvmlSampler 包住一轮 extract。
+
+    `with` 退出后 `block()` 给出 registry 的 gpu 字段：
+    {sm_min, sm_p50, sm_max, throttle_bad, valid, gate}。
+    valid = 无主动压频 tick 且 sm_min ≥ CLOCK_GATE_K×最大SM 时钟；
+    采样点不足（run 短于首个 0.2s tick）判 valid=True 并注明——门禁
+    不能替无数据，也不能无证据剔除。
+    """
+
+    def __init__(self, gate: bool = True, label: str = "") -> None:
+        self._gate = gate
+        self._label = label
+        self._sm_max = None
+        self._sampler = None
+        self._pts: list = []
+        self.unavailable = ""
+        if gate:
+            self._sm_max = _sm_max_clock()   # NVML 会话进程级一次初始化
+            if self._sm_max is None:
+                self.unavailable = "unavailable:NVML 或最大SM时钟不可读"
+
+    def __enter__(self):
+        if self._gate and not self.unavailable:
+            from video_ocr_engine.domain.resources import NvmlSampler
+            self._sampler = NvmlSampler(interval_s=0.2)
+            self._sampler.start()
+        return self
+
+    def __exit__(self, *exc):
+        if self._sampler is not None:
+            self._sampler.stop()
+            self._pts = list(self._sampler._pts)
+            self._sampler = None
+        return False
+
+    def block(self) -> dict:
+        if not self._gate:
+            return {"valid": True, "gate": self._label or "off"}
+        if self.unavailable:
+            return {"valid": True, "gate": self.unavailable}
+        pts = [(p[4], p[7]) for p in self._pts if p[4] is not None]
+        if not pts:
+            return {"valid": True, "sm_min": None, "sm_p50": None,
+                    "throttle_bad": 0, "gate": "unavailable:采样点不足"}
+        sm = sorted(p[0] for p in pts)
+        bad = sum(1 for _, m in pts if (m or 0) & _THROTTLE_BAD)
+        sm_min, sm_p50 = sm[0], sm[len(sm) // 2]
+        valid = bad == 0 and sm_min >= CLOCK_GATE_K * (self._sm_max or 0)
+        return {"sm_min": sm_min, "sm_p50": sm_p50, "sm_max": self._sm_max,
+                "throttle_bad": bad, "valid": valid, "gate": "nvml"}
+
+
+def _set_priority_above_normal() -> bool:
+    """SetPriorityClass(ABOVE_NORMAL)（§8.5：实测可用、无需管理员）。
+
+    伪句柄 -1 直传，绕开 GetCurrentProcess 的 restype 截断陷阱（64 位
+    伪句柄若按默认 c_int 返回会被截成 32 位、调用静默失败）。
+    """
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        return bool(k.SetPriorityClass(
+            ctypes.c_void_p(-1), 0x00008000))  # ABOVE_NORMAL_PRIORITY_CLASS
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def cmd_run(args) -> int:
@@ -115,23 +234,48 @@ def cmd_run(args) -> int:
     commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
                             cwd=str(ROOT), capture_output=True, text=True,
                             encoding="utf-8").stdout.strip()
+    gate = not args.no_clock_gate
+    if gate:
+        _sm_max_clock()            # NVML 会话一次性初始化（~20ms 不进首轮）
+    if args.priority and not _set_priority_above_normal():
+        print("⚠ 优先级提升失败（忽略，按普通优先级继续）")
     for name in names:
+        # 门禁只对真用 GPU 的配置生效（nvdec/hybrid 解码或 OCR≠cpu）：
+        # 纯 CPU 配置下 GPU 空闲时钟恒低，判了只会全 invalid 再回退。
+        uses_gpu = (CONFIGS[name]["decode_backend"] in ("nvdec", "hybrid")
+                    or args.ocr_backend != "cpu")
         rounds = []
         for i in range(args.rounds):
-            rec = _round(name, args.window, args.telemetry, args.keep_crops,
-                         args.ocr_backend, args.rep_format, args.buffer_size,
-                         getattr(args, "decode_backend", ""),
-                         getattr(args, "fill_width", None))
+            with _RoundClockWatch(
+                    gate=gate and uses_gpu,
+                    label="off:纯CPU配置不判GPU时钟") as watch:
+                rec = _round(name, args.window, args.telemetry, args.keep_crops,
+                             args.ocr_backend, args.rep_format, args.buffer_size,
+                             getattr(args, "decode_backend", ""),
+                             getattr(args, "fill_width", None))
+            rec["gpu"] = watch.block()
             rec["round"] = i + 1
             rounds.append(rec)
-            print("  %-12s round %d  %.4fs  %d 段" % (
-                name, i + 1, rec["wall"], rec["n_segments"]))
-        walls = [r["wall"] for r in rounds]
-        hot = walls[1:] if len(walls) > 1 else walls
+            gpu = rec["gpu"]
+            note = "" if gpu.get("valid") else "  ⚠低时钟/压频（剔除出热轮）"
+            print("  %-12s round %d  %.4fs  %d 段%s" % (
+                name, i + 1, rec["wall"], rec["n_segments"], note))
+        # 热轮 = 第 2 轮起（引擎热）∧ 时钟门禁 valid；全剔则回退全收——
+        # 门禁不能替无数据。dropped 只数"本可入热轮但被门禁剔"的轮，
+        # 引擎冷启动的第 1 轮是既有排除口径、不算门禁剔除。
+        hot_pool = [r for r in rounds
+                    if r["round"] > 1 or args.rounds == 1]
+        hot = [r["wall"] for r in hot_pool if r["gpu"].get("valid")]
+        dropped = len(hot_pool) - len(hot)
+        if not hot:
+            hot = [r["wall"] for r in rounds]
+            dropped = 0
+            print("  ⚠ 时钟门禁后无热轮，回退全收")
         med = statistics.median(hot)
         spread = ((max(hot) - min(hot)) / med * 100) if len(hot) > 1 else 0.0
-        print("%-12s 热轮中位 %.4fs  散布 %.2f%%  段数 %d" % (
-            name, med, spread, rounds[-1]["n_segments"]))
+        print("%-12s 热轮中位 %.4fs  散布 %.2f%%  段数 %d%s" % (
+            name, med, spread, rounds[-1]["n_segments"],
+            ("  剔除 %d 轮低时钟" % dropped) if dropped else ""))
         for rec in rounds:
             rec.update({"label": args.label, "config": name, "commit": commit,
                         "telemetry": args.telemetry, "window": args.window,
@@ -145,7 +289,11 @@ def cmd_run(args) -> int:
 
 
 def _load(label: str) -> dict:
-    """按 label 聚合：config → {wall 中位, 指标快照}。"""
+    """按 label 聚合：config → {wall 中位, 指标快照, 有效热轮}。
+
+    `hot` 只收「第 2 轮起 ∧ 时钟门禁 valid」的 wall（历史无 gpu 字段
+    视为 valid，不追溯改判）；`n_excluded` 是被门禁剔除的热轮数。
+    """
     out: dict = {}
     if not REGISTRY.exists():
         raise SystemExit("registry 不存在：%s" % REGISTRY)
@@ -156,9 +304,15 @@ def _load(label: str) -> dict:
         if rec.get("label") != label:
             continue
         c = out.setdefault(rec["config"], {"walls": [], "reports": [],
-                                           "n_segments": []})
+                                           "n_segments": [], "hot": [],
+                                           "n_excluded": 0})
         c["walls"].append(rec["wall"])
         c["n_segments"].append(rec["n_segments"])
+        if rec.get("round", 1) > 1:
+            if _gpu_valid(rec.get("gpu")):
+                c["hot"].append(rec["wall"])
+            else:
+                c["n_excluded"] += 1
         if rec.get("report"):
             c["reports"].append(rec["report"])
     if not out:
@@ -197,13 +351,21 @@ def cmd_diff(args) -> int:
         if name not in a or name not in b:
             print("%-12s  仅一侧有记录，跳过" % name)
             continue
-        ma = statistics.median(a[name]["walls"][1:] or a[name]["walls"])
-        mb = statistics.median(b[name]["walls"][1:] or b[name]["walls"])
+        # 优先用门禁后的有效热轮；空则回退旧口径（walls[1:] / 全量）
+        ha = a[name]["hot"] or a[name]["walls"][1:] or a[name]["walls"]
+        hb = b[name]["hot"] or b[name]["walls"][1:] or b[name]["walls"]
+        ma = statistics.median(ha)
+        mb = statistics.median(hb)
         d = (mb - ma) / ma * 100
         worst = max(worst, abs(d))
         verdict = ("硬失败" if abs(d) > hard
                    else "告警" if abs(d) > warn else "通过")
-        print("%-12s %10.4f %10.4f %+8.2f%%  %s" % (name, ma, mb, d, verdict))
+        cut = ""
+        if a[name]["n_excluded"] or b[name]["n_excluded"]:
+            cut = "  [门禁剔除热轮 A:%d B:%d]" % (a[name]["n_excluded"],
+                                                  b[name]["n_excluded"])
+        print("%-12s %10.4f %10.4f %+8.2f%%  %s%s"
+              % (name, ma, mb, d, verdict, cut))
     print("\n逐指标（报告口径，中位；仅列变化 >%.1f%% 的项）：" % warn)
     shown = 0
     for name in sorted(set(a) & set(b)):
@@ -389,7 +551,7 @@ def _limit_from_band(b: dict) -> float:
     标定用对数 n 必须与门禁一致（SE∝1/√n）。
     """
     cand = abs(b["mean"]) + 3 * b["se"]
-    return max(0.30, -(-cand // 0.05) * 0.05)
+    return max(PI15_FLOOR_PCT, -(-cand // 0.05) * 0.05)
 
 
 def _report_aa(per: dict, med: dict, args) -> int:
@@ -486,26 +648,39 @@ def cmd_show(args) -> int:
 
 
 def cmd_ab(args) -> int:
-    """交错 A/B（S6 口径修正）：同一窗口内 A/B/A/B 交替测量。
+    """交错 A/B（S6 口径 → P1 加固：臂序轮转 + 时钟门禁 + 自动判定）。
 
     背景（实测 2026-09-10）：**同一份代码**连跑两次 `bench run`，h264-cpu
-    1.2567 → 1.1599s（−7.7%）、hevc −7.7%——笔记本功耗/热状态与后台进程
-    造成的漂移**大于**被测量本身。顺序 A 全跑再 B 全跑会把漂移记到 B 头上，
-    因此 S6 各项一律用本命令：每个 variant 起独立子进程（状态干净、各自
-    含一轮预热），交错重复后在窗口内取中位。
+    1.2567 → 1.1599s（−7.7%）、hevc −7.7%——功耗/热状态与后台进程造成的
+    漂移**大于**被测量本身，顺序跑会把漂移记到 B 头上 → 必须交错。每个
+    variant 起独立子进程（状态干净、各含一轮预热）。P1 再加三层降噪：
+      1. **臂序逐对轮转**（AB/BA 交替）——对消轮内位置效应（先跑的臂
+         系统性慢 ~1.3%，telemetry-check 同款结论）；
+      2. **每轮 GPU 时钟入账**（子进程 `bench run` 内做，registry `gpu`
+         字段），低时钟/压频热轮不进聚合（P0b：冷轮 CV 6.6% → 热轮 0.12%）；
+      3. **自动判定**：逐对热轮中位配对差分 → 均值 + SE + 符号多数（≥70%）
+         vs `--hard` 阈值；B 显著慢 → 退出码 1（`--no-verdict` 回纯展示）。
+    `--aa`：两臂同配置（忽略 env/args 差异）→ 差分即子进程协议噪声带，
+    打印建议阈值（规则 |均值偏差|+3×SE，下限 PI15_FLOOR_PCT）。
 
     用法：
       python tools/bench.py ab --config h264-cpu --repeat 3 \
           --a base --b s6c --env-b VOE_S6C_ASYNC=1
     """
     import os
-    # 本次运行唯一后缀：防与历史运行重名（2026-09-13 实测到该污染）
     run_id = time.strftime("%m%d-%H%M%S")
+    aa = bool(args.aa)
+    gate = not args.no_clock_gate
     pairs: list = []
     for i in range(args.repeat):
         row = {}
-        for tag, label, envspec, extra in (("A", args.a, args.env_a, args.args_a),
-                                           ("B", args.b, args.env_b, args.args_b)):
+        arm_specs = (("A", args.a, args.env_a, args.args_a),
+                     ("B", args.b, args.env_b, args.args_b))
+        if i % 2 == 1:
+            arm_specs = arm_specs[::-1]     # 臂序轮转：对消位置效应（P1）
+        for tag, label, envspec, extra in arm_specs:
+            if aa:
+                envspec, extra = "", ""     # A/A：两臂完全同配置
             lab = "%s#%d@%s" % (label, i, run_id)
             env = dict(os.environ)
             for kv in filter(None, envspec.split(",")):
@@ -518,6 +693,10 @@ def cmd_ab(args) -> int:
                    "--ocr-backend", args.ocr_backend]
             if args.keep_crops:
                 cmd.append("--keep-crops")
+            if not gate:
+                cmd.append("--no-clock-gate")
+            if args.priority:
+                cmd.append("--priority")
             cmd += [a for a in extra.split() if a]
             r = subprocess.run(cmd, env=env, capture_output=True, text=True,
                                encoding="utf-8", errors="replace")
@@ -531,59 +710,132 @@ def cmd_ab(args) -> int:
         if args.cooldown:
             time.sleep(args.cooldown)     # 热降是本地最大噪声源（实测 2× 偏差）
         pairs.append(row)
-    data = None  # 直接按 registry 聚合，不做二次缓存
-    # 聚合：每个 variant 在窗口内的全部轮次（冷=第 1 轮 / 热=其余）
-    def _walls(labels: set):
-        """按**精确 label 集合**聚合（不再按前缀扫——那会纳入历史同名运行）。"""
+
+    # 聚合：直接按 registry 精确 label 集合（防历史同名污染，2026-09-13 实测）
+    def _arm_rounds(labels: set) -> dict:
         out: dict = {}
         for line in REGISTRY.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             rec = json.loads(line)
-            lab = rec.get("label", "")
-            if lab not in labels:
+            if rec.get("label") not in labels:
                 continue
             out.setdefault(rec["config"], []).append(
-                (lab, rec.get("round", 1), rec["wall"]))
+                (rec.get("label"), rec.get("round", 1), rec["wall"],
+                 _gpu_valid(rec.get("gpu"))))
         return out
 
-    wa = _walls({row["A"] for row in pairs})
-    wb = _walls({row["B"] for row in pairs})
-    print("本次运行 label 后缀 @%s（聚合只认这些）" % run_id)
-    print("\n交错 A/B（每 variant %d 次独立进程；冷=第 1 轮，热=第 2 轮起）"
-          % args.repeat)
-    for mode in ("cold", "hot"):
-        print("\n-- %s --" % ("冷启动（进程内首个 extract）" if mode == "cold"
-                              else "热池（引擎复用）"))
-        print("%-12s %10s %10s %9s  %s" % ("config", args.a, args.b, "Δ%",
-                                           "逐对符号"))
-        for name in sorted(set(wa) | set(wb)):
+    def _arm_reports(labels: set) -> dict:
+        out: dict = {}
+        for line in REGISTRY.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            if rec.get("label") in labels and rec.get("report"):
+                out.setdefault(rec["config"], []).append(rec["report"])
+        return out
+
+    wa = _arm_rounds({row["A"] for row in pairs})
+    wb = _arm_rounds({row["B"] for row in pairs})
+    ra_all = _arm_reports({row["A"] for row in pairs})
+    rb_all = _arm_reports({row["B"] for row in pairs})
+    print("本次运行 label 后缀 @%s（聚合只认这些；臂序逐对轮转 AB/BA）" % run_id)
+    rc = 0
+    for name in sorted(set(wa) | set(wb)):
+        if name not in wa or name not in wb:
+            continue
+        print("\n=== %s（每 variant %d 次独立进程；冷=第 1 轮，热=第 2 轮起）==="
+              % (name, args.repeat))
+        hot_diffs: list = []
+        for mode in ("cold", "hot"):
+            print("\n-- %s --" % ("冷启动（进程内首个 extract，未过门禁）"
+                                  if mode == "cold"
+                                  else "热池（引擎复用 ∧ 时钟门禁）"))
+            print("%-12s %10s %10s %9s  %s" % ("config", args.a, args.b, "Δ%",
+                                               "逐对符号"))
             per_pair = []
+            n_excluded = 0
             for row in pairs:
                 la, lb = row["A"], row["B"]
-                sel = (lambda r: r[1] == 1) if mode == "cold" else (
-                    lambda r: r[1] > 1)
-                va = [w for lab, rn, w in wa.get(name, [])
-                      if lab == la and sel((lab, rn, w))]
-                vb = [w for lab, rn, w in wb.get(name, [])
-                      if lab == lb and sel((lab, rn, w))]
+                va = [w for l_, rn, w, v in wa.get(name, [])
+                      if l_ == la and (rn == 1 if mode == "cold" else
+                                       rn > 1 and v)]
+                vb = [w for l_, rn, w, v in wb.get(name, [])
+                      if l_ == lb and (rn == 1 if mode == "cold" else
+                                       rn > 1 and v)]
+                if mode == "hot":
+                    n_excluded += (sum(1 for l_, rn, w, v in wa.get(name, [])
+                                       if l_ == la and rn > 1 and not v)
+                                   + sum(1 for l_, rn, w, v in wb.get(name, [])
+                                         if l_ == lb and rn > 1 and not v))
                 if va and vb:
                     per_pair.append((statistics.median(va),
                                      statistics.median(vb)))
             if not per_pair:
+                print("%-12s  无有效配对轮" % name)
                 continue
             ma = statistics.median([p[0] for p in per_pair])
             mb = statistics.median([p[1] for p in per_pair])
             d = (mb - ma) / ma * 100
             signs = ["+" if (b_ - a_) > 0 else "-" for a_, b_ in per_pair]
             anomaly = any(abs(b_ - a_) / a_ > 0.20 for a_, b_ in per_pair)
-            print("%-12s %10.4f %10.4f %+8.2f%%  %s%s"
-                  % (name, ma, mb, d, "".join(signs),
+            cut = ("  [门禁剔除 %d 热轮轮次]" % n_excluded) if n_excluded else ""
+            print("%-12s %10.4f %10.4f %+8.2f%%  %s%s%s"
+                  % (name, ma, mb, d, "".join(signs), cut,
                      "  ⚠环境异常对（|Δ|>20%：GPU 掉频/后台占用）"
                      if anomaly else ""))
-    print("\n判读：符号一致=可信；符号混乱=落在漂移内。A=%s B=%s"
-          % (args.a, args.b))
-    return 0
+            if mode == "hot":
+                hot_diffs = [(b_ - a_) / a_ * 100.0 for a_, b_ in per_pair]
+        if not hot_diffs:
+            continue
+        # 热轮自动判定 / A/A 标定
+        band = _band(hot_diffs)
+        need = max(2, int(round(len(hot_diffs) * PI15_LIMITS["sign_majority"]
+                               + 0.5)))
+        pos = band["pos"]
+        neg = len(hot_diffs) - pos
+        if aa:
+            rec_ = _limit_from_band(band)
+            print("\nA/A 标定（子进程协议，%d 对）：均值 %+.3f%%  |Δ|p95 %.3f%%  "
+                  "sd=%.3f%%  SE=%.3f%%  符号 %d/%d"
+                  % (band["n"], band["mean"], band["p95abs"], band["sd"],
+                     band["se"], pos, neg))
+            print("  → 建议 --hard 阈值 = +%.2f%%（|均值偏差|+3×SE 上取整 "
+                  "0.05%%，下限 %.2f%%）" % (rec_, PI15_FLOOR_PCT))
+            continue
+        if args.no_verdict:
+            print("\n判定关闭（--no-verdict）：均值 %+.3f%%（SE %.3f%%）符号 %d/%d"
+                  % (band["mean"], band["se"], pos, neg))
+        else:
+            lim = args.hard
+            if band["mean"] > lim and pos >= need:
+                print("\n判定：**B 显著慢 %+.2f%%**（均值 %+.3f%%，SE %.3f%%，"
+                      "限 +%.2f%%，符号 %d/%d）"
+                      % (band["mean"], band["mean"], band["se"], lim, pos, neg))
+                rc = 1
+            elif band["mean"] < -lim and neg >= need:
+                print("\n判定：B 显著快 %+.2f%%（均值 %+.3f%%，SE %.3f%%，符号 "
+                      "%d/%d）" % (band["mean"], band["mean"], band["se"], neg))
+            else:
+                print("\n判定：不可判定（落在噪声带内；均值 %+.3f%%，SE %.3f%%，"
+                      "限 ±%.2f%%，符号 %d/%d）"
+                      % (band["mean"], band["se"], lim, pos, neg))
+        # 逐 span 归因（只展示不判；C-42：占比/差分≠可回收量，绑定实验才是口径）
+        if args.telemetry != "off":
+            fa = _median_flat(ra_all.get(name, []))
+            fb = _median_flat(rb_all.get(name, []))
+            moved = [(k, fa[k], fb[k]) for k in sorted(set(fa) & set(fb))
+                     if fa[k] not in (0, 0.0)
+                     and abs((fb[k] - fa[k]) / fa[k] * 100) > 1.0]
+            if moved:
+                print("逐 span 归因（中位，|Δ|>1%；⚠ C-42 归因≠可回收量）：")
+                for k, va_, vb_ in moved[:20]:
+                    print("  %-40s %12.4f → %12.4f  %+7.2f%%"
+                          % (k, va_, vb_, (vb_ - va_) / va_ * 100))
+    if not aa:
+        print("\n判读补充：符号一致=可信；符号混乱=落在漂移内。A=%s B=%s"
+              % (args.a, args.b))
+    return rc
 
 
 def cmd_list(args) -> int:
@@ -619,6 +871,12 @@ def main() -> int:
                    choices=("", "auto", "cpu", "nvdec", "hybrid"),
                    help="覆盖 config 的解码后端（空=用 config 值）。"
                         "配合 ab 的 --args-a/--args-b 即可做跨解码器交错 A/B")
+    r.add_argument("--no-clock-gate", action="store_true",
+                   help="关闭每轮 GPU 时钟门禁（默认开：NVML 包轮，低时钟/"
+                        "压频轮不进热轮聚合；P0b 校准 k=0.75）")
+    r.add_argument("--priority", action="store_true",
+                   help="本进程提到 ABOVE_NORMAL 优先级（§8.5 降抢占，"
+                        "opt-in：会改变被测调度 regime）")
     r.set_defaults(func=cmd_run)
     d = sub.add_parser("diff", help="两个 label 的逐指标对比（D10 双档）")
     d.add_argument("a")
@@ -658,7 +916,7 @@ def main() -> int:
     sh.add_argument("--config", default="")
     sh.add_argument("--tier", default="")
     sh.set_defaults(func=cmd_show)
-    ab = sub.add_parser("ab", help="交错 A/B（抵消机器漂移）")
+    ab = sub.add_parser("ab", help="交错 A/B（臂序轮转+时钟门禁+自动判定）")
     ab.add_argument("--a", required=True)
     ab.add_argument("--b", required=True)
     ab.add_argument("--env-a", default="")
@@ -672,9 +930,20 @@ def main() -> int:
     ab.add_argument("--keep-crops", action="store_true")
     ab.add_argument("--args-a", default="", help="A 变体附加 CLI 参数（空格分隔）")
     ab.add_argument("--args-b", default="", help="B 变体附加 CLI 参数")
-    ab.add_argument("--hard", type=float, default=5.0)
+    ab.add_argument("--hard", type=float, default=1.0,
+                    help="自动判定阈值 %%（B 慢过此值且符号多数 → 退出码 1）；"
+                         "建议先跑 ab --aa 标定再回填（默认 1.0）")
     ab.add_argument("--cooldown", type=float, default=8.0,
                     help="每组之间的冷却秒数（对抗 GPU 热降）")
+    ab.add_argument("--no-verdict", action="store_true",
+                    help="关闭自动判定（回到纯展示，恒退出码 0）")
+    ab.add_argument("--no-clock-gate", action="store_true",
+                    help="子进程关闭时钟门禁（透传 bench run）")
+    ab.add_argument("--priority", action="store_true",
+                    help="子进程提到 ABOVE_NORMAL 优先级（透传 bench run）")
+    ab.add_argument("--aa", action="store_true",
+                    help="A/A 标定：两臂同配置（忽略 env/args 差异），差分即"
+                         "子进程协议噪声带，打印建议 --hard 阈值")
     ab.set_defaults(func=cmd_ab)
     args = ap.parse_args()
     return args.func(args)

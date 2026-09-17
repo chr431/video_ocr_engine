@@ -6,9 +6,11 @@ A/A 实测只能分辨到 ~0.85%（同一段代码两槽差可达 4%），而 st
 放松了那条门禁）。所以严格性搬到这里：**直接量插桩路径本身的执行时间**，
 分辨力比墙钟高约 10⁴ 倍，且不受 GPU 热降/后台负载影响。
 
-口径与真实 run 对齐（实测 3000 帧 std run）：9 个 span 键 / **138 个 span
-样本** / 10 个 counter 键 / 8 个 gauge / **4 个 L1 资源边界** + 一次
-`snapshot()` + 一次 `build_report()`。断言的是"这样一整套跑完"的成本上限。
+口径与真实 run 对齐（实测 3000 帧 std run，2026-09-17 重设计后）：9 个
+span 键 / **138 个 span 样本** / 14 个 counter 键 / 10 个 gauge / **2200
+个 TOTALS 逐事件计数**（P2b/P2c：consume_feed/merge_pair 的 n 计数，每帧/
+每对一次）/ **4 个 L1 资源边界** + 一次 `snapshot()` + 一次 `build_report()`。
+断言的是"这样一整套跑完"的成本上限。
 """
 from __future__ import annotations
 
@@ -22,8 +24,9 @@ from video_ocr_engine.pipeline.report import build_report
 
 # 真实 run 的记录量（见模块 docstring 的实测出处）
 SPAN_SAMPLES = 138
-COUNTER_KEYS = 10
-GAUGE_KEYS = 8
+TOTALS_EVENTS = 2200
+COUNTER_KEYS = 14
+GAUGE_KEYS = 10
 CHECKPOINTS = 4
 REPLAYS = 300
 
@@ -39,6 +42,8 @@ def _one_run(m: Metrics) -> None:
     """重放一个 3000 帧 std run 的全部遥测动作（含收尾快照）。"""
     for i in range(SPAN_SAMPLES):
         m.record_span(_SPANS[i % len(_SPANS)], 0.001)
+    for _ in range(TOTALS_EVENTS):
+        m.counter("pipeline.consume_feed_n")   # TOTALS 逐事件的 n 计数
     for name in _COUNTERS:
         m.counter(name, 3)
     for i, name in enumerate(_GAUGES):

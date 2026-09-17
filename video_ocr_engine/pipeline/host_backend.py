@@ -205,19 +205,35 @@ def _segment_frames(spec: HostRunSpec, frames, stream, *, emit, segs):
     """
     from .._helpers import _decode_progress_pct
     prefix = f'[{spec.backend_label()}] 解码+分段'
+
+    def _similar(a, b) -> bool:
+        # P2c 覆盖：merge_pair 此前只有 GPU 路径产出（宿主只能从
+        # timing['decode'] 反推合并成本）。merge_similar 关闭时不计
+        # （无判定成本可量）。
+        if not spec.merge_similar:
+            return False
+        _t = time.perf_counter()
+        try:
+            return spec.segments_similar(a[2], b[2])
+        finally:
+            _prof(spec, 'producer', 'merge_pair', _t)
+
     machine = SegmentStateMachine(
         frames, C=spec.C,
         on_emit=lambda seg, rep, frac: emit(seg, rep[0], rep[1], rep[3],
                                             rep[2], frac),
-        on_similar=lambda a, b: (spec.merge_similar
-                                 and spec.segments_similar(a[2], b[2])),
+        on_similar=_similar,
         on_cancel=spec.cancel,
         on_progress=lambda k, frac: spec.progress(
             f'{prefix}: {k}/{len(frames)}',
             _decode_progress_pct(frac)),
         debug_tag='HB')
     for k, (fi, c, g, sharp, b, dev) in enumerate(stream):
+        # P2c 覆盖：consume_feed（无界 TOTALS，std 档 sum+n+max）——
+        # 与 GPU 路径 consume_feed 同义（状态机 feed 含 emit 回调）。
+        _t_feed = time.perf_counter()
         machine.feed(k, fi, sharp, (fi, c, g, dev), bin=b)
+        _prof(spec, 'producer', 'consume_feed', _t_feed)
     machine.finish()
     segs[:] = machine.segs
     return segs
@@ -258,6 +274,10 @@ def run_host_pipeline(spec: HostRunSpec, ocr_engines=None,
             pass  # 清理路径：close 失败无需上抛
         raise
     _prof(spec, 'producer', 'open_and_fps', _t_open)
+    # P2c 对齐：宿主此前缺 'open' 边界（GPU 路径有）——L1 per_phase
+    # 两路径相位集合不一致，diff 读数对不上。
+    if spec.metrics.enabled:
+        spec.metrics.checkpoint('open')
     # OCR 会话提前到校准前启动：worker 线程内构建引擎，与校准并行重叠；
     # 引擎就绪前 emit 自动走 host 回退，语义不变。
     try:
