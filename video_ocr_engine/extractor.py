@@ -766,6 +766,16 @@ class FieldExtractor:
                            or 16)
                 _hctx = _hyg(0) if self._ocr_on_gpu() else _hy(0)
                 vr = self._open_decord_reader(_hctx, roi_kw, num_threads=_ct)
+                # 硬窗界（2026-09-17 越窗修复）：短窗时声明消费上限，fork
+                # 的 demux 与 GOP 派工在窗缘硬停——窗口外一个包都不读
+                # （实测 w3000 曾把全片 7761 包喂进两臂）。仅当窗口 < 全长
+                # 才设：全片运行不设 = fork 深库存行为不变。需 fork ≥ 遥测
+                # 穿透版（stock decord 无此方法，getattr 容忍）。
+                _sdw = getattr(vr, 'set_decode_window', None)
+                if (_sdw is not None and self._frame_end is not None
+                        and self._frame_start < (self._frame_end - self._frame_start)
+                        and self._frame_end - self._frame_start < len(vr)):
+                    _sdw(self._frame_end - self._frame_start)
                 self._backend = 'decord/hybrid'
                 logger.info('混合解码开启(原生): codec=%s ctx=%s cpuT=%d',
                             self._codec,

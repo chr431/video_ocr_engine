@@ -23,7 +23,7 @@
   evidence: PERF §20 §21
 
 - id: C-04
-  conclusion: 解码后端按编码选：h264 CPU 快 ~2.9×，AV1 反转慢 ~2.6×
+  conclusion: 解码后端按编码选：h264 CPU 快 ~2.9×，av1 慢 ~2.6×
   status: active
   premises: fork 0.7.x；av1 经济性已变（C-31）；并行已重测（C-52）
   revisit: 并行场景重测（C-31 策略修复后）
@@ -133,7 +133,7 @@
   status: superseded
   replaced_by: C-52
 - id: C-52
-  conclusion: **批量互补配对有真实收益（C-34 翻案）**：三码族全片 pool pair 27.0s vs 全 nvdec 34.0/34.2s（2w/串行）=**−20.6%/−21.0%**（4/4 逐位一致）；收益主体=编码感知派工（h264→cpu 2.5s vs 7.9s），并发零贡献；旧判零增益系 OCR-bound 前提已翻转
+  conclusion: **批量互补配对有真实收益（C-34 翻案）**：三码族全片 pool pair 27.0s vs 全 nvdec 34.0/34.2s=**−20.6%/−21.0%**（4/4 逐位一致）；收益主体=编码感知派工；旧判系 OCR-bound 前提已翻转
   status: active
   premises: TRT OCR + C-48 后 decode-bound；三码族（有 h264 可卸载）
   revisit: 换卡 / OCR 变慢 / 素材全 hevc/av1（pair 退化为 nv2）
@@ -168,9 +168,9 @@
   evidence: log 2026-09-13-hybrid可见性重评
 
 - id: C-40
-  conclusion: **hybrid 收益与片长相关**：h264 500 帧起全胜；hevc/av1 交叉点 1500~3000 帧（引擎级已复现：w3000 反 +94%，见 C-53）；对纯 CPU 臂三码全片均胜
+  conclusion: **hybrid 收益与片长相关（交叉点已复测改判）**：h264 短窗即胜 nvdec；hevc 交叉点 **>3000 帧**（w3000 仍 +35% 慢，2026-09-17 硬窗界修复后复测，旧 1500~3000 系越窗税伪影）；av1 **<3000**（w3000 已 −16.3%）；对纯 CPU 臂三码全片均胜
   status: active
-  premises: 4060/16C32T；独立子进程 min-of-2；ocr=trt
+  premises: 4060/16C32T；硬窗界修复后口径（DecodeStats 包级直证）
   revisit: 换卡 / 关键帧间隔差异大的片源 / <500 帧短片
   evidence: log 2026-09-13-hybrid解码率与理论并联和 §续七
 
@@ -232,7 +232,7 @@
   evidence: log 2026-09-15-依赖替换裁决
 
 - id: C-50
-  conclusion: **DECODE_THREADS 10→32 无收益**（不可判定 +0.97%<1.45%；冷启 t32 慢 +4.03% 8/8）。机制：decode.batch 阻塞 −82% 但 GIL 争用对冲——**维持 10 档**
+  conclusion: **DECODE_THREADS 10→32 无收益**（不可判定 +0.97%；冷启 +4.03% 8/8）。decode.batch −82% 但 GIL 争用对冲——**维持 10 档**
   status: active
   premises: 16C32T；openvino CPU OCR；h264
   revisit: 核数格局变 / OCR 再提速 / decord 预取变
@@ -246,7 +246,7 @@
   evidence: log 2026-09-17-重设计 §7
 
 - id: C-53
-  conclusion: **hybrid 基线=目标码最快纯臂（口径规则）**：h264 基线=CPU，hybrid w3000 +53.6%/全片 +11.4% 慢（机制=供给耦合+暖机为主、超额争用为辅；解码单跑反 +17%，泵欠供 cache 15MB vs 127MB）；hevc/av1 基线=NVDEC，hybrid **−23%/−34%** → **h264 选 cpu、hevc/av1 选 hybrid**；fork 遥测直通 report 'hybrid' 段。⚠️ 窗口须越 C-40 交叉点
+  conclusion: **hybrid 基线=目标码最快纯臂（口径规则）**：h264 基线=CPU，hybrid w3000 +39%/全片 +26% 慢（硬窗界后；暖机+慢臂结构成本）；hevc/av1 基线=NVDEC，hybrid **−23.6%/−31.2%** → **h264 选 cpu、hevc/av1 选 hybrid**；fork 遥测直通 report 'hybrid' 段。⚠️ hevc 窗口须 >3000（C-40 改判）；av1 w3000 已 −16.3%
   status: active
   premises: 4060/TRT；fork 穿透版；hevc/av1 全片；h264 曾错用 nvdec 基线
   revisit: 换卡 / h264 CPU 臂速率变 / fork 换代 / OCR 变慢改瓶颈

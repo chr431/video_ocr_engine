@@ -521,3 +521,24 @@
     （关掉后 16.42→16.45 不变）——越窗包大多死在 pkt_queue（close 丢弃，
     ROI 解码太便宜），真实代价=demux I/O+pkt_queue 内存（160MB→6MB）；
     decode 相位 16 核构成另立开放问题
+# ── 2026-09-17 八段：hybrid 硬窗界 + 死锁修复 + C-40 改判（§11.12-13）──
+- metric: hybrid_hard_window            # SetDecodeWindow 全链 + 排空修复
+  impl: NeedsPackets 窗界门（assigned≥窗仅放行边界 GOP）+ PumpFeed 派工
+        硬停 + window_closed 触发排空标记（窗外 kick 丢弃不兜底重锚）
+  deadlock: 双重——①排空条件只认 EOF 游标条件，窗缘永不满足 → worker
+        join 死锁；②NVDEC 输入断流 → 7 帧扣留 DPB（DiagDepths cud=0/7/0）
+        → 显示回调停 → 消费者饿死。修复=窗界关断即发排空
+  verify_w3000: {assigned: 3289(修前7761), wall: 1.524-1.540(修前1.58-1.68),
+                 hol_g: 0.03(修前0.22), cpu_arm_busy_fps: 2761(修前1218),
+                 segments: 1090}
+  full_window_matrix: {w64: {assigned: 299, wall: 0.199}, w500: {assigned: 598},
+                       w1000: {assigned: 1196}, full: {assigned: 7761, wall: 2.713}}
+- metric: c40_remeasure_after_fix       # C-40 复测（硬窗界后，干净口径）
+  hevc_w3000: {hybrid_vs_nvdec: +35.2%, signs: 6/0 慢}   # 交叉点 >3000
+  hevc_full: {hybrid_vs_nvdec: -23.6%, signs: 4/4 快}
+  av1_w3000: {hybrid_vs_nvdec: -16.3%, signs: 4/4 快}    # 交叉点 <3000
+  av1_full: {hybrid_vs_nvdec: -31.2%, signs: 4/4 快}
+  verdict: C-40 改判——hevc 交叉点 (3000,23970) 非 1500~3000；av1 确认；
+          h264 不变（选 cpu，C-53）
+  note: 全片数字修复前后稳定（hevc -23.0→-23.6 / av1 -33.8→-31.2）——
+        硬窗界全片零影响（不设界）
