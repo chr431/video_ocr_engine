@@ -624,3 +624,17 @@
   measurement_notes: h264same cpu 臂 GPU 空闲（sm 2025-2265）触发 GPU 向
             时钟门禁误剔（--no-clock-gate 重跑）；|Δ|>20% 警讯系启发式
             误报（逐轮 4/4 一致）
+- metric: cpu_decode_gap_test5_vs_test6h264
+  date: 2026-09-19
+  question: 同为 1080p60 High 8bit h264，test5 CPU 软解 3374fps vs
+            test6_h264 2455fps（ffmpeg 32T）；NVDEC 仅 −4%
+  method: test6 内容首 7761 帧 x264 合成对照矩阵（preset/bframes/crf
+            单变量）+ trace_headers 位流层 PPS 对比
+  verdict: 主因=编码工具集 −27.7%（medium vs veryfast 同码率同结构
+            2429→3358；PPS：test6 weighted_pred=1+weighted_bipred=2+
+            refs 默认 3=x264 medium，SEI 逐项吻合；test5 加权全 0/无
+            SEI/整齐 7B=硬编风格解码廉价流）；次因=码率 +34.6% →
+            ~−10%（12→7Mbps 仅 +12.5%，弱次线性）；B 结构无贡献
+            （b3 vs b7 ±1.7%，b3 略快——并行度假说否决）
+  implication: h264 选型分界的第一驱动是编码工具集；批量按实测速率
+            分派（勿按格式/码率猜）
