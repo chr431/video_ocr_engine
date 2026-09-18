@@ -9,12 +9,12 @@ ctx = hybrid（CPU-out，gold A 组口径）。win = set_decode_window(n)。
 import ctypes, os, sys, time
 ctypes.windll.kernel32.SetErrorMode(0x0004)
 sys.stdout.reconfigure(encoding="utf-8")
-from decord import VideoReader, hybrid
+from decord import VideoReader, hybrid, hybrid_gpu
 path, n = sys.argv[1], int(sys.argv[2])
 win = len(sys.argv) > 3 and sys.argv[3] == "win"
 t0 = time.perf_counter()
 print("ctor...", flush=True)
-vr = VideoReader(path, ctx=hybrid(0), output_format="gray",
+vr = VideoReader(path, ctx=(hybrid_gpu if len(sys.argv) > 4 and sys.argv[4] == "gpu" else hybrid)(0), output_format="gray",
                  roi=(843, 993, 949, 1026), num_threads=32)
 print("ctor done %.3f" % (time.perf_counter() - t0), flush=True)
 if win:
