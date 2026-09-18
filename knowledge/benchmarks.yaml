@@ -542,3 +542,21 @@
           h264 不变（选 cpu，C-53）
   note: 全片数字修复前后稳定（hevc -23.0→-23.6 / av1 -33.8→-31.2）——
         硬窗界全片零影响（不设界）
+# ── 2026-09-17 九段：h264 hybrid 输 cpu + 启动开销 两问调查（§11.14）──
+- metric: h264_hybrid_vs_cpu_decomposition  # 交付层耦合损失分解（全片热轮）
+  decode_only_fpsb: {cpu: 3613, hybrid: 4213}      # hybrid +17%
+  engine_delivery_fps: {cpu: 3427, hybrid: 3042}   # hybrid -11%
+  coupling_loss: {cpu: -5%, hybrid: -28%}          # hybrid 损失 5.6 倍
+  arm_utilization: 64%   # 双臂 busy 和 4780fps vs 交付 3042
+  jitter_p99_p50: {cpu: 1.5x, hybrid: 4.5x}
+  cpu_arm_busy_ratio: 91%  # hybrid CPU 臂速 ≈ 纯臂，臂不差
+  mechanism: 双臂异步+按序汇流结构成本——HOL 保序 0.17s + chunk 对齐 +
+            GPU worker 1ms 轮询粒度 + 多级搬运；非解码产能问题
+  fix_direction: 交付层事件驱动化（1ms 轮询→on_output_ 回调唤醒）——未实施
+- metric: hybrid_coldstart_decomposition   # 冷启同刻成对（新进程 w3000+TRT）
+  cpu:    {ctor_ms: 26, setup_ms: 55, calib_ms: 406, extract_s: 1.698}
+  nvdec:  {ctor_ms: 25, setup_ms: 27, calib_ms: 363, extract_s: 3.817}
+  hybrid: {ctor_ms: 24, setup_ms: 88, calib_ms: 370, extract_s: 2.157}
+  hybrid_specific: 构造 +33ms（NVDEC 子解码器/GPU 池/improc）+ 冷启管线上涨
+                   ~430ms（CUDA/NVDEC 暖填+泵速率学习暖机+双臂协同冷启）
+  note: 相对 nvdec hybrid 冷启反快 1.7s——开销量是 h264 对 cpu 口径
