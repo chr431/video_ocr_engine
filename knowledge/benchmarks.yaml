@@ -572,3 +572,24 @@
             §11.14 的"解码管线冷启"归因据此修正
   answer: 测速即工作、工作即测速——无可拆除的测速阶段；压冷启的方向在
           OCR/TRT 初始化（C-36 warmup，两路公共）
+- metric: hybrid_startup_dispatch
+  fork_commit: 13d509d（dev DLL d5f22111，未发 wheel）
+  diagnosis_hevc_w3000: 盲派 10~13/13 GOP（rc 出版前 50/50 交替）+ CPU 臂
+            超分 200+ 帧（assigned 1200/1680 vs 稳态 ~986）+ rg 段式 EWMA
+            排空孤峰 13402fps（h264 尾部假折 689655fps）
+  fix: PumpFeed 熟前挂起 + 防饿死盲派（side_pending==0 库存读数）+ Pop
+            空取重驱泵；rg 折计时迁 CU display 回调（生产侧）+ 8 折环
+            sustained（max 连续 4 折最小值 + 0.997/折慢降锁）
+  fork_level_hevc_w3000: 修前 1.53-1.88s → 修后 1.08-1.26s（gpu-only
+            1.46-1.48）；盲派 13→2；rg 归真（hevc 2027-2057=nvdec-only
+            2033；h264 973-979=966）
+  engine_ab: hevc w1000 +7.96% 慢(5/0) / w1500 噪声带(+1.85%,4/2) / w2000
+            噪声带(-2.30%,3/3) / w3000 -9.94% 快(6/0；修前 +35.2% 慢) /
+            全片 -21.79%(4/4)；av1 w3000 -19.07%(6/6)；h264 vs cpu
+            w3000 +23.05%(6/0)、全片 +6.09%(4/0；修前 +26%)；
+            8/8 组跨臂段数相等
+  crossover_hevc: ">3000 → 1500~2000（C-40 二改判）"
+  coupling_loss: h264 28%→~6%、hevc/av1 ≈0——旧损失主体=速率学习被消费
+            节奏污染（盲派+rg 假折）非交付层结构（用户怀疑证实）
+  gate: 发布门禁 14/14（金标 28/28、三码段数对表 8340、压测 0 坏、
+            corrupt 6/6、KICK_BURST=0 消融优雅）
