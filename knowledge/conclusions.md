@@ -250,7 +250,7 @@
   evidence: log 2026-09-18-hybrid启动轮 §4；2026-09-17-重设计 §11.13
 
 - id: C-54
-  conclusion: **启动+窗口尾轮（fork a6cdeb7）：熟前挂起+防饿死盲派+rg 生产侧 sustained+窗口尾 ETA 派工**——盲派 13→2、rg 归真；hevc 交叉点 >3000→~1200（w3000 −14.5%）；耦合损失 h264 28%→~6%、hevc/av1≈0（主体=速率学习被消费节奏污染）
+  conclusion: **启动+窗口尾轮（fork a6cdeb7）：熟前挂起+防饿死盲派+rg 生产侧 sustained+窗口尾 ETA**——盲派 13→2、hevc 交叉点 >3000→~1200（w3000 −14.5%）；h264 残余=冷税 ~95ms+尾 69ms（交付已反超，infer 膨胀被吸收——§10）
   status: active
   premises: dev DLL 未发 wheel；盲承诺下界=2 GOP（禁先验地板）
   revisit: 换卡 / fork 换代 / GOP<64 帧 / 消费节奏巨变
