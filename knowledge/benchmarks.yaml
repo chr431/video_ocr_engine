@@ -560,3 +560,15 @@
   hybrid_specific: 构造 +33ms（NVDEC 子解码器/GPU 池/improc）+ 冷启管线上涨
                    ~430ms（CUDA/NVDEC 暖填+泵速率学习暖机+双臂协同冷启）
   note: 相对 nvdec hybrid 冷启反快 1.7s——开销量是 h264 对 cpu 口径
+# ── 2026-09-17 十段：hybrid 测速产出与冷启归因修正（§11.15）────────────
+- metric: hybrid_rate_learning_audit   # 测速过程产出对账 + 冷启归因修正
+  output_audit: 冷启/热池 emitted 均 = 3000/3000 = 窗口帧数，差额 0——
+            速率学习寄生真实交付流，零专门测速帧/零空转
+  convergence: 冷启 rc/rg=3281/703、热池 2464/860（出版即近稳态）；share
+            全程 74~82% 无振荡；收敛期份额次优损失仅 0.061s（decode 相位
+            冷热差，被 h264 强势 CPU 臂掩盖）
+  coldstart_attribution_fix: hybrid 冷热自比 0.554s 的分相——OCR/TRT 初始
+            化 0.309s + 校准冷启 0.247s，hybrid 调度暖机仅 ~11%（61ms）；
+            §11.14 的"解码管线冷启"归因据此修正
+  answer: 测速即工作、工作即测速——无可拆除的测速阶段；压冷启的方向在
+          OCR/TRT 初始化（C-36 warmup，两路公共）
