@@ -168,9 +168,9 @@
   evidence: log 2026-09-13-hybrid可见性重评
 
 - id: C-40
-  conclusion: **hybrid 收益与片长相关（交叉点二改判）**：h264 短窗即胜 nvdec；hevc 交叉点 **1500~2000**（启动轮后 w3000 −9.9%、w1500/w2000 噪声带、w1000 +8% 慢；旧值系盲派/越窗税伪影）；av1 <3000（w3000 −19.1%）；对纯 CPU 臂三码全片均胜
+  conclusion: **hybrid 收益与片长相关（交叉点三改）**：h264 短窗即胜 nvdec；hevc 交叉点 **~1200**（窗口尾轮后 w1500 −6.1%、w3000 −14.5% 快、w1000 +5.4% 慢；>3000、1500~2000 系旧值伪影）；av1 <3000（w3000 −16.7%）；对纯 CPU 臂三码全片均胜
   status: active
-  premises: 4060/16C32T；fork ≥13d509d（速率未熟挂起，盲派 13→2）
+  premises: 4060/16C32T；fork ≥a6cdeb7（熟前挂起+窗口尾 ETA 派工）
   revisit: 换卡 / GOP 尺寸极端小 / <500 帧短片
   evidence: log 2026-09-18-hybrid启动轮 §4
 
@@ -250,7 +250,7 @@
   evidence: log 2026-09-18-hybrid启动轮 §4；2026-09-17-重设计 §11.13
 
 - id: C-54
-  conclusion: **启动轮（fork 13d509d）：速率未熟挂起+防饿死盲派（库存读数）+rg 生产侧 sustained**——盲派 13→2、rg 归真；hevc w3000 +35%→−9.9%；耦合损失 h264 28%→~6%、hevc/av1≈0（主体=速率学习被消费节奏污染）
+  conclusion: **启动+窗口尾轮（fork a6cdeb7）：熟前挂起+防饿死盲派+rg 生产侧 sustained+窗口尾 ETA 派工**——盲派 13→2、rg 归真；hevc 交叉点 >3000→~1200（w3000 −14.5%）；耦合损失 h264 28%→~6%、hevc/av1≈0（主体=速率学习被消费节奏污染）
   status: active
   premises: dev DLL 未发 wheel；盲承诺下界=2 GOP（禁先验地板）
   revisit: 换卡 / fork 换代 / GOP<64 帧 / 消费节奏巨变
