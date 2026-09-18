@@ -50,7 +50,9 @@ VIDS = {"h264": ("test5.mp4", (843, 993, 948, 1025)),
         "hevc": ("test6_hevc.mp4", (841, 994, 949, 1026)),
         "av1": ("test6.mp4", (841, 994, 949, 1026))}
 # 引擎 §14 的 hybrid/cpu 臂线程档（codec 感知）：h264/hevc=32、av1=24
-THREADS = {"h264": 32, "hevc": 32, "av1": 24}
+# 线程档=引擎同源派生（口径轮 2026-09-18）：decode_num_threads(codec)
+# ——DECODE_THREADS env / 引擎档位变更自动跟随，探针不再复制策略。
+from video_ocr_engine.config.decode_caliber import decode_num_threads
 
 WORKER = r'''
 import json, os, sys, time
@@ -74,6 +76,10 @@ else:
     ctx = decord.cpu(0)
 kw = {"num_threads": threads} if ctx_name != "gpu" else {}
 vr = VideoReader(path, ctx=ctx, output_format="gray", roi=roi, **kw)
+if n < len(vr):
+    _sdw = getattr(vr, 'set_decode_window', None)
+    if _sdw is not None:
+        _sdw(n)   # 硬窗界（口径轮）：窗口外零包读取，与引擎一致
 frames = list(range(n))
 first = None
 lst = []
@@ -104,8 +110,10 @@ print(json.dumps({"ctx": ctx_name, "n_first_drop": first,
 
 def run_arm(ctx_name: str, codec: str, frames: int, reps: int) -> dict:
     vid, roi = VIDS[codec]
+    from video_ocr_engine.config.decode_caliber import roi_for_decord
+    roi = roi_for_decord(roi)   # 真值口径 → decord 半开（曾少 1px）
     path = str(_VDIR / vid)
-    threads = THREADS[codec]
+    threads = decode_num_threads(codec)
     # 批大小取引擎常量 DECODE_BATCH_SIZE（=16），与 engine 的 get_batch 粒度一致；
     # ⚠️ 不是 DECODE_BATCH（无此名）。
     try:

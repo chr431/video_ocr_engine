@@ -25,11 +25,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-VID = {  # name → (file, roi(x1,y1,x2,y2 inclusive), cpu_threads)
-    "test5": ("test5.mp4", (843, 993, 948, 1025), 32),
-    "test6_hevc": ("test6_hevc.mp4", (841, 994, 949, 1026), 32),
-    "test6_av1": ("test6.mp4", (841, 994, 949, 1026), 24),
+VID = {  # name → (file, roi（真值口径 x1,y1,x2,y2 闭）)
+    "test5": ("test5.mp4", (843, 993, 948, 1025)),
+    "test6_hevc": ("test6_hevc.mp4", (841, 994, 949, 1026)),
+    "test6_av1": ("test6.mp4", (841, 994, 949, 1026)),
 }
+# 口径轮 2026-09-18：线程档/format 改引擎同源派生——
+# decode_num_threads(codec)（DECODE_THREADS env 生效）+ 缺省 gray
+# （引擎 GPU 管线生产口径；--format yuv420 对齐 keep_crops+yuv）。
 
 WORKER = r'''
 import sys, time, json
@@ -37,11 +40,11 @@ sys.stdout.reconfigure(encoding="utf-8")
 from decord import VideoReader, gpu, hybrid, hybrid_gpu
 path = sys.argv[1]
 x1, y1, x2, y2 = int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
-nt, n, mode = int(sys.argv[6]), int(sys.argv[7]), sys.argv[8]
+nt, n, mode, fmt = int(sys.argv[6]), int(sys.argv[7]), sys.argv[8], sys.argv[9]
 ctx = {"gpu": gpu(0), "hybrid": hybrid(0), "hybrid_gpu": hybrid_gpu(0)}[mode]
 t_ctor0 = time.perf_counter()
-vr = VideoReader(path, ctx=ctx, output_format='yuv420',
-                 roi=(x1, y1, x2 + 1, y2 + 1), num_threads=nt)
+vr = VideoReader(path, ctx=ctx, output_format=fmt,
+                 roi=(x1, y1, x2, y2), num_threads=nt)
 t_ctor = time.perf_counter() - t_ctor0
 sdw = getattr(vr, 'set_decode_window', None)
 if sdw is not None and n < len(vr):
@@ -65,12 +68,13 @@ print("RESULT " + json.dumps({
 '''
 
 
-def run_one(python: str, path: str, roi, nt: int, n: int, mode: str):
+def run_one(python: str, path: str, roi, nt: int, n: int, mode: str,
+            fmt: str = 'gray'):
     env = dict(os.environ)
     env["DECORD_HYBRID_TRACE"] = "1"
     proc = subprocess.run(
         [python, "-c", WORKER, path, str(roi[0]), str(roi[1]),
-         str(roi[2]), str(roi[3]), str(nt), str(n), mode],
+         str(roi[2]), str(roi[3]), str(nt), str(n), mode, fmt],
         capture_output=True, text=True, timeout=600, env=env,
         cwd=str(Path(__file__).resolve().parent))
     out = ""
@@ -90,16 +94,25 @@ def main() -> int:
     ap.add_argument("--modes", default="hybrid_gpu,gpu")
     ap.add_argument("--runs", type=int, default=2)
     ap.add_argument("--python", default=sys.executable)
+    ap.add_argument("--format", default="gray", choices=("gray", "yuv420"),
+                    help="decord 输出格式（缺省=引擎 GPU 管线生产口径）")
     args = ap.parse_args()
 
-    name, roi, nt = VID[args.video]
+    from video_ocr_engine.config.decode_caliber import (
+        decode_num_threads, roi_for_decord)
+    name, roi = VID[args.video]
+    codec = {'test5': 'h264', 'test6_hevc': 'hevc',
+             'test6_av1': 'av1'}[args.video]
+    roi = roi_for_decord(roi)
+    nt = decode_num_threads(codec)
     vdir = os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test")
     path = str(Path(vdir) / name)
 
     rows = []
     for mode in args.modes.split(","):
         for r in range(args.runs):
-            res = run_one(args.python, path, roi, nt, args.n, mode)
+            res = run_one(args.python, path, roi, nt, args.n, mode,
+                          args.format)
             res["run"] = r
             rows.append(res)
             st = res.get("stats") or {}

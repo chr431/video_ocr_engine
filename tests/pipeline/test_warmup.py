@@ -74,7 +74,10 @@ def test_warmup_makes_next_run_hot():
         "test5.mp4")
     if not os.path.exists(vid):
         pytest.skip("无真值视频（RACELOG_VIDEO_DIR）")
-    import cuda.bindings  # noqa: F401  无 CUDA 则跳过
+    try:
+        import cuda.bindings  # noqa: F401  无 CUDA 则跳过
+    except ImportError:
+        pytest.skip("无 cuda-python（CI 无 GPU 环境）")
     ex = FieldExtractor(vid, (843, 993, 948, 1025), frame_start=0,
                         frame_end=600, decode_backend="cpu",
                         ocr_backend="tensorrt", keep_crops=False)

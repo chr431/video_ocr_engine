@@ -199,6 +199,8 @@ def test_no_dangling_file_refs() -> None:
                     continue  # 命令片段、glob 通配符、占位模板
                 if name.startswith(("http://", "https://")):
                     continue
+                if name.startswith("bench/"):
+                    continue  # 本地证据产物（.gitignore 目录）：存在性随机器，不判悬空
                 if "/" in name:
                     ok = name in tracked_set or (ROOT / name).is_file()
                 else:

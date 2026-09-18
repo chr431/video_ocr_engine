@@ -42,7 +42,8 @@ VIDS = {"h264": (r"D:\Videos\racelog_test\test5.mp4", (843, 993, 948, 1025), 776
 
 WORKER = r"""
 import json, sys, time
-pkg_parent, path, roi_s, n, ctx_name = sys.argv[1:6]
+pkg_parent, path, roi_s, n, ctx_name, nt = sys.argv[1:7]
+nt = int(nt)
 sys.path.insert(0, pkg_parent)
 sys.stdout.reconfigure(encoding="utf-8")
 import decord
@@ -55,9 +56,8 @@ elif ctx_name == "gpu":
     ctx = decord.gpu(0)
 else:
     ctx = decord.cpu(0)
-kw = {} if ctx_name == "gpu" else {"num_threads": 16}
-if ctx_name == "hybrid":
-    kw = {"num_threads": 32}
+# 口径轮：线程档由父进程按引擎策略传入（原硬编码 16/32）
+kw = {} if ctx_name == "gpu" else {"num_threads": nt}
 vr = VideoReader(path, ctx=ctx, output_format="gray", roi=roi, **kw)
 from video_ocr_engine.config import constants as cfg
 batch = int(cfg.DECODE_BATCH_SIZE)
@@ -91,8 +91,13 @@ def run_arm(pkg_parent: str, codec: str, ctx_name: str):
     env = {**os.environ, **env}
     if ctx_name == "hybrid":
         env["DECORD_HYBRID_STATS"] = "1"
+    from video_ocr_engine.config.decode_caliber import (
+        decode_num_threads, roi_for_decord)
+    roi = roi_for_decord(roi)   # 真值口径 → decord 半开（曾少 1px）
+    nt = decode_num_threads(codec)
     p = subprocess.run([sys.executable, "-c", WORKER, pkg_parent, vid,
-                        ",".join(map(str, roi)), str(n), ctx_name],
+                        ",".join(map(str, roi)), str(n), ctx_name,
+                        str(nt)],
                        capture_output=True, text=True, encoding="utf-8",
                        env=env, timeout=600)
     fps = None

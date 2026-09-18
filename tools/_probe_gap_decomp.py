@@ -46,8 +46,8 @@ OUT = ROOT / "bench" / "gap_decomp.json"
 VIDS = {"h264": ("test5.mp4", (843, 993, 948, 1025), 7761),
         "hevc": ("test6_hevc.mp4", (841, 994, 949, 1026), 23970),
         "av1": ("test6.mp4", (841, 994, 949, 1026), 23970)}
-# 引擎 §14 档位（与 _probe_decode_rate.py 同源）
-THREADS = {"h264": 32, "hevc": 32, "av1": 24}
+# 线程档=引擎同源（口径轮 2026-09-18，见 _probe_decode_rate.py）
+from video_ocr_engine.config.decode_caliber import decode_num_threads
 
 WORKER = r'''
 import json, os, sys, time
@@ -68,6 +68,10 @@ else:
     ctx = decord.cpu(0)
 kw = {"num_threads": threads} if ctx_name != "gpu" else {}
 vr = VideoReader(path, ctx=ctx, output_format="gray", roi=roi, **kw)
+if n < len(vr):
+    _sdw = getattr(vr, 'set_decode_window', None)
+    if _sdw is not None:
+        _sdw(n)   # 硬窗界（口径轮）：窗口外零包读取，与引擎一致
 frames = list(range(n))
 first = None
 lst = []
@@ -106,9 +110,11 @@ _STATS_PATTERNS = {
 def run_arm(ctx_name: str, codec: str, threads: int | None, reps: int,
             frames: int | None) -> dict:
     vid, roi, full_n = VIDS[codec]
+    from video_ocr_engine.config.decode_caliber import roi_for_decord
+    roi = roi_for_decord(roi)   # 真值口径 → decord 半开（曾少 1px）
     path = str(_VDIR / vid)
     if threads is None:
-        threads = THREADS[codec]
+        threads = decode_num_threads(codec)
     if frames is None:
         frames = full_n
     try:

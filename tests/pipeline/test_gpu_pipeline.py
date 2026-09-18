@@ -15,9 +15,12 @@ def _make(**kwargs):
 
 @pytest.fixture
 def gpu_ok(monkeypatch):
-    """模拟 NVDEC + TensorRT 可用（默认规则要求两者，全程 raw 才启用）。"""
+    """模拟 NVDEC + TensorRT + cuda-python 可用（默认规则要求三者；
+    cuda-python 缺失曾让 CI 全红——门控 _cuda_python_available 在无 GPU
+    runner 上恒 False，2026-09-18 口径轮补 patch）。"""
     monkeypatch.setattr(_gpu, "nvdec_available", lambda p: True)
     monkeypatch.setattr(_gpu, "tensorrt_available", lambda: True)
+    monkeypatch.setattr(_gpu, "_cuda_python_available", lambda: True)
 
 
 def test_gpu_pipeline_default_on_for_gray_nvdec_trt(gpu_ok):

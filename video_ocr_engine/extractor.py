@@ -676,7 +676,8 @@ class FieldExtractor:
             _has_roi_api = hasattr(_vr_mod, '_CAPI_VideoReaderSetRoi')
         except ImportError:
             _has_roi_api = False
-        roi = (self._roi[0], self._roi[1], self._roi[2] + 1, self._roi[3] + 1)
+        from video_ocr_engine.config.decode_caliber import roi_for_decord
+        roi = roi_for_decord(self._roi)
         roi_kw = {'roi': roi} if _has_roi_api else {}
         backend = (self._decode_backend or 'auto').lower()
         vr = None
@@ -922,79 +923,16 @@ class FieldExtractor:
         return res.as_tuple()
 
     def _decode_num_threads(self, codec: str | None=None) -> int | None:
-        """CPU 软解的 decord FFmpeg 帧线程数（按 OCR 是否在 GPU 分档）。
+        """CPU 软解的 decord FFmpeg 帧线程数（按 codec/stride/OCR 位置分档）。
 
-            ── OCR 在 GPU（TRT，现役默认）────────────────────────────
-            host CPU 空闲 → 解码吃满逻辑核（上下限见
-            config.DECODE_THREADS_GPU_OCR_MIN/MAX）。
-            背景：fork 的默认线程上限（DECORD_FFMPEG_THREAD_COUNT，随版本
-            变化）是"ONNX 占满物理核"时代定的；TRT 成默认后 host 在解码
-            阶段基本空闲，旧上限成为瓶颈。实测（7945HX 16C32T + RTX 4060，
-            test5 1080p h264 全片
-            7223 帧，TRT）：8 线程 6.452s → 16 线程 4.875s（-24%）→ 32 线程
-            5.085s；新三国01 标清整集 73430 源帧 stride8：8 线程 15.897s →
-            32 线程 10.812s（-32%）。相对现役默认（NVDEC+TRT）为 -45%/-50%。
-            绑核 8 逻辑核模拟弱 CPU 时不劣化（1080p -6%、标清 -35%）。
-
-            ── OCR 在 CPU（ONNX，无 NVIDIA 显卡场景）───────────────
-            解码与 ORT 真正抢核，但**不是"越少越好"**——取决于解码与 OCR
-            谁占墙钟，而段密度决定这一点：
-              · 物理核 ≤ CPU_CORES_SPLIT_THRESHOLD（8）：max(2, cores//2)
-                （4 核 28.0 vs 33.1s、8 核 17.8 vs 20.7s）
-              · 多核 + stride>1（解码受限）：逻辑核 3/4，钳 [8, 24]
-              · 多核 + stride==1（OCR 受限）：逻辑核 1/3，钳 [8, 12]
-            判据：stride>1 时采样帧数 ÷ stride 而解码帧数不变 → 解码占比
-            必然上升；stride==1 时段数可接近采样帧数 → OCR 占比上升。
-            实测（16C32T，test5 3000 帧，decode=cpu ocr=cpu）：
-              stride=8（339 段）  dcd 8 → 2.841s，24 → 2.026s（-27.8%）
-              stride=1（1083 段） dcd 8 → 3.746s，10 → 3.617s，16 → 3.811s
-            （旧实现的"多核返回 None"让解码一直跑 fork 默认 8 线程，
-            低段密度场景白丢 ~28%；且它引用的"加线程变慢"实测来自 OCR
-            受限的高段密度场景，被错误地当成了普适结论。）
-
-            codec='av1'：fork 0.8.1 (FFmpeg9) 起 dav1d 帧线程扩展性改善
-            （FFmpeg8 时代"不随 FFmpeg 帧线程数扩展"的旧实测是被 OCR 墙钟
-            掩盖的口径）→ 逻辑核 3/4 钳 [8, 24]，不分 OCR 位置。
-            GPU(NVDEC) 不调用本方法。
-
-            DECODE_THREADS env 覆盖（>0 时直接返回，与 OCR_THREADS 对齐）：
-            调参与 A/B 用；不设置时行为与上述分档一致。
+            完整分档依据与实测表已迁 ``config.decode_caliber.decode_num_threads``
+            （2026-09-18 口径轮：单一事实源，探针与引擎同源派生）。
             """
-        _ovr = self._rc.decode_num_threads
-        if _ovr > 0:
-            return _ovr
-        from video_ocr_engine.ocr.native import auto_ocr_thread_count
-        cores = auto_ocr_thread_count()
-        logical = _os.cpu_count() or cores
-        if codec == 'av1':
-            # fork 0.8.1 (FFmpeg9) 复测：dav1d 帧线程扩展性大幅改善，
-            # 旧结论（8/16/24/32 线程全 5.8~5.9s，FFmpeg8 口径且被 OCR
-            # 墙钟掩盖）已过时。顺序解码（stride=1）16T 797fps →
-            # 24T 1164fps → 32T 1178fps（饱和）→ ONNX 墙钟 24T 最优
-            # （3.958s，32T 持平）；stride=8 等差快速路径扩展到 48T
-            # （2.536s vs 24T 2.880s，48T 后饱和；2026-09-10 实测表）。
-            if self._sample_stride > 1:
-                return max(8, min(48, logical))
-            return max(8, min(24, logical * 3 // 4))
-        if codec == 'hevc':
-            # FFmpeg9 hevc 软解扩展性同样大幅改善（2026-09-10 ONNX 墙钟
-            # 实测表，test.mp4 3000 帧窗口）：stride=1 8T 4.748 → 16T
-            # 3.763 → 24T 3.520 → 32T 3.110（48T 3.240 回落）；stride=8
-            # 16T 2.757 → 32T 2.289 → 48T 2.219（渐近）。旧通用档位
-            # （10/24）分别慢 27%/12%。
-            if self._sample_stride > 1:
-                return max(8, min(48, logical))
-            return max(8, min(32, logical))
-        if self._ocr_on_gpu():
-            return max(config.DECODE_THREADS_GPU_OCR_MIN,
-                       min(config.DECODE_THREADS_GPU_OCR_MAX, logical))
-        if cores <= config.CPU_CORES_SPLIT_THRESHOLD:
-            return max(2, cores // 2)
-        if self._sample_stride > 1:
-            return max(8, min(config.DECODE_THREADS_CPU_OCR_MAX,
-                              logical * 3 // 4))
-        return max(8, min(config.DECODE_THREADS_CPU_OCR_STRIDE1_MAX,
-                          logical // 3))
+        from video_ocr_engine.config.decode_caliber import decode_num_threads
+        return decode_num_threads(
+            codec, sample_stride=self._sample_stride,
+            ocr_on_gpu=self._ocr_on_gpu(),
+            override=self._rc.decode_num_threads)
 
     def _open_decord_reader(self, ctx, roi_kw: dict, num_threads=None):
         """按当前输出格式打开 decord reader。

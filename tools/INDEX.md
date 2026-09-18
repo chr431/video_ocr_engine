@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **127 个 `.py`**（22,045 行），其中 116 个是探针
+`tools/` 现有 **127 个 `.py`**（22,087 行），其中 116 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -33,7 +33,7 @@
 | `_probe_hybrid_engine_loss.py` | 73 | hybrid 引擎内流失定位（stream/批大小/轻消费对照 + ENGINE_PROFILE 分相） | docs/log/2026-09-10-hybrid联调深挖.md |
 | `_probe_hybrid_sum_gap.py` | 81 | hybrid 与两侧解码器速率之和的精确差值（三速率中位 + 理想和对比） | docs/log/2026-09-10-hybrid联调深挖.md |
 | `_probe_hybrid_trace.py` | 109 | hybrid 调度轨迹剖析（DECORD_HYBRID_DEBUG 分侧发射时间线/份额/慢批定位） | docs/log/2026-09-10-hybrid联调深挖.md |
-| `_probe_hybrid_startup.py` | 133 | hybrid 启动期派工诊断（fork 级冷进程：硬窗界+TRACE 轨迹+hybrid_stats 对账；盲派 GOP 数/稳态份额/rg 真伪的判定仪）| docs/log/2026-09-18-hybrid启动轮.md |
+| `_probe_hybrid_startup.py` | 146 | hybrid 启动期派工诊断（fork 级冷进程：硬窗界+TRACE 轨迹+hybrid_stats 对账；盲派 GOP 数/稳态份额/rg 真伪的判定仪）| docs/log/2026-09-18-hybrid启动轮.md |
 | `_probe_hybrid_bitwise.py` | 72 | hybrid vs NVDEC 输出逐帧字节比对（深 prefetch 安全性 + fork 改动的正确性门禁） | docs/log/2026-09-10-hybrid联调深挖.md |
 | `_probe_onnx_dcd_sweep.py` | 80 | ONNX OCR 场景解码线程数 sweep（DECODE_THREADS；h264/hevc/av1 × stride），产出 2026-09-10 新档位表 | docs/log/2026-09-10-ONNX解码线程档位.md |
 | `_probe_perf_sweep.py` | 118 | 解码参数 sweep（batch/stream/threads/hybthreads），monkey-patch 模块常量；用于 C-10 复确认与 batch=32 越界 bug 的暴露 | docs/log/2026-09-09-深度性能优化.md |
@@ -132,7 +132,7 @@
 | `_probe_round4_bw.py` | 102 | 2026-08-31 | §21 带宽矩阵 |
 | `_probe_cr_roundtrip.py` | 182 | 2026-08-31 | 裸 CR 保真性（AGENTS.md 编辑护栏） |
 
-| `tools/_audit_ext.py` | 285 | 2026-09-10 | S8 审计扩展 13..22（与纪律审计同一入口） |
+| `tools/_audit_ext.py` | 289 | 2026-09-10 | S8 审计扩展 13..22（与纪律审计同一入口） |
 
 ### 2026-09-12 准确项（分段合并稠密簇门 · 预处理 gamma 复核）
 
@@ -155,16 +155,16 @@
 | 文件 | 行 | 改于 | 支撑 |
 |---|---:|---|---|
 | `_probe_path_survey.py` | 141 | 2026-09-13 | **路径普查**（测量非 A/B）：五条路径单臂各跑一次、只取 std 档报告，一次给出时间去向 + 背压分诊（`get_wait`/`put_block` 的总量·次数·单次最长）。首轮结论：hybrid/TRT 比 nvdec/TRT 快 1.6~1.8×、decode 占 wall 83~87%、hybrid/cpu 是唯一生产者也被压的路径（瓶颈翻转到下游 OCR）|
-| `_probe_decode_rate.py` | 173 | 2026-09-13 | **只解码速率**（工作项 0，扩展 `_probe_path_survey.py`：那条测引擎路径的时间去向，本条测 fork 侧纯解码吞吐）：与引擎 GPU 管线同参数（ctx/gray/ROI-first/线程档/DECODE_BATCH 粒度）但**不做 analyze/分段/OCR**，按 ctx 分离 fork 侧吞吐——判定 hybrid 稳态封顶（三码趋同 2214~2285 fps）落在 fork 还是引擎生产者链 |
+| `_probe_decode_rate.py` | 181 | 2026-09-13 | **只解码速率**（工作项 0，扩展 `_probe_path_survey.py`：那条测引擎路径的时间去向，本条测 fork 侧纯解码吞吐）：与引擎 GPU 管线同参数（ctx/gray/ROI-first/线程档/DECODE_BATCH 粒度）但**不做 analyze/分段/OCR**，按 ctx 分离 fork 侧吞吐——判定 hybrid 稳态封顶（三码趋同 2214~2285 fps）落在 fork 还是引擎生产者链 |
 | `_probe_dll_ab.py` | 206 | 2026-09-13 | **换 DLL 的交错 A/B**（工作项 5）：`bench ab` 是同进程内跑两臂、而换 DLL 必须每臂新进程，本探针补这个缺口——逐轮交错 + 轮转先后 + 配对差分均值/SE/符号多数，可分辨下限取 PI-15 标定值。⚠️ 实测噪声带 sd 4.6%（冷启动，比同进程 ab 大一个量级）⇒ 判 1% 级效应需 ≥20 轮 |
-| `_probe_gap_decomp.py` | 213 | 2026-09-13 | **hybrid 并联缺口分解**（`_probe_decode_rate.py` 的分臂账目版）：全片 + `[hybrid-stats]` 解析，一次拿 delivered c/g、busy、plan rc/rg/份额、HOL——把 fork 级缺口拆成「CPU 臂银行帽 / 计划份额失真 / 每臂混跑干扰」三成分（C-45 的取证入口；支持 `--threads` 扫描） |
+| `_probe_gap_decomp.py` | 219 | 2026-09-13 | **hybrid 并联缺口分解**（`_probe_decode_rate.py` 的分臂账目版）：全片 + `[hybrid-stats]` 解析，一次拿 delivered c/g、busy、plan rc/rg/份额、HOL——把 fork 级缺口拆成「CPU 臂银行帽 / 计划份额失真 / 每臂混跑干扰」三成分（C-45 的取证入口；支持 `--threads` 扫描） |
 | `_probe_pool_pairing.py` | 161 | 2026-09-17 | **跨视频互补配对三臂 A/B/C**（层5）：pair（编码感知+LPT×2w）vs nv2（全 nvdec×2w，原 seq 臂名不副实）vs nv1（真串行）；拉丁轮转 + >10% 偏离中位瞬态剔除（首跑 2 次环境瞬态曾拖垮均值的教训）+ 逐视频 wall/backend 落盘。C-52 翻案载体（−20.6%/−21.0%，4/4）；同温零增益（OCR-GPU-bound）的取证入口 |
 | `_probe_quant_static.py` | 158 | 2026-09-14 | **静态 INT8 QDQ 量化评测**（压缩轮，已判死）：校准=真帧生产预处理；全图/仅Conv 两变体——argmax 格一致 0.58、CTC 一致 0、速度 +30~81%——与动态量化（20x 劣化，ARCHIVE）同命；ORT 1.29/Win-x64 上量化方向关闭，OpenVINO EP 为 CPU 提速正路（需立项） |
-| `_probe_h264_hybrid.py` | 419 | 2026-09-14 | **hybrid 达成率定稿测量**（对两解码器并联和）：同会话三臂（cpu/gpu/hybrid）逐轮交错 + min-of-N + 机器忙闲污染门（>40% 当轮重试）+ fps_b/wall 双口径 + 外部重负载进程扫描；`--landscape` 线程扫描 / `--shares` 份额扫描 / `--arm` 自定义臂。C-46 达成率数字的复测载体（达成率定稿协议见 log 2026-09-14） |
+| `_probe_h264_hybrid.py` | 426 | 2026-09-14 | **hybrid 达成率定稿测量**（对两解码器并联和）：同会话三臂（cpu/gpu/hybrid）逐轮交错 + min-of-N + 机器忙闲污染门（>40% 当轮重试）+ fps_b/wall 双口径 + 外部重负载进程扫描；`--landscape` 线程扫描 / `--shares` 份额扫描 / `--arm` 自定义臂。C-46 达成率数字的复测载体（达成率定稿协议见 log 2026-09-14） |
 | `_probe_ocr_phase_split.py` | 137 | 2026-09-14 | **OCR 批延迟拆相**（TRT 流水轮取证）：生产 ocr.infer 按相拆解——prep 提交 / TRT 调用（enqueue+argmax+D2H+sync）或深度 2 的 submit/collect / 宿主 CTC；`--runs` 冷热两轮。定量出 trt_call 13.9ms/批占 87%、CTC 0.4ms（launch 裸奔归因的测量入口，结论见 log 2026-09-14-TRT延迟收集流水） |
 | `_probe_ov_cpu_ab.py` | 97 | 2026-09-14 | **OCR CPU 后端 A/B：onnxruntime vs OpenVINO**（模型级）：同模型同线程（物理核）同形状，生产 ORT 配置 vs OV CPU 插件——本机 Zen4 实测 OV 快 **2.1×**（47.8→23.0ms@B18W224）且随机输入 argmax 100% 一致；OpenVINO 立项（ocr_backend 扩展）的裁决入口 |
 | `_probe_ov_prep_fusion.py` | 130 | 2026-09-14 | **gamma/resize 换序 + OV preproc 融合赌局**（判死留档）：模型级生产语义 +1.1% 平价（−17.4% 系直拉语义假象）；⚠️ 教训载体——其引擎级猴子补丁因形状臆造静默回落 legacy 产生假胜利，已更正刻进探针注释（对照法必须断言分支真的走到） |
-| `_probe_ffmpeg_min_perf.py` | 175 | 2026-09-15 | **FFmpeg 极简集 vs GPL 全家桶解码性能对照**（健壮性验证）：双 decord 包副本 + 子进程 worker 全片 ROI gray，三码×双臂交错 min-of-3；NVDEC 健全性对照。结论=CPU 软解 −0.4~−1.6%（av1 含 dav1d vs native 换算）、NVDEC 零差异——瘦身无实质回退（log 见 bench/ffmpeg_min_perf.log） |
+| `_probe_ffmpeg_min_perf.py` | 180 | 2026-09-15 | **FFmpeg 极简集 vs GPL 全家桶解码性能对照**（健壮性验证）：双 decord 包副本 + 子进程 worker 全片 ROI gray，三码×双臂交错 min-of-3；NVDEC 健全性对照。结论=CPU 软解 −0.4~−1.6%（av1 含 dav1d vs native 换算）、NVDEC 零差异——瘦身无实质回退（log 见 bench/ffmpeg_min_perf.log） |
 | `_probe_ov_int8.py` | 108 | 2026-09-15 | **OV INT8（NNCF PTQ）模型级裁决**（判死留档）：真实预处理数据校准 + 三形状速度/数值对照——INT8 反慢 6% 且真实批 argmax 仅 95%（Zen4/动态形状下无收益，方向关闭）；`nncf.Dataset(列表)` 口径 |
 | `_probe_binding.py` | 171 | 2026-09-15 | **绑定约束判定（决定性实验）**：把 OCR 推理/预处理分别换成零成本，看墙钟动不动——GPU 三条路径（h264/hevc/av1）全部 **解码绑定**（Δwall +0.1~0.2% = 噪声），h264-cpu 为**生产者绑定**（零成本 OCR 仅 −18.35%、零成本预处理 −1.21%）。"换依赖能否再快"的裁决入口 |
 | `_probe_critical_path.py` | 129 | 2026-09-15 | **关键路径判定**：纯解码产能（decord 直扫）vs 全管线墙钟 vs 生产者队列阻塞三口径并列——h264-cpu 纯解码 1.24s 而 producer 2.10s、OCR 空等 1.46s（解码非绑定、消费者饥饿） |

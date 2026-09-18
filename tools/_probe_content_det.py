@@ -60,12 +60,15 @@ def main() -> int:
     vid = os.path.join(os.environ.get("RACELOG_VIDEO_DIR",
                                       r"D:\Videos\racelog_test"),
                        "test6_hevc.mp4")
-    roi = (841, 994, 949, 1026)
-    ref = run("gpu", vid, roi, "32")
+    from video_ocr_engine.config.decode_caliber import (
+        decode_num_threads, roi_for_decord)
+    roi = roi_for_decord((841, 994, 949, 1026))  # 口径轮：+1 换算
+    nt = str(decode_num_threads("hevc"))
+    ref = run("gpu", vid, roi, nt)
     print("gpu 参照帧数", len(ref))
     runs = []
     for i in range(3):
-        h = run("hybrid", vid, roi, "32")
+        h = run("hybrid", vid, roi, nt)
         runs.append(h)
         d_ref = [j for j in range(min(len(h), len(ref))) if h[j] != ref[j]]
         print(f"hybrid#{i}: n={len(h)} vs gpu 差异帧 {len(d_ref)} 个，"

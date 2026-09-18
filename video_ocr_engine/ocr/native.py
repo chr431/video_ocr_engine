@@ -35,16 +35,10 @@ log = logging.getLogger(__name__)
 _models_dir = config.models_dir
 
 
-def cpu_physical_cores() -> int:
-    """物理核数（psutil 缺失时用逻辑核/2 估算，最小 2）。"""
-    try:
-        import psutil  # type: ignore[import-not-found]
-        physical = psutil.cpu_count(logical=False)
-    except ImportError:
-        physical = None
-    if not physical:
-        physical = max(2, (os.cpu_count() or 8) // 2)
-    return max(2, int(physical))
+def cpu_physical_cores() -> int:  # noqa: F401（re-export）
+    """物理核数——2026-09-18 迁 config.decode_caliber（单一事实源）。"""
+    from video_ocr_engine.config.decode_caliber import cpu_physical_cores as _c
+    return _c()
 
 
 def auto_ocr_thread_count() -> int:
