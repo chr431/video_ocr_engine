@@ -36,7 +36,7 @@
 | C-49 | **换依赖无剩余性能空间**：GPU 三码解码绑定（零成本 OCR≈噪声）、h264-cpu 生产者绑定；fork 超外部参考（NVDEC 989>cuvid 901fps；ROI-first 1.75×）；PyNv 493fps+DLL 冲突；cv2 resize 墙钟 −0.26% | 4060/16C32T/Zen4；fork 0.8.3；入口 _probe_{binding,decode_ceiling,preproc_ab} | 换卡 / 带 ROI-first 的解码绑定 / 预处理升为关键路径 / 断言瓶颈前先跑绑定实验 | log 2026-09-15-依赖替换裁决 |
 | C-50 | **DECODE_THREADS 10→32 无收益**（不可判定 +0.97%；冷启 +4.03% 8/8）。decode.batch −82% 但 GIL 争用对冲——**维持 10 档** | 16C32T；openvino CPU OCR；h264 | 核数格局变 / OCR 再提速 / decord 预取变 | log 2026-09-17-重设计 §5-§11 |
 | C-51 | **监测系统新基线（2026-09-17）**：时钟门禁+ab 轮转/判定/--aa；report v6=relations+缺口派生+cycle 口径+TOTALS n/max+histograms（仅 full）+相位 sm_clock+fork 穿透段；子相位闭合（infer_other 92%→16%）；std 地板 0.30%（n=50 后 0.20）；trace opt-in | 4060（max3105/平台2700）；共享桌面 | 换卡/驱动 / 换机器重标 / 协议改即 --aa 重标 / trace 转正需锁频 | log 2026-09-17-重设计 §7 |
-| C-53 | **hybrid 基线=目标码最快纯臂（口径规则）**：h264 基线=CPU，hybrid 全片 +6.1% 慢（w3000 +23%）→ 选 cpu；hevc/av1 基线=NVDEC，hybrid −21.8%/−31.2% → 选 hybrid（窗口须越 C-40 交叉点）；fork 遥测直通 report 'hybrid' 段 | 4060/16C32T；fork ≥13d509d；bench ab 交错+时钟门禁 | 换卡 / fork 换代 | log 2026-09-18-hybrid启动轮 §4；2026-09-17-重设计 §11.13 |
+| C-53 | **hybrid 基线=目标码最快纯臂（口径规则）**：h264 基线=CPU，test5 全片 +6.1% 慢→选 cpu；**h264same 反例 −22%——h264 决策按文件 CPU 解码速率分界（非码级规则，pool 一刀切误派，§11）**；hevc/av1 基线=NVDEC，hybrid −23.9%/−31.4% → 选 hybrid（窗口越 C-40 交叉点） | 4060/16C32T；fork ≥a6cdeb7 | 换卡 / fork 换代 | log 2026-09-18-hybrid启动轮 §4§11 |
 | C-54 | **启动+窗口尾轮（fork a6cdeb7）：熟前挂起+防饿死盲派+rg 生产侧 sustained+窗口尾 ETA**——盲派 13→2、hevc 交叉点 >3000→~1200（w3000 −14.5%）；h264 残余=冷税 ~95ms+尾 69ms（交付已反超，infer 膨胀被吸收——§10） | dev DLL 未发 wheel；盲承诺下界=2 GOP（禁先验地板） | 换卡 / fork 换代 / GOP<64 帧 / 消费节奏巨变 | log 2026-09-18-hybrid启动轮；bench/hybrid_startup.json |
 
 ## 已取代（指针）

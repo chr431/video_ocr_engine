@@ -243,11 +243,11 @@
   evidence: log 2026-09-17-重设计 §7
 
 - id: C-53
-  conclusion: **hybrid 基线=目标码最快纯臂（口径规则）**：h264 基线=CPU，hybrid 全片 +6.1% 慢（w3000 +23%）→ 选 cpu；hevc/av1 基线=NVDEC，hybrid −21.8%/−31.2% → 选 hybrid（窗口须越 C-40 交叉点）；fork 遥测直通 report 'hybrid' 段
+  conclusion: **hybrid 基线=目标码最快纯臂（口径规则）**：h264 基线=CPU，test5 全片 +6.1% 慢→选 cpu；**h264same 反例 −22%——h264 决策按文件 CPU 解码速率分界（非码级规则，pool 一刀切误派，§11）**；hevc/av1 基线=NVDEC，hybrid −23.9%/−31.4% → 选 hybrid（窗口越 C-40 交叉点）
   status: active
-  premises: 4060/16C32T；fork ≥13d509d；bench ab 交错+时钟门禁
+  premises: 4060/16C32T；fork ≥a6cdeb7
   revisit: 换卡 / fork 换代
-  evidence: log 2026-09-18-hybrid启动轮 §4；2026-09-17-重设计 §11.13
+  evidence: log 2026-09-18-hybrid启动轮 §4§11
 
 - id: C-54
   conclusion: **启动+窗口尾轮（fork a6cdeb7）：熟前挂起+防饿死盲派+rg 生产侧 sustained+窗口尾 ETA**——盲派 13→2、hevc 交叉点 >3000→~1200（w3000 −14.5%）；h264 残余=冷税 ~95ms+尾 69ms（交付已反超，infer 膨胀被吸收——§10）

@@ -609,3 +609,18 @@
   crossover: ">3000 → 1500~2000（启动轮）→ ~1200（本轮）；w1000 残余=盲承诺
             2GOP 结构地板"
   gate: 发布门禁 19/19；22 组 A/B 跨臂段数全等
+- metric: test6_full_hybrid_overhead
+  date: 2026-09-18（用户改判：放弃短窗优化，hybrid 价值在长窗）
+  protocol: test6 同内容三码族各 23970 帧全片，hybrid vs 各自最优单臂
+            （基线实测验证：h264same 的 cpu 11.11s 轻取 nvdec 25.86s），
+            bench ab 交错热轮，fork a6cdeb7
+  result: h264same −22.0%（cpu 11.1-11.6→hybrid 9.02s，4/4）；hevc
+            −23.85%（4/4）；av1 −31.39%（3/3）——三码净开销为负，
+            全面净赚 2.5~3.7s
+  h264_counterexample: "test6_h264 CPU 软解 ~2155fps（test5 ~3400fps）→
+            GPU 臂赚回，hybrid 反超 22%；「h264 选 cpu」是编码产物相关
+            而非码级规则，pool 的 h264→cpu 一刀切对此类文件误派（C-52
+            复评触发满足）"
+  measurement_notes: h264same cpu 臂 GPU 空闲（sm 2025-2265）触发 GPU 向
+            时钟门禁误剔（--no-clock-gate 重跑）；|Δ|>20% 警讯系启发式
+            误报（逐轮 4/4 一致）
