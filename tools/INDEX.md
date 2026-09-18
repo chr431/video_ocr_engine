@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **127 个 `.py`**（22,087 行），其中 116 个是探针
+`tools/` 现有 **127 个 `.py`**（22,094 行），其中 116 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -37,7 +37,7 @@
 | `_probe_hybrid_bitwise.py` | 72 | hybrid vs NVDEC 输出逐帧字节比对（深 prefetch 安全性 + fork 改动的正确性门禁） | docs/log/2026-09-10-hybrid联调深挖.md |
 | `_probe_onnx_dcd_sweep.py` | 80 | ONNX OCR 场景解码线程数 sweep（DECODE_THREADS；h264/hevc/av1 × stride），产出 2026-09-10 新档位表 | docs/log/2026-09-10-ONNX解码线程档位.md |
 | `_probe_perf_sweep.py` | 118 | 解码参数 sweep（batch/stream/threads/hybthreads），monkey-patch 模块常量；用于 C-10 复确认与 batch=32 越界 bug 的暴露 | docs/log/2026-09-09-深度性能优化.md |
-| `_probe_index_audit.py` | 277 | 核对本索引的每个数字是否与磁盘一致 | 本文件（自检） |
+| `_probe_index_audit.py` | 284 | 核对本索引的每个数字是否与磁盘一致 | 本文件（自检） |
 | `_probe_discipline_audit.py` | 612 | **项目纪律审计**（12 项：硬编码路径 / 异常吞噬 / 未用 import / 未门控 print / 版本号 / 文档引用 / 注入预算…） | AGENTS.md「纪律与自动化守卫」 |
 | `_doc_section.py` | 214 | **文档章节级检索**：`--toc` 看目录 / `--find` 按标题定位 / 读单章。避免整文件读，实测省 84~96% tokens | AGENTS.md「查文档前先定位」 |
 | `_probe_roi_decode.py` | 105 | **否定结果**：量化「打开时 SetRoi」vs「每次 get_batch 传 roi」对 CPU 软解速率的影响。实测两者无差异（1841 vs 1849 fps），但**不传 ROI = 520 fps**（3.6× 慢）→ ROI 本身是巨大优化，两种传法等价 | PERF §22.5 |
@@ -205,7 +205,7 @@
 
 ## D. 孤儿（无任何文档引用、也无代码引用）
 
-**共 4 个 / 550 行 / 20.7 KB**。量很小，**建议保留**——删掉的代价（断了未记录的
+**共 4 个 / 550 行 / 20.6 KB**。量很小，**建议保留**——删掉的代价（断了未记录的
 结论链）远大于留着的代价（一个文件名）。
 
 > 数字由 `python tools/_probe_index_audit.py` 实测维护，别手改。

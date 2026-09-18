@@ -43,6 +43,11 @@ DOCS = ["README.md", "AGENTS.md", "docs/log/PERFORMANCE.md", "docs/log/DECISIONS
         "docs/DEPENDENCIES.md", "docs/log/ARCHIVE.md"]
 
 
+def _lf_bytes(raw: bytes) -> int:
+    """检出后字节（LF 归一）：与仓内存储口径一致。"""
+    return len(raw.replace(b"\r\n", b"\n"))
+
+
 def read_bytes(p: str) -> bytes:
     with open(p, "rb") as f:
         return f.read()
@@ -107,7 +112,7 @@ def main() -> int:
         for f in glob.glob(os.path.join(HERE, "*.py")):
             files[os.path.basename(f)] = read_bytes(f)
         fix_index({k: v.count(b"\n") + 1 for k, v in files.items()},
-                  {k: len(v) for k, v in files.items()})
+                  {k: _lf_bytes(v) for k, v in files.items()})
         return 0
 
     problems: list[str] = []
@@ -117,7 +122,9 @@ def main() -> int:
     for f in glob.glob(os.path.join(HERE, "*.py")):
         files[os.path.basename(f)] = read_bytes(f)
     lines_of = {k: v.count(b"\n") + 1 for k, v in files.items()}
-    bytes_of = {k: len(v) for k, v in files.items()}
+    # 字节按 LF 归一：行数不受检出行尾影响、字节受（CRLF 检出
+    # = 每行多 1B；GitHub windows runner autocrlf 必炸，2026-09-18）。
+    bytes_of = {k: _lf_bytes(v) for k, v in files.items()}
     n_file, n_line, n_byte = len(files), sum(lines_of.values()), sum(bytes_of.values())
 
     idx = read_bytes(INDEX).decode("utf-8")
