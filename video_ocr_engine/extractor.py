@@ -453,6 +453,16 @@ class FieldExtractor:
             _outcome = self._run_pipelined()   # S9-6：RunOutcome（裸 5 元组已退场）
         finally:
             self._hardware = self._metrics.hardware_report()
+            # 诊断收尾（2026-09-19 审查轮）：此前 _diag.stop() 只在成功
+            # 路径的 _assemble_report 里调用——失败路径看门狗线程泄漏
+            # （每 30s 写 stall JSON 并继续排干指标桶）。stop 幂等，
+            # 成功路径再调一次返回 {}。
+            if self._diag.armed:
+                try:
+                    self._diag.stop()
+                except Exception:  # noqa: BLE001
+                    logger.debug("诊断收尾失败（run 失败路径）",
+                                 exc_info=True)
         _wall = time.perf_counter() - _t_run
         frames, segs, texts, confs, rep_frames = _outcome.as_tuple()
         self._frames = frames
@@ -692,11 +702,14 @@ class FieldExtractor:
                 from decord import gpu as _g
                 vr = self._open_decord_reader(_g(0), roi_kw)
                 label = 'GPU'
-            except Exception:
+            except Exception as e:  # noqa: BLE001
+                # 保留异常文本（2026-09-19 审查轮）：此前吞掉原始异常，
+                # 「驱动/权限不可用」与「代码 bug 导致打开失败」在
+                # auto 路径下完全无法区分，性能回归静默发生。
                 vr = None
-                self._degraded.append('NVDEC 打开失败，回退 CPU')
-                if backend in ('nvdec', 'hybrid'):
-                    logger.warning('NVDEC 解码不可用，回退 CPU')
+                self._degraded.append('NVDEC 打开失败，回退 CPU: %r' % (e,))
+                logger.warning('NVDEC 解码不可用，回退 CPU: %r', e,
+                               exc_info=True)
         if vr is None:
             vr = self._open_decord_reader(_cpu(0), roi_kw, num_threads=self._decode_num_threads())
             label = 'CPU'
@@ -704,8 +717,12 @@ class FieldExtractor:
         if label == 'CPU':
             try:
                 self._codec = str(vr.get_codec() or '').lower()
-            except Exception:
+            except Exception:  # noqa: BLE001
+                # 探测失败=线程档位按默认 h264 走（hevc/av1 实测差
+                # 4~13%）——记降级原因（2026-09-19 审查轮）。
                 self._codec = ''
+                self._degraded.append('codec 探测失败，解码线程档位按默认')
+                logger.debug('codec 探测失败', exc_info=True)
             # codec 感知线程档位（2026-09-10 实测表，见 _decode_num_threads）：
             # hevc/av1 在 FFmpeg9 下的帧线程扩展性与 h264 分化（hevc
             # stride=1 到 32 线程仍在涨、av1 stride=8 最优 48），通用档位
@@ -719,8 +736,12 @@ class FieldExtractor:
         else:
             try:
                 self._codec = str(vr.get_codec() or '').lower()
-            except Exception:
+            except Exception:  # noqa: BLE001
+                # 探测失败=线程档位按默认 h264 走（hevc/av1 实测差
+                # 4~13%）——记降级原因（2026-09-19 审查轮）。
                 self._codec = ''
+                self._degraded.append('codec 探测失败，解码线程档位按默认')
+                logger.debug('codec 探测失败', exc_info=True)
         self._remember_color_range(vr)
         # CPU+NVDEC 混合解码（decode_backend="hybrid" 显式选择，与 auto/cpu/nvdec
         # 并列）：速率比例分界 + 两端连续扫掠（HybridDecoder v3/v4）。
@@ -962,8 +983,12 @@ class FieldExtractor:
             return
         try:
             self._color_range = int(vr.get_color_range() or 0)
-        except Exception:
+        except Exception:  # noqa: BLE001
+            # 失败按 limited 处理但**记录**（2026-09-19 审查轮）：full
+            # range 流被当 limited 会错误拉伸 Y → 分段阈值/OCR 像素静默
+            # 改变，此前 meta['color_range']=0 与"真的是 limited"不可分。
             self._color_range = 0
+            self._degraded.append('color_range 读取失败，按 limited 处理')
 
     def _crop_luma(self, crop: np.ndarray) -> np.ndarray:
         """crop → 分段/OCR 灰度：YUV 时取 Y 并按 range 展开，否则 _gray_seg。"""

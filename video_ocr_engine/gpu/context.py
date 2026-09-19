@@ -8,20 +8,31 @@ OcrEngine 初始化 TensorRT 前调用 ensure_gpu_initialized()；旧的后端�
 from __future__ import annotations
 import logging
 import os as _os
+import threading
 
 logger = logging.getLogger(__name__)  # S1：与其他根模块一致（P1-6）
 
 # ═══════════════════ 内部状态 ═══════════════════
 _gpu_initialized: bool = False
+_gpu_init_lock = threading.Lock()   # 2026-09-19 审查轮：见下
 _dll_dir_cookies: list = []  # 保持 os.add_dll_directory() 返回值存活
 
 
 def ensure_gpu_initialized() -> None:
-    """延迟初始化 GPU：首次调用时扫描并加载 CUDA/cuDNN/TensorRT DLL。"""
+    """延迟初始化 GPU：首次调用时扫描并加载 CUDA/cuDNN/TensorRT DLL。
+
+    加锁（2026-09-19 审查轮）：此前是无锁 check-then-act——批量场景
+    （pool.run 多 worker）并发首次构建 TRT 时两线程同进
+    `_register_gpu_dlls()`，后者 `_dll_dir_cookies.clear()` 会把前者
+    注册的 `os.add_dll_directory` cookie 释放（返回值必须保活）→
+    DLL 搜索目录被注销，后续 LoadLibrary 可能失败。"""
     global _gpu_initialized
-    if not _gpu_initialized:
-        _gpu_initialized = True
-        _register_gpu_dlls()
+    if _gpu_initialized:
+        return
+    with _gpu_init_lock:
+        if not _gpu_initialized:
+            _register_gpu_dlls()
+            _gpu_initialized = True
 
 
 def _register_gpu_dlls() -> None:

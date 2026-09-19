@@ -79,6 +79,8 @@ class RunJournal:
         self._lock = threading.Lock()
         self._n_written = 0
         self._n_dropped = 0
+        self._last_err: str = ""   # 2026-09-19 审查轮：此前只在 except
+                                   # 分支赋值，report() 读它会 AttributeError
         self._fh = None
 
     def add(self, event: str, **fields) -> None:
@@ -122,8 +124,11 @@ class RunJournal:
             self._fh = None
 
     def report(self) -> dict:
+        # last_error（2026-09-19 审查轮）：_last_err 此前只写不读——落盘
+        # 持续失败（磁盘满/权限）时报告里只有计数，失败原因永远不可见。
         return {"path": str(self.path), "written": self._n_written,
-                "dropped": self._n_dropped}
+                "dropped": self._n_dropped,
+                "last_error": self._last_err or None}
 
 
 class StallWatchdog:
@@ -326,7 +331,11 @@ def open_diagnostics(report_file: str | None, *, metrics=None,
     journal = RunJournal(base + ".journal.jsonl")
     snap = None
     if metrics is not None:
-        snap = metrics.snapshot
+        # 只读快照（drain=False，2026-09-19 审查轮）：看门狗在 run 中途
+        # 落盘停顿现场，此前用 drain 语义的 snapshot 会把已累计的桶全部
+        # 吃掉——停顿之后的最终 RunReport 只剩停顿后的样本，PI-3/PI-10
+        # 等阈值指标偏小 → 门禁静默放行。
+        snap = lambda: metrics.snapshot(drain=False)
     wd = StallWatchdog(progress, base + ".diag", stall_s=stall_s,
                        journal=journal, snapshot=snap)
     diag = Diagnostics(progress, wd, journal)

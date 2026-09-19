@@ -49,6 +49,10 @@ def run(items: list, *, backends: str = 'pair',
               显式列表（与 items 等长，逐项指定，不做重排）。
     """
     items = [dict(it) for it in items]
+    if not items:
+        # 空输入直接返回（2026-09-19 审查轮）：此前 max_workers=min(0,2)=0
+        # → ThreadPoolExecutor(0) 抛 ValueError，与"批量 0 项"语义无关。
+        return []
     if isinstance(backends, str):
         if backends == 'pair':
             probe = [_probe_video(it.get('video_path')

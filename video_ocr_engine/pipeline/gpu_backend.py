@@ -335,7 +335,11 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
             for item in frame_stream:
                 if not _put_q(item):
                     return
-        except Exception as e:  # noqa: BLE001
+        except BaseException as e:  # noqa: BLE001
+            # BaseException 而非 Exception（2026-09-19 审查轮，与
+            # gpu/device.py 排空线程对齐）：逃逸的 BaseException 会让
+            # producer_err 恒空 → 消费循环见哨兵即正常收尾 → run 报
+            # 成功但帧数静默截断。
             producer_err.append(e)
         finally:
             _put_q(None)

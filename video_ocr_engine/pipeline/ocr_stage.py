@@ -24,6 +24,9 @@ from .._helpers import _ocr_batch_size, _ocr_progress_pct
 
 logger = logging.getLogger(__name__)
 
+# OCR worker join 超时（审查轮）：卡在设备调用时无超时 join = 永久挂死
+_OCR_JOIN_TIMEOUT_S = 10.0
+
 
 @dataclass
 class SegmentTask:
@@ -212,18 +215,34 @@ class OcrSession:
         # emit 为 5 元组 (owner,ptr,h,w,sharp)，autocrop 推迟到 flush 批量
         # 执行。None = emit 内逐段裁切。（B4：事后赋值，S3-3c 改构造注入）
         self.autocropper = None
-        self._engines: list = []
+        # 注入路径（2026-09-19 审查轮）：参数此前只用于判定 _owns_engines，
+        # 从未存入——注入引擎时 worker 恒读空列表 → IndexError，且注入的
+        # 引擎既不使用也不归还（GPU 校准失败回退宿主路径的引擎泄漏）。
+        self._engines: list = list(_ocr_engines) if _ocr_engines else []
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
 
     # ── 生产者接口 ──────────────────────────────────────────
 
+    def _raise_if_dead(self) -> None:
+        """worker 已死或已报错 → 抛出（2026-09-19 审查轮）。
+
+        此前三处自旋循环的唯一出口是 `self.err` 非空，而 worker 的
+        `except Exception` 接不住 BaseException（KeyboardInterrupt /
+        SystemExit / C 扩展抛出的非 Exception 子类）——那种情况下线程
+        已死而 err 恒空，队列满时 put 永久自旋 = 挂死。现在以
+        「线程存活」为主判据（与 finish 的既有写法对齐）。"""
+        if self.err:
+            raise self.err[0]
+        if not self._thread.is_alive() and not self.err:
+            raise RuntimeError(
+                "OCR worker 线程已退出但未记录异常（BaseException 逃逸？）")
+
     def put(self, item) -> None:
         """入队一个段任务；队列满时保持取消响应（C7）。"""
         from queue import Full
         while True:
-            if self.err:
-                raise self.err[0]
+            self._raise_if_dead()
             try:
                 self.q.put(item, timeout=0.2)
                 return
@@ -232,7 +251,7 @@ class OcrSession:
                 continue
 
     def finish(self) -> None:
-        """投递哨兵并等待 OCR worker 退出。"""
+        """投递哨兵并等待 OCR worker 退出（join 带超时，审查轮加固）。"""
         from queue import Full
         while True:
             try:
@@ -241,7 +260,14 @@ class OcrSession:
             except Full:
                 if not self._thread.is_alive():
                     break
-        self._thread.join()
+        # join 超时：worker 若卡在不可中断的设备调用（TRT 流同步/驱动
+        # 恢复中）上，无超时 join 会把整条流水线永久停住（挂死不是异常，
+        # 外层 except 吞不掉）。超时后线程为 daemon，进程可退出。
+        self._thread.join(timeout=_OCR_JOIN_TIMEOUT_S)
+        if self._thread.is_alive():
+            logger.warning("OCR worker 未在 %.1fs 内退出（卡在设备调用？）"
+                           "——放弃等待，进程退出时回收",
+                           _OCR_JOIN_TIMEOUT_S)
 
     # ── OCR worker（引擎取还 / 预处理分流 / 推理）────────────
 
@@ -277,6 +303,11 @@ class OcrSession:
         try:
             if not self._owns_engines:
                 engines = list(self._engines)
+                if not engines:
+                    # 契约违反显式化（2026-09-19 审查轮）：此前空列表直接
+                    # 走 engines[0] → IndexError，错误信息与真实原因无关。
+                    raise ValueError(
+                        "注入引擎路径要求 _ocr_engines 非空（收到空列表）")
                 spec.on_backend_used(
                     'tensorrt+onnxruntime'
                     if len(engines) == 2 and
@@ -335,6 +366,12 @@ class OcrSession:
                         infer_q.put(item, timeout=0.2)
                         return True
                     except Full:
+                        # 推理线程全部退出（异常/正常收尾）而队列仍满：
+                        # 无人再消费，继续自旋 = 挂死（审查轮：与
+                        # put/finish 同族的「等一个永不到来的事件」）。
+                        if infer_threads and not any(
+                                t.is_alive() for t in infer_threads):
+                            return False
                         continue
 
             def _report_ocr_progress(idx: int, frac: float) -> None:
@@ -563,7 +600,11 @@ class OcrSession:
                             break
             for t in infer_threads:
                 t.join()
-        except Exception as e:
+        except BaseException as e:  # noqa: BLE001
+            # BaseException 而非 Exception（2026-09-19 审查轮）：worker
+            # 逃逸的异常若不被记录，self.err 恒空 → put/finish 的等待
+            # 循环失去唯一出口 = 挂死。此处全接并记录（KeyboardInterrupt
+            # 等仍会被 put/finish 以 self.err[0] 原样抛给调用方）。
             failed = True
             self.err.append(e)
         finally:

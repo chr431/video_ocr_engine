@@ -23,6 +23,14 @@ _TRUTHY = ("1", "true", "yes", "on")
 _FALSY = ("0", "false", "no", "off")
 ENV_WINS = "VOE_ENV_WINS"
 
+# 枚举型 str 旋钮的已知取值（2026-09-19 审查轮）：_parse 对 str 做
+# 「忽略大小写后命中」归一，避免 VOE_TELEMETRY=FULL 这类输入被当成
+# 非法档位（此前撞无消息 assert；-O 下静默降级）。
+_STR_CHOICES = {
+    "diag.telemetry": ("off", "std", "full"),
+    "segment.text_sep_merge": ("binary", "off"),
+}
+
 
 def _parse_bool(raw: str, default: bool) -> bool:
     v = raw.strip().lower()
@@ -49,6 +57,19 @@ def _parse(knob, raw: str) -> Any:
             return int(s)
         except ValueError:
             return knob.default
+    if t == "str":
+        # 大小写/空白归一（2026-09-19 审查轮）：v1 裸 get 原样返回，
+        # 于是 VOE_TELEMETRY=FULL（大写）会以非法档位进 Metrics——此前
+        # 撞 assert（无消息的崩溃）、-O 下静默降级。这里只在「忽略大小写
+        # 后恰好等于某个已知取值」时归一，其余仍原样返回（保持 v1 对
+        # 自由文本旋钮的宽松语义，非法值由消费方显式报错）。
+        low = s.lower()
+        for cand in _STR_CHOICES.get(knob.name, ()):
+            if cand == s:
+                return s
+            if cand == low:
+                return cand
+        return s
     if t == "float":
         try:
             return float(s)

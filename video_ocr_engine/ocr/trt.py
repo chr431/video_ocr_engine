@@ -49,6 +49,7 @@ def engine_sm() -> str:
     if _ENGINE_SM_CACHE is not None:
         return _ENGINE_SM_CACHE[0]
     sm = config.TRT_ENGINE_SM
+    probed = False
     try:
         from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
         _e, dev = cudart.cudaGetDevice()
@@ -59,8 +60,17 @@ def engine_sm() -> str:
                 cudart.cudaDeviceAttr.cudaDevAttrComputeCapabilityMinor, dev)
             if not _e2 and not _e3:
                 sm = "sm%d%d" % (major, minor)
+                probed = True
     except Exception:  # noqa: BLE001 — 探测失败回落常量（无 CUDA/无设备）
         pass
+    if not probed:
+        # 只缓存成功的探测（2026-09-19 审查轮）：此前失败也写缓存——
+        # 首次调用若撞上 CUDA 瞬态不可用（独显刚从省电态唤醒，
+        # _wait_cuda_ready 处理的同一实测现象），常量后缀会被缓存整个
+        # 进程 → 引擎缓存名与真实架构不符 → 后续可能触发 68~72s 全量
+        # 重建且无提示。参照 nvdec_available 的"只缓存成功"写法。
+        log.debug("sm 探测失败，本次回落常量 %s（不缓存）", sm)
+        return sm
     _ENGINE_SM_CACHE = (sm, "")
     return sm
 

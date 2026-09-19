@@ -614,9 +614,16 @@ def acquire_ocr_engine(variant: str = "v6_small",
 
     S9-2：pad/gamma/gpu_ctc 为 D6 注入口（None=引擎内调用期读 env）。
     仅当注入值非 None 时才参与池 key——同一解析结果的引擎共享池位
-    （PI-10 key 稳定性不变：引擎路径的注入值对同一实例恒定）。"""
+    （PI-10 key 稳定性不变：引擎路径的注入值对同一实例恒定）。
+
+    ⚠️ gamma/gpu_ctc 入 key（2026-09-19 审查轮）：两者在引擎构造期冻结
+    （`GpuPreprocessor(gamma=...)`），此前不在 key 里——同进程内改
+    `OCR_GAMMA` 后重跑会命中旧 key 拿到旧 gamma 的引擎 = 旋钮静默失效。
+    key 维度增加对稳态 PI-10 无影响（同 run 内注入值恒定）。"""
     key = (variant, engine_type, int(fill_width or 0), int(num_threads or 0),
-           int(pad_floor_env) if pad_floor_env is not None else -1)
+           int(pad_floor_env) if pad_floor_env is not None else -1,
+           round(float(gamma), 6) if gamma is not None else -1.0,
+           int(bool(gpu_ctc)) if gpu_ctc is not None else -1)
     with _POOL_LOCK:
         idle = _ENGINE_POOL.get(key)
         if idle:
@@ -651,7 +658,20 @@ def checkin_ocr_engine(engine: OcrEngine) -> None:
             idle.append(engine)
             _POOL_IDLE_ORDER[id(engine)] = engine
             while len(_POOL_IDLE_ORDER) > _POOL_MAX_TOTAL:
-                _oldest_id, old = _POOL_IDLE_ORDER.popitem(last=False)
+                # 淘汰最旧的**其他 key** 条目（2026-09-19 审查轮）：直接
+                # popitem 会取到刚 append 的同一 key 引擎（同 key 的 bucket
+                # 就是 idle 本身）→ 刚归还的引擎被 del 后又 release()，
+                # 池净减 + 白付一次 TRX 反序列化（下次 checkout 重建
+                # 0.35~0.44s）。仅当池里全是同 key 时才退化为淘汰自身。
+                victim = None
+                for cand_id, cand in _POOL_IDLE_ORDER.items():
+                    if getattr(cand, "_pool_key", None) != key:
+                        victim = cand_id
+                        break
+                if victim is None:
+                    victim, old = _POOL_IDLE_ORDER.popitem(last=False)
+                else:
+                    old = _POOL_IDLE_ORDER.pop(victim)
                 evicted_key = getattr(old, "_pool_key", None)
                 bucket = _ENGINE_POOL.get(evicted_key, [])
                 for i, candidate in enumerate(bucket):

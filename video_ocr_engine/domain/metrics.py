@@ -261,7 +261,14 @@ class Metrics:
 
     def __init__(self, tier: str = "std", registry: MetricRegistry = METRICS,
                  clock=time.perf_counter) -> None:
-        assert tier in ("off", "std", "full")
+        # 显式校验而非 assert（2026-09-19 审查轮）：assert 在 python -O
+        # 下消失，非法档位会静默变成"enabled 但非 detailed"的混合态
+        # （full 档专属直方图静默不产）；且此前无消息的 AssertionError
+        # 对 VOE_TELEMETRY=FULL 这类大小写输入毫无提示。
+        if tier not in ("off", "std", "full"):
+            raise ValueError(
+                "遥测档位必须为 off/std/full，收到 %r（env VOE_TELEMETRY）"
+                % (tier,))
         self._tier = tier
         self._registry = registry
         self._clock = clock
@@ -392,16 +399,25 @@ class Metrics:
             arr = h[name] = [0] * HIST_N_BUCKETS
         arr[hist_bucket(seconds)] += 1
 
-    def snapshot(self) -> dict:
-        """合并全部线程桶（drain 语义）并返回聚合快照。
+    def snapshot(self, drain: bool = True) -> dict:
+        """合并全部线程桶并返回聚合快照。
 
         返回 {"spans": {name: {n,sum,min,max,p50,p99}}, "counters": {...},
         "gauges": {...}, "histograms": {name: {n, buckets, lower}}}；
         spans 聚合后丢弃原始样本（报告不需要时间线）。
+
+        ``drain``（2026-09-19 审查轮）：True=排干（run 末一次性调用，
+        默认保持既有语义）；**False=只读快照**——run 中途的消费者
+        （StallWatchdog.dump_stall）必须用它，否则把已累计的桶全部
+        吃掉：停顿后的最终 RunReport 只剩停顿之后的部分样本，
+        PI-3/PI-10 这类阈值指标偏小 → 门禁静默放行。
         """
         with self._lock:
-            buckets, self._buckets = self._buckets, []
-            self._local = threading.local()          # 丢弃本线程桶引用
+            if drain:
+                buckets, self._buckets = self._buckets, []
+                self._local = threading.local()      # 丢弃本线程桶引用
+            else:
+                buckets = list(self._buckets)
         spans: dict = {}
         counters: dict = {}
         gauges: dict = {}
@@ -450,7 +466,7 @@ class NullMetrics(Metrics):
     def __init__(self) -> None:
         super().__init__(tier="off")
 
-    def snapshot(self) -> dict:
+    def snapshot(self, drain: bool = True) -> dict:
         return {}
 
 

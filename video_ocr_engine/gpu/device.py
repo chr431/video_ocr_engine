@@ -10,6 +10,7 @@ gpu/frame_ref.py。
 tests/pipeline/test_gpu_pipeline.py patch 面）。
 """
 import logging
+import threading
 import time
 
 import numpy as np
@@ -80,40 +81,63 @@ class _YFramePool:
     def __init__(self, fnb: int):
         self._fnb = int(fnb)
         self._free: list = []
+        self._lk = threading.Lock()   # acquire/_recycle/release_all 互斥
+                                      # （2026-09-19 审查轮：此前无锁，
+                                      #  check-then-act 可 pop 空列表）
 
     def acquire(self) -> _YFrame:
-        if self._free:
-            return self._free.pop()
+        with self._lk:
+            if self._free:
+                return self._free.pop()
+        return self._malloc_frame()
+
+    def _malloc_frame(self) -> _YFrame:
         from cuda.bindings import runtime as cudart
-        _err, ptr = cudart.cudaMalloc(self._fnb)
+        err, ptr = cudart.cudaMalloc(self._fnb)
+        if int(err) != 0 or not ptr:
+            raise MemoryError(
+                "cudaMalloc(%d B) 失败: %s（审查轮：此前丢弃 _err，"
+                "int(None) 误报 TypeError）" % (self._fnb, err))
         return _YFrame(self, int(ptr), self._fnb)
 
     def _recycle(self, frame: _YFrame) -> None:
         """入列回收（__del__ 安全路径：无任何 CUDA 调用）。"""
-        if len(self._free) < self._MAX:
-            self._free.append(frame)
-            return
+        with self._lk:
+            if len(self._free) < self._MAX:
+                self._free.append(frame)
+                return
         # B6：溢出不在析构上下文里 cudaFree——告警并放弃（有界泄漏，
         # 由 release_all/进程退出兜底）
         logger.warning("_YFramePool 空闲列满，__del__ 放弃回收一块 %d B 显存"
                        "（B6：CUDA 释放只走显式路径）", self._fnb)
 
     def recycle(self, frame: "_YFrame") -> None:
-        """显式归还（S4）：先置空 pool 引用防 __del__ 双重入列，再入列。"""
-        frame.pool = None
+        """显式归还（S4）：入列后置空 pool 引用防 __del__ 双重入列。
+
+        ⚠️ 顺序不可交换（2026-09-19 审查轮）：先置空再入列时，对象带着
+        pool=None 进入空闲列——下次 acquire 复用它、GC 时 __del__ 撞 None
+        被 except 吞掉，该块既不回池也不 cudaFree = 每轮泄漏一帧显存
+        （长驻进程必现 OOM）。现在入列在前（此时 pool 仍有效，若随后被
+        GC 也能正确回收），置空在后（阻断 __del__ 重复入列）。"""
         self._recycle(frame)
+        frame.pool = None
 
     def release_all(self) -> None:
         """显式释放全部空闲缓冲（extract 结束调用；DESIGN-REVIEW C5：池
         原本只在超 _MAX 时 cudaFree，extract 返回后池随闭包 GC，已入池块
         永不释放 → 长进程显存单调增长）。"""
-        while self._free:
-            frame = self._free.pop()
+        while True:
+            with self._lk:
+                if not self._free:
+                    break
+                frame = self._free.pop()
             try:
                 from cuda.bindings import runtime as cudart
                 cudart.cudaFree(frame.ptr)
             except Exception:
-                pass
+                logger.debug("cudaFree 失败，忽略（进程退出兜底）",
+                             exc_info=True)
+                pass  # 释放失败仅余进程退出兜底，无进一步处置手段
 
 
 class _DevBatch:
@@ -178,39 +202,53 @@ class _DevBatchPool:
     def __init__(self, nbytes: int):
         self._nbytes = int(nbytes)
         self._free: list = []
+        self._lk = threading.Lock()   # 同 _YFramePool（审查轮加锁）
 
     def acquire(self, host) -> _DevBatch:
-        if self._free:
-            b = self._free.pop()
-            b.host = host
-            return b
+        with self._lk:
+            if self._free:
+                b = self._free.pop()
+                b.host = host
+                return b
         from cuda.bindings import runtime as cudart
-        _err, ptr = cudart.cudaMalloc(self._nbytes)
+        err, ptr = cudart.cudaMalloc(self._nbytes)
+        if int(err) != 0 or not ptr:
+            raise MemoryError(
+                "cudaMalloc(%d B) 失败: %s（审查轮：此前误报 TypeError）"
+                % (self._nbytes, err))
         return _DevBatch(self, int(ptr), self._nbytes, host)
 
     def _recycle(self, b: _DevBatch) -> None:
         """入列回收（__del__ 安全路径：无任何 CUDA 调用；B6/S4）。"""
         b.host = None
-        if len(self._free) < self._MAX:
-            self._free.append(b)
-            return
+        with self._lk:
+            if len(self._free) < self._MAX:
+                self._free.append(b)
+                return
         logger.warning("_DevBatchPool 空闲列满，__del__ 放弃回收一块 %d B 显存"
                        "（B6：CUDA 释放只走显式路径）", self._nbytes)
 
     def recycle(self, b: "_DevBatch") -> None:
-        """显式归还（S4）：先置空 pool 引用防 __del__ 双重入列，再入列。"""
-        b.pool = None
+        """显式归还（S4）：入列在前、置空 pool 在后（顺序不可交换，
+        同 _YFramePool.recycle 的 2026-09-19 审查轮修复——先置空会让
+        复用时 __del__ 撞 None 被吞 = 每轮泄漏一块显存）。"""
         self._recycle(b)
+        b.pool = None
 
     def release_all(self) -> None:
         """显式释放全部空闲缓冲（同 _YFramePool.release_all，C5）。"""
-        while self._free:
-            b = self._free.pop()
+        while True:
+            with self._lk:
+                if not self._free:
+                    break
+                b = self._free.pop()
             try:
                 from cuda.bindings import runtime as cudart
                 cudart.cudaFree(b.ptr)
             except Exception:
-                pass
+                logger.debug("cudaFree 失败，忽略（进程退出兜底）",
+                             exc_info=True)
+                pass  # 释放失败仅余进程退出兜底，无进一步处置手段
 
 
 class _GpuRunCtx:
