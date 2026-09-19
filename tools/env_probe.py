@@ -149,11 +149,20 @@ def ffmpeg_fact() -> EnvFact:
     return EnvFact("ffmpeg", path, source, version=_version_of(path))
 
 
-def decord_fact(expect_dll: Path | None = None) -> EnvFact:
-    """decord 包与其 DLL 的事实；``expect_dll`` 给定时校验 md5 一致。
+def decord_fact(expect_dll: Path | None = None, *,
+                install_mode: str = "auto") -> EnvFact:
+    """decord 包与其 DLL 的事实。
 
-    这是「实际使用的 DLL 非最新」的根治点：构建产物 md5 与
-    site-packages 里的 DLL md5 必须一致，不一致即显式报错。
+    ``install_mode``（2026-09-19 起 decord 有正式 wheel 发布，两种形态）：
+      · ``"wheel"``  —— 从 GitHub Release 的 wheel 安装（**推荐/默认路径**）。
+        此时 DLL 由 wheel 自带，**不该**与本地 dev 构建比对 md5——
+        两者本就是不同产物（wheel 有独立的构建链与版本号）。
+      · ``"dev"``    —— 本地 `rebuild_dev.bat` 构建后部署（开发调试用）。
+        此时才校验「构建产物 md5 == 已部署 md5」，防「改了 C++ 忘了部署」。
+      · ``"auto"``   —— 依据是否存在本地构建产物推断；有构建产物且版本号
+        与 wheel 一致时才按 dev 口径校验（见下方实现）。
+
+    ``--deploy`` 只在 dev 形态下有意义（wheel 形态应 `pip install` 升级）。
     """
     # ⚠️ 用 find_spec 定位而**不 import**（2026-09-19 纪律轮）：import decord
     # 会把 decord.dll 载入本进程并锁住，--deploy 随即无法覆盖它
@@ -177,6 +186,18 @@ def decord_fact(expect_dll: Path | None = None) -> EnvFact:
         ver = "?"
     fact = EnvFact("decord", dll if dll.is_file() else pkg, "site-packages",
                    version=ver, md5=_md5(dll) if dll.is_file() else "")
+    # wheel 形态：DLL 由 wheel 自带，不与本地构建产物比对
+    if install_mode == "auto":
+        try:
+            from importlib.metadata import distribution as _dist
+            files = _dist("decord").files or []
+            install_mode = ("wheel" if any(
+                str(f).endswith("decord.dll") for f in files) else "dev")
+        except Exception:  # noqa: BLE001 — 元数据不可用则按 dev 保守处理
+            install_mode = "dev"
+    if install_mode == "wheel":
+        fact.note = ""            # wheel 自带 DLL，无"过期"概念
+        return fact
     if expect_dll is not None and dll.is_file():
         want = _md5(expect_dll)
         if want and fact.md5 and want != fact.md5:

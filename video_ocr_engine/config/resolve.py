@@ -105,7 +105,13 @@ def resolve(*, env: Mapping[str, str] | None = None,
                 continue
         values[k.name] = ov if ov is not None else k.default
 
-    digest_src = json.dumps(values, sort_keys=True, ensure_ascii=True,
+    # digest 只覆盖**生效值**（2026-09-19）：env_live_only 旋钮的实际
+    # 行为由调用期 env 决定，把解析结果计入 digest 会让 A/B 指纹撒谎。
+    # values 的键是**点号形式**（k.name），排除集合必须同形
+    _live_only = {k.name for k in KNOBS.knobs
+                  if getattr(k, "env_live_only", False)}
+    _digest_vals = {k: v for k, v in values.items() if k not in _live_only}
+    digest_src = json.dumps(_digest_vals, sort_keys=True, ensure_ascii=True,
                             default=str)
     values["config_digest"] = hashlib.sha256(
         digest_src.encode("utf-8")).hexdigest()[:16]

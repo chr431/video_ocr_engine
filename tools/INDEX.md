@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **131 个 `.py`**（22,840 行），其中 116 个是探针
+`tools/` 现有 **131 个 `.py`**（22,861 行），其中 116 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -34,7 +34,7 @@
 | `_probe_hybrid_sum_gap.py` | 81 | hybrid 与两侧解码器速率之和的精确差值（三速率中位 + 理想和对比） | docs/log/2026-09-10-hybrid联调深挖.md |
 | `_probe_hybrid_trace.py` | 109 | hybrid 调度轨迹剖析（DECORD_HYBRID_DEBUG 分侧发射时间线/份额/慢批定位） | docs/log/2026-09-10-hybrid联调深挖.md |
 | `_probe_hybrid_startup.py` | 146 | hybrid 启动期派工诊断（fork 级冷进程：硬窗界+TRACE 轨迹+hybrid_stats 对账；盲派 GOP 数/稳态份额/rg 真伪的判定仪）| docs/log/2026-09-18-hybrid启动轮.md |
-| `env_probe.py` | 207 | **环境事实源**（纪律轮）：外部依赖路径的唯一解析入口——ffmpeg 候选列表/decord DLL 定位（find_spec 不加载，避免锁 DLL）/md5 校验；工具与探针一律 `from env_probe import ffmpeg_bin`，禁写绝对路径 | docs/log/2026-09-19-纪律轮.md |
+| `env_probe.py` | 228 | **环境事实源**（纪律轮）：外部依赖路径的唯一解析入口——ffmpeg 候选列表/decord DLL 定位（find_spec 不加载，避免锁 DLL）/md5 校验；工具与探针一律 `from env_probe import ffmpeg_bin`，禁写绝对路径 | docs/log/2026-09-19-纪律轮.md |
 | `env_doctor.py` | 243 | **环境体检/部署/审计**：`--deploy` 把 fork 构建产物同步进 site-packages 并校验 md5（消除手工 cp 导致的「用的 DLL 非最新」）；`--audit` 硬编码路径扫描（纪律项 1 的实现）；`--json` 供 CI/审计消费 | docs/log/2026-09-19-纪律轮.md |
 | `_probe_leak_longrun.py` | 195 | 长跑资源泄漏检测（同进程多轮 extract 采样 VRAM/RSS，后段斜率判平台 vs 泄漏；`--expect-leak` 注入旧 recycle 顺序做反向对照）| docs/log/2026-09-19-资源长跑轮.md |
 | `_probe_window_repro.py` | 34 | hard-window 回归复现器（CPU-out 窗口口径，got==n 判少交付；2026-09-19 窗口缺陷轮取证工具，矩阵 6+4 文件×窗长）| docs/log/2026-09-19-hybrid窗口缺陷轮.md |

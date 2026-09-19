@@ -49,12 +49,13 @@ KNOBS = Registry(knobs=(
     Knob("ocr.trt_fp16", "TRT_FP16_ENV", "TRT_FP16", "bool", False,
          "ocr", ("gpu",), "ocr/trt.py:_fp16_on",
          note="fp16 ONNX（keep_io_types）+ STRONGLY_TYPED 引擎（层内 half、"
-              "IO fp32）；准确率门禁 _probe_acc_ab --knob TRT_FP16=0,1"),
+              "IO fp32）；准确率门禁 _probe_acc_ab --knob TRT_FP16=0,1",
+         env_live_only=True),   # env-live-only（2026-09-19）：调用期直读 env，不进 digest
     Knob("ocr.trt_defer_sync", "TRT_DEFER_SYNC_ENV", "TRT_DEFER_SYNC",
          "bool", False, "ocr", ("gpu",), "ocr/trt.py 延迟收集环",
          note="raw 直通批深度 2 延迟收集（提交不等待、结果滞后一批、"
               "提交序交付）；治 launch 裸奔（运行期 SM ~40%）；"
-              "门禁=文本 sha 逐位+段数+bench ab"),
+              "门禁=文本 sha 逐位+段数+bench ab", env_live_only=True),   # env-live-only（2026-09-19）：消费者调用期直读 env，RunConfig 字段不决定行为 → 已从 config_digest 排除
     # ── segment ──
     Knob("segment.text_sep_merge", "TEXT_SEP_MERGE_ENV", "TEXT_SEP_MERGE", "str",
          "binary", "segment", _ALL, "ec:229",
@@ -70,19 +71,22 @@ KNOBS = Registry(knobs=(
          "pipeline", ("gpu",), "ec:81",
          note="三态：未设 None=规则 / falsy 关 / truthy 强制 / 非法=关（非 None）"),
     Knob("pipeline.gpu_stream", "GPU_PIPELINE_STREAM_ENV", "GPU_PIPELINE_STREAM",
-         "bool", False, "pipeline", ("gpu",), "ec:82", note="C-10 判零收益，opt-in"),
+         "bool", False, "pipeline", ("gpu",), "ec:82", note="C-10 判零收益，opt-in",
+         env_live_only=True),   # env-live-only（2026-09-19）：消费者调用期直读 env，RunConfig 字段不决定行为 → 已从 config_digest 排除
     Knob("pipeline.gpu_drainer", "GPU_PIPELINE_DRAINER_ENV",
          "GPU_PIPELINE_DRAINER", "bool", False, "pipeline", ("gpu",),
          "gpu/device.py:_batch_iter",
          note="层4 排空线程（get_batch 独占线程预取深 4 批）；实测零收益"
-              "默认关（引擎税=线程争用而非排空阻塞，同 C-10 判例）"),
+              "默认关（引擎税=线程争用而非排空阻塞，同 C-10 判例）",
+         env_live_only=True),   # env-live-only（2026-09-19）：消费者调用期直读 env，RunConfig 字段不决定行为 → 已从 config_digest 排除
     # ── diag ──
     Knob("diag.profile", "ENGINE_PROFILE_ENV", "ENGINE_PROFILE", "bool", False,
          "diag", _ALL, "ec:84", note="v1 读于构造期；v2 统一构造期一次（§10.2）"),
     Knob("diag.subprobe", "TRT_SUBPROBE_ENV", "TRT_SUBPROBE", "bool", False,
-         "diag", ("gpu",), "ec:85", note="v1 读于 import 期；v2 统一构造期一次（§10.2）"),
+         "diag", ("gpu",), "ec:85", note="v1 读于 import 期；v2 统一构造期一次（§10.2）",
+         env_live_only=True),   # env-live-only（2026-09-19）：消费者调用期直读 env，RunConfig 字段不决定行为 → 已从 config_digest 排除
     Knob("diag.bounds_debug", "DEBUG_BOUNDS_ENV", "DEBUG_BOUNDS", "bool", False,
-         "diag", _ALL, "ec:86"),
+         "diag", _ALL, "ec:86", env_live_only=True),   # env-live-only（2026-09-19）：消费者调用期直读 env，RunConfig 字段不决定行为 → 已从 config_digest 排除
     Knob("diag.telemetry", "VOE_TELEMETRY", "VOE_TELEMETRY", "str", "std",
          "diag", _ALL, "v2:8.6-r5", note="off/std/full；off=NullMetrics 一键关闭（PI-15）"),
     Knob("diag.report_file", "VOE_REPORT_FILE", "VOE_REPORT_FILE", "str", "",
@@ -94,3 +98,4 @@ KNOBS = Registry(knobs=(
               "一次 is-not-None 判断）；需 VOE_TELEMETRY!=off；开启时自带 "
               "NVML 0.2s 点列"),
 ))
+
