@@ -808,29 +808,6 @@ class FieldExtractor:
                 logger.warning('原生混合解码打开失败，回退纯 GPU: %s', e)
         return vr
 
-    def _decord_has_hybrid_preroute(self) -> bool:
-        """decord ≥0.8.3（hybrid chunk 预路由 + 池深修复）判定。
-
-        **线程档位不再以本判定分叉**（§14 起 hybrid 与 cpu 后端共用
-        codec 感知策略，见 `_open_vr` 的 hybrid 分支）。保留本方法供
-        **诊断/日志**用：`DECORD_LIBRARY_PATH` 开发态换 dll 不改 Python 包
-        版本号，故此判定对"实际加载的 dll"并不可靠——需要能力探测时应按
-        v2 §17.4 D-2 走 `ctx.capabilities()`（S5 内联落地时替换）。
-        """
-        try:
-            import decord as _d
-            parts = []
-            for p in str(getattr(_d, '__version__', '')).split('.'):
-                digits = ''.join(ch for ch in p if ch.isdigit())
-                if not digits:
-                    break
-                parts.append(int(digits))
-                if len(parts) == 3:
-                    break
-            return tuple(parts) >= (0, 8, 3)
-        except Exception:  # noqa: BLE001 版本不可知 → 保守判 False
-            return False
-
     def _decord_format(self) -> str:
         """当前管线请求的 decord output_format。
 

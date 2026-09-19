@@ -321,7 +321,6 @@ OCR_TARGET_H: int = 48
 # test5/test6 左留白是右留白的约 4 倍 —— 数字右对齐、ROI 按最长状态取，
 # 短数字时空白全堆在左侧。留白越多，裁掉的收益越大、切到笔画的风险越小。
 # 测量工具：`tools/_probe_roi_whitespace.py`。
-OCR_ROI_AUTOCROP_DEFAULT: bool = True
 # 余量 = ROI 宽的百分比（每侧）。**2026-08-30 由 10 改为 20**，依据见下。
 #
 # 余量是「裁掉空白」与「切到笔画」之间的权衡，两侧都错得起：
@@ -345,7 +344,6 @@ OCR_ROI_AUTOCROP_DEFAULT: bool = True
 # 削掉 —— test5 的裁掉量中位数 余量10 时 13.2% → 余量20 时只剩 3.8%
 # （收益少了 71%），而 test5 在余量 10 下**零误裁**。
 # 真正的解法是下面的 **最小收益门槛**（逐段自适应），余量因此**回到 10**。
-OCR_ROI_AUTOCROP_MARGIN_PCT: int = 10
 #
 # 最小收益门槛：裁掉宽度占 ROI 宽的比例低于此值就**整段不裁**。
 #
@@ -368,8 +366,6 @@ OCR_ROI_AUTOCROP_MARGIN_PCT: int = 10
 # **收益与风险在逐段粒度上自动分开**，不需要全局折中。
 # 门槛取 10% 是因为 test5/test6 的裁掉量分布里 [5%,10%) 区间为空（0 段），
 # 即 10% 不会误伤宽 ROI 的任何一段。
-OCR_ROI_AUTOCROP_MIN_GAIN_PCT: int = 10
-OCR_REORDER_WINDOW_DEFAULT: int = 64         # 重排窗口（段）；= 4 × 默认 OCR 批 16
 # 高度已接近目标时跳过 resize 的相对容差（2%）
 OCR_RESIZE_TOL: float = 0.02
 # 灰度权重（Rec.601；分段与 OCR 预处理共用，逐位一致性依赖此权重）

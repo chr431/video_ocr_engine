@@ -27,7 +27,6 @@ class Knob:
     applies_to: tuple[str, ...]  # ("cpu", "gpu") —— 取代散落的门控注释
     rationale_id: str            # → 依据锚点（S2 前为 ec:<行>，之后为 knobs.yaml id）
     note: str = ""               # 解析语义备注（三态 / 特殊回退等）
-    deprecated: str | None = None
     # 2026-09-19：该旋钮由消费者**调用期 env 活读**，RunConfig 字段值
     # 不决定行为 → 从 config_digest 排除（否则 A/B 指纹与实际不符）。
     # 标记为 True 的旋钮，其 RunConfig 字段仅供 introspection 兼容。
@@ -43,12 +42,6 @@ class Registry:
             if k.name == name:
                 return k
         raise KeyError("未注册旋钮: %s" % name)
-
-    def by_env(self, env: str) -> Knob | None:
-        for k in self.knobs:
-            if k.env == env:
-                return k
-        return None
 
     def env_names(self) -> tuple[str, ...]:
         return tuple(k.env for k in self.knobs if k.env)

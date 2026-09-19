@@ -7,7 +7,7 @@ S3 起扩展为完整 RunConfig（video_path / roi / decode_backend 等每次调
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -48,10 +48,6 @@ class RunConfig:
     @classmethod
     def from_values(cls, values: dict) -> "RunConfig":
         return cls(**{k.replace(".", "_"): v for k, v in values.items()})
-
-    def as_dict(self) -> dict:
-        return {f.name: getattr(self, f.name) for f in fields(self)
-                if f.name != "config_digest"}
 
     def get(self, knob_name: str):
         """按旋钮规范名取值（"ocr.gamma" → self.ocr_gamma）。"""
