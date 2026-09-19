@@ -294,7 +294,7 @@ class OcrSession:
     def _worker(self) -> None:
         import time
         from queue import Full, Queue
-        from video_ocr_engine.ocr.native import acquire_ocr_engine, checkin_ocr_engine
+        from video_ocr_engine.ocr.native import checkin_ocr_engine
         self._bump_priority()
         spec = self._spec
         t0 = time.perf_counter()
@@ -599,7 +599,10 @@ class OcrSession:
                         if not any(t.is_alive() for t in infer_threads):
                             break
             for t in infer_threads:
-                t.join()
+                # 超时对齐 finish() 的 10s 哲学（ocr_stage 头注释）：infer
+                # 线程卡设备调用时不无限等待，超时后由 daemon 兜底 + err
+                # 路径上报（2026-09-20 审计：此前无超时，与 finish 不一致）。
+                t.join(10.0)
         except BaseException as e:  # noqa: BLE001
             # BaseException 而非 Exception（2026-09-19 审查轮）：worker
             # 逃逸的异常若不被记录，self.err 恒空 → put/finish 的等待

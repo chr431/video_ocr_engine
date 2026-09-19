@@ -32,8 +32,11 @@ def compute_frames(spec, total: int) -> list:
 
 
 def begin_reading(vr, spec, frames: list) -> None:
-    """seek / hybrid_begin（hybrid 分片定位由生产者在片首完成，跳过外部
-    seek——其 seek_accurate 已显式报错，DESIGN-REVIEW B4）。"""
+    """seek 定位。`hybrid_begin` 是已删除的项目层 HybridDecoder 壳
+    （v3~v7）时代的化石 API——fork 读者从未实现（无 C-API），hasattr
+    恒 False，hybrid 读者实际走 seek_accurate（fork 支持，2026-09-20
+    引擎级实测 start=5000/win=1000 通过）；保留守卫仅因零成本。
+    （DESIGN-REVIEW B4 的「seek_accurate 显式报错」指旧壳，非 fork。）"""
     hybrid = hasattr(vr, 'hybrid_begin')
     if spec.frame_start > 0 and not hybrid:
         vr.seek_accurate(spec.frame_start)

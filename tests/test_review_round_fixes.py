@@ -38,6 +38,7 @@ def _fake_pool():
             self._fnb = 1024
             self._free = []
             self._lk = threading.Lock()
+            self._released = False   # 2026-09-20 泄漏专项新增字段
             self.malloc_calls = 0
 
         def _malloc_frame(self):
@@ -48,7 +49,11 @@ def _fake_pool():
 
 
 def test_pool_recycle_keeps_pool_alive_for_reuse():
-    """recycle 后对象被 acquire 复用；pool 引用必须保留（GC 兜底依赖它）。"""
+    """recycle 后缓冲被 acquire 复用；pool 引用必须保留（GC 兜底依赖它）。
+
+    2026-09-20 泄漏专项改判据：复用的是**缓冲**（ptr 相同），**不是对象**
+    （`f2 is not f`）——停靠对象是被 __del__ 复活过的，CPython 对复活对象
+    的二次死亡不再触发 __del__，直接复用对象 = 最终死亡永久泄漏。"""
     import gc
 
     pool = _fake_pool()
@@ -58,13 +63,46 @@ def test_pool_recycle_keeps_pool_alive_for_reuse():
     # __del__ 的 GC 兜底，只靠 GC 回收的池帧将永久泄漏。
     assert f.pool is pool, "recycle 不得置空 pool（会切断 GC 回收路径）"
     assert f._recycled is True, "须置 _recycled 标志防双入列"
+    orig_ptr = f.ptr                      # acquire 会把旧壳失能，先存
     f2 = pool.acquire()
-    assert f2 is f, "复用同一对象"
-    assert f2._recycled is False, "acquire 必须清 _recycled（否则回收被跳过）"
+    assert f2 is not f, "复用必须换壳（复活对象二次死亡不再触发 __del__）"
+    assert f2.ptr == orig_ptr, "缓冲本身应复用（malloc 次数不增）"
+    assert f2.pool is pool
+    assert f2._recycled is False, "新壳对象 _recycled 初值 False"
+    assert f.ptr == 0 and f.pool is None, "旧壳必须失能（不得再持指针/池引用）"
     pool.recycle(f2)
     assert len(pool._free) == 1, "显式 recycle 后必须回到空闲列"
     del f, f2
     gc.collect()
+
+
+def test_pool_reuse_after_resurrection_frees_on_final_death():
+    """2026-09-20 泄漏专项（真根因）钉子：复用帧的最终死亡必须可回收。
+
+    旧实现 acquire 直接复活停靠对象 → 其最终死亡（__del__ 已用过，复活
+    对象二次死亡不触发）既不入列也不 cudaFree = +2 MiB/轮永久泄漏。
+    锁定判据：复用 → 死亡 → release_all 后该缓冲恰好被释放一次。"""
+    import gc
+
+    pytest.importorskip("cuda")
+    from cuda.bindings import runtime as cudart
+
+    pool = _fake_pool()
+    f = pool.acquire()
+    pool.recycle(f)                 # 停靠（对象被 __del__ 或显式路径复活）
+    f2 = pool.acquire()             # 复用（换壳）
+    assert pool.malloc_calls == 1, "复用不得新增分配"
+    freed: list = []
+    orig = cudart.cudaFree
+    cudart.cudaFree = lambda p: (freed.append(p), (0, None))[1]
+    try:
+        del f, f2
+        gc.collect()
+        pool.release_all()
+    finally:
+        cudart.cudaFree = orig
+    assert len(freed) == 1, (
+        "复用帧最终死亡后 release_all 应释放其缓冲（旧实现此处 0 = 泄漏）")
 
 
 def test_pool_recycle_reuse_does_not_leak_via_gc():
@@ -103,6 +141,53 @@ def test_pool_concurrent_acquire_no_indexerror():
     for t in ts:
         t.join()
     assert not errs, "并发 acquire/recycle 出错: %r" % errs[:2]
+
+
+def test_pool_overflow_recycle_direct_frees():
+    """2026-09-20 泄漏专项钉子：空闲列满时的归还**必须 cudaFree 直释**。
+
+    旧语义「列满→告警放弃（CUDA 释放只走显式路径）」在轮末死亡波
+    （gc 集中析构数百帧、空闲列仅 _MAX）下每块永久泄漏——实测
+    +2.0 MiB/轮（600 块 × 3498B）。锁定判据：列满后多余块走直释。"""
+    pytest.importorskip("cuda")
+    from video_ocr_engine.gpu import device as dev
+    from cuda.bindings import runtime as cudart
+
+    pool = _fake_pool()
+    frames = [pool._malloc_frame() for _ in range(dev._YFramePool._MAX + 2)]
+    freed: list = []
+    orig = cudart.cudaFree
+    cudart.cudaFree = lambda p: (freed.append(p), (0, None))[1]
+    try:
+        for f in frames:
+            pool.recycle(f)
+    finally:
+        cudart.cudaFree = orig
+    assert len(pool._free) == dev._YFramePool._MAX, "空闲列应恰好填满"
+    assert len(freed) == 2, "溢出的 2 块必须 cudaFree 直释（旧版此处=泄漏）"
+
+
+def test_pool_released_late_frame_direct_frees():
+    """2026-09-20 泄漏专项钉子：release_all 之后迟到帧的归还必须直释。
+
+    旧语义把迟到帧回收入**已 release 的孤儿池**（池↔帧互引成环，GC 收
+    环时 _recycled=True 跳过释放）= 第二条永久泄漏路径。"""
+    pytest.importorskip("cuda")
+    from cuda.bindings import runtime as cudart
+
+    pool = _fake_pool()
+    pool.release_all()                 # 清列 + 置 _released
+    assert pool._released is True
+    f = pool._malloc_frame()           # 模拟迟到帧（现实中由在飞 payload GC 触发）
+    freed: list = []
+    orig = cudart.cudaFree
+    cudart.cudaFree = lambda p: (freed.append(p), (0, None))[1]
+    try:
+        pool.recycle(f)
+    finally:
+        cudart.cudaFree = orig
+    assert len(pool._free) == 0, "已 release 的池不得再收集空闲帧（孤儿池环）"
+    assert len(freed) == 1, "迟到帧必须 cudaFree 直释"
 
 
 # ── OcrSession：注入路径与等待循环出口 ──────────────────────────────

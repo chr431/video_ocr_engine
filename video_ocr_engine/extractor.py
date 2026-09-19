@@ -791,8 +791,13 @@ class FieldExtractor:
                 # 硬窗界（2026-09-17 越窗修复）：短窗时声明消费上限，fork
                 # 的 demux 与 GOP 派工在窗缘硬停——窗口外一个包都不读
                 # （实测 w3000 曾把全片 7761 包喂进两臂）。仅当窗口 < 全长
-                # 才设：全片运行不设 = fork 深库存行为不变。需 fork ≥ 遥测
-                # 穿透版（stock decord 无此方法，getattr 容忍）。
+                # 且 **start < 窗长** 才设：后者不是任意保守——fork 实测
+                # （2026-09-20 起点轮）晚起点（start=5000/win=1000）+
+                # seek_accurate + 硬窗交付的帧与 cpu/nvdec 基线**位级不
+                # 一致**（同请求无窗时三者一致）→ 晚起点硬窗存在 fork 级
+                # 缺陷，此谓词是唯一防线，修复前不得删。全片运行不设 =
+                # fork 深库存行为不变。需 fork ≥ 遥测穿透版（stock decord
+                # 无此方法，getattr 容忍）。
                 _sdw = getattr(vr, 'set_decode_window', None)
                 if (_sdw is not None and self._frame_end is not None
                         and self._frame_start < (self._frame_end - self._frame_start)

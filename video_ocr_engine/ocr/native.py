@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 import threading
 from collections import OrderedDict, deque
 from pathlib import Path

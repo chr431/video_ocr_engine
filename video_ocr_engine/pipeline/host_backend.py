@@ -264,6 +264,12 @@ def run_host_pipeline(spec: HostRunSpec, ocr_engines=None,
         raise ValueError(
             f"帧区间为空: frame_start={spec.frame_start}, "
             f"frame_end={spec.frame_end}, total={total}")
+    # hybrid_begin 为化石 API（fork 未实现，hasattr 恒 False → _with_dev
+    # 恒 True）。对 fork hybrid(CPU-out) 读者实测无害：其 get_batch 返回
+    # decord NDArray（有 to_dlpack），采到的是 CPU 指针且仅在 GPU raw OCR
+    # 直通时消费——而宿主帧 hybrid 只与 CPU OCR 组合（OCR 在 GPU 时
+    # extractor 选 hybrid_gpu 走 gpu_backend），该指针无人读（2026-09-20
+    # 起点轮核实）。
     hybrid = hasattr(vr, 'hybrid_begin')   # _with_dev 判定用
     try:
         begin_reading(vr, spec, frames)

@@ -10,7 +10,7 @@
 | numpy | 2.x | PyPI | 预处理/信号计算，纯 numpy 无 scipy |
 | openvino | 2026.3.1 | PyPI | **CPU OCR 默认后端**（2026-09-14 起）：模型级 2.1× 于 ORT + argmax 全一致（log 2026-09-14-OpenVINO模型级A-B/集成轮）；wheel ~76MB，仅 CPU 插件。**冻结分发可剪至 73MB**（删 NPU/GPU/异构前端等，配方与等价性实证见 log 2026-09-14-OpenVINO冻结瘦身） |
 | psutil | 6+ | PyPI | 物理核数探测 / RSS 采样（缺失时降级） |
-| decord | **0.8.3（已发布 [v0.8.3](https://github.com/chr431/decord/releases/tag/v0.8.3)，含 §16/§17 死锁修复）** | chr431/decord release | NVDEC 硬解 + CPU 软解；**PyPI 官方版不支持** `next_roi` / ROI-first / GPU gray / YUV420 / `sample_stride` 等差步长快速路径；fork 自 0.8.2 起发布 cp39–cp314 全版本 wheel，`pip install <wheel>` 即用 |
+| decord | **0.8.4（已发布 [v0.8.4](https://github.com/chr431/decord/releases/tag/v0.8.4)；本机现为 dev 部署态，见下节）** | chr431/decord release | NVDEC 硬解 + CPU 软解；**PyPI 官方版不支持** `next_roi` / ROI-first / GPU gray / YUV420 / `sample_stride` 等差步长快速路径；fork 自 0.8.2 起发布 cp39–cp314 全版本 wheel，`pip install <wheel>` 即用 |
 | cuda-python | 13.x | PyPI | TRT 执行 + decord GPU DLL 注册 |
 | tensorrt_*_bindings | 11.x | PyPI | TensorRT thin binding（~1MB）；运行 DLL 从系统 PATH 加载 |
 
@@ -30,6 +30,15 @@
 ## 已知问题与注意
 
 ### decord（自建 fork，pip wheel 安装）
+- **0.8.4（2026-09-19 已发布，tag v0.8.4，cp39–cp314 + win64-gpu.zip）**：
+  v0.8.4 = v0.8.3 + 冻结前清理（cuMemcpyPeerAsync 符号修复 / 死代码
+  −14.6k 行 / nvml.h 手写替代 795KB→45 行）+ 性能参考纯解码口径
+  （详见 log 2026-09-19-decord发布与引擎清理）。
+  **⚠️ 本机现为 dev 部署态（2026-09-20 审计修复轮）**：site-packages
+  DLL 为 dev 构建 `a2deb3c2`（= v0.8.4 + 未发布改动：错误槽
+  per-instance / H2D 积攒窗默认关 / update_version.py argv 化）。
+  回 wheel 态：`pip install --force-reinstall --no-deps
+  <decord-0.8.4-cp313-cp313-win_amd64.whl>`。
 - **0.8.3（2026-09-12 已发布，tag v0.8.3，cp39–cp314 + win64-gpu.zip；
   CI cp313 wheel 抽验：金标 28/28 + 宿主挂死用例干净 + TRT 段数一致）**：
   v0.8.3 = 0.8.2 + 十一个提交（73e5540 析构 UAF 修复 /

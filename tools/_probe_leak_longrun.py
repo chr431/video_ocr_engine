@@ -41,8 +41,26 @@ VIDS = {
 }
 
 
+def _vram_used_mib():
+    """显存已用（MiB）——**cudaMemGetInfo 口径优先**（泄漏判据）。
+
+    2026-09-20 泄漏专项教训：本探针此前用 NVML 全卡口径（含桌面合成），
+    反向对照注入的 +10 MiB/轮级泄漏在 NVML 读数上不显（桌面波动对冲/
+    掩盖）——资源长跑轮 §1「测进程内泄漏必须用 CUDA runtime 口径」的
+    教训此前只写进文档、没落进本探针。返回设备 used = total-free
+    （MemGetInfo 无进程字段；进程泄漏在运行期主导该值的变化）。"""
+    try:
+        from cuda.bindings import runtime as cudart
+        err, free, total = cudart.cudaMemGetInfo()
+        if int(err) != 0:
+            return _nvml_used_mib()
+        return (total - free) / 1048576.0
+    except Exception:
+        return _nvml_used_mib()
+
+
 def _nvml_used_mib():
-    """显存已用（MiB）；NVML 不可用返回 None。
+    """显存已用（MiB）；NVML 不可用返回 None（仅作无 CUDA 时的回退）。
 
     ctypes 调用口径与 resources.NvmlSampler 一致（返回码 + byref 结构）。"""
     try:
@@ -72,20 +90,24 @@ def _rss_mib():
 
 
 def _patch_old_recycle_order():
-    """反向对照：把池的 recycle 恢复成旧顺序（置空 pool 后入列）。"""
+    """反向对照：注入「放弃语义」——_recycle 谎报已入列而实际丢弃。
+
+    2026-09-20 泄漏专项更新：初版的「旧 recycle 顺序」（置空 pool）已被
+    __del__ 直释修复自然化解（pool=None 触发 except → 直释），注入后测
+    不出泄漏；放弃路径（列满/已 release 不释放）才是现存泄漏类，本函数
+    以「恒返 True 且不入列」模拟之，验证探针仍能抓到这类泄漏。"""
     from video_ocr_engine.gpu import device as dev
 
-    def _old_yframe_recycle(self, frame):
-        frame.pool = None
-        self._recycle(frame)
+    def _drop_yframe(self, frame):
+        return True
 
-    def _old_devbatch_recycle(self, b):
-        b.pool = None
-        self._recycle(b)
+    def _drop_devbatch(self, b):
+        b.host = None
+        return True
 
-    dev._YFramePool.recycle = _old_yframe_recycle
-    dev._DevBatchPool.recycle = _old_devbatch_recycle
-    print("⚠️ 已注入旧 recycle 顺序（反向对照：应看到显存单调增长）")
+    dev._YFramePool._recycle = _drop_yframe
+    dev._DevBatchPool._recycle = _drop_devbatch
+    print("⚠️ 已注入放弃语义（反向对照：应看到显存单调增长）")
 
 
 def _slope_per_round(xs, ys):
@@ -111,9 +133,13 @@ def main() -> int:
                     help="解码后端（hybrid 走 GPU 管线 CPU 分支）")
     ap.add_argument("--ocr", default="tensorrt")
     ap.add_argument("--expect-leak", action="store_true",
-                    help="注入旧 recycle 顺序做反向对照")
-    ap.add_argument("--keep-crops", action="store_true",
-                    help="开启 keep_crops（yuv420 代表帧路径）")
+                    help="注入放弃语义做反向对照")
+    # 2026-09-20：默认改 True 对齐 FieldExtractor 默认（也是 Y 池泄漏的
+    # 触发面）——此前默认 False 时探针对池类泄漏结构性盲（Y 池不启用，
+    # 反向对照注入也测不出）。要测 keep_crops=False 用 --no-keep-crops。
+    ap.add_argument("--keep-crops", action=argparse.BooleanOptionalAction,
+                    default=True,
+                    help="keep_crops（默认 True=引擎默认，Y 池触发面）")
     ap.add_argument("--rep-format", default="",
                     help="yuv|gray：yuv 走 _YFramePool（池泄漏的实际触发面）")
     ap.add_argument("--label", default="")
@@ -130,7 +156,7 @@ def main() -> int:
     from video_ocr_engine import FieldExtractor
 
     gc.collect()
-    v0, r0 = _nvml_used_mib(), _rss_mib()
+    v0, r0 = _vram_used_mib(), _rss_mib()
     print("基线: VRAM=%s MiB  RSS=%s MiB  (%s w%d decode=%s ocr=%s)"
           % (None if v0 is None else "%.0f" % v0,
              None if r0 is None else "%.0f" % r0,
@@ -150,7 +176,7 @@ def main() -> int:
         segs.append(len(r.segments))
         del ex, r
         gc.collect()
-        v, m = _nvml_used_mib(), _rss_mib()
+        v, m = _vram_used_mib(), _rss_mib()
         vram.append(v)
         rss.append(m)
         print("  轮 %2d  wall=%.3fs  VRAM=%s  RSS=%s"

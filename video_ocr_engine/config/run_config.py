@@ -13,8 +13,8 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class RunConfig:
     # ── decode ──
-    decode_num_threads: int = 0            # 0=自动分档
-    decode_hybrid_cpu_threads: int = 0     # 0=自动 clamp [8,16]
+    decode_num_threads: int = 0            # 0=自动（codec 感知档，decode_caliber.py）
+    decode_hybrid_cpu_threads: int = 0     # 0=自动（同上：与 cpu 后端共用档位）
     # ── ocr ──
     ocr_threads: int = 0                   # 0=全部物理核
     ocr_batch: int = 16
