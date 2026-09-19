@@ -18,7 +18,7 @@
 
 ---
 
-## 1. 导入路径迁移（六根模块 → 包内，0.14.0 删除旧路径）
+## 1. 导入路径迁移（六根模块 → 包内）——**已删除（0.14.1）**
 
 | 旧（DeprecationWarning） | 新 |
 |---|---|
@@ -32,7 +32,10 @@
 - 旧路径是**模块别名式 shim**：全部符号（含下划线名）可用、模块同一性
   保持（`import segmentation as s; s is video_ocr_engine.domain.segmentation`
   为 True）——monkeypatch/别名逻辑不受影响。
-- 时间线（Q3 裁决）：0.12.x 起 DeprecationWarning；**0.14.0 删除**。
+- 时间线（Q3 裁决）：0.12.x 起 DeprecationWarning；**0.14.0 起删除**——
+  实际落地在 **0.14.1**（先完成下游迁移：RaceVideoToLog 33 文件 59 行、
+  video_subtitle_extractor 无代码依赖，2026-09-19）。**上表旧路径自
+  0.14.1 起不可导入**，请按右列迁移。
 - `engine_config.__version__` / `OCR_THREADS_ENV` 等常量：从
   `video_ocr_engine.config.constants` 导入，名字不变。
 

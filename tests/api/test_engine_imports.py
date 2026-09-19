@@ -10,12 +10,14 @@ import pytest
 
 from _paths import PKG  # tests/_paths.py：与目录深度无关的 video_ocr_engine/ 路径
 
-# 0.14.0 删除六个根模块 shim 时，本表前 6 项须换成包内路径
-# （video_ocr_engine.config.constants / .gpu.context / .ocr.native /
-# .ocr.trt / .domain.segmentation / .domain.video_utils）——见 docs/MIGRATION.md §1。
+# 2026-09-19：六个根模块 shim（engine_config / gpu_setup / ocr_native /
+# ocr_trt / segmentation / video_utils）**已删除**（下游 RVTL 完成迁移后）。
+# 本表已换成包内路径——见 docs/MIGRATION.md §1 的迁移表（标注"已删除"）。
 ENGINE_MODULES = [
-    "engine_config", "gpu_setup", "ocr_native",
-    "ocr_trt", "segmentation", "video_utils", "video_ocr_engine",
+    "video_ocr_engine.config.constants", "video_ocr_engine.gpu.context",
+    "video_ocr_engine.ocr.native", "video_ocr_engine.ocr.trt",
+    "video_ocr_engine.domain.segmentation",
+    "video_ocr_engine.domain.video_utils", "video_ocr_engine",
 ]
 
 # 应用层（RaceVideoToLog）：引擎不得 import / 引入这些模块

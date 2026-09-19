@@ -87,7 +87,7 @@ for seg in result.segments:
 
 > 参数选择提示：`fill_width`（OCR 输入 pad 宽下限）的最优值依赖 `force_aspect`
 > ——`force_aspect>0`（内容被压窄）时越大越准，`=0` 时偏小更佳，两者应一起调
-> （2026-08-29 曾因单调 fill_width 踩坑回退默认值，见 `engine_config.py` 注释（实现已迁 `video_ocr_engine/config/constants.py`，根处为兼容 shim））。
+> （2026-08-29 曾因单调 fill_width 踩坑回退默认值，见 `video_ocr_engine/config/constants.py` 的注释）。
 
 `decode_backend="auto"` 的默认逻辑：**恒为 NVDEC 优先，不可用时回退 CPU**
 （刻意决策，2026-09-10 重申：弱 CPU 上 h264 软解可能慢于 NVDEC，且 CPU
@@ -349,8 +349,8 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 > `HYBRID_*` 参数，仅 `HYBRID_CPU_THREADS` 保留见上表）的完整清单与历史
 > 结论见 `docs/log/DECISIONS.md`，结论状态见 `docs/CONCLUSIONS.md`。
 
-内部实现（`engine_config` 常量、`_gpu_pipeline` 门控等）不在本表；如需深入，
-以 `engine_config.py` 为唯一事实源（实现已迁 `video_ocr_engine/config/constants.py`，根处为兼容 shim）。
+内部实现（配置常量、GPU 管线门控等）不在本表；如需深入，以
+`video_ocr_engine/config/constants.py` 为唯一事实源。
 
 ## 文档
 

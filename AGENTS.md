@@ -71,9 +71,9 @@ python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.
 | 宿主后端 | `video_ocr_engine/pipeline/host_backend.py` |
 | GPU 后端 | `video_ocr_engine/pipeline/gpu_backend.py`（gray+NVDEC+TRT 时默认；设备侧机制在 `video_ocr_engine/gpu/device.py`） |
 | OCR 会话 | `video_ocr_engine/pipeline/ocr_stage.py`（SessionSpec 契约；CPU 引擎=OpenVINO 唯一，C-48） |
-| OCR 调度 / 引擎池 | `video_ocr_engine/ocr/native.py`（根 `ocr_native.py` 为兼容 shim） |
+| OCR 调度 / 引擎池 | `video_ocr_engine/ocr/native.py` |
 | TRT | `video_ocr_engine/ocr/trt.py` + `video_ocr_engine/_gpu_kernels.py` |
-| 配置常量 | `video_ocr_engine/config/constants.py`（根 `engine_config.py` 为兼容 shim）；旋钮注册表 `video_ocr_engine/config/` |
+| 配置常量 | `video_ocr_engine/config/constants.py`；旋钮注册表 `video_ocr_engine/config/` |
 | 运行报告 | `video_ocr_engine/pipeline/report.py`（RunReport schema **v2** → `meta['report']`；v2 加 `resources`/`hardware`）；指标注册表 `video_ocr_engine/domain/metrics.py`；资源层 `video_ocr_engine/domain/resources.py`（L1 边界差分 / L2 NVML） |
 | 分相打桩 | `video_ocr_engine/extractor.py` 的 `_prof_end`（**单一计时脊柱**：同一 t0 喂 profile 与指标） |
 | 性能 A/B | `tools/bench.py`（`run`/`diff`/`show`/`ab`/`telemetry-check`；报告落 `bench/registry.jsonl`） |
@@ -161,9 +161,11 @@ python tools/_probe_index_audit.py               # tools/INDEX.md 数字一致�
   `self._probe`），否则走 `logging`。docstring 里的用法示例不算。
 - **未使用的 import**：有意 re-export 加 `# noqa: F401`，否则删掉。
 - **探针分层（L2）**：`tools/INDEX.md` 的「探针状态」小节是唯一权威——**只有 `live` 名单里的探针有修复义务**，其余默认 `frozen`（证据已产出、结论已封板 → 豁免活性检查，重构时不必修）。新增 live 须写理由。现状 live 14 / frozen 102 —— 这就是抑制「探针无限堆积 + 失效修复成本无限增高」的机制。
-- **不得引用六个废弃根模块 shim**（`engine_config` / `gpu_setup` /
-  `ocr_native` / `ocr_trt` / `segmentation` / `video_utils`）——审计项 22，
-  白名单只有两个冻结 shim 可导入性的契约测试；迁移表 `docs/MIGRATION.md` §1。
+- **六个根模块 shim 已于 0.14.1 删除**（`engine_config` / `gpu_setup` /
+  `ocr_native` / `ocr_trt` / `segmentation` / `video_utils`）——旧路径不可
+  导入，改用包内路径（`video_ocr_engine.config.constants` 等）。下游
+  （RaceVideoToLog 33 文件 / video_subtitle_extractor）已先行迁移；
+  迁移表 `docs/MIGRATION.md` §1。
 - **文档裸 CR = 0、AGENTS.md ≤ 14 KB**：`tests/test_docs_hygiene.py` 守护。
 
 （旧「只能用二进制」「Edit 工具不安全」两条规矩**双向都错**，勘误原文见

@@ -55,9 +55,12 @@ def test_signature_frozen():
 
 
 def test_defaults_are_engine_config_objects():
-    """默认值必须是 engine_config 常量的同一对象，不是抄写的字面量。"""
+    """默认值必须是常量对象的同一对象，不是抄写的字面量。
+
+    2026-09-19：常量唯一出处 = video_ocr_engine.config.constants
+    （根 shim 已删除）。"""
     from video_ocr_engine import FieldExtractor
-    import engine_config as config
+    import video_ocr_engine.config.constants as config
     sig = inspect.signature(FieldExtractor.__init__)
     assert sig.parameters["sample_stride"].default is config.DEFAULT_SAMPLE_STRIDE
     assert sig.parameters["merge_similar"].default is config.DEFAULT_MERGE_SIMILAR
@@ -92,18 +95,23 @@ def test_meta_param_timing_key_sets_frozen():
 
 def test_package_exports_and_root_modules():
     import video_ocr_engine as pkg
-    import engine_config
+    import video_ocr_engine.config.constants as _const
     for name in ("FieldExtractor", "ExtractedSegment", "ExtractionResult"):
         assert getattr(pkg, name) is not None
-    assert pkg.__version__ == engine_config.__version__
+    assert pkg.__version__ == _const.__version__
     import importlib
-    for mod in ("engine_config", "segmentation", "video_utils",
-                "ocr_native", "ocr_trt", "gpu_setup"):
+    # 2026-09-19：六个根模块 shim 已删除 → 断言包内路径可导入
+    for mod in ("video_ocr_engine.config.constants",
+                "video_ocr_engine.domain.segmentation",
+                "video_ocr_engine.domain.video_utils",
+                "video_ocr_engine.ocr.native",
+                "video_ocr_engine.ocr.trt",
+                "video_ocr_engine.gpu.context"):
         assert importlib.import_module(mod) is not None
 
 
 def test_env_name_constants_frozen():
-    import engine_config as config
+    import video_ocr_engine.config.constants as config
     names = sorted(n for n in dir(config) if n.endswith("_ENV"))
     assert len(names) == 22   # OCR_CPU_BACKEND 随 ORT 移除删除（2026-09-14）
     # 名字快照（附录 C 全表的键集合 + SEG_MERGE_DENSE_GATE_ENV）
@@ -123,26 +131,27 @@ def test_env_name_constants_frozen():
 DELETED_NAMES = {
     "video_ocr_engine": ("gray_output", "yuv_output", "SegmentPipeline",
                          "extract_speed_value", "correct_segments"),
-    "engine_config": ("TEXT_SEP_MERGE_CONTRAST",),
-    "gpu_setup": ("select_backend", "get_engine_type", "get_setup_advice"),
+    "video_ocr_engine.config.constants": ("TEXT_SEP_MERGE_CONTRAST",),
+    "video_ocr_engine.gpu.context": ("select_backend", "get_engine_type",
+                                     "get_setup_advice"),
 }
 
 
 def test_deleted_names_stay_deleted():
     import video_ocr_engine as pkg
-    import engine_config
-    import gpu_setup
+    import video_ocr_engine.config.constants as cfg
+    import video_ocr_engine.gpu.context as gctx
     for name in DELETED_NAMES["video_ocr_engine"]:
         assert not hasattr(pkg, name), name
-    for name in DELETED_NAMES["engine_config"]:
-        assert not hasattr(engine_config, name), name
-    for name in DELETED_NAMES["gpu_setup"]:
-        assert not hasattr(gpu_setup, name), name
+    for name in DELETED_NAMES["video_ocr_engine.config.constants"]:
+        assert not hasattr(cfg, name), name
+    for name in DELETED_NAMES["video_ocr_engine.gpu.context"]:
+        assert not hasattr(gctx, name), name
 
 
 def test_models_dir_alias():
-    import ocr_native
-    import ocr_trt
+    import video_ocr_engine.ocr.native as ocr_native
+    import video_ocr_engine.ocr.trt as ocr_trt
     assert hasattr(ocr_native, "_models_dir")
     assert hasattr(ocr_trt, "_models_dir")
 

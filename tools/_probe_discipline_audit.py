@@ -53,8 +53,9 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
 # 产品代码（不含 tools/ 探针与 tests/）
-PRODUCT = ["engine_config.py", "gpu_setup.py", "ocr_native.py",
-           "ocr_trt.py", "segmentation.py", "video_utils.py"]
+# 2026-09-19：六个根模块 shim 已删除 → 本表不再列它们（下方 os.walk 会枚举
+# video_ocr_engine/ 全部 .py）。
+PRODUCT: list = []
 # 包与 tests 递归枚举（S1：config/ domain/ 子包入住后，顶层 listdir 会漏扫；
 # v2 §8.2 的终极方案是按 pyproject 推导，此处先解除"只扫顶层"的硬编码）
 for _dir, _subs, _files in os.walk(os.path.join(ROOT, "video_ocr_engine")):
