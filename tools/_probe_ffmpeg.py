@@ -17,7 +17,8 @@ from pathlib import Path
 _VIDEO_DIR = Path(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"))
 
 
-FFMPEG = r"D:\Software\ffmpeg8\bin\ffmpeg.exe"
+from env_probe import ffmpeg_bin  # 事实源（纪律：不写绝对路径）
+FFMPEG = str(ffmpeg_bin("ffmpeg"))
 
 
 def run(args, label):

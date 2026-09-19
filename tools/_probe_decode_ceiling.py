@@ -36,8 +36,8 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 ROOT = Path(__file__).resolve().parents[1]
-FFMPEG_DIR = Path(os.environ.get(
-    "FFMPEG_DIR", r"D:\Software\ffmpeg-n9.0-latest-win64-gpl-shared-9.0\bin"))
+from env_probe import ffmpeg_bin  # 事实源（纪律：不写绝对路径）
+FFMPEG_DIR = ffmpeg_bin("ffmpeg").parent
 
 
 def ffmpeg_window(video: str, frames: int, hwaccel: str, codec: str | None) -> dict:

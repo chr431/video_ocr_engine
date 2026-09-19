@@ -38,7 +38,8 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 _VDIR = Path(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"))
 _CORRUPT_DIR = ROOT / "bench" / "corrupt"
-_FFMPEG = r"D:/Software/ffmpeg-n9.0-latest-win64-gpl-shared-9.0/bin/ffmpeg.exe"
+from env_probe import ffmpeg_bin  # 事实源（纪律：不写绝对路径）
+_FFMPEG = str(ffmpeg_bin("ffmpeg"))
 
 # (文件名, 期望段数)。段数锚点说明见模块 docstring。
 # 2026-09-12 重锚：segment.merge_dense_gate 默认开后四例统一为 8340

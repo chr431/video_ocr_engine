@@ -24,8 +24,9 @@ import sys
 import time
 from pathlib import Path
 
-FFMPEG = r"D:\Software\ffmpeg8\bin\ffmpeg.exe"
-FFPROBE = r"D:\Software\ffmpeg8\bin\ffprobe.exe"
+from env_probe import ffmpeg_bin  # 事实源（纪律：不写绝对路径）
+FFMPEG = str(ffmpeg_bin("ffmpeg"))
+FFPROBE = str(ffmpeg_bin("ffprobe"))
 
 
 def _run(args: list[str], timeout: float = 600.0) -> tuple[int, str]:

@@ -146,6 +146,11 @@ python tools/_probe_index_audit.py               # tools/INDEX.md 数字一致�
 
 - **路径不许写死**：仓库内路径一律 `__file__` 推导；外部视频走环境变量
   （`RACELOG_VIDEO_DIR` / `RACELOG_BATCH_DIR`），硬编码值只能当默认值。
+  **外部依赖（ffmpeg/decord）一律经 `tools/env_probe.py` 解析**
+  （`from env_probe import ffmpeg_bin`）——2026-09-19 纪律轮：4 处硬编码
+  ffmpeg 路径（3 处失效）因「tools/ 豁免」无人察觉；检查 1 已升级（不再
+  豁免）+ 新增检查 13（DLL 部署一致性）。环境异常先跑 `env_doctor.py`；
+  改完 decord C++ 跑 `rebuild_dev.bat`（构建即部署，md5 自动校验）。
   ⚠️ **`WORKER = r"""..."""` 子进程模板是特例**：它以 `python -c` 执行，
   **`-c` 下 `__file__` 未定义**，须靠父进程注入 `PROBE_ROOT`（`_probe_cpu_onnx.py`
   例外：它做新旧版本 A/B，子进程 cwd 就是旧 worktree，**必须插 cwd**）。

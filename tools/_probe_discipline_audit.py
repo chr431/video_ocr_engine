@@ -41,6 +41,7 @@ import os
 
 import argparse
 import ast
+import json
 import re
 import subprocess
 import sys
@@ -96,27 +97,85 @@ def read(rel: str) -> str:
 
 
 def check_hardcoded_paths() -> None:
-    """[1] 硬编码绝对路径。"""
-    pat = re.compile(r'["\'][A-Za-z]:[\\/](?:Repo|Users)[\\/]')
-    hits = []
-    for rel in ALL_PY:
-        for i, line in enumerate(read(rel).split("\n"), 1):
-            if pat.search(line):
-                hits.append((rel, i, line.strip()[:80]))
-    print("    命中 %d 处" % len(hits))
-    for rel, ln, txt in hits[:12]:
-        print("      %-46s L%-5d %s" % (rel, ln, txt))
+    """[1] 硬编码绝对路径（2026-09-19 纪律轮升级：探针不再整体豁免）。
+
+    升级动因：旧版正则只匹配 `Repo|Users` 开头，且 **tools/ 整体豁免**——
+    于是 4 处失效的 ffmpeg 硬编码（3 处指向已不存在的 D:\\Software\\ffmpeg8）
+    从未被发现，直接造成"找不到 ffmpeg"反复发生。
+
+    新判据（委托 tools/env_doctor.py --audit，与体检共用一份实现）：
+      · 任意盘符绝对路径字面量（docstring/注释/env 默认值豁免）；
+      · **tools/ 不豁免**——外部依赖路径必须经 tools/env_probe.py 解析。
+    """
+    import subprocess as _sp
+    r = _sp.run([sys.executable, os.path.join(HERE, "env_doctor.py"), "--audit"],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", cwd=ROOT)
+    out = (r.stdout or "") + (r.stderr or "")
+    hits = [ln.strip() for ln in out.splitlines()
+            if re.match(r"^\s*\S+\.py:\d+:", ln)]
+    print("    命中 %d 处（env_doctor --audit）" % len(hits))
+    for h in hits[:12]:
+        print("      " + h[:100])
     if hits:
-        # 探针是调查工具，允许硬编码（一次性使用）；产品代码与测试不允许。
-        prod = [h for h in hits if not h[0].startswith("tools" + os.sep)]
-        if prod:
-            fail("产品/测试代码含硬编码绝对路径 %d 处（tools/ 探针豁免）" % len(prod))
-        else:
-            warn("tools/ 探针含硬编码绝对路径 %d 处（豁免，但换机器会坏）" % len(hits))
+        fail("硬编码绝对路径 %d 处——外部依赖须经 tools/env_probe.py 解析"
+             "（from env_probe import ffmpeg_bin）" % len(hits))
+
+
+def check_env_provenance() -> None:
+    """[13] 外部依赖与 DLL 部署一致性（2026-09-19 纪律轮）。
+
+    根除两类反复事故：
+      · 「找不到 ffmpeg」——旧检查 1 豁免 tools/，失效路径无人察觉；
+      · 「用的 decord DLL 不是最新」——构建产物 → site-packages 靠手工 cp。
+
+    判据（委托 env_doctor，与体检共用一份实现）：
+      · ffmpeg 可解析（有版本号）；
+      · fork 构建产物存在时，其 md5 必须与已部署 decord.dll 一致
+        （不一致 = 改了 C++ 没部署，测量结果静默用旧 DLL）。
+    找不到 fork 构建产物时只警告（纯引擎开发/CI 环境本就没有）。
+    """
+    import subprocess as _sp
+    r = _sp.run([sys.executable, os.path.join(HERE, "env_doctor.py"), "--json"],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", cwd=ROOT)
+    try:
+        rep = json.loads(r.stdout)
+    except Exception:  # noqa: BLE001 — 体检本身跑不起来
+        fail("env_doctor --json 无法解析（rc=%d）：%s"
+             % (r.returncode, (r.stderr or "")[-160:]))
+        return
+    ff, dc, fb = rep["ffmpeg"], rep["decord"], rep["fork_build"]
+    print("    ffmpeg: %s（%s）" % (
+        ("✓ " + str(ff["path"])) if ff["ok"] else "✗ " + str(ff["note"]),
+        ff.get("version") or "-"))
+    print("    decord: %s  md5 %s" % (dc.get("version") or "?",
+                                      (dc.get("md5") or "")[:12]))
+    print("    构建产物: %s  md5 %s" % (fb["path"] or "（未构建）",
+                                       (fb.get("md5") or "")[:12] or "-"))
+    problems = []
+    # 判据（2026-09-19 纪律轮）：**"装了但不一致"才是缺陷**；
+    # "没装"是环境事实（CI 只装引擎依赖，不装 decord/TRT/ffmpeg），
+    # 把"缺外部工具"判红会让 CI 永久失败——那不是本检查的目的。
+    if not ff["ok"]:
+        warn("ffmpeg 不可解析：%s（需 ffmpeg 的步骤会自行失败）" % ff["note"])
+    if dc.get("note") and dc.get("path"):
+        problems.append(dc["note"])          # 装了但 md5 不一致 → 缺陷
+    elif not dc.get("path"):
+        warn("decord 未安装（CI/纯引擎环境正常；本机请 pip install 该 fork）")
+    if fb["path"] and not dc.get("path"):
+        warn("有 fork 构建产物但环境未装 decord——本机开发请安装该 fork")
+    if problems:
+        for p in problems:
+            print("      ✗ " + p)
+        fail("环境事实不一致 %d 项（修复：python tools/env_doctor.py "
+             "--deploy / 设 FFMPEG_DIR）" % len(problems))
+    elif not fb["path"]:
+        warn("未找到 fork 构建产物（纯引擎/CI 环境正常；本地开发请先 "
+             "rebuild_dev.bat）")
 
 
 BASELINE = os.path.join(HERE, "_discipline_baseline.json")
-
 
 def _load_baseline() -> dict[str, int]:
     """读存量豁免登记：{文件: 静默吞噬处数}。
@@ -501,6 +560,7 @@ CHECKS = {
     10: ("AGENTS.md 注入预算", check_claude_budget),
     11: ("未跟踪文件", check_untracked),
     12: ("测试纪律（真实资源保护）", check_test_discipline),
+    13: ("外部依赖与 DLL 部署一致性", check_env_provenance),
 }
 
 

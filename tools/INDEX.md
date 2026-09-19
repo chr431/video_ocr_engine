@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **129 个 `.py`**（22,323 行），其中 116 个是探针
+`tools/` 现有 **131 个 `.py`**（22,837 行），其中 116 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -34,13 +34,15 @@
 | `_probe_hybrid_sum_gap.py` | 81 | hybrid 与两侧解码器速率之和的精确差值（三速率中位 + 理想和对比） | docs/log/2026-09-10-hybrid联调深挖.md |
 | `_probe_hybrid_trace.py` | 109 | hybrid 调度轨迹剖析（DECORD_HYBRID_DEBUG 分侧发射时间线/份额/慢批定位） | docs/log/2026-09-10-hybrid联调深挖.md |
 | `_probe_hybrid_startup.py` | 146 | hybrid 启动期派工诊断（fork 级冷进程：硬窗界+TRACE 轨迹+hybrid_stats 对账；盲派 GOP 数/稳态份额/rg 真伪的判定仪）| docs/log/2026-09-18-hybrid启动轮.md |
+| `env_probe.py` | 207 | **环境事实源**（纪律轮）：外部依赖路径的唯一解析入口——ffmpeg 候选列表/decord DLL 定位（find_spec 不加载，避免锁 DLL）/md5 校验；工具与探针一律 `from env_probe import ffmpeg_bin`，禁写绝对路径 | docs/log/2026-09-19-纪律轮.md |
+| `env_doctor.py` | 243 | **环境体检/部署/审计**：`--deploy` 把 fork 构建产物同步进 site-packages 并校验 md5（消除手工 cp 导致的「用的 DLL 非最新」）；`--audit` 硬编码路径扫描（纪律项 1 的实现）；`--json` 供 CI/审计消费 | docs/log/2026-09-19-纪律轮.md |
 | `_probe_leak_longrun.py` | 195 | 长跑资源泄漏检测（同进程多轮 extract 采样 VRAM/RSS，后段斜率判平台 vs 泄漏；`--expect-leak` 注入旧 recycle 顺序做反向对照）| docs/log/2026-09-19-资源长跑轮.md |
 | `_probe_window_repro.py` | 34 | hard-window 回归复现器（CPU-out 窗口口径，got==n 判少交付；2026-09-19 窗口缺陷轮取证工具，矩阵 6+4 文件×窗长）| docs/log/2026-09-19-hybrid窗口缺陷轮.md |
 | `_probe_hybrid_bitwise.py` | 72 | hybrid vs NVDEC 输出逐帧字节比对（深 prefetch 安全性 + fork 改动的正确性门禁） | docs/log/2026-09-10-hybrid联调深挖.md |
 | `_probe_onnx_dcd_sweep.py` | 80 | ONNX OCR 场景解码线程数 sweep（DECODE_THREADS；h264/hevc/av1 × stride），产出 2026-09-10 新档位表 | docs/log/2026-09-10-ONNX解码线程档位.md |
 | `_probe_perf_sweep.py` | 118 | 解码参数 sweep（batch/stream/threads/hybthreads），monkey-patch 模块常量；用于 C-10 复确认与 batch=32 越界 bug 的暴露 | docs/log/2026-09-09-深度性能优化.md |
 | `_probe_index_audit.py` | 284 | 核对本索引的每个数字是否与磁盘一致 | 本文件（自检） |
-| `_probe_discipline_audit.py` | 612 | **项目纪律审计**（12 项：硬编码路径 / 异常吞噬 / 未用 import / 未门控 print / 版本号 / 文档引用 / 注入预算…） | AGENTS.md「纪律与自动化守卫」 |
+| `_probe_discipline_audit.py` | 672 | **项目纪律审计**（12 项：硬编码路径 / 异常吞噬 / 未用 import / 未门控 print / 版本号 / 文档引用 / 注入预算…） | AGENTS.md「纪律与自动化守卫」 |
 | `_doc_section.py` | 214 | **文档章节级检索**：`--toc` 看目录 / `--find` 按标题定位 / 读单章。避免整文件读，实测省 84~96% tokens | AGENTS.md「查文档前先定位」 |
 | `_probe_roi_decode.py` | 105 | **否定结果**：量化「打开时 SetRoi」vs「每次 get_batch 传 roi」对 CPU 软解速率的影响。实测两者无差异（1841 vs 1849 fps），但**不传 ROI = 520 fps**（3.6× 慢）→ ROI 本身是巨大优化，两种传法等价 | PERF §22.5 |
 | `_probe_nvdec_interference.py` | 141 | **推翻前一轮归因**：隔离测 NVDEC 对 CPU 软解的干扰，A 单跑 / B ∥NVDEC / C ∥忙等线程（对照）。实测 NVDEC 只造成 **−3.3%**，而等量纯抢核 **−41.9%** → 元凶是分段/OCR 流水线，不是 NVDEC | PERF §22.6 |
@@ -63,7 +65,7 @@
 | `_probe_hol_stats.py` | 245 | 走 fork **非打印** `DECORD_HYBRID_STATS`（零打印扰动）实测队头阻塞时长/episode/搁置峰值 + BuildPlan 冻结速率/CPU 折数/时刻；decode-only 每格独立子进程+硬超时，`--set KEY=VAL` 做单变量 A/B；`--nts 16,24,32` 展开 CPU 臂线程档位（§14：hybrid_gpu 传 num_threads=0 在 decord 内隐式落 16，同口径比较必须显式给 nt） | log 2026-09-11-hybrid差距分解 §8/§14；knowledge `hybrid_cpu_rate_ratchet` |
 | `_probe_stress_harness.py` | 109 | hybrid 死锁/性能**压测 harness 通用规格**：每 trial 独立子进程 + 硬超时 + 进度逐行落文件（慢消费者 = get_batch+asnumpy 保留；"无超时压测烧千秒"三踩后的纪律固化，rules.yaml 同名规则）。kick 突发修复 24/24 证据；`--nt` 覆盖 CPU 臂线程（§14 起引擎新档 24/32 同须压测） | log 2026-09-11-hybrid差距分解 §8.2/§9.1/§14.5；knowledge `hybrid_sustained_default` |
 | `_probe_e2e_mode.py` | 34 | 单视频引擎 e2e + 管线模式取证（`_gpu_pipeline_mode` + `DECORD_HYBRID_STATS` 汇总）；全片配对 A/B 用它做 sustained 转默认测量 | log 2026-09-11-hybrid差距分解 §9.2；knowledge `hybrid_sustained_default` |
-| `_probe_release_gate.py` | 259 | **hybrid 发布门禁**（§18 硬化）：六步 19 项一键跑——金标 28/28 / 三码×双路径 e2e（段数对表+零 stall 误报）/ 压测 / 损坏码流（现场生成 faststart 截断+坏字节，完成或干净报错）/ KICK_BURST=0 消融判别（期望挂死=机制承重）。损坏流段数不查表；⚠️ 段数期望表是内容锚点，引擎分段语义变更需同步 | log 2026-09-11-hybrid差距分解 §18；knowledge `hybrid_release_gate` |
+| `_probe_release_gate.py` | 260 | **hybrid 发布门禁**（§18 硬化）：六步 19 项一键跑——金标 28/28 / 三码×双路径 e2e（段数对表+零 stall 误报）/ 压测 / 损坏码流（现场生成 faststart 截断+坏字节，完成或干净报错）/ KICK_BURST=0 消融判别（期望挂死=机制承重）。损坏流段数不查表；⚠️ 段数期望表是内容锚点，引擎分段语义变更需同步 | log 2026-09-11-hybrid差距分解 §18；knowledge `hybrid_release_gate` |
 | `_probe_hybrid_threads_e2e.py` | 137 | hybrid CPU 臂线程档位的**引擎 e2e 配对 A/B**（独立子进程槽位 + 交错 + 段数/唯一文本集 sha 门禁）：§14 定档证据链——16→24/24→32/32→48 三码矩阵，h264→32 / hevc→32 / av1→24 恰为 `_decode_num_threads` 现行策略 | log 2026-09-11-hybrid差距分解 §14；knowledge `hybrid_cpu_threads_tier` |
 
 ## B. 库型 / worker 型（**被其他探针依赖，动不得**）
@@ -106,8 +108,8 @@
 
 | 文件 | 行 | 改于 | | 文件 | 行 | 改于 |
 |---|---:|---|---|---|---:|---|
-| `_probe_drop_nonref.py` | 417 | 2026-08-29 | | `_probe_final.py` | 104 | 2026-08-28 |
-| `_probe_ffmpeg.py` | 58 | 2026-08-28 | | `_probe_gpu_ctc.py` | 126 | 2026-08-29 |
+| `_probe_drop_nonref.py` | 418 | 2026-08-29 | | `_probe_final.py` | 104 | 2026-08-28 |
+| `_probe_ffmpeg.py` | 59 | 2026-08-28 | | `_probe_gpu_ctc.py` | 126 | 2026-08-29 |
 | `_probe_crop_miscut.py` | 233 | 2026-08-30 | | `_probe_perframe.py` | 120 | 2026-08-28 |
 | `_probe_autocrop_truth.py` | 152 | 2026-08-29 | | `_probe_ceiling.py` | 131 | 2026-08-28 |
 | `_probe_autocrop_ab.py` | 140 | 2026-08-29 | | `_probe_e2e_ab.py` | 116 | 2026-08-28 |
@@ -249,7 +251,7 @@
 | `_probe_pool_pairing.py` | 本轮新工具：层5 配对 A/B |
 | `_probe_run_setup_cost.py` | tests/ |
 
-frozen 102 个（按 §A–§D 各节原样保留）：`_probe_acc_ab.py`、`_probe_acc_baseline.py`、`_probe_arm_verify.py`、`_probe_autocrop_ab.py`、`_probe_autocrop_truth.py`、`_probe_batch_coldstart.py`、`_probe_binding.py`、`_probe_busy_overhead.py`、`_probe_ceiling.py`、`_probe_clock_gate.py`、`_probe_cluster_dtype.py`、`_probe_cr_roundtrip.py`、`_probe_critical_path.py`、`_probe_crop_miscut.py`、`_probe_crop_stats.py`、`_probe_cycle_quant.py`、`_probe_d1_prim_diff.py`、`_probe_d1_trace.py`、`_probe_d1_trace2.py`、`_probe_decode_batch_ab.py`、`_probe_decode_ceiling.py`、`_probe_decode_contention.py`、`_probe_drop_nonref.py`、`_probe_e2e_ab.py`、`_probe_e2e_mode.py`、`_probe_engine_ab.py`、`_probe_feed_cost.py`、`_probe_ffmpeg.py`、`_probe_final.py`、`_probe_gamma_sweep.py`、`_probe_gil_check.py`、`_probe_golden_diff.py`、`_probe_golden_drift.py`、`_probe_gpu_ctc.py`、`_probe_guard_clean.py`、`_probe_hol_stats.py`、`_probe_hybrid_ab.py`、`_probe_hybrid_axis.py`、`_probe_hybrid_bitwise.py`、`_probe_hybrid_cpu_profile.py`、`_probe_hybrid_engine_loss.py`、`_probe_hybrid_gap.py`、`_probe_hybrid_reeval.py`、`_probe_hybrid_startup.py`、`_probe_hybrid_sum_gap.py`、`_probe_hybrid_threads_e2e.py`、`_probe_hybrid_trace.py`、`_probe_lifecycle_repeat.py`、`_probe_mem_bw.py`、`_probe_merge_log.py`、`_probe_mp_scale.py`、`_probe_numpy_all_kernels.py`、`_probe_numpy_cost_split.py`、`_probe_numpy_kernels.py`、`_probe_numpy_replace_ab.py`、`_probe_nvdec_interference.py`、`_probe_onnx_dcd_sweep.py`、`_probe_pad_width.py`、`_probe_patch_verify.py`、`_probe_perf_baseline.py`、`_probe_perf_sweep.py`、`_probe_perframe.py`、`_probe_phase_cores.py`、`_probe_prep_ab.py`、`_probe_preproc_ab.py`、`_probe_preproc_dep.py`、`_probe_producer_binding2.py`、`_probe_producer_gap.py`、`_probe_producer_profile.py`、`_probe_pynv_isolated.py`、`_probe_pynv_vs_decord.py`、`_probe_python_cost.py`、`_probe_r3_infer_split.py`、`_probe_release_gate.py`、`_probe_roadmap_decode.py`、`_probe_roadmap_ocr.py`、`_probe_roadmap_profile.py`、`_probe_roi_decode.py`、`_probe_roi_dump.py`、`_probe_roi_segcost.py`、`_probe_roi_whitespace.py`、`_probe_roi_width.py`、`_probe_round4_bw.py`、`_probe_round4_wall.py`、`_probe_seg_share.py`、`_probe_skip_frame.py`、`_probe_slf_adjudicate.py`、`_probe_slf_diff.py`、`_probe_slf_vis.py`、`_probe_span_dump.py`、`_probe_stress_harness.py`、`_probe_text_ab.py`、`_probe_threads.py`、`_probe_trace_view.py`、`_probe_trt_maxbatch.py`、`_probe_truth_env.py`、`_probe_leak_longrun.py`、`_probe_window_repro.py`、`_probe_upload_chain.py`、`_probe_wide_roi_binding.py`、`_probe_yuv_tax.py`
+frozen 102 个（按 §A–§D 各节原样保留）：`_probe_acc_ab.py`、`_probe_acc_baseline.py`、`_probe_arm_verify.py`、`_probe_autocrop_ab.py`、`_probe_autocrop_truth.py`、`_probe_batch_coldstart.py`、`_probe_binding.py`、`_probe_busy_overhead.py`、`_probe_ceiling.py`、`_probe_clock_gate.py`、`_probe_cluster_dtype.py`、`_probe_cr_roundtrip.py`、`_probe_critical_path.py`、`_probe_crop_miscut.py`、`_probe_crop_stats.py`、`_probe_cycle_quant.py`、`_probe_d1_prim_diff.py`、`_probe_d1_trace.py`、`_probe_d1_trace2.py`、`_probe_decode_batch_ab.py`、`_probe_decode_ceiling.py`、`_probe_decode_contention.py`、`_probe_drop_nonref.py`、`_probe_e2e_ab.py`、`_probe_e2e_mode.py`、`_probe_engine_ab.py`、`_probe_feed_cost.py`、`_probe_ffmpeg.py`、`_probe_final.py`、`_probe_gamma_sweep.py`、`_probe_gil_check.py`、`_probe_golden_diff.py`、`_probe_golden_drift.py`、`_probe_gpu_ctc.py`、`_probe_guard_clean.py`、`_probe_hol_stats.py`、`_probe_hybrid_ab.py`、`_probe_hybrid_axis.py`、`_probe_hybrid_bitwise.py`、`_probe_hybrid_cpu_profile.py`、`_probe_hybrid_engine_loss.py`、`_probe_hybrid_gap.py`、`_probe_hybrid_reeval.py`、`_probe_hybrid_startup.py`、`_probe_hybrid_sum_gap.py`、`_probe_hybrid_threads_e2e.py`、`_probe_hybrid_trace.py`、`_probe_lifecycle_repeat.py`、`_probe_mem_bw.py`、`_probe_merge_log.py`、`_probe_mp_scale.py`、`_probe_numpy_all_kernels.py`、`_probe_numpy_cost_split.py`、`_probe_numpy_kernels.py`、`_probe_numpy_replace_ab.py`、`_probe_nvdec_interference.py`、`_probe_onnx_dcd_sweep.py`、`_probe_pad_width.py`、`_probe_patch_verify.py`、`_probe_perf_baseline.py`、`_probe_perf_sweep.py`、`_probe_perframe.py`、`_probe_phase_cores.py`、`_probe_prep_ab.py`、`_probe_preproc_ab.py`、`_probe_preproc_dep.py`、`_probe_producer_binding2.py`、`_probe_producer_gap.py`、`_probe_producer_profile.py`、`_probe_pynv_isolated.py`、`_probe_pynv_vs_decord.py`、`_probe_python_cost.py`、`_probe_r3_infer_split.py`、`_probe_release_gate.py`、`_probe_roadmap_decode.py`、`_probe_roadmap_ocr.py`、`_probe_roadmap_profile.py`、`_probe_roi_decode.py`、`_probe_roi_dump.py`、`_probe_roi_segcost.py`、`_probe_roi_whitespace.py`、`_probe_roi_width.py`、`_probe_round4_bw.py`、`_probe_round4_wall.py`、`_probe_seg_share.py`、`_probe_skip_frame.py`、`_probe_slf_adjudicate.py`、`_probe_slf_diff.py`、`_probe_slf_vis.py`、`_probe_span_dump.py`、`_probe_stress_harness.py`、`_probe_text_ab.py`、`_probe_threads.py`、`_probe_trace_view.py`、`_probe_trt_maxbatch.py`、`_probe_truth_env.py`、`env_probe.py`、`env_doctor.py`、`_probe_leak_longrun.py`、`_probe_window_repro.py`、`_probe_upload_chain.py`、`_probe_wide_roi_binding.py`、`_probe_yuv_tax.py`
 ## 清理判据（想删探针时按这个顺序）
 
 1. `grep -rn "<文件名>" README.md AGENTS.md docs/ tools/` —— 有命中就不删。
