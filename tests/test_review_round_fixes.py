@@ -48,19 +48,19 @@ def _fake_pool():
 
 
 def test_pool_recycle_keeps_pool_alive_for_reuse():
-    """recycle 后对象再被 acquire 复用，GC 时必须仍能正确入列（不泄漏）。"""
+    """recycle 后对象被 acquire 复用；pool 引用必须保留（GC 兜底依赖它）。"""
     import gc
-    from video_ocr_engine.gpu.device import _YFrame
 
     pool = _fake_pool()
     f = pool.acquire()
     pool.recycle(f)
-    # 关键断言：入列的对象 pool 引用为 None（防 __del__ 双重入列），
-    # 但列表里**同一个对象**在下次 acquire 时要能正常工作。
+    # 关键断言（审查轮二修）：pool 引用**不得**被置空——置空会切断
+    # __del__ 的 GC 兜底，只靠 GC 回收的池帧将永久泄漏。
+    assert f.pool is pool, "recycle 不得置空 pool（会切断 GC 回收路径）"
+    assert f._recycled is True, "须置 _recycled 标志防双入列"
     f2 = pool.acquire()
-    assert f2 is f
-    # 复用的对象再次归零：__del__ 撞 pool=None 是被接受的（不再入列），
-    # 但它不能把块永久丢失——显式 recycle 路径必须仍可用。
+    assert f2 is f, "复用同一对象"
+    assert f2._recycled is False, "acquire 必须清 _recycled（否则回收被跳过）"
     pool.recycle(f2)
     assert len(pool._free) == 1, "显式 recycle 后必须回到空闲列"
     del f, f2
@@ -68,11 +68,12 @@ def test_pool_recycle_keeps_pool_alive_for_reuse():
 
 
 def test_pool_recycle_reuse_does_not_leak_via_gc():
-    """回归钉子（原缺陷）：置空 pool 后入列 → 复用时 GC 撞 None 被吞。
+    """回归钉子：acquire→recycle 循环 N 次不新增 cudaMalloc。
 
-    修复后语义：recycle 的对象在 _free 里 pool 仍为 None（防双入列），
-    但**显式 recycle 路径始终把块放回列表**——不依赖 __del__ 兜底。
-    本用例锁定"acquire→recycle 循环 N 次不新增 cudaMalloc"。
+    ⚠️ 这条钉子经历了两次修正：初版断言"置空 pool 防双入列"，
+    实测证明置空切断了 __del__ 的 GC 兜底（跨线程 payload 帧只靠 GC
+    回收）→ 253 次 cudaMalloc/轮永久泄漏。现语义：标志位防双入列 +
+    pool 保留。本用例锁定"循环复用不新增分配"这一**最终判据**。
     """
     pool = _fake_pool()
     for _ in range(5):

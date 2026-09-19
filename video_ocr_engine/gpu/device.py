@@ -50,19 +50,30 @@ class _YFrame:
     归还 _YFramePool，不阻塞调用方。
     """
 
-    __slots__ = ("pool", "ptr", "size")
+    __slots__ = ("pool", "ptr", "size", "_recycled")
 
     def __init__(self, pool, ptr, size):
         self.pool = pool
         self.ptr = ptr
         self.size = size
+        self._recycled = False
 
     def __del__(self):
         # B6（S4）：析构在任意 GC 上下文/解释器关闭期运行——只做入列回收，
         # 溢出（空闲列满）时告警并放弃该块（泄漏有界：≤ 池上限+在飞数，
         # release_all 于 teardown 释放在列块；CUDA 释放只走显式路径）。
+        #
+        # ⚠️ 2026-09-19 审查轮二修：**pool 引用必须保留**。上一版让
+        # recycle() 置空 pool 以"防双入列"，结果破坏了本函数——大量池帧
+        # 是随 payload 跨线程传递、**只靠 GC 回收**的（见 gpu_backend
+        # _similar_device 注释），pool 一置空，它们的 __del__ 撞 None 被
+        # 吞掉 = 永久泄漏（实测 253 次 cudaMalloc/轮未释放、+1 MiB/轮）。
+        # 防双入列改用 _recycled 标志位（语义等价，且不切断 GC 兜底）。
+        if self._recycled:
+            return
         try:
             self.pool._recycle(self)
+            self._recycled = True
         except Exception:
             pass
 
@@ -88,7 +99,9 @@ class _YFramePool:
     def acquire(self) -> _YFrame:
         with self._lk:
             if self._free:
-                return self._free.pop()
+                f = self._free.pop()
+                f._recycled = False   # 清标志：复用后须能被再次回收
+                return f
         return self._malloc_frame()
 
     def _malloc_frame(self) -> _YFrame:
@@ -112,15 +125,16 @@ class _YFramePool:
                        "（B6：CUDA 释放只走显式路径）", self._fnb)
 
     def recycle(self, frame: "_YFrame") -> None:
-        """显式归还（S4）：入列后置空 pool 引用防 __del__ 双重入列。
+        """显式归还（S4）：入列 + 置 _recycled 标志防 __del__ 双入列。
 
-        ⚠️ 顺序不可交换（2026-09-19 审查轮）：先置空再入列时，对象带着
-        pool=None 进入空闲列——下次 acquire 复用它、GC 时 __del__ 撞 None
-        被 except 吞掉，该块既不回池也不 cudaFree = 每轮泄漏一帧显存
-        （长驻进程必现 OOM）。现在入列在前（此时 pool 仍有效，若随后被
-        GC 也能正确回收），置空在后（阻断 __del__ 重复入列）。"""
+        ⚠️ **不置空 frame.pool**（2026-09-19 审查轮二修）：置空会切断
+        __del__ 的 GC 兜底——大量池帧只靠 GC 回收（跨线程 payload），
+        它们会永久泄漏（实测 253 次 cudaMalloc/轮）。防双入列改用
+        _recycled 标志位。"""
+        if frame._recycled:
+            return
+        frame._recycled = True
         self._recycle(frame)
-        frame.pool = None
 
     def release_all(self) -> None:
         """显式释放全部空闲缓冲（extract 结束调用；DESIGN-REVIEW C5：池
@@ -148,18 +162,23 @@ class _DevBatch:
     与 sim_pair（compare_pair 同步）读完才可能归零归还。
     """
 
-    __slots__ = ("pool", "ptr", "size", "host")
+    __slots__ = ("pool", "ptr", "size", "host", "_recycled")
 
     def __init__(self, pool, ptr, size, host):
         self.pool = pool
         self.ptr = ptr
         self.size = size
         self.host = host
+        self._recycled = False
 
     def __del__(self):
         # B6（S4）：同 _YFrame——只入列，溢出告警不 cudaFree
+        # （2026-09-19 审查轮二修：pool 引用保留，标志位防双入列）
+        if self._recycled:
+            return
         try:
             self.pool._recycle(self)
+            self._recycled = True
         except Exception:
             pass
 
@@ -209,6 +228,7 @@ class _DevBatchPool:
             if self._free:
                 b = self._free.pop()
                 b.host = host
+                b._recycled = False   # 清标志（同 _YFramePool.acquire）
                 return b
         from cuda.bindings import runtime as cudart
         err, ptr = cudart.cudaMalloc(self._nbytes)
@@ -229,11 +249,12 @@ class _DevBatchPool:
                        "（B6：CUDA 释放只走显式路径）", self._nbytes)
 
     def recycle(self, b: "_DevBatch") -> None:
-        """显式归还（S4）：入列在前、置空 pool 在后（顺序不可交换，
-        同 _YFramePool.recycle 的 2026-09-19 审查轮修复——先置空会让
-        复用时 __del__ 撞 None 被吞 = 每轮泄漏一块显存）。"""
+        """显式归还（S4）：入列 + 标志位防双入列（同 _YFramePool.recycle
+        的二修：不置空 pool，保住 __del__ 的 GC 兜底）。"""
+        if b._recycled:
+            return
+        b._recycled = True
         self._recycle(b)
-        b.pool = None
 
     def release_all(self) -> None:
         """显式释放全部空闲缓冲（同 _YFramePool.release_all，C5）。"""
