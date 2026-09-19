@@ -10,8 +10,11 @@
   4 stress    压测 harness 三码 hybrid_gpu 全片 ×2 trials：bad=0
   5 corrupt   损坏码流三例（faststart 截断 60%/90% + 中段坏字节）× 双路径：
               完成或干净报错均可，超时/崩溃 = FAIL（验证护栏+EOF 冲刷兜底）
-  6 ablation  KICK_BURST=0 + h264lg+ONNX：**期望超时挂死**（反馈清偿机制
-              在被测构建里承重的判别；健康完成 = 修复缺失 = FAIL）
+  6 ablation  KICK_OFF=1（禁 kick）+ h264+cpu：**期望优雅降级**（段数
+              8340 不变、不挂死）。⚠️ 2026-09-19 修正：旧说明写"期望超时
+              挂死（反馈清偿承重）"——该机制已随 fef3c4b 重设计删除
+              （kick_guard_ 默认 0，克隆路径只由 KICK_BURST>0 启用），
+              旧判据测的东西已不存在。现判据 = 无 kick 回退路径未被破坏。
 
 用法：
   python tools/_probe_release_gate.py                     # 用已装 wheel
