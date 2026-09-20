@@ -11,15 +11,15 @@
 - id: C-02
   conclusion: IO 不是并发退化原因（<1% 墙钟；页缓存全命中仍退化 1.88×）
   status: active
-  premises: NVMe + 页缓存命中
+  premises: NVMe 页缓存命中
   revisit: 冷盘/网络盘使 IO 占比抬升
   evidence: PERF §19
 
 - id: C-03
   conclusion: 内存带宽不是并发变量（B_max 实测 55.8 GB/s；互补设计仅 7.8 GB/s 退化 1.02×）
   status: active
-  premises: 2×16GB DDR5-6000 独显平台
-  revisit: 共享内存带宽的集成平台 / 内存减半
+  premises: 2×16GB DDR5-6000
+  revisit: 集成显存平台 / 内存减半
   evidence: PERF §20 §21
 
 - id: C-04
@@ -30,11 +30,11 @@
   evidence: PERF §21 §22.1；log 2026-09-08
 
 - id: C-05
-  conclusion: hybrid = fork 原生（TRT→hybrid_gpu、CPU→宿主帧）。收益面=TRT 路径；ONNX 宿主不反超→选 nvdec。解码率可见性 h264 2.45×/hevc 17%/av1 30%；e2e 见 C-53
+  conclusion: hybrid = fork 原生（TRT→hybrid_gpu、CPU→宿主帧）。收益面=TRT 路径；ONNX 宿主不反超→选 nvdec。解码率可见性 2.45×/17%/30%；e2e 见 C-53
   status: active
   premises: 4060/16C32T；0.8.3；fork ≥6da2957
   revisit: >32 核 / 残余=每臂混跑干扰
-  evidence: log 2026-09-11-hybrid差距分解 §11-§16；2026-09-13-hybrid可见性重评
+  evidence: log 2026-09-11-hybrid差距分解 §11-16；2026-09-13-hybrid可见性重评
 
 - id: C-06
   status: superseded
@@ -75,12 +75,12 @@
 - id: C-13
   conclusion: 真跳帧（丢 nal_ref_idc==0 整包）安全，收益仅 1.03–1.48×
   status: active
-  premises: H.264、fork 0.7.x
+  premises: h264、fork 0.7.x
   revisit: 新编码 / 更激进的过滤方案
   evidence: DECISIONS「下一步三目标轮」
 
 - id: C-14
-  conclusion: skip_loop_filter 收益 1.11–1.36× 但改变输出像素；默认 opt-in
+  conclusion: skip_loop_filter 1.11–1.36× 但改变像素；默认 opt-in
   status: active
   premises: —
   revisit: 下游证实对像素不敏感且需提速率
@@ -94,7 +94,7 @@
   evidence: log 2026-09-12-准确项 §4.1
 
 - id: C-16
-  conclusion: OCR 裁切余量 10% 优于 0%；裁切即使省不到算力也能提准确率（旧"守卫"前提错）
+  conclusion: OCR 裁切余量 10% 优于 0%；裁切提准确率（旧"守卫"前提错）
   status: active
   premises: —
   revisit: ROI 形态 / 分辨率大变
@@ -115,8 +115,8 @@
 - id: C-31
   conclusion: decord 0.8.1+FFmpeg9：seek 未变慢；av1 慢系 NT=4 假象。修：av1 线程 3/4 钳 [8,24]，CPU −50%、e2e −45%
   status: active
-  premises: wheel 0.8.2（md5 6597eea6）
-  revisit: fork / 驱动 / FFmpeg 换代
+  premises: wheel 0.8.2
+  revisit: fork/驱动/FFmpeg 换代
   evidence: log 2026-09-08 decord-0.8.1；DEPENDENCIES decord 节
 
 - id: C-32
@@ -133,21 +133,18 @@
   status: superseded
   replaced_by: C-52
 - id: C-52
-  conclusion: **批量互补配对有真实收益（C-34 翻案）**：三码族 pool pair 27.0s vs 全 nvdec 34.0s=**−20.6%**（4/4 逐位）；收益主体=编码感知派工
-  status: active
-  premises: TRT OCR + C-48 后 decode-bound；三码族（有 h264 可卸载）
-  revisit: 换卡 / OCR 变慢 / 素材全 hevc/av1（退化 nv2）
-  evidence: log 2026-09-17-重设计 §10；bench/pool_pairing.json
+  status: superseded
+  replaced_by: C-53
 
 - id: C-36
-  conclusion: 冷启动 = cuda.core 0.22s + NVRTC 0.09s + TRT 反序列化 0.39–0.44s；显式 `warmup()` 移出首个 extract（首视频 −33%），总吞吐不变
+  conclusion: 冷启动 = cuda.core 0.22s + NVRTC 0.09s + TRT 反序列化 0.39–0.44s；显式 `warmup()` 移出首 extract（首视频 −33%）
   status: active
   premises: 引擎已缓存；首个 extract
   revisit: 换后端/引擎格式
   evidence: log §3；tests/pipeline/test_warmup.py
 
 - id: C-37
-  conclusion: 消费端提交可批量化：归约 D2H 异步+本流同步（h264-cpu −5.19%）、keep_crops 并批窗 16（h264-gpu −2.45%）；按宽分组无收益
+  conclusion: 消费端提交可批量化：归约 D2H 异步+本流同步（−5.19%）、keep_crops 并批窗 16（−2.45%）；按宽分组无收益
   status: active
   premises: 本机 4060；交错 A/B
   revisit: 段密度翻倍 / ROI 形态翻转
@@ -243,7 +240,7 @@
   evidence: log 2026-09-17-重设计 §7
 
 - id: C-53
-  conclusion: **hybrid 基线=目标码最快纯臂（口径规则）**：h264 基线=CPU（test5 +6.1% 慢→cpu；**h264same 反例 −22%：按文件 CPU 速率分界，pool 一刀切误派**）；hevc/av1 基线=NVDEC，hybrid −23.9%/−31.4%→选 hybrid（越 C-40）
+  conclusion: **hybrid 基线=目标码最快纯臂（口径规则）**：h264 基线=CPU（test5 +6.1% 慢→cpu；**h264same 反例 −22%：按文件 CPU 速率分界，pool 一刀切误派**）；hevc/av1 基线=NVDEC，hybrid −23.9%/−31.4%→选 hybrid（越 C-40）。**批量=逐文件 hybrid 串行**（28.61s vs pool 并发 29.3~29.7s；pool 0.15 废弃 0.16 删）
   status: active
   premises: 4060/16C32T；fork ≥a6cdeb7
   revisit: 换卡 / fork 换代
@@ -257,7 +254,7 @@
   evidence: log 2026-09-18-hybrid启动轮；bench/hybrid_startup.json
 
 - id: C-55
-  conclusion: **池复用必须换壳**（CPython 复活对象二次死亡不触发 __del__，实测）+放弃路径直释 cudaFree——旧 Y 池两层皆漏=默认配置 +2.0 MiB/轮，修复后 40 轮 +0.000
+  conclusion: **池复用必须换壳**（CPython 复活对象二次死亡不触发 __del__）+放弃路径直释——旧 Y 池两层皆漏=+2.0 MiB/轮，修复后 40 轮 +0.000
   status: active
   premises: CPython；4 钉子
   revisit: PyPy 等 finalizer 语义不同 / 池契约重构
@@ -268,3 +265,9 @@
   premises: fork 0.8.4 与 dev 均在
   revisit: fork 迟包供给专项落地后解除谓词
   evidence: log 2026-09-20-审计修复轮 §4
+- id: C-58
+  conclusion: **hybrid OCR v0 双车道自败**：正确性成立（段数恒等/文本 3 段差），弃 raw 直通后串行宿主 resize（1.37ms/段=prep 86%）成瓶颈 → OCR-bound +51% 回归；v0.5=设备 prep 共享（留档），天花板 −15~20%
+  status: active
+  premises: batch_test 字幕 stride=1（infer 92% 忙）；v0 opt-in 保留
+  revisit: v0.5 落地后复测
+  evidence: log 2026-09-20-批量策略与hybridOCR轮 §3

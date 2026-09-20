@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **132 个 `.py`**（23,102 行），其中 117 个是探针
+`tools/` 现有 **135 个 `.py`**（23,467 行），其中 120 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -38,6 +38,9 @@
 | `env_doctor.py` | 243 | **环境体检/部署/审计**：`--deploy` 把 fork 构建产物同步进 site-packages 并校验 md5（消除手工 cp 导致的「用的 DLL 非最新」）；`--audit` 硬编码路径扫描（纪律项 1 的实现）；`--json` 供 CI/审计消费 | docs/log/2026-09-19-纪律轮.md |
 | `_probe_leak_longrun.py` | 221 | 长跑资源泄漏检测（同进程多轮 extract 采样 VRAM/RSS，后段斜率判平台 vs 泄漏；cudaMemGetInfo 口径优先 + keep_crops 默认对齐引擎；`--expect-leak` 注入放弃语义做反向对照——2026-09-20 两盲区修复）| docs/log/2026-09-19-资源长跑轮.md；2026-09-20-审计修复轮.md §2 |
 | `_probe_leak_pinpoint.py` | 203 | 泄漏定位探针（双层：A=释放边界 cudaMemGetInfo 差；B=Python 侧 cudaMalloc/MallocHost 全局追踪按调用点聚合存活——2026-09-20 定位池复活泄漏真根因）| docs/log/2026-09-20-审计修复轮.md §2 |
+| `_probe_pool_vs_serial.py` | 128 | 批量三码族三臂交错：serial-hybrid vs pool pair vs pool-hybrid 并发（臂序轮转+同轮配对——pool 退役裁决：串行 28.61s 最快）| docs/log/2026-09-20-批量策略与hybridOCR轮.md §2 |
+| `_probe_unify_decode.py` | 148 | decode 统一设想测量：forced-hybrid vs 纯臂（输出位级等价/速率平价/ctor 冷税；av1×force_cpu 退化 GPU 实证；子进程自调用协议）| docs/log/2026-09-20-批量策略与hybridOCR轮.md §1.1 |
+| `_probe_hybrid_ocr.py` | 89 | hybrid OCR（双车道 TRT+OV）A/B 与文本对照（batch_test 字幕 stride=1 OCR-bound 口径——v0 +51% 回归与 3/26461 文本差的证据）| docs/log/2026-09-20-批量策略与hybridOCR轮.md §3 |
 | `_probe_window_repro.py` | 45 | hard-window 回归复现器（CPU-out 窗口口径，got==n 判少交付 + hybrid_stats；可选 start 参数=晚起点复现（窗×seek 尾帧替补缺陷的取证口径，2026-09-20））| docs/log/2026-09-19-hybrid窗口缺陷轮.md；2026-09-20-审计修复轮.md §4 |
 | `_probe_hybrid_bitwise.py` | 72 | hybrid vs NVDEC 输出逐帧字节比对（深 prefetch 安全性 + fork 改动的正确性门禁） | docs/log/2026-09-10-hybrid联调深挖.md |
 | `_probe_onnx_dcd_sweep.py` | 80 | ONNX OCR 场景解码线程数 sweep（DECODE_THREADS；h264/hevc/av1 × stride），产出 2026-09-10 新档位表 | docs/log/2026-09-10-ONNX解码线程档位.md |

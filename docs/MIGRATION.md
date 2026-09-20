@@ -12,6 +12,12 @@
 "构造后改 env 仍生效"或"env 盖过构造参数"；③若你读取 OMP_WAIT_POLICY
 被引擎隐式设置。
 
+**0.15（2026-09-20 批量策略轮）**：`ExtractionPool.run` 标废弃
+（`DeprecationWarning`，**0.16 删除**）——批量改「逐文件
+`decode_backend="hybrid"` 顺序跑」（实测快于任何跨视频并发，README 批量
+章）；新增 `ocr_backend="hybrid"`（双车道 TRT+OpenVINO，实验性，OCR-bound
+负载 v0 实测慢于单 TRT，勿用于生产）。
+
 **0.13.2（S6 性能轮）只做加法**：`meta` 新增 `report` 键（第 10 键）、新增
 `FieldExtractor.warmup()` 与 `VOE_REPORT_FILE` 旋钮；无参数语义变更。
 

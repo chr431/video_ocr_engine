@@ -66,7 +66,8 @@ class FieldExtractor:
 
     构造参数：
       常用 —— video_path / roi / frame_start / frame_end / force_aspect /
-      decode_backend(auto|cpu|nvdec|hybrid) / ocr_backend(auto|cpu|tensorrt) /
+      decode_backend(auto|cpu|nvdec|hybrid) /
+      ocr_backend(auto|cpu|tensorrt|hybrid=双车道 TRT+OpenVINO) /
       sample_stride / rep_crop_format(yuv|gray) / keep_crops / keep_frames /
       merge_similar / merge_text_sep / progress_cb / cancel_check。
       高级（默认即最优，改动前读 docs/PERFORMANCE.md）—— buffer_size /
@@ -221,9 +222,9 @@ class FieldExtractor:
                 f"decode_backend 必须为 auto/cpu/nvdec/hybrid，"
                 f"收到 {self._decode_backend!r}")
         _ocr = (self._ocr_backend or 'auto').lower()
-        if _ocr not in ('auto', 'cpu', 'tensorrt'):
+        if _ocr not in ('auto', 'cpu', 'tensorrt', 'hybrid'):
             raise ValueError(
-                f"ocr_backend 必须为 auto/cpu/tensorrt，"
+                f"ocr_backend 必须为 auto/cpu/tensorrt/hybrid，"
                 f"收到 {self._ocr_backend!r}")
 
 
@@ -999,8 +1000,19 @@ class FieldExtractor:
         return c.shape[0] == roi_h and c.shape[1] == roi_w
 
     def _ocr_engine_type(self) -> str:
-        """OCR 推理后端：auto/tensorrt → tensorrt（OcrEngine 失败回退 CPU 路径），cpu → openvino。"""
-        return 'onnxruntime' if (self._ocr_backend or 'auto').lower() == 'cpu' else 'tensorrt'
+        """OCR 推理后端：auto/tensorrt → tensorrt（OcrEngine 失败回退 CPU 路径），cpu → openvino。
+
+        hybrid（2026-09-20 hybrid ocr 轮，opt-in）→ 'hybrid'：TRT 设备
+        车道 + OpenVINO CPU 车道各一引擎（ocr_stage.acquire_engines 取双
+        擎、共享 infer_q 工作窃取）。收益面 = OCR-bound 场景（当前实测
+        仅 batch_test 稠密字幕 stride=1 类负载，infer 忙时 92% wall）；
+        decode-bound 的常规负载零收益（L3 本就空等）。"""
+        _b = (self._ocr_backend or 'auto').lower()
+        if _b == 'cpu':
+            return 'onnxruntime'
+        if _b == 'hybrid':
+            return 'hybrid'
+        return 'tensorrt'
 
     def _ocr_num_threads(self) -> int:
         """OCR 推理线程预算：OCR_THREADS env 钩子优先，否则全物理核；

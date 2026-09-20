@@ -1,5 +1,10 @@
 """ExtractionPool —— 跨视频互补配对（层5，redesign 分支）。
 
+.. deprecated:: 0.15
+    2026-09-20 实测：hybrid 单流进步后跨视频并发无收益（串行 hybrid
+    28.61s vs pair 29.34s / 全hybrid 并发 29.69s），批量最优 = 逐文件
+    hybrid 顺序跑。0.16 删除本模块（run() 发 DeprecationWarning）。
+
 动机（C-01/C-07/C-08）：单视频内 hybrid 已接近两解码器并联和的物理
 上限；**跨视频**配对（h264 走 CPU 软解、hevc/av1 走 NVDEC）没有单视频
 混跑的 SMT/LLC 干扰税——两套资源真·独立。批量场景的吞吐上限在此。
@@ -43,11 +48,30 @@ def run(items: list, *, backends: str = 'pair',
         max_workers: int = None) -> list:
     """批量抽取：编码感知互补配对 + LPT 派发。
 
+    .. deprecated:: 0.15
+        2026-09-20 实测裁决（log 同日）：hybrid 单流已达解码器并联和的
+        92~96%，三码族批量「逐文件 hybrid 顺序跑」中位 28.61s，本函数
+        pair 29.34s（+2.6%）、全 hybrid 并发 29.69s（+3.8%）——跨视频
+        并发不再有收益（C-52 的 −20.6% 基线是全-nvdec 派工，前提已
+        翻转）。替代写法::
+
+            for kw in items:
+                kw = {**kw, 'decode_backend': kw.get('decode_backend') or 'hybrid'}
+                results.append(FieldExtractor(**kw).extract())
+
+        按仓库两版本惯例，0.16 删除本模块。
+
     items: FieldExtractor(...) 的 kwargs（video 必填；decode_backend
            可留空由策略分配）。
     backends: 'pair'（缺省，编码感知+LPT）| 'nvdec' | 'cpu' |
               显式列表（与 items 等长，逐项指定，不做重排）。
     """
+    import warnings
+    warnings.warn(
+        "ExtractionPool.run 已废弃（0.15 起）：批量场景改用逐文件 hybrid "
+        "顺序抽取（实测更快，见 docs/log/2026-09-20-审计修复轮.md 与 "
+        "tools/_probe_pool_vs_serial.py）；0.16 将删除本模块。",
+        DeprecationWarning, stacklevel=2)
     items = [dict(it) for it in items]
     if not items:
         # 空输入直接返回（2026-09-19 审查轮）：此前 max_workers=min(0,2)=0

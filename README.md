@@ -62,7 +62,10 @@ ex = FieldExtractor(
     frame_end=None,                   # 可选；0 或 None = 到片尾（超界按片尾
                                       # 截断并 warning）
     decode_backend="auto",            # auto/cpu/nvdec/hybrid
-    ocr_backend="cpu",                # auto/cpu/tensorrt
+    ocr_backend="cpu",                # auto/cpu/tensorrt/hybrid（hybrid=双车道
+                                      # TRT+OpenVINO，OCR-bound 负载实验性，
+                                      # v0 实测慢于单 TRT——见 docs/log
+                                      # 2026-09-20-hybridOCR轮，勿用于生产）
     rep_crop_format="yuv",            # 代表帧格式："yuv"=packed NV12（默认；
                                       # 内部链恒为单通道灰度，外部用
                                       # video_utils.nv12_to_rgb 转 RGB）或 "gray"
@@ -184,30 +187,35 @@ e2e 口径**定档（decode-only 口径 24T 即饱和，但引擎里解码与分
 > 提供 `--roi`/`--start-frame`/`--end-frame`/`--sample-stride` 等参数，输出
 > `time_sec,text` 两列 CSV。本引擎仓库保持为通用引擎（不携带具体场景 CLI）。
 
-## 批量处理：多实例并发（多集/多视频）
+## 批量处理：逐文件 hybrid 顺序跑（多集/多视频）
 
-多个视频的批量处理建议用**多线程并发多个独立 `FieldExtractor` 实例**，
-按后端互补配对（实测 7945HX 16C32T + RTX 4060，两视频各 30000 帧 stride8，
-seg/text 与顺序完全一致）：
+**当前推荐**（2026-09-20 实测，`tools/_probe_pool_vs_serial.py`）：hybrid 单流
+解码已达两解码器并联和的 92–96%，三码族批量「**逐文件 `decode_backend="hybrid"`
+顺序抽取**」中位 28.61s，快于任何跨视频并发形态（互补配对 29.34s、双 hybrid
+并发 29.69s）——单 NVDEC 单元上并发不再提供增益，只增加争用：
+
+```python
+results = []
+for kw in items:                       # 逐文件顺序跑
+    kw = {**kw, "decode_backend": "hybrid"}
+    results.append(FieldExtractor(**kw).extract())
+```
+
+> 历史背景：`ExtractionPool.run`（互补配对，曾实测 −20.6%）已于 0.15 起
+> **废弃**（其收益基线是"全 nvdec 派工"时代；调用时发 `DeprecationWarning`，
+> 0.16 删除）。当时的并发配对结论仍有效于「无 hybrid 可用」的场合，机制
+> 记录见 `docs/log/`（C-01/C-52）与下表——若你必须并发（如 hybrid 不可用）：
 
 | 配对 | 聚合加速 | 说明 |
 |---|---:|---|
-| **1×NVDEC+TRT ∥ 1×CPU+ONNX** | **~1.8×** | 解码器 + 加速器双重互补，对端完全不占 GPU，**首选** |
+| **1×NVDEC+TRT ∥ 1×CPU+ONNX** | **~1.8×** | 解码器 + 加速器双重互补，对端完全不占 GPU |
 | **1×NVDEC+TRT ∥ 1×CPU+TRT** | **~1.5–1.85×** | 仅解码器互补；对端软解快（h264）时会抢 GPU，掉到 1.5× |
 | 2×CPU+TRT | ~1.4× | 靠核富余；少核机收益递减 |
 | 2×NVDEC+TRT | **~1.0–1.2×** | 单 NVDEC 硬件单元，双会话互相争抢，基本等于串行 |
 
-> **实测修订**（证据与消元过程见 `docs/log/PERFORMANCE.md` §19/§21）：「IO 竞争」
-> 与「内存带宽」均已证伪——并发退化真因是**单一 NVDEC 硬件单元串行化**；
-> 加速比按聚合吞吐口径看（互补配对 1.83–1.87×，双 NVDEC 仅 1.01–1.20×）。
-> 支配变量是对端往 GPU 提交工作的速率；编码决定一切（同一 3000 帧窗口
-> e2e：h264 上 CPU 软解比 NVDEC 快 **3.0×**，AV1 上慢 **1.36×**；纯解码
-> 口径的倍数见 C-04/C-31），选配对前先看对端视频的编码。
-
-```python
-import threading
-threads = [threading.Thread(target=extract, args=(video, backend)) for ...]
-```
+> 「IO 竞争」与「内存带宽」均已证伪（PERFORMANCE §19/§21）——并发退化真因
+> 是**单一 NVDEC 硬件单元串行化**；支配变量是对端往 GPU 提交工作的速率，
+> 编码决定一切（h264 上 CPU 软解比 NVDEC 快 3.0×，AV1 上慢 1.36×）。
 
 **显式预热**（可选）：冷启动的 OCR 引擎构建（TRT 反序列化 ~0.4s）可以提前：
 

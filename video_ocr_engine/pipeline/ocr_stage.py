@@ -108,6 +108,27 @@ def acquire_engines(spec: "SessionSpec") -> "tuple[list, str]":
     from video_ocr_engine.ocr.native import acquire_ocr_engine, checkin_ocr_engine
     ot = spec.num_threads_fn()
     engine_type = spec.engine_type_fn()
+    if engine_type == 'hybrid':
+        # 双 OCR（2026-09-20 hybrid ocr 轮，opt-in）：TRT 设备车道 +
+        # OpenVINO CPU 车道各一引擎，worker 为每引擎起一条 infer 线程
+        # 共享 infer_q（自然工作窃取，与双实例 ONNX 同骨架——库存派工，
+        # 无需速率学习；结果按 idx 收敛，无序交付无害）。raw 设备直通
+        # 要求单 TRT 引擎 → 双引擎自动回退宿主 crop 路径（GPU 管线的
+        # ONNX 回退既有机制，D2H 每代表帧 ≤ROI 字节）。TRT 不可用时
+        # OcrEngine 内部回退 OV → 双 OV 仍成立（等价双实例）。
+        engines = [
+            acquire_ocr_engine(
+                spec.model, 'tensorrt',
+                fill_width=spec.fill_width, num_threads=ot,
+                pad_floor_env=spec.pad_floor_env,
+                gamma=spec.gamma, gpu_ctc=spec.gpu_ctc),
+            acquire_ocr_engine(
+                spec.model, 'onnxruntime',
+                fill_width=spec.fill_width, num_threads=ot,
+                pad_floor_env=spec.pad_floor_env,
+                gamma=spec.gamma, gpu_ctc=spec.gpu_ctc),
+        ]
+        return engines, engine_type
     _inst = (spec.ocr_instances if spec.ocr_instances is not None
              else config.env_bool(config.OCR_INSTANCES_ENV, default=True))
     ocr_instances = (engine_type == 'onnxruntime'
@@ -316,11 +337,17 @@ class OcrSession:
             else:
                 _t_eng = time.perf_counter()
                 engines, engine_type = acquire_engines(spec)
-                spec.on_backend_used(engines[0].backend_name)
+                _names = sorted({e.backend_name for e in engines})
+                spec.on_backend_used('+'.join(_names))
                 if (engine_type == 'tensorrt'
                         and engines[0].backend_name != 'tensorrt'):
                     # D3：请求 TRT 但引擎回退 ONNX → 降级原因透出 meta
                     spec.on_degraded('TRT 引擎不可用，回退 ONNX')
+                if (engine_type == 'hybrid'
+                        and _names == ['openvino']):
+                    # 双车道里 TRT 臂也不可用 → 全 OV（等价双实例），
+                    # 降级原因同样透出
+                    spec.on_degraded('TRT 引擎不可用，双车道退化为双 OpenVINO')
                 if spec.prof_end is not None:
                     spec.prof_end('ocr', 'engine_init', _t_eng)
             # S6-0（§8.6 N-2）：引擎只在本次会话内被独占使用，指标记录器随
