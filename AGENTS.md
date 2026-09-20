@@ -67,7 +67,7 @@ python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.
 |---|---|
 | 解码 | `decord.VideoReader.get_batch`（**唯一入口**；decode_backend=hybrid 走 decord 原生混合解码 ctx） |
 | 分段 | `video_ocr_engine/domain/segmentation.py` |
-| 编排引擎 | `video_ocr_engine/pipeline/engine.py`（SegmentEngine 唯一入口） |
+| 编排引擎 | `video_ocr_engine/pipeline/engine.py`（SegmentEngine 唯一入口；生命周期单出处 `_driver.py`，lane 策略） |
 | 宿主后端 | `video_ocr_engine/pipeline/host_backend.py` |
 | GPU 后端 | `video_ocr_engine/pipeline/gpu_backend.py`（gray+NVDEC+TRT 时默认；设备侧机制在 `video_ocr_engine/gpu/device.py`） |
 | OCR 会话 | `video_ocr_engine/pipeline/ocr_stage.py`（SessionSpec 契约；CPU 引擎=OpenVINO 唯一，C-48） |

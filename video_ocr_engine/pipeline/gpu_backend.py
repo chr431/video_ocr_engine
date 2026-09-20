@@ -1,14 +1,20 @@
-"""GPU 后端（v2 §5/pipeline/gpu_backend，S3-3c 自 _gpu_pipeline.py 迁入）。
+"""GPU 后端（v2 §5/pipeline/gpu_backend，S3-3c 自 _gpu_pipeline.py 迁入；
+P1 起为 GPU lane 策略）。
 
 452 行驱动的显式契约化（与 host_backend 同构）：算法与编排代码只读
 GpuRunSpec 声明字段；判定回调（merge/autocrop/裁切区间）显式注入；
 运行态只写 GpuRunResult 与 fps 缓存盒。
 
-B4/B5 随迁修复：autocropper 与 y_pool 从"事后赋值、worker/GC 无锁读"
-改为**构造注入**——会话启动前/生产者线程启动前构建完毕（线程可见性由
+B4/B5：autocropper 与 y_pool 从"事后赋值、worker/GC 无锁读"改为
+**构造注入**——会话启动前/生产者线程启动前构建完毕（线程可见性由
 Thread.start() 的 happens-before 保证）。
 B6（__del__ 内 cudaFree）**未随本迁移改动**：池帧归还仍走 __del__ →
 池 free-list（溢出才 cudaFree），显式化随 S4 设备侧模块拆分落地。
+
+P1（宿主/GPU 实现统一轮）：生命周期（open→fps→会话→校准→消费→收尾）
+上收到 _driver.run_segment_pipeline 单出处，本模块只剩 GPU 侧策略
+（_GpuLane）：设备侧校准、生产者线程+队列帧流、DeviceRef emit、
+sim_pair 合并判定，以及形状不符回退宿主（C10）。
 """
 from __future__ import annotations
 
@@ -21,15 +27,14 @@ from typing import Callable
 
 import numpy as np
 
-from video_ocr_engine.domain.segmentation import (SegmentStateMachine,
-                                                  dense_gate_hit,
-                                                  similar_decision)
+from video_ocr_engine.domain.segmentation import dense_gate_hit, similar_decision
 from ..domain.metrics import NULL_METRICS
 from ..gpu.frame_ref import DeviceRef
 
 logger = logging.getLogger(__name__)
 
 _PRODUCER_JOIN_TIMEOUT = 5.0
+_KEEP_CROPS_WINDOW = 16   # S6-b：keep_crops 的 D2H 并批窗口（段数计）
 
 
 class _SpecView:
@@ -125,160 +130,143 @@ class GpuRunResult:
         return (self.frames, self.segs, self.texts, self.confs, self.rep_frames)
 
 
-def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
-    """GPU 驱动门入口（原 _GpuPipelineMixin._run_pipelined_gpu 主体）。
+class _DeferredAutocropper:
+    def __init__(self, ctx_ref, spec_ref, session_ref):
+        self._ctx = ctx_ref
+        self._spec = spec_ref
+        self._session = session_ref
 
-    资源阶段：open_vr → 帧区间 → hybrid_begin → 会话启动（构造注入
-    autocropper，B4）→ 校准（失败或形状不符可回退宿主）→ 生产者线程
-    （解码+GPU analyze 与主线程分段/OCR 重叠）→ 消费循环 → 清理。
-    """
-    from ..gpu.device import (   # S9-5：设备侧机制迁 gpu/device.py
-        _GpuRunCtx, _YFramePool, _gpu_frame_stream_cpu,
-        _gpu_frame_stream_nvdec, _gpu_prepare_calibration,
-        _gpu_release_partial)
-    from .._helpers import _decode_progress_pct
-
-    res = GpuRunResult()
-    # 指标器别名：L1 边界（`_MET.checkpoint`）从 open 起就要用，故在函数
-    # 顶端取一次（纯别名，无副作用；off 档是 NULL_METRICS 单例，全 no-op）。
-    _MET = spec.metrics
-    # Cleanup handles are initialized before any calibration/setup can fail.
-    ocr_session = None
-    producer = None
-    producer_stop = threading.Event()
-    _t_open = time.perf_counter()
-    vr = spec.open_vr()
-    # F-6：on_gpu 必须在 open_vr **之后**判定——backend 标签由 open 写入
-    # （旧代码同序；门面若在 spec 构造期求值，B1 重置后的空标签会使其
-    # 恒为 False → 误走 CPU 解码分支，stride>1 时 rep_frame 帧号漂移）。
-    _label = spec.backend_label()
-    on_gpu = (_label == 'decord/GPU'
-              or (_label == 'decord/hybrid' and spec.ocr_on_gpu()))
-    from ._run_common import begin_reading, compute_frames, ensure_fps
-    ensure_fps(spec, vr)
-    res.fps = spec.fps_box[0]
-    x1, y1, x2, y2 = spec.roi
-    total = len(vr)
-    frames = compute_frames(spec, total)
-    if not frames:
-        try:
-            vr.close()
-        except Exception:
-            pass  # 清理路径：close 失败无需上抛（资源由进程回收）
-        raise ValueError(
-            f"帧区间为空: frame_start={spec.frame_start}, "
-            f"frame_end={spec.frame_end}, total={total}")
-    try:
-        begin_reading(vr, spec, frames)
-    except BaseException:
-        logger.debug("hybrid_begin 失败进入回退清理", exc_info=True)
-        try:
-            vr.close()
-        except Exception:
-            pass  # 清理路径：close 失败无需上抛
-        raise
-    if spec.prof_end is not None:
-        spec.prof_end('producer', 'open_and_fps', _t_open)
-    # P2c 卫生：calibrate 的 t0 从 open 收口处起算。此前用 _t_open 会让
-    # pipeline.calibrate 与 pipeline.setup（同一起点）完全重叠双计——
-    # spans 表 sum 不可加的来源之一（2026-09-17 勘察确认）。
-    _t_calib = time.perf_counter()
-    # L1 资源边界（§8.6 r5）：粗相位结束处各采一次，差分见 run report。
-    # 记的是**进程级**用量，OCR 与解码并发时核数会互相计入——这是"该相位
-    # 平均并行核数"的本意（不是单相位隔离）。off 档此调用为空操作。
-    _MET.checkpoint('open')
-    # OCR 会话提前到校准前启动（引擎构建与校准并行重叠）。
-    try:
-        ocr_session = spec.start_ocr_session(ocr_engines)
-    except BaseException:
-        logger.debug("OCR 会话启动失败进入清理", exc_info=True)
-        try:
-            vr.close()
-        except Exception:
-            pass  # 清理路径：close 失败无需上抛
-        raise
-    results = ocr_session.results
-    ocr_err = ocr_session.err
-    ocr_wall = ocr_session.wall
-    _put_ocr = ocr_session.put
-    # ── B4/B5：autocropper 与 y_pool 均为构造期装配 ──
-    ctx = _GpuRunCtx()
-    yuv = spec.yuv_output
-    limited = spec.color_range != 1
-    # 设备侧协作函数的 ex 适配视图（迁移期桥接，S4 拆分时消除）
-    exv = _SpecView(spec, spec.batch_luma)
-
-    class _DeferredAutocropper:
-        def __init__(self, ctx_ref, spec_ref, session_ref):
-            self._ctx = ctx_ref
-            self._spec = spec_ref
-            self._session = session_ref
-
-        def process(self, devs):
-            """5 元组列表 → 6 元组列表：NVDEC+yuv 先批量提取 Y（池帧），
-            再批量 col_ink 得裁切区间。CPU 解码分支设备侧恒为灰度，
-            直接进入 col_ink。"""
-            an = self._ctx.analyzer
-            if an is None:
-                return [d.with_crop(0, d.w) for d in devs]
-            crop_devs = []
-            yfs = []
-            if self._ctx.y_pool is not None:
-                for d in devs:
-                    yf = self._ctx.y_pool.acquire()
-                    yfs.append(yf)
-                    crop_devs.append(yf.ptr)
-                an.luma_into_batch(
-                    [d.ptr for d in devs], crop_devs,
-                    self._ctx.src_h, self._ctx.src_w,
-                    self._spec.color_range != 1, stream=an._stream_c)
+    def process(self, devs):
+        """5 元组列表 → 6 元组列表：NVDEC+yuv 先批量提取 Y（池帧），
+        再批量 col_ink 得裁切区间。CPU 解码分支设备侧恒为灰度，
+        直接进入 col_ink。"""
+        an = self._ctx.analyzer
+        if an is None:
+            return [d.with_crop(0, d.w) for d in devs]
+        crop_devs = []
+        yfs = []
+        if self._ctx.y_pool is not None:
+            for d in devs:
+                yf = self._ctx.y_pool.acquire()
+                yfs.append(yf)
+                crop_devs.append(yf.ptr)
+            an.luma_into_batch(
+                [d.ptr for d in devs], crop_devs,
+                self._ctx.src_h, self._ctx.src_w,
+                self._spec.color_range != 1, stream=an._stream_c)
+        else:
+            crop_devs = [d.ptr for d in devs]
+        rows = an.content_range_batch(
+            crop_devs, self._ctx.src_h, self._ctx.src_w,
+            self._spec.bin_thresh_ref[0], stream=an._stream_c)
+        outs = []
+        for d, yf, r in zip(devs, yfs or [None] * len(devs), rows):
+            owner = yf if yf is not None else d.owner
+            ptr = yf.ptr if yf is not None else d.ptr
+            if int(r[0]) <= int(r[1]):
+                rng = self._spec.content_range_to_crop(
+                    int(r[0]), int(r[1]), self._ctx.src_w)
+                xoff, cropw = (rng if rng is not None
+                               else (0, self._ctx.src_w))
             else:
-                crop_devs = [d.ptr for d in devs]
-            rows = an.content_range_batch(
-                crop_devs, self._ctx.src_h, self._ctx.src_w,
-                self._spec.bin_thresh_ref[0], stream=an._stream_c)
-            outs = []
-            for d, yf, r in zip(devs, yfs or [None] * len(devs), rows):
-                owner = yf if yf is not None else d.owner
-                ptr = yf.ptr if yf is not None else d.ptr
-                if int(r[0]) <= int(r[1]):
-                    rng = self._spec.content_range_to_crop(
-                        int(r[0]), int(r[1]), self._ctx.src_w)
-                    xoff, cropw = (rng if rng is not None
-                                   else (0, self._ctx.src_w))
-                else:
-                    xoff, cropw = 0, self._ctx.src_w
-                outs.append(DeviceRef(ptr=ptr, h=d.h, w=d.w, owner=owner,
-                                      x_off=xoff, crop_w=cropw))
-            return outs
+                xoff, cropw = 0, self._ctx.src_w
+            outs.append(DeviceRef(ptr=ptr, h=d.h, w=d.w, owner=owner,
+                                  x_off=xoff, crop_w=cropw))
+        return outs
 
-    def _cleanup_partial():
-        nonlocal ocr_session
-        if ocr_session is not None:
-            try:
-                ocr_session.finish()
-            except BaseException:
-                logger.debug("ocr_session.finish 清理忽略异常", exc_info=True)
-            ocr_session = None
-        _gpu_release_partial(ctx)
 
-    # 校准（构建 analyzer / 首批直方图 / Otsu 阈值）
-    try:
-        _calib_ok, _th = _gpu_prepare_calibration(
-            exv, ctx, vr, frames, on_gpu=on_gpu, yuv=yuv,
-            roi=(x1, y1, x2 + 1, y2 + 1))
-    except BaseException:
-        logger.debug("GPU 管线异常触发 _cleanup_partial", exc_info=True)
-        _cleanup_partial()
+class _GpuLane:
+    """GPU 全驻留 lane：设备侧校准/帧流/emit/合并判定（_driver 的策略侧）。
+
+    payload 形状 (fi, dev, sharp)——emit 取 [0]/[1]/[2]，
+    similar 判定取 [1]（DeviceRef）。
+    """
+
+    progress_verb = 'GPU分段'
+    debug_tag = 'GB'
+
+    def __init__(self, spec: GpuRunSpec) -> None:
+        from ..gpu.device import _gpu_release_partial   # S9-5：设备侧机制迁 gpu/device.py
+        self._spec = spec
+        self._release = _gpu_release_partial
+        self._ctx = None        # _GpuRunCtx（after_open 前置装配）
+        self._exv = None        # 设备函数的 ex 适配视图
+        self._prepare = None    # _gpu_prepare_calibration
+        self._stream_fn = None  # (nvdec, cpu) 两帧流
+        self._YFramePool = None
+        self._on_gpu = False
+        self._yuv = spec.yuv_output
+        self._limited = spec.color_range != 1
+        self._th = 0
+        # 生产者线程 / 队列 / 错误槽
+        self._producer = None
+        self._producer_q: Queue | None = None
+        self._stream = None
+        self.producer_stop = threading.Event()
+        self.producer_err: list = []
+        # 消费侧运行态
+        self._session = None
+        self._put_ocr = None
+        self._raw_ready = None
+        self._rep_crops: dict = {}
+        self._pending_crops: list = []          # [(r_frame, dev, prefer_device)]
+        self._seg_idx = 0
+        self._merge_hits = 0        # PI-15：逐段计数改局部累加，run 末一次上报
+
+    @property
+    def crops(self) -> dict:
+        return self._rep_crops
+
+    # ── 生命周期挂钩 ──────────────────────────────────────────────
+    def after_open(self, vr) -> None:
+        from ..gpu.device import (_GpuRunCtx, _gpu_frame_stream_cpu,
+                                  _gpu_frame_stream_nvdec,
+                                  _gpu_prepare_calibration)
+        spec = self._spec
+        self._ctx = _GpuRunCtx()
+        self._exv = _SpecView(spec, spec.batch_luma)
+        self._prepare = _gpu_prepare_calibration
+        self._stream_fn = (_gpu_frame_stream_nvdec, _gpu_frame_stream_cpu)
+        # F-6：on_gpu 必须在 open_vr **之后**判定——backend 标签由 open 写入
+        # （旧代码同序；门面若在 spec 构造期求值，B1 重置后的空标签会使其
+        # 恒为 False → 误走 CPU 解码分支，stride>1 时 rep_frame 帧号漂移）。
+        _label = spec.backend_label()
+        self._on_gpu = (_label == 'decord/GPU'
+                        or (_label == 'decord/hybrid' and spec.ocr_on_gpu()))
+
+    def calibrate(self, spec, vr, frames, ocr_session):
+        x1, y1, x2, y2 = spec.roi
+        ok, th = self._prepare(
+            self._exv, self._ctx, vr, frames, on_gpu=self._on_gpu,
+            yuv=self._yuv, roi=(x1, y1, x2 + 1, y2 + 1))
+        self._th = th
+        return ok, th
+
+    def after_calibrate(self, th, ocr_session) -> None:
+        spec = self._spec
+        self._session = ocr_session
+        self._put_ocr = ocr_session.put
+        spec.bin_thresh_ref[0] = th
+        if spec.on_bin_thresh is not None:
+            spec.on_bin_thresh(th)
+        # B5（真装配点）：y_pool 依赖校准产出的 src_h/src_w；生产者未启动，
+        # 此处赋值先行于一切并发读者。
+        from ..gpu.device import _YFramePool
+        self._ctx.y_pool = (_YFramePool(self._ctx.src_h * self._ctx.src_w)
+                            if (self._yuv and self._on_gpu) else None)
+        ocr_session.autocropper = _DeferredAutocropper(self._ctx, spec,
+                                                        ocr_session)
+
+    def abort(self, ocr_session) -> None:
+        # Cleanup handles are initialized before any calibration/setup can fail.
         try:
-            vr.close()
-        except Exception:
-            pass  # 清理路径：close 失败无需上抛
-        raise
-    if not _calib_ok:
-        # 形状不符等：回退宿主（C10 语义）——会话收尾（worker 归还引擎）、
-        # 释放设备侧临时缓冲，但 **reader 不 close**：宿主路径复用已打开的
-        # reader（get_batch 随机访问无消费状态，免二次打开/解码器悬挂）。
+            ocr_session.finish()
+        except BaseException:
+            logger.debug("ocr_session.finish 清理忽略异常", exc_info=True)
+        self._release(self._ctx)
+
+    def fallback(self, res, ocr_session, ocr_engines, vr):
+        spec = self._spec
         res.fell_back_to_host = True
         res.fallback_engines = ocr_engines
         res.fallback_vr = vr
@@ -287,41 +275,54 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
             ocr_session.finish()   # 空会话收尾：worker 归还引擎
         except BaseException:
             logger.debug("ocr_session.finish 清理忽略异常", exc_info=True)
-        _gpu_release_partial(ctx)
+        self._release(self._ctx)
         return res
-    res.bin_thresh = _th
-    spec.bin_thresh_ref[0] = _th
-    if spec.on_bin_thresh is not None:
-        spec.on_bin_thresh(_th)
-    if spec.prof_end is not None:
-        spec.prof_end('producer', 'gpu_calib_total', _t_calib)
-    _MET.checkpoint('calibrate')
-    # B5（真装配点）：y_pool 依赖校准产出的 src_h/src_w；生产者未启动，
-    # 此处赋值先行于一切并发读者。
-    ctx.y_pool = (_YFramePool(ctx.src_h * ctx.src_w)
-                  if (yuv and on_gpu) else None)
-    ocr_session.autocropper = _DeferredAutocropper(ctx, spec, ocr_session)
 
-    if on_gpu:
-        frame_stream = _gpu_frame_stream_nvdec(
-            exv, ctx, vr, frames, yuv=yuv,
-            roi=(x1, y1, x2 + 1, y2 + 1), th=_th)
-    else:
-        frame_stream = _gpu_frame_stream_cpu(
-            exv, ctx, vr, frames, yuv=yuv,
-            roi=(x1, y1, x2 + 1, y2 + 1), th=_th)
+    def release(self) -> None:
+        # C5：释放本次 extract 的临时设备缓冲；OCR 引擎缓冲归引擎池。
+        self._release(self._ctx)
 
-    producer_q: Queue = Queue(maxsize=max(8, spec.buffer_size))
-    producer_err: list = []
+    def report_counters(self) -> None:
+        if self._spec.metrics.enabled:
+            self._spec.metrics.counter('segment.merges', self._merge_hits)
 
-    def _put_q(item) -> bool:
+    # ── 帧流：生产者线程 + 队列，包成生成器交统一驱动消费 ──────────
+    def frame_items(self, spec, vr, frames, ocr_session):
+        self._raw_ready = ocr_session.raw_ready
+        self._producer_q = Queue(maxsize=max(8, spec.buffer_size))
+        x1, y1, x2, y2 = spec.roi
+        self._stream = self._stream_fn[0 if self._on_gpu else 1](
+            self._exv, self._ctx, vr, frames, yuv=self._yuv,
+            roi=(x1, y1, x2 + 1, y2 + 1), th=self._th)
+        self._producer = threading.Thread(target=self._producer_loop,
+                                          daemon=True)
+        self._producer.start()
+        while True:
+            try:
+                item = self._producer_q.get(timeout=0.2)
+            except Empty:
+                # C7：解码停滞/等待期间保持取消响应。
+                spec.cancel()
+                continue
+            if item is None:
+                break
+            if self.producer_err:
+                raise RuntimeError(
+                    f"GPU 解码生产者失败: {self.producer_err[0]!r}"
+                ) from self.producer_err[0]
+            fi, dev, sharp, cluster = item
+            yield fi, sharp, dict(payload=(fi, dev, sharp),
+                                  cluster=float(cluster))
+
+    def _put_q(self, item) -> bool:
         # P2c 覆盖：生产者侧背压此前无对应物（宿主路径 q_put_block 一直
         # 有）——FULL 重试等待正是"OCR 消费不动生产者"的直接证据。
+        spec = self._spec
         _t_put = time.perf_counter()
         try:
-            while not producer_stop.is_set():
+            while not self.producer_stop.is_set():
                 try:
-                    producer_q.put(item, timeout=0.2)
+                    self._producer_q.put(item, timeout=0.2)
                     return True
                 except Full:
                     continue
@@ -330,33 +331,45 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
             if spec.prof_end is not None:
                 spec.prof_end('producer', 'q_put_block', _t_put)
 
-    def _producer() -> None:
+    def _producer_loop(self) -> None:
         try:
-            for item in frame_stream:
-                if not _put_q(item):
+            for item in self._stream:
+                if not self._put_q(item):
                     return
         except BaseException as e:  # noqa: BLE001
             # BaseException 而非 Exception（2026-09-19 审查轮，与
             # gpu/device.py 排空线程对齐）：逃逸的 BaseException 会让
             # producer_err 恒空 → 消费循环见哨兵即正常收尾 → run 报
             # 成功但帧数静默截断。
-            producer_err.append(e)
+            self.producer_err.append(e)
         finally:
-            _put_q(None)
+            self._put_q(None)
 
-    producer = threading.Thread(target=_producer, daemon=True)
-    producer.start()
+    def after_stream(self) -> None:
+        self._producer.join()
+        if self.producer_err:
+            raise RuntimeError(
+                f"GPU 解码生产者失败: {self.producer_err[0]!r}"
+            ) from self.producer_err[0]
 
-    rep_crops: dict = {}
-    seg_idx = 0
-    merge_hits = [0]          # PI-15：逐段计数器改局部累加（run 末一次上报）
-    k = 0
-    t0 = time.perf_counter()
-    from cuda.bindings import runtime as cudart
-    raw_ready_ref = ocr_session.raw_ready
+    def stop_consume(self) -> None:
+        self.producer_stop.set()   # C6：任何退出路径都叫停 producer
+        self._resolve_keep_crops()   # S6-b：尾窗收口（rep_crops 必须完整）
+        if self._producer is not None:
+            try:
+                self._producer.join(_PRODUCER_JOIN_TIMEOUT)
+            except BaseException:
+                logger.debug("producer.join 清理忽略异常", exc_info=True)
 
-    def _d2h_rep(dev, *, prefer_device=False):
+    # ── 代表帧交付 / 合并判定（消费线程内）────────────────────────
+    def emit(self, seg, rep, frac) -> None:
+        self._emit_ocr(self._seg_idx, rep[0], rep[1], frac, rep[2])
+        self._seg_idx += 1
+
+    def _d2h_rep(self, dev, *, prefer_device=False):
         """代表帧 → 宿主：NVDEC = D2H；CPU 解码默认宿主切片直取。"""
+        from cuda.bindings import runtime as cudart
+        ctx = self._ctx
         hc = getattr(dev.owner, 'host_crop', None)
         if hc is not None and not prefer_device:
             h = hc()
@@ -369,24 +382,26 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
             cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost,
             ctx.analyzer._stream_c)
         cudart.cudaStreamSynchronize(ctx.analyzer._stream_c)
+        _MET = self._spec.metrics
         if _MET.enabled:
             _MET.counter('emit.d2h_calls')
             _MET.counter('emit.d2h_bytes', dev.h * dev.w)
             _MET.counter('emit.syncs')
         return arr
 
-    # ── S6-b：keep_crops 的 D2H 并批（v1 每段一次 async D2H + 一次流同步，
-    # 3000 帧/1083 段 = 1083 次同步全落在消费线程上）。改为有界窗口收集 +
-    # 每窗一次流同步；窗口 = 16 段，避免把过多 decord 批 owner 钉住（PI-5）。
-    pending_crops: list = []          # [(r_frame, dev, prefer_device)]
-    _KEEP_CROPS_WINDOW = 16
-
-    def _resolve_keep_crops() -> None:
-        if not pending_crops:
+    def _resolve_keep_crops(self) -> None:
+        # ── S6-b：keep_crops 的 D2H 并批（v1 每段一次 async D2H + 一次流同步，
+        # 3000 帧/1083 段 = 1083 次同步全落在消费线程上）。改为有界窗口收集 +
+        # 每窗一次流同步；窗口 = 16 段，避免把过多 decord 批 owner 钉住（PI-5）。
+        if not self._pending_crops:
             return
+        from cuda.bindings import runtime as cudart
+        spec = self._spec
+        ctx = self._ctx
+        _MET = spec.metrics
         _t_d2h = time.perf_counter()
         arrs: list = []
-        for _rf, _dev, _prefer in pending_crops:
+        for _rf, _dev, _prefer in self._pending_crops:
             _hc = getattr(_dev.owner, 'host_crop', None)
             _h = _hc() if (_hc is not None and not _prefer) else None
             if _h is not None:
@@ -399,18 +414,20 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
                 ctx.analyzer._stream_c)
             arrs.append(_arr)
         cudart.cudaStreamSynchronize(ctx.analyzer._stream_c)   # 每窗一次
-        for (_rf, _dev, _prefer), _arr in zip(pending_crops, arrs):
-            rep_crops[_rf] = _arr
+        for (_rf, _dev, _prefer), _arr in zip(self._pending_crops, arrs):
+            self._rep_crops[_rf] = _arr
         if _MET.enabled:
             # PI-15：逐段计数由调用点搬到这里（每窗一次），少 N 次 Python 上报
-            _MET.counter('emit.keep_crops_batched', len(pending_crops))
-            _MET.counter('emit.keep_crops_d2h', len(pending_crops))
+            _MET.counter('emit.keep_crops_batched', len(self._pending_crops))
+            _MET.counter('emit.keep_crops_d2h', len(self._pending_crops))
         if spec.prof_end is not None:
             spec.prof_end('producer', 'emit_d2h', _t_d2h)
-        pending_crops.clear()
+        self._pending_crops.clear()
 
-    def _autocrop_device(gray_ptr, sharp):
+    def _autocrop_device(self, gray_ptr, sharp):
         """GPU 直通裁切：col_ink 判「有墨迹列范围」+ 宿主同一余量规则。"""
+        spec = self._spec
+        ctx = self._ctx
         if not spec.ocr_autocrop:
             return None
         if ctx.src_w <= 8 or sharp < 3.0:
@@ -422,21 +439,26 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
             return None
         return spec.content_range_to_crop(rng[0], rng[1], ctx.src_w)
 
-    def _similar_device(a_dev, b_dev) -> bool:
+    def similar(self, a, b) -> bool:
         """merge_similar 判定：GPU sim_pair（整数精确）。"""
+        return self._similar_device(a[1], b[1])
+
+    def _similar_device(self, a_dev, b_dev) -> bool:
+        spec = self._spec
+        ctx = self._ctx
         if not (spec.merge_similar and a_dev is not None
                 and b_dev is not None):
             return False
         use_bin = 1 if spec.merge_effective_mode() == 'binary' else 0
         ya = yb = None
-        if yuv and on_gpu:
+        if self._yuv and self._on_gpu:
             ya = ctx.y_pool.acquire()
             yb = ctx.y_pool.acquire()
             ctx.analyzer.luma_into(int(a_dev.ptr), int(ya.ptr), ctx.src_h,
-                                   ctx.src_w, limited,
+                                   ctx.src_w, self._limited,
                                    stream=ctx.analyzer._stream_c)
             ctx.analyzer.luma_into(int(b_dev.ptr), int(yb.ptr), ctx.src_h,
-                                   ctx.src_w, limited,
+                                   ctx.src_w, self._limited,
                                    stream=ctx.analyzer._stream_c)
             ap, bp = ya.ptr, yb.ptr
         else:
@@ -468,16 +490,21 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
                                 dense=dense_gate_hit(win3,
                                                      spec.merge_dense_gate))
         if _dec:
-            merge_hits[0] += 1        # PI-15：逐段计数改为局部累加，run 末一次上报
+            self._merge_hits += 1       # PI-15：逐段计数改为局部累加，run 末一次上报
         return _dec
 
-    def _emit_ocr(idx, r_frame, r_dev, frac, r_sharp) -> None:
+    def _emit_ocr(self, idx, r_frame, r_dev, frac, r_sharp) -> None:
+        from cuda.bindings import runtime as cudart
+        spec = self._spec
+        ctx = self._ctx
+        yuv = self._yuv
+        on_gpu = self._on_gpu
         _t_push = time.perf_counter()
-        _raw = raw_ready_ref[0] and r_dev is not None
+        _raw = self._raw_ready[0] and r_dev is not None
         crop_h = None
         dev_ocr = None
         if _raw:
-            if getattr(ocr_session, 'autocropper', None) is not None:
+            if getattr(self._session, 'autocropper', None) is not None:
                 # 零拷贝 + 双推迟：emit 只剩构元+入队。
                 if (spec.ocr_autocrop and ctx.src_w > 8 and r_sharp >= 3.0):
                     dev_ocr = DeviceRef(ptr=r_dev.ptr, h=ctx.src_h,
@@ -491,7 +518,8 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
                 if yuv and on_gpu:
                     yf = ctx.y_pool.acquire()
                     ctx.analyzer.luma_into(int(r_dev.ptr), int(yf.ptr),
-                                           ctx.src_h, ctx.src_w, limited,
+                                           ctx.src_h, ctx.src_w,
+                                           self._limited,
                                            stream=ctx.analyzer._stream_c)
                     cudart.cudaStreamSynchronize(ctx.analyzer._stream_c)
                     base = DeviceRef(ptr=yf.ptr, h=ctx.src_h, w=ctx.src_w,
@@ -500,122 +528,44 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
                     base = r_dev
                 xoff, cropw = 0, ctx.src_w
                 _t_ac = time.perf_counter()
-                rng = _autocrop_device(base.ptr, r_sharp)
+                rng = self._autocrop_device(base.ptr, r_sharp)
                 if rng is not None:
                     xoff, cropw = rng
                 if spec.prof_end is not None:
                     spec.prof_end('producer', 'emit_autocrop', _t_ac)
                 dev_ocr = base.with_crop(xoff, cropw)
         else:
-            crop_h = _d2h_rep(r_dev)
+            crop_h = self._d2h_rep(r_dev)
         if spec.keep_crops:
             if crop_h is not None:
                 # 该段已在走宿主路径，代表帧就是宿主数组：直接落盘，无需 D2H
-                rep_crops[r_frame] = crop_h
+                self._rep_crops[r_frame] = crop_h
             else:
                 # S6-b：设备代表帧的 D2H 进窗口并批（见 _resolve_keep_crops）。
                 # 实测（交错 A/B，4 次独立进程）：冷启动 h264-gpu −2.45%
                 # （符号一致），其余配置中性——收益集中在"代表帧留显存"的
                 # raw 直通路径。
-                pending_crops.append(
+                self._pending_crops.append(
                     (r_frame, r_dev, dev_ocr is not None and not yuv))
-                if len(pending_crops) >= _KEEP_CROPS_WINDOW:
-                    _resolve_keep_crops()
+                if len(self._pending_crops) >= _KEEP_CROPS_WINDOW:
+                    self._resolve_keep_crops()
         if dev_ocr is not None and not yuv:
             drop_host = getattr(dev_ocr.owner, 'drop_host', None)
             if drop_host is not None:
                 drop_host()
         from .ocr_stage import SegmentTask
-        _put_ocr(SegmentTask(idx, r_frame, crop_h, dev_ocr, frac))
+        self._put_ocr(SegmentTask(idx, r_frame, crop_h, dev_ocr, frac))
         if spec.prof_end is not None:
             spec.prof_end('producer', 'emit_put', _t_push)
 
-    def _on_emit(seg, rep, frac):
-        nonlocal seg_idx
-        _emit_ocr(seg_idx, rep[0], rep[1], frac, rep[2])
-        seg_idx += 1
 
-    machine = SegmentStateMachine(
-        frames, C=spec.C,
-        on_emit=_on_emit,
-        on_similar=lambda a, b: _similar_device(a[1], b[1]),
-        on_cancel=spec.cancel,
-        on_progress=lambda kk, frac: spec.progress(
-            f'[{spec.backend_label()}] GPU分段: {kk}/{len(frames)}',
-            _decode_progress_pct(frac)),
-        debug_tag='GB')
+def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
+    """GPU 驱动门入口（原 _GpuPipelineMixin._run_pipelined_gpu 主体）。
 
-    try:
-        while True:
-            try:
-                item = producer_q.get(timeout=0.2)
-            except Empty:
-                # C7：解码停滞/等待期间保持取消响应。
-                spec.cancel()
-                continue
-            if item is None:
-                break
-            if producer_err:
-                raise RuntimeError(
-                    f"GPU 解码生产者失败: {producer_err[0]!r}"
-                ) from producer_err[0]
-            fi, dev, sharp, cluster = item
-            _t_feed = time.perf_counter()
-            machine.feed(k, fi, sharp, (fi, dev, sharp),
-                         cluster=float(cluster))
-            if spec.prof_end is not None:
-                spec.prof_end('producer', 'consume_feed', _t_feed)
-            k += 1
-        producer.join()
-        if producer_err:
-            raise RuntimeError(
-                f"GPU 解码生产者失败: {producer_err[0]!r}"
-            ) from producer_err[0]
-        machine.finish()
-        segs = machine.segs
-    finally:
-        producer_stop.set()   # C6：任何退出路径都叫停 producer
-        _resolve_keep_crops()   # S6-b：尾窗收口（rep_crops 必须完整）
-        if producer is not None:
-            try:
-                producer.join(_PRODUCER_JOIN_TIMEOUT)
-            except BaseException:
-                logger.debug("producer.join 清理忽略异常", exc_info=True)
-        _t_consume_end = time.perf_counter()
-        res.timing['decode'] = _t_consume_end - t0
-        _MET.checkpoint('decode')
-        try:
-            ocr_session.finish()
-        except BaseException:
-            logger.debug("ocr_session.finish 清理忽略异常", exc_info=True)
-        res.timing['ocr_tail'] = time.perf_counter() - _t_consume_end
-        # fork 遥测穿透（2026-09-17）：close 前取快照（同宿主路径）
-        _fs = getattr(vr, "hybrid_stats", None)
-        if _fs is not None:
-            try:
-                res.fork_stats = _fs() or None
-            except Exception:
-                logger.debug("fork 遥测抓取失败忽略", exc_info=True)
-        try:
-            vr.close()
-        except Exception:
-            pass  # 清理路径：close 失败无需上抛
-        # C5：释放本次 extract 的临时设备缓冲；OCR 引擎缓冲归引擎池。
-        _gpu_release_partial(ctx)
-    if ocr_err:
-        raise RuntimeError(f"OCR worker 失败: {ocr_err[0]!r}") from ocr_err[0]
-    if _MET.enabled:
-        # PI-15：逐段计数一律在此一次性上报（run 内不再逐段调 Python）
-        _MET.counter('segment.segments', seg_idx)
-        _MET.counter('segment.merges', merge_hits[0])
-    res.timing['ocr'] = ocr_wall[0]
-    _MET.checkpoint('ocr')
-    res.frames = frames
-    res.segs = segs
-    res.n_segments = len(segs)
-    res.crops = rep_crops
-    res.texts = [results[i][0] for i in range(seg_idx)]
-    res.confs = [results[i][1] for i in range(seg_idx)]
-    res.rep_frames = [results[i][2] for i in range(seg_idx)]
-    del vr
-    return res
+    生命周期由 _driver.run_segment_pipeline 承载（P1）；本模块提供
+    GPU lane 策略：设备侧校准 → 生产者线程（解码+GPU analyze 与主线程
+    分段/OCR 重叠）→ 消费循环 → 清理；形状不符回退宿主（C10）。
+    """
+    from ._driver import run_segment_pipeline
+    return run_segment_pipeline(spec, GpuRunResult(), _GpuLane(spec),
+                                ocr_engines)

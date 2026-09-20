@@ -41,14 +41,14 @@ if _ROOT not in sys.path:
 #: 内部调用。注意 `extractor` 走函数内 `from ... import`（每次调用重解析），
 #: 所以打 `domain.segmentation` 的模块属性即可拦住它，无需另打一处。
 POINTS: dict[str, tuple[str, str]] = {
-    # 分段状态机：两个执行后端各自 by-value 导入，故必须分别打桩
-    "STATE_MACHINE": ("video_ocr_engine.pipeline.host_backend",
+    # 分段状态机：P1 驱动合一后唯一构造点在 _driver（旧两后端各自的
+    # 构造点已上收；STATE_MACHINE_GPU 随之失效删除——不再有第二个点）
+    "STATE_MACHINE": ("video_ocr_engine.pipeline._driver",
                       "SegmentStateMachine"),
-    "STATE_MACHINE_GPU": ("video_ocr_engine.pipeline.gpu_backend",
-                          "SegmentStateMachine"),
-    # 宿主分段接线（原 _host_pipeline._host_segment_frames，S9 迁入并改名）
-    "SEGMENT_FRAMES": ("video_ocr_engine.pipeline.host_backend",
-                       "_segment_frames"),
+    # 宿主分段接线（原 _host_pipeline._host_segment_frames，S9 迁入并改名）：
+    # P1 后机器接线内联进 _driver.run_segment_pipeline，无函数边界可打；
+    # 需要宿主帧流/消费侧取数时用 _HostLane.frame_items（SEGMENT_FRAMES
+    # 条目随之删除，2026-09-20 无消费方核实）
     # 分段原语（调用点即 segmentation 内的模块全局）
     "CLUSTER_WIN3": ("video_ocr_engine.domain.segmentation", "_cluster_win3"),
     "OTSU": ("video_ocr_engine.domain.segmentation", "_otsu"),

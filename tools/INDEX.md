@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **135 个 `.py`**（23,467 行），其中 120 个是探针
+`tools/` 现有 **136 个 `.py`**（23,630 行），其中 121 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -42,6 +42,7 @@
 | `_probe_unify_decode.py` | 148 | decode 统一设想测量：forced-hybrid vs 纯臂（输出位级等价/速率平价/ctor 冷税；av1×force_cpu 退化 GPU 实证；子进程自调用协议）| docs/log/2026-09-20-批量策略与hybridOCR轮.md §1.1 |
 | `_probe_hybrid_ocr.py` | 89 | hybrid OCR（双车道 TRT+OV）A/B 与文本对照（batch_test 字幕 stride=1 OCR-bound 口径——v0 +51% 回归与 3/26461 文本差的证据）| docs/log/2026-09-20-批量策略与hybridOCR轮.md §3 |
 | `_probe_window_repro.py` | 45 | hard-window 回归复现器（CPU-out 窗口口径，got==n 判少交付 + hybrid_stats；可选 start 参数=晚起点复现（窗×seek 尾帧替补缺陷的取证口径，2026-09-20））| docs/log/2026-09-19-hybrid窗口缺陷轮.md；2026-09-20-审计修复轮.md §4 |
+| `_probe_worktree_ab.py` | 163 | 跨代码版本的同会话交错 A/B（A=HEAD 临时 worktree / B=当前工作树；bench run 子进程自带时钟门禁，臂序轮转 + 同轮配对差分 + 段数旁证；重构中性验证专用件——硬件漂移禁止新码 vs 注册表过往条目直接比对）| docs/log/2026-09-20-宿主GPU驱动合一轮.md |
 | `_probe_hybrid_bitwise.py` | 72 | hybrid vs NVDEC 输出逐帧字节比对（深 prefetch 安全性 + fork 改动的正确性门禁） | docs/log/2026-09-10-hybrid联调深挖.md |
 | `_probe_onnx_dcd_sweep.py` | 80 | ONNX OCR 场景解码线程数 sweep（DECODE_THREADS；h264/hevc/av1 × stride），产出 2026-09-10 新档位表 | docs/log/2026-09-10-ONNX解码线程档位.md |
 | `_probe_perf_sweep.py` | 118 | 解码参数 sweep（batch/stream/threads/hybthreads），monkey-patch 模块常量；用于 C-10 复确认与 batch=32 越界 bug 的暴露 | docs/log/2026-09-09-深度性能优化.md |

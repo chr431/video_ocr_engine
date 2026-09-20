@@ -1,4 +1,4 @@
-"""宿主后端（v2 §5/§6.2，S3-3a）。
+"""宿主后端（v2 §5/§6.2，S3-3a；P1 起为宿主 lane 策略）。
 
 从 extractor._run_pipelined_host 与 _host_pipeline 的三个模块级函数外提
 （2026-09-10）。语义变化：**算法代码只读 HostRunSpec 的显式声明字段**，
@@ -6,9 +6,11 @@
 只写入 HostRunResult 与两个显式可变盒（fps 缓存 / backend 标签），
 由门面在调用前后同步。
 
-_segment/_calibrate/_frame_stream 的像素与判定原语经 spec 回调注入
-（实现仍唯一出自 segmentation / extractor 薄层）；GPU 路径的
-_gpu_fallback_to_host 经 preopened_vr 复用（C10 语义不变）。
+P1（宿主/GPU 实现统一轮）：生命周期（open→fps→会话→校准→消费→收尾）
+上收到 _driver.run_segment_pipeline 单出处，本模块只剩宿主侧策略——
+校准（_calibrate）、帧流（_frame_stream）、emit/合并判定（_HostLane）。
+像素与判定原语经 spec 回调注入（实现唯一出处 segmentation /
+extractor 薄层）；GPU 路径的回退经 preopened_vr 复用（C10 语义不变）。
 """
 from __future__ import annotations
 
@@ -22,7 +24,7 @@ import numpy as np
 from video_ocr_engine.config import constants as config
 from ..domain.metrics import NULL_METRICS
 from ..gpu.frame_ref import DeviceRef
-from video_ocr_engine.domain.segmentation import SegmentStateMachine, _otsu, otsu_median_threshold
+from video_ocr_engine.domain.segmentation import _otsu, otsu_median_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -198,187 +200,109 @@ def _frame_stream(spec: HostRunSpec, frames, vr, calib, th, *, with_dev: bool):
                    bs[k], d)
 
 
-def _segment_frames(spec: HostRunSpec, frames, stream, *, emit, segs):
-    """宿主分段状态机接线（原 _host_segment_frames）。
+class _HostLane:
+    """宿主 lane：校准/帧流/emit/合并判定的宿主实现（_driver 的策略侧）。
 
-    编排统一实现在 segmentation.SegmentStateMachine（与 GPU 共用）；
-    本函数只做宿主侧接线。
+    payload 形状 (fi, crop, gray, dev_info)——emit 取 [0]/[1]/[3]，
+    similar 判定取 [2]（灰度）。
     """
-    from .._helpers import _decode_progress_pct
-    prefix = f'[{spec.backend_label()}] 解码+分段'
 
-    def _similar(a, b) -> bool:
-        # P2c 覆盖：merge_pair 此前只有 GPU 路径产出（宿主只能从
-        # timing['decode'] 反推合并成本）。merge_similar 关闭时不计
-        # （无判定成本可量）。
-        if not spec.merge_similar:
-            return False
-        _t = time.perf_counter()
-        try:
-            return spec.segments_similar(a[2], b[2])
-        finally:
-            _prof(spec, 'producer', 'merge_pair', _t)
+    progress_verb = '解码+分段'
+    debug_tag = 'HB'
 
-    machine = SegmentStateMachine(
-        frames, C=spec.C,
-        on_emit=lambda seg, rep, frac: emit(seg, rep[0], rep[1], rep[3],
-                                            rep[2], frac),
-        on_similar=_similar,
-        on_cancel=spec.cancel,
-        on_progress=lambda k, frac: spec.progress(
-            f'{prefix}: {k}/{len(frames)}',
-            _decode_progress_pct(frac)),
-        debug_tag='HB')
-    for k, (fi, c, g, sharp, b, dev) in enumerate(stream):
-        # P2c 覆盖：consume_feed（无界 TOTALS，std 档 sum+n+max）——
-        # 与 GPU 路径 consume_feed 同义（状态机 feed 含 emit 回调）。
-        _t_feed = time.perf_counter()
-        machine.feed(k, fi, sharp, (fi, c, g, dev), bin=b)
-        _prof(spec, 'producer', 'consume_feed', _t_feed)
-    machine.finish()
-    segs[:] = machine.segs
-    return segs
+    def __init__(self, spec: HostRunSpec) -> None:
+        self._spec = spec
+        self._with_dev = True
+        self._calib: list = []
+        self._th = 0
+        self._seg_idx = 0
+        self._rep_crops: dict = {}
+        self._put_ocr = None
 
+    @property
+    def crops(self) -> dict:
+        return self._rep_crops
 
-def run_host_pipeline(spec: HostRunSpec, ocr_engines=None,
-                      preopened_vr=None) -> HostRunResult:
-    """宿主驱动（原 extractor._run_pipelined_host 的主体）。
+    def after_open(self, vr) -> None:
+        # hybrid_begin 为化石 API（fork 未实现，hasattr 恒 False → _with_dev
+        # 恒 True）。对 fork hybrid(CPU-out) 读者实测无害：其 get_batch 返回
+        # decord NDArray（有 to_dlpack），采到的是 CPU 指针且仅在 GPU raw OCR
+        # 直通时消费——而宿主帧 hybrid 只与 CPU OCR 组合（OCR 在 GPU 时
+        # extractor 选 hybrid_gpu 走 gpu_backend），该指针无人读（2026-09-20
+        # 起点轮核实）。
+        hybrid = hasattr(vr, 'hybrid_begin')   # _with_dev 判定用
+        self._with_dev = not hybrid
 
-    解码∥分段∥OCR：段一闭合即把代表帧交给 OCR 会话线程；返回显式
-    HostRunResult（门面负责同步回实例属性与 meta）。
-    """
-    res = HostRunResult()
-    _t_open = time.perf_counter()
-    vr = preopened_vr
-    if vr is None:
-        vr = spec.open_vr()
-    from ._run_common import begin_reading, compute_frames, ensure_fps
-    res.fps = ensure_fps(spec, vr)
-    total = len(vr)
-    frames = compute_frames(spec, total)
-    if not frames:
-        try:
-            vr.close()
-        except Exception:
-            pass  # 清理路径：close 失败无需上抛（资源由进程回收）
-        raise ValueError(
-            f"帧区间为空: frame_start={spec.frame_start}, "
-            f"frame_end={spec.frame_end}, total={total}")
-    # hybrid_begin 为化石 API（fork 未实现，hasattr 恒 False → _with_dev
-    # 恒 True）。对 fork hybrid(CPU-out) 读者实测无害：其 get_batch 返回
-    # decord NDArray（有 to_dlpack），采到的是 CPU 指针且仅在 GPU raw OCR
-    # 直通时消费——而宿主帧 hybrid 只与 CPU OCR 组合（OCR 在 GPU 时
-    # extractor 选 hybrid_gpu 走 gpu_backend），该指针无人读（2026-09-20
-    # 起点轮核实）。
-    hybrid = hasattr(vr, 'hybrid_begin')   # _with_dev 判定用
-    try:
-        begin_reading(vr, spec, frames)
-    except BaseException:
-        logger.debug("hybrid_begin 失败进入回退清理", exc_info=True)
-        try:
-            vr.close()
-        except Exception:
-            pass  # 清理路径：close 失败无需上抛
-        raise
-    _prof(spec, 'producer', 'open_and_fps', _t_open)
-    # P2c 对齐：宿主此前缺 'open' 边界（GPU 路径有）——L1 per_phase
-    # 两路径相位集合不一致，diff 读数对不上。
-    if spec.metrics.enabled:
-        spec.metrics.checkpoint('open')
-    # OCR 会话提前到校准前启动：worker 线程内构建引擎，与校准并行重叠；
-    # 引擎就绪前 emit 自动走 host 回退，语义不变。
-    try:
-        ocr_session = spec.start_ocr_session(ocr_engines)
-    except BaseException:
-        logger.debug("OCR 会话启动失败进入清理", exc_info=True)
-        try:
-            vr.close()
-        except Exception:
-            pass  # 清理路径：close 失败无需上抛（资源由进程回收）
-        raise
-    results = ocr_session.results
-    ocr_err = ocr_session.err
-    ocr_wall = ocr_session.wall
-    _put_ocr = ocr_session.put
-    try:
-        _t_cal = time.perf_counter()
+    def calibrate(self, spec, vr, frames, ocr_session):
         # with_dev=True：保留 GPU 单通道帧的 DLPack 指针供 GPU raw OCR 直通。
         # hybrid 交付宿主数组（无 to_dlpack），不存在可直通指针——强采
         # _ndarray_device_ptr 会 AttributeError，必须跳过。
-        _with_dev = not hybrid
-        calib, th = _calibrate(spec, vr, frames, with_dev=_with_dev)
-        res.bin_thresh = th
-        if spec.on_bin_thresh is not None:
-            spec.on_bin_thresh(th)   # 流式合并判定活读，必须即时回写（F-4）
-        _prof(spec, 'producer', 'calib_total', _t_cal)
-        if spec.metrics.enabled:
-            spec.metrics.checkpoint('calibrate')   # L1 资源边界（§8.6 r5）
-    except BaseException:
-        logger.debug("校准相位异常进入清理", exc_info=True)
+        self._put_ocr = ocr_session.put
+        calib, th = _calibrate(spec, vr, frames, with_dev=self._with_dev)
+        self._calib = calib
+        self._th = th
+        return True, th
+
+    def after_calibrate(self, th, ocr_session) -> None:
+        if self._spec.on_bin_thresh is not None:
+            self._spec.on_bin_thresh(th)   # 流式合并判定活读，必须即时回写（F-4）
+
+    def frame_items(self, spec, vr, frames, ocr_session):
+        for fi, c, g, sharp, b, d in _frame_stream(
+                spec, frames, vr, self._calib, self._th,
+                with_dev=self._with_dev):
+            yield fi, sharp, dict(payload=(fi, c, g, d), bin=b)
+
+    def emit(self, seg, rep, frac) -> None:
+        _t_push = time.perf_counter()
+        from .ocr_stage import SegmentTask
+        self._put_ocr(SegmentTask(self._seg_idx, rep[0], rep[1], rep[3], frac))
+        _prof(self._spec, 'producer', 'q_put_block', _t_push)
+        if self._spec.keep_crops:
+            self._rep_crops[rep[0]] = rep[1]
+        self._seg_idx += 1
+
+    def similar(self, a, b) -> bool:
+        # P2c 覆盖：merge_pair 此前只有 GPU 路径产出（宿主只能从
+        # timing['decode'] 反推合并成本）。merge_similar 关闭时不计
+        # （无判定成本可量）。
+        if not self._spec.merge_similar:
+            return False
+        _t = time.perf_counter()
+        try:
+            return self._spec.segments_similar(a[2], b[2])
+        finally:
+            _prof(self._spec, 'producer', 'merge_pair', _t)
+
+    # ── 宿主路径的空挂钩（生命周期差异全在 GPU lane 侧）──
+    def abort(self, ocr_session) -> None:
         try:
             ocr_session.finish()
         except BaseException:
             logger.debug("ocr_session.finish 清理忽略异常", exc_info=True)
-        try:
-            vr.close()
-        except Exception:
-            pass  # 清理路径：close 失败无需上抛（资源由进程回收）
-        raise
 
-    segs: list = []
-    rep_crops: dict = {}
-    seg_idx = 0
+    def fallback(self, res, ocr_session, ocr_engines, vr):
+        raise AssertionError("宿主 lane 校准恒成功，不走 fallback 分支")
 
-    def _emit_ocr(seg, r_frame, r_crop, r_dev, _r_gray, frac) -> None:
-        nonlocal seg_idx
-        _t_push = time.perf_counter()
-        from .ocr_stage import SegmentTask
-        _put_ocr(SegmentTask(seg_idx, r_frame, r_crop, r_dev, frac))
-        _prof(spec, 'producer', 'q_put_block', _t_push)
-        if spec.keep_crops:
-            rep_crops[r_frame] = r_crop
-        seg_idx += 1
+    def after_stream(self) -> None:
+        pass
 
-    t0 = time.perf_counter()
-    try:
-        _segment_frames(
-            spec, frames,
-            _frame_stream(spec, frames, vr, calib, th, with_dev=_with_dev),
-            emit=_emit_ocr, segs=segs)
-    finally:
-        _t_consume_end = time.perf_counter()
-        res.timing['decode'] = _t_consume_end - t0
-        if spec.metrics.enabled:
-            spec.metrics.checkpoint('decode')
-        _prof(spec, 'producer', 'consumer_total', t0)
-        ocr_session.finish()
-        res.timing['ocr_tail'] = time.perf_counter() - _t_consume_end
-        # fork 遥测穿透（2026-09-17）：close 前取快照（原子计数器，此后
-        # 解码器将销毁）；非 hybrid 解码器方法缺席 → 保持 None。
-        _fs = getattr(vr, "hybrid_stats", None)
-        if _fs is not None:
-            try:
-                res.fork_stats = _fs() or None
-            except Exception:
-                logger.debug("fork 遥测抓取失败忽略", exc_info=True)
-        try:
-            vr.close()   # hybrid 探针/资源释放：显式停止生产者线程
-        except Exception:
-            pass  # 清理路径：close 失败无需上抛（资源由进程回收）
-    if ocr_err:
-        # C4：补"OCR worker 失败"上下文并保留原始异常链
-        raise RuntimeError(f"OCR worker 失败: {ocr_err[0]!r}") from ocr_err[0]
-    if spec.metrics.enabled:
-        spec.metrics.counter('segment.segments', seg_idx)   # PI-15：run 末一次
-    res.timing['ocr'] = ocr_wall[0]
-    if spec.metrics.enabled:
-        spec.metrics.checkpoint('ocr')
-    res.frames = frames
-    res.segs = segs
-    res.n_segments = len(segs)
-    res.crops = rep_crops
-    res.texts = [results[i][0] for i in range(seg_idx)]
-    res.confs = [results[i][1] for i in range(seg_idx)]
-    res.rep_frames = [results[i][2] for i in range(seg_idx)]
-    del vr
-    return res
+    def stop_consume(self) -> None:
+        pass
+
+    def release(self) -> None:
+        pass
+
+    def report_counters(self) -> None:
+        pass
+
+
+def run_host_pipeline(spec: HostRunSpec, ocr_engines=None,
+                      preopened_vr=None) -> HostRunResult:
+    """宿主驱动入口：解码∥分段∥OCR（段一闭合即把代表帧交给 OCR 会话
+    线程）。生命周期由 _driver.run_segment_pipeline 承载（P1），本模块
+    只提供宿主 lane 策略。
+    """
+    from ._driver import run_segment_pipeline
+    return run_segment_pipeline(spec, HostRunResult(), _HostLane(spec),
+                                ocr_engines, preopened_vr)

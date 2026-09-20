@@ -181,7 +181,6 @@ PROFILE_SPANS = {
     # 有界（每次 run ≤ ~200 次）：std 档即逐次采样
     ("producer", "open_and_fps"): "pipeline.setup",
     ("producer", "calib_total"): "pipeline.calibrate",
-    ("producer", "gpu_calib_total"): "pipeline.calibrate",
     ("producer", "consumer_total"): "pipeline.consumer",
     ("producer", "decode_batch"): "decode.batch",
     ("producer", "stream_analyze"): "decode.stream_analyze",
