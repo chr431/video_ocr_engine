@@ -34,7 +34,7 @@
   status: active
   premises: 4060/16C32T；0.8.3；fork ≥6da2957
   revisit: >32 核 / 残余=每臂混跑干扰
-  evidence: log 2026-09-11-hybrid差距分解 §11-16；2026-09-13-hybrid可见性重评
+  evidence: log 2026-09-11-hybrid差距分解；09-13 可见性重评
 
 - id: C-06
   status: superseded
@@ -87,7 +87,7 @@
   evidence: DECISIONS「P0-6 翻案」
 
 - id: C-15
-  conclusion: **OCR 输入侧参数都不是杠杆**。pad 下限 224 保持（160/320 均证伪）；预处理六变体仅一个非负 +7 帧；翻转系实例级边缘判决
+  conclusion: **OCR 输入侧参数都不是杠杆**。pad 下限 224 保持（160/320 证伪）；预处理六变体仅一非负 +7 帧；翻转系实例级判决
   status: active
   premises: v6_small + racelog 内容
   revisit: pad/预处理架构变更；换模型或字体/ROI 形态
@@ -113,14 +113,14 @@
   replaced_by: C-05
 
 - id: C-31
-  conclusion: decord 0.8.1+FFmpeg9：seek 未变慢；av1 慢系 NT=4 假象。修：av1 线程 3/4 钳 [8,24]，CPU −50%、e2e −45%
+  conclusion: decord 0.8.1+FFmpeg9：seek 未变慢；av1 慢系 NT=4 假象；修=av1 钳 [8,24]，CPU −50%、e2e −45%
   status: active
   premises: wheel 0.8.2
   revisit: fork/驱动/FFmpeg 换代
   evidence: log 2026-09-08 decord-0.8.1；DEPENDENCIES decord 节
 
 - id: C-32
-  conclusion: 分段/状态机/裁切/预处理实现唯一出处 = segmentation.py：宿主直调，GPU kernel 为设备侧逐位镜像、判据引用同一文件；不做插件抽象面（已回退）
+  conclusion: 实现唯一出处=segmentation.py：宿主直调，GPU kernel 逐位镜像、判据同文件；不做插件抽象面（已回退）
   status: active
   premises: 0.11.0；两侧行为由真值用例逐位守护
   revisit: 出现真实的 GPU 侧算法插件需求
@@ -165,7 +165,7 @@
   evidence: log 2026-09-13-hybrid可见性重评
 
 - id: C-40
-  conclusion: **hybrid 收益与片长相关（交叉点三改）**：h264 短窗即胜 nvdec；hevc 交叉点 **~1200**（w1000 +5.4%/w1500 −6.1%/w3000 −14.5%；旧值系伪影）；av1 <3000（−16.7%）；对纯 CPU 臂三码全片均胜
+  conclusion: **hybrid 收益与片长相关（交叉点三改）**：h264 短窗即胜 nvdec；hevc 交叉点 ~1200（w1000 +5.4%→w3000 −14.5%）；av1 <3000（−16.7%）；纯 CPU 臂三码全片均胜
   status: active
   premises: 4060/16C32T；fork ≥a6cdeb7（熟前挂起+窗口尾 ETA 派工）
   revisit: 换卡 / GOP 尺寸极端小 / <500 帧短片
@@ -176,7 +176,7 @@
   replaced_by: C-54
 
 - id: C-42
-  conclusion: 相似判定单次 232µs、全片≈墙钟 21% 但**不在关键路径**（短路恒不相似 wall 无改善，消费者空等吸收）；按占比推算收益是错的
+  conclusion: 相似判定 232µs、全片≈21% 但**不在关键路径**（短路实验 wall 无改善）；按占比推算收益是错的
   status: active
   premises: GPU 管线；hevc 6000 帧；merges=0
   revisit: 消费者不再空等 / 段边界密度大增 / 换卡
@@ -198,16 +198,16 @@
   replaced_by: C-46
 
 - id: C-46
-  conclusion: **hybrid = 包缓存+供料期 GOP 派工（fork fef3c4b）**：Push 只入 512MB 包缓存，泵按速率贪心派工 GOP；**kick 必须经泵按流序注入**（错位=段数漂移）。机制 A/B hevc −6.29%/h264 −4.78%（新旧机制对比，见 C-53）；对并联和 96/92/96%
+  conclusion: **hybrid=包缓存+供料期 GOP 派工（fork fef3c4b）**：Push 只入 512MB 包缓存，泵按速率贪心派工；**kick 必须经泵按流序注入**（错位=段数漂移）。机制 A/B hevc −6.29%/h264 −4.78%；并联 96/92/96%
   status: active
   premises: 达成率=同会话三臂
   revisit: 换卡 / fork 换代 / 截断流·bf16 重跑
-  evidence: log 2026-09-13-hybrid重设计分支 §8、2026-09-14-hybrid达成率定稿测量
+  evidence: log 2026-09-13-hybrid重设计分支；2026-09-14 达成率定稿
 
 - id: C-47
   conclusion: **OCR 批延迟残差=GPU 链争用主导**：TRT_DEFER_SYNC 机制成立、逐位一致但 e2e 平价（与 CUDA Graph 同判）；再提速只能减 GPU 工作量/争用
   status: active
-  premises: 全片逐位 + bench ab 热池；trt_call 13.9ms/批占 87%、SM ~40%
+  premises: 逐位+ab 热池；trt_call 13.9ms/批占 87%
   revisit: 换卡 / TRT 换代 / 解码下 GPU
   evidence: log 2026-09-14-TRT延迟收集流水
 
@@ -216,38 +216,38 @@
   status: active
   premises: 4060/Zen4；openvino 2026.3.1
   revisit: 换 CPU（非 x86）/ openvino 换代 / 内容族大变
-  evidence: log 2026-09-14-OpenVINO模型级A-B/集成轮
+  evidence: log 2026-09-14-OpenVINO模型级A-B
 
 - id: C-49
-  conclusion: **换依赖无剩余性能空间**：GPU 三码/h264-cpu 解码绑定；fork 超外部参考（NVDEC 989>cuvid 901fps；ROI-first 1.75×）；PyNv 493fps+DLL 冲突；cv2 −0.26%
+  conclusion: **换依赖无剩余性能空间**：GPU 三码/h264-cpu 解码绑定；fork 超外部参考（989>901fps；ROI-first 1.75×）；PyNv 493fps+DLL 冲突；cv2 −0.26%
   status: active
   premises: 4060/16C32T/Zen4；fork 0.8.3
   revisit: 换卡 / 带 ROI-first 的解码绑定 / 预处理升为关键路径
-  evidence: log 2026-09-15-依赖替换裁决
+  evidence: log 2026-09-15-依赖替换
 
 - id: C-50
-  conclusion: **DECODE_THREADS 10→32 无收益**（不可判定 +0.97%；冷启 +4.03% 8/8）。decode.batch −82% 但 GIL 争用对冲——**维持 10 档**
+  conclusion: **DECODE_THREADS 10→32 无收益**（+0.97% 不可判定；冷启 +4.03%）。decode.batch −82% 被 GIL 对冲——**维持 10 档**
   status: active
   premises: 16C32T；openvino CPU OCR；h264
   revisit: 核数格局变 / OCR 再提速 / decord 预取变
   evidence: log 2026-09-17-重设计 §5-§11
 
 - id: C-51
-  conclusion: **监测系统新基线（2026-09-17）**：时钟门禁+ab 轮转/判定/--aa；report v6=relations+缺口派生+cycle 口径+histograms（仅 full）+fork 穿透段；子相位闭合（infer_other 92%→16%）；std 地板 0.30%（n=50 后 0.20）
+  conclusion: **监测系统新基线（2026-09-17）**：时钟门禁+ab 轮转/判定/--aa；report v6（relations/缺口派生/histograms/fork 穿透）；子相位闭合（infer_other 92%→16%）；std 地板 0.30%（n=50 后 0.20）
   status: active
   premises: 4060；共享桌面
   revisit: 换卡/机器 / 协议改即 --aa 重标 / trace 转正需锁频
   evidence: log 2026-09-17-重设计 §7
 
 - id: C-53
-  conclusion: **hybrid 基线=目标码最快纯臂（口径规则）**：h264 基线=CPU（test5 +6.1% 慢→cpu；**h264same 反例 −22%：按文件 CPU 速率分界，pool 一刀切误派**）；hevc/av1 基线=NVDEC，hybrid −23.9%/−31.4%→选 hybrid（越 C-40）。**批量=逐文件 hybrid 串行**（28.61s vs pool 并发 29.3~29.7s；pool 0.15 废弃 0.16 删）
+  conclusion: **hybrid 基线=目标码最快纯臂**：h264=CPU（+6.1% 慢；h264same −22% 反例=按文件分界）；hevc/av1=NVDEC，hybrid −23.9%/−31.4%→选 hybrid。批量=逐文件串行（28.61s vs pool 29.3~29.7；pool 0.15 废弃 0.16 删）
   status: active
   premises: 4060/16C32T；fork ≥a6cdeb7
   revisit: 换卡 / fork 换代
-  evidence: log 2026-09-18-hybrid启动轮 §4§11
+  evidence: log 2026-09-18-hybrid启动轮
 
 - id: C-54
-  conclusion: **启动+窗口尾轮（fork a6cdeb7）：熟前挂起+防饿死盲派+窗口尾 ETA**——盲派 13→2、hevc 交叉点 ~1200；h264 残余=冷税 ~95ms+尾 69ms。其修法（H2D 聚合）2026-09-20 干预：机制成立（put_block −23%）无净收益（HOL 对冲、暴露未复现日）→UPLOAD_WAIT_US 默认 0
+  conclusion: **启动+窗口尾轮（fork a6cdeb7）：熟前挂起+防饿死盲派+窗口尾 ETA**——盲派 13→2、hevc 交叉点 ~1200；h264 残余=冷税 ~95ms+尾 69ms；H2D 聚合修法机制成立（put_block −23%）无净收益→默认关
   status: active
   premises: 盲承诺下界=2 GOP
   revisit: 换卡 / fork 换代 / infer 暴露复现日
@@ -266,8 +266,14 @@
   revisit: fork 迟包供给专项落地后解除谓词
   evidence: log 2026-09-20-审计修复轮 §4
 - id: C-58
-  conclusion: **hybrid OCR 双车道（TRT+OV）v0.5：回归已消除（v0 +48%→−1.8%）但本机无净收益**——容量理论 +54% 实测 +18%（OV 产能=TRT 1/3；TRT 被争用 +20%；解码 CPU 臂无余量）→ 收益被 decode 劣化对冲。触发=NVDEC 纯解码（CPU 空闲）+OCR 需求高
+  conclusion: **hybrid OCR 双车道（TRT+OV）v0.5：回归已消除（+48%→−1.8%）但本机无净收益**——容量理论 +54% 实测 +18%（OV 产能=TRT 1/3；争用 +20%；CPU 臂无余量）。触发=NVDEC 纯解码+OCR 需求高
   status: active
   premises: batch_test 字幕 stride=1；16C32T 三层占满
   revisit: NVDEC 纯解码部署 / 多 NVDEC 卡 / OCR 变重
   evidence: log 2026-09-20-批量策略与hybridOCR轮 §3-4
+- id: C-59
+  conclusion: 宽 ROI 字幕：裁切文本效应=临界字形宽度彩票（C639≡C 不翻、C781 纯 pad 翻 14 段；高恒 48 字形尺寸不变），随集波动（ep01 −7/ep02 +40 全修复）；性能真收益（墙钟 −6.6% 同窗口/−9.0% vs 旧默认；OCR 负担降→解码争用减；infer 对 pad 宽不敏感）。默认维持；L2 同属宽度扰动
+  status: active
+  premises: 新三国01/02 stride=1；dbe=cpu+TRT；真值视觉+抽帧复核
+  revisit: 换模型 / PAD_SMALL×裁切联调 / NVDEC 纯解码 / dbe 变更
+  evidence: log 2026-09-20-裁切复测轮
