@@ -95,6 +95,39 @@ def ocr_pad_floor(variant: str, fill_width: int,
                                                     config.OCR_PAD_WIDTH_MIN))
 
 
+def ocr_lane_prep(eng, stream: int | None = None):
+    """按车道引擎取共享 GpuPreprocessor（hybrid OCR v0.5）。
+
+    TRT 车道：复用引擎自己的 GpuPreprocessor（与 TrtEngine 共享流，
+    不阻塞——worker 只提交不同步，同步在 TRT 车道 collect 时发生）。
+    OV 车道：引擎无 _gpu_pre（CPU 引擎）→ 在此挂一个**独立 stream** 的
+    GpuPreprocessor。独立流是关键：设备 prep 若用 TRT 流提交，worker 的
+    批末 sync 会把 OV 车道的 prep 排在 TRT 车道在途推理之后（跨车道串行
+    化）。D2H 用 cudaEvent 同步（record 在 prep 流上，host 等事件），
+    宿主侧拷贝/推理仍完全并行。
+
+    ⚠️ 生命周期：本对象挂在引擎上，引擎 release 时随之释放
+    （_release_lane_prep）。不得借用会随 extract 结束销毁的 TRT 流。
+    """
+    pre = getattr(eng, '_gpu_pre_lane', None)
+    if pre is None:
+        from video_ocr_engine.ocr.trt import GpuPreprocessor
+        pre = GpuPreprocessor(stream=stream, gamma=None)
+        eng._gpu_pre_lane = pre
+    return pre
+
+
+def release_lane_prep(eng) -> None:
+    """释放车道 prep（引擎归池前的显式清理；幂等）。"""
+    pre = getattr(eng, '_gpu_pre_lane', None)
+    if pre is not None:
+        try:
+            pre.release()
+        except Exception:
+            pass  # 释放失败仅余进程退出兜底
+        eng._gpu_pre_lane = None
+
+
 class OcrEngine:
     """PP-OCRv6 rec 原生引擎（ONNX / TensorRT 双后端）。
 
@@ -345,6 +378,21 @@ class OcrEngine:
                     text, conf = "", 0.0
                 out.append(RecOut(text, conf))
         return out
+
+    def call_prepped(self, batch_nchw: "np.ndarray") -> list:
+        """消费**已预处理**批（NCHW float32，(B,3,48,W)，已归一化/pad）。
+
+        hybrid OCR v0.5（2026-09-20）：设备 prep 共享后 OV 车道的输入——
+        预处理由共享 GpuPreprocessor 在 GPU 上完成，本入口跳过
+        `_resize_norm`（v0 的宿主 resize 1.37ms/段是双车道回归的根因）。
+        仅 CPU 引擎（OV）有意义；TRT 引擎走 call_gpu_raw/_gpu_raw_submit。
+        """
+        if self._trt is not None:
+            raise RuntimeError("call_prepped 仅适用于 CPU（OpenVINO）引擎")
+        preds = self._infer(batch_nchw)
+        if preds.ndim == 3:
+            return self._ctc_decode_batch(preds)
+        return [self._ctc_decode(preds[k]) for k in range(len(preds))]
 
     # ═══════════════ 批处理入口 ═══════════════
 
@@ -644,6 +692,9 @@ def checkin_ocr_engine(engine: OcrEngine) -> None:
     # 下一个 checkout 者会在未知在途状态上续跑。
     if getattr(engine, "_defer_sync", False):
         engine.drain_deferred()
+    # hybrid OCR v0.5：车道 prep 是**每次 extract 现场挂载**的（独立流，
+    # 随车道会话存亡）——归还池前释放，防池内引擎钉住设备缓冲/流。
+    release_lane_prep(engine)
     key = getattr(engine, "_pool_key", None)
     if key is None:
         engine.release()

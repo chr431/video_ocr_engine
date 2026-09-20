@@ -24,11 +24,11 @@
 | C-32 | 分段/状态机/裁切/预处理实现唯一出处 = segmentation.py：宿主直调，GPU kernel 为设备侧逐位镜像、判据引用同一文件；不做插件抽象面（已回退） | 0.11.0；两侧行为由真值用例逐位守护 | 出现真实的 GPU 侧算法插件需求 | log 2026-09-09 引擎四方向；tests/ 全套 |
 | C-36 | 冷启动 = cuda.core 0.22s + NVRTC 0.09s + TRT 反序列化 0.39–0.44s；显式 `warmup()` 移出首 extract（首视频 −33%） | 引擎已缓存；首个 extract | 换后端/引擎格式 | log §3；tests/pipeline/test_warmup.py |
 | C-37 | 消费端提交可批量化：归约 D2H 异步+本流同步（−5.19%）、keep_crops 并批窗 16（−2.45%）；按宽分组无收益 | 本机 4060；交错 A/B | 段密度翻倍 / ROI 形态翻转 | log §4-§6 |
-| C-38 | **合并判定「稠密簇门」**（win3≥SEG_C 恒不合并，默认开）净 +226 帧；段数 +1.2~3.6%、墙钟不变 | 六片真值；宿主/GPU 逐位一致 | 大字号字体 / OCR-bound 部署 | log 2026-09-12-准确项 §3 §6 |
+| C-38 | **合并判定「稠密簇门」**（win3≥SEG_C 恒不合并，默认开）净 +226 帧；段数 +1.2~3.6% | 六片真值；宿主/GPU 逐位一致 | 大字号字体 / OCR-bound 部署 | log 2026-09-12-准确项 §3 §6 |
 | C-39 | **NVML NVDEC% 是「在用」指示器非占空比**（35% 忙仍读 98%）——忙闲用 fork busy 计数；NVML 价值=时钟+热降位 | full 档 + fork ≥6da2957；本机单卡 | 换卡（NVDEC% 语义随驱动/卡型变）/ fork 换代 | log 2026-09-13-hybrid可见性重评 |
 | C-40 | **hybrid 收益与片长相关（交叉点三改）**：h264 短窗即胜 nvdec；hevc 交叉点 **~1200**（w1000 +5.4%/w1500 −6.1%/w3000 −14.5%；旧值系伪影）；av1 <3000（−16.7%）；对纯 CPU 臂三码全片均胜 | 4060/16C32T；fork ≥a6cdeb7（熟前挂起+窗口尾 ETA 派工） | 换卡 / GOP 尺寸极端小 / <500 帧短片 | log 2026-09-18-hybrid启动轮 §4 |
 | C-42 | 相似判定单次 232µs、全片≈墙钟 21% 但**不在关键路径**（短路恒不相似 wall 无改善，消费者空等吸收）；按占比推算收益是错的 | GPU 管线；hevc 6000 帧；merges=0 | 消费者不再空等 / 段边界密度大增 / 换卡 | log 2026-09-13-merge判定代价与短路实验 |
-| C-43 | **fill_width×force_aspect 强交互**（224 保持）：fa=1.5 下 224 零误读（30664 帧）；仅 fa=0 关填充更准；fill_width=0 开关保留 | 六片真值 | 换片源 / 模型换代 / 默认 force_aspect 变更 | log 2026-09-13-填充宽度重测 |
+| C-43 | **fill_width×force_aspect 强交互**（224 保持）：fa=1.5 下 224 零误读（30664 帧）；仅 fa=0 关填充更准 | 六片真值 | 换片源 / 模型换代 / 默认 force_aspect 变更 | log 2026-09-13-填充宽度重测 |
 | C-46 | **hybrid = 包缓存+供料期 GOP 派工（fork fef3c4b）**：Push 只入 512MB 包缓存，泵按速率贪心派工 GOP；**kick 必须经泵按流序注入**（错位=段数漂移）。机制 A/B hevc −6.29%/h264 −4.78%（新旧机制对比，见 C-53）；对并联和 96/92/96% | 达成率=同会话三臂 | 换卡 / fork 换代 / 截断流·bf16 重跑 | log 2026-09-13-hybrid重设计分支 §8、2026-09-14-hybrid达成率定稿测量 |
 | C-47 | **OCR 批延迟残差=GPU 链争用主导**：TRT_DEFER_SYNC 机制成立、逐位一致但 e2e 平价（与 CUDA Graph 同判）；再提速只能减 GPU 工作量/争用 | 全片逐位 + bench ab 热池；trt_call 13.9ms/批占 87%、SM ~40% | 换卡 / TRT 换代 / 解码下 GPU | log 2026-09-14-TRT延迟收集流水 |
 | C-48 | **CPU OCR=OpenVINO 唯一（ORT 已移除）**：模型级 2.1×；真值零差；h264-cpu 热池 −27.96%；冻结包 73MB | 4060/Zen4；openvino 2026.3.1 | 换 CPU（非 x86）/ openvino 换代 / 内容族大变 | log 2026-09-14-OpenVINO模型级A-B/集成轮 |
@@ -37,9 +37,9 @@
 | C-51 | **监测系统新基线（2026-09-17）**：时钟门禁+ab 轮转/判定/--aa；report v6=relations+缺口派生+cycle 口径+histograms（仅 full）+fork 穿透段；子相位闭合（infer_other 92%→16%）；std 地板 0.30%（n=50 后 0.20） | 4060；共享桌面 | 换卡/机器 / 协议改即 --aa 重标 / trace 转正需锁频 | log 2026-09-17-重设计 §7 |
 | C-53 | **hybrid 基线=目标码最快纯臂（口径规则）**：h264 基线=CPU（test5 +6.1% 慢→cpu；**h264same 反例 −22%：按文件 CPU 速率分界，pool 一刀切误派**）；hevc/av1 基线=NVDEC，hybrid −23.9%/−31.4%→选 hybrid（越 C-40）。**批量=逐文件 hybrid 串行**（28.61s vs pool 并发 29.3~29.7s；pool 0.15 废弃 0.16 删） | 4060/16C32T；fork ≥a6cdeb7 | 换卡 / fork 换代 | log 2026-09-18-hybrid启动轮 §4§11 |
 | C-54 | **启动+窗口尾轮（fork a6cdeb7）：熟前挂起+防饿死盲派+窗口尾 ETA**——盲派 13→2、hevc 交叉点 ~1200；h264 残余=冷税 ~95ms+尾 69ms。其修法（H2D 聚合）2026-09-20 干预：机制成立（put_block −23%）无净收益（HOL 对冲、暴露未复现日）→UPLOAD_WAIT_US 默认 0 | 盲承诺下界=2 GOP | 换卡 / fork 换代 / infer 暴露复现日 | log 2026-09-18-hybrid启动轮；bench/hybrid_startup.json |
-| C-55 | **池复用必须换壳**（CPython 复活对象二次死亡不触发 __del__）+放弃路径直释——旧 Y 池两层皆漏=+2.0 MiB/轮，修复后 40 轮 +0.000 | CPython；4 钉子 | PyPy 等 finalizer 语义不同 / 池契约重构 | log 2026-09-20-审计修复轮 §2 |
-| C-57 | **hybrid 硬窗 × seek(start>0) fork 缺陷：尾帧 EOF 容错静默替补**（帧数守恒、尾 ~20 帧像素错；start=0 窗干净）——引擎谓词 `start<窗长` 是唯一防线 | fork 0.8.4 与 dev 均在 | fork 迟包供给专项落地后解除谓词 | log 2026-09-20-审计修复轮 §4 |
-| C-58 | **hybrid OCR v0 双车道自败**：正确性成立（段数恒等/文本 3 段差），弃 raw 直通后串行宿主 resize（1.37ms/段=prep 86%）成瓶颈 → OCR-bound +51% 回归；v0.5=设备 prep 共享（留档），天花板 −15~20% | batch_test 字幕 stride=1（infer 92% 忙）；v0 opt-in 保留 | v0.5 落地后复测 | log 2026-09-20-批量策略与hybridOCR轮 §3 |
+| C-55 | **池复用必须换壳**（CPython 复活对象二次死亡不触发 __del__）+放弃路径直释——旧 Y 池两层皆漏=+2.0 MiB/轮，修复后 +0.000 | CPython；4 钉子 | PyPy finalizer 语义 / 池契约重构 | log 2026-09-20-审计修复轮 §2 |
+| C-57 | **hybrid 硬窗 × seek(start>0) fork 缺陷：尾帧 EOF 容错静默替补**（帧数守恒、尾 ~20 帧像素错；start=0 干净）——引擎谓词 `start<窗长` 是唯一防线 | fork 0.8.4 与 dev 均在 | fork 迟包供给专项落地后解除谓词 | log 2026-09-20-审计修复轮 §4 |
+| C-58 | **hybrid OCR 双车道（TRT+OV）v0.5：回归已消除（v0 +48%→−1.8%）但本机无净收益**——容量理论 +54% 实测 +18%（OV 产能=TRT 1/3；TRT 被争用 +20%；解码 CPU 臂无余量）→ 收益被 decode 劣化对冲。触发=NVDEC 纯解码（CPU 空闲）+OCR 需求高 | batch_test 字幕 stride=1；16C32T 三层占满 | NVDEC 纯解码部署 / 多 NVDEC 卡 / OCR 变重 | log 2026-09-20-批量策略与hybridOCR轮 §3-4 |
 
 ## 已取代（指针）
 

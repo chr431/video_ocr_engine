@@ -151,7 +151,7 @@
   evidence: log §4-§6
 
 - id: C-38
-  conclusion: **合并判定「稠密簇门」**（win3≥SEG_C 恒不合并，默认开）净 +226 帧；段数 +1.2~3.6%、墙钟不变
+  conclusion: **合并判定「稠密簇门」**（win3≥SEG_C 恒不合并，默认开）净 +226 帧；段数 +1.2~3.6%
   status: active
   premises: 六片真值；宿主/GPU 逐位一致
   revisit: 大字号字体 / OCR-bound 部署
@@ -183,7 +183,7 @@
   evidence: log 2026-09-13-merge判定代价与短路实验
 
 - id: C-43
-  conclusion: **fill_width×force_aspect 强交互**（224 保持）：fa=1.5 下 224 零误读（30664 帧）；仅 fa=0 关填充更准；fill_width=0 开关保留
+  conclusion: **fill_width×force_aspect 强交互**（224 保持）：fa=1.5 下 224 零误读（30664 帧）；仅 fa=0 关填充更准
   status: active
   premises: 六片真值
   revisit: 换片源 / 模型换代 / 默认 force_aspect 变更
@@ -254,20 +254,20 @@
   evidence: log 2026-09-18-hybrid启动轮；bench/hybrid_startup.json
 
 - id: C-55
-  conclusion: **池复用必须换壳**（CPython 复活对象二次死亡不触发 __del__）+放弃路径直释——旧 Y 池两层皆漏=+2.0 MiB/轮，修复后 40 轮 +0.000
+  conclusion: **池复用必须换壳**（CPython 复活对象二次死亡不触发 __del__）+放弃路径直释——旧 Y 池两层皆漏=+2.0 MiB/轮，修复后 +0.000
   status: active
   premises: CPython；4 钉子
-  revisit: PyPy 等 finalizer 语义不同 / 池契约重构
+  revisit: PyPy finalizer 语义 / 池契约重构
   evidence: log 2026-09-20-审计修复轮 §2
 - id: C-57
-  conclusion: **hybrid 硬窗 × seek(start>0) fork 缺陷：尾帧 EOF 容错静默替补**（帧数守恒、尾 ~20 帧像素错；start=0 窗干净）——引擎谓词 `start<窗长` 是唯一防线
+  conclusion: **hybrid 硬窗 × seek(start>0) fork 缺陷：尾帧 EOF 容错静默替补**（帧数守恒、尾 ~20 帧像素错；start=0 干净）——引擎谓词 `start<窗长` 是唯一防线
   status: active
   premises: fork 0.8.4 与 dev 均在
   revisit: fork 迟包供给专项落地后解除谓词
   evidence: log 2026-09-20-审计修复轮 §4
 - id: C-58
-  conclusion: **hybrid OCR v0 双车道自败**：正确性成立（段数恒等/文本 3 段差），弃 raw 直通后串行宿主 resize（1.37ms/段=prep 86%）成瓶颈 → OCR-bound +51% 回归；v0.5=设备 prep 共享（留档），天花板 −15~20%
+  conclusion: **hybrid OCR 双车道（TRT+OV）v0.5：回归已消除（v0 +48%→−1.8%）但本机无净收益**——容量理论 +54% 实测 +18%（OV 产能=TRT 1/3；TRT 被争用 +20%；解码 CPU 臂无余量）→ 收益被 decode 劣化对冲。触发=NVDEC 纯解码（CPU 空闲）+OCR 需求高
   status: active
-  premises: batch_test 字幕 stride=1（infer 92% 忙）；v0 opt-in 保留
-  revisit: v0.5 落地后复测
-  evidence: log 2026-09-20-批量策略与hybridOCR轮 §3
+  premises: batch_test 字幕 stride=1；16C32T 三层占满
+  revisit: NVDEC 纯解码部署 / 多 NVDEC 卡 / OCR 变重
+  evidence: log 2026-09-20-批量策略与hybridOCR轮 §3-4

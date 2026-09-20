@@ -208,6 +208,37 @@ def effective_reorder_window(roi_w: int, roi_h: int, floor_px: int,
     return 1 if (float(roi_w) / max(1, roi_h)) <= floor_ratio else window
 
 
+def _lane_host(eng, shape, cudart):
+    """车道 D2H 的 pinned 宿主缓冲（每引擎一份，容量不足才重分配）。
+
+    返回 (c_void_p 缓冲, np 视图)。视图共享缓冲内存——call_prepped 消费
+    完即失效（同批内同步推理，无跨批在途）。
+    """
+    import ctypes
+    import numpy as np
+    nbytes = int(np.prod(shape)) * 4
+    buf = getattr(eng, '_lane_host_buf', None)
+    if buf is None or buf[1] < nbytes:
+        if buf is not None:
+            cudart.cudaFreeHost(buf[0])
+        _err, ptr = cudart.cudaMallocHost(nbytes)
+        buf = (ptr, nbytes)
+        eng._lane_host_buf = buf
+    arr = np.ctypeslib.as_array(
+        ctypes.cast(buf[0], ctypes.POINTER(ctypes.c_float)),
+        shape=(nbytes // 4,)).view(np.float32).reshape(shape)
+    return buf[0], arr
+
+
+def _lane_ev(eng, cudart):
+    """车道 D2H 事件（每引擎一份，复用）。"""
+    ev = getattr(eng, '_lane_ev', None)
+    if ev is None:
+        _err, ev = cudart.cudaEventCreate()
+        eng._lane_ev = ev
+    return ev
+
+
 class OcrSession:
     """OCR 消费会话：段任务队列 → 预处理(raw 直通判定) → 宽度重排分批 →
     推理 worker（进程级引擎池取还）→ 结果收敛。
@@ -362,11 +393,18 @@ class OcrSession:
                     _e._metrics = _m
                     if getattr(_e, '_trt', None) is not None:
                         _e._trt._metrics = _m
-            # 引擎就绪 → 供 GPU 管线 emit 决策（raw 直通需单 TRT 引擎；
+            # 引擎就绪 → 供 GPU 管线 emit 决策（raw 直通需设备帧可被消费；
             # 置位后该会话内代表帧可全程留显存，仅输出/回退时 D2H）。
-            self.raw_ready[0] = (len(engines) == 1
-                                 and getattr(engines[0], '_trt', None)
-                                 is not None)
+            # hybrid OCR v0.5：双车道（TRT+OV）同样置位——设备帧由共享
+            # prep 消费（TRT 车道 call_gpu_raw、OV 车道车道 prep+D2H），
+            # 两侧都不需要宿主代表帧。
+            self.raw_ready[0] = (
+                (len(engines) == 1
+                 and getattr(engines[0], '_trt', None) is not None)
+                or (len(engines) == 2
+                    and {getattr(e, 'backend_name', '') for e in engines}
+                    == {'tensorrt', 'openvino'}
+                    and spec.gpu_pipeline_mode))
             B = (spec.ocr_batch or _ocr_batch_size())
             # TRT 批对齐 max_batch（§8.1）：TRT 按 profile max_batch 切
             # 子批，末批 batch 维变化前必须 cudaStreamSynchronize（TRT
@@ -409,6 +447,21 @@ class OcrSession:
 
             def infer_worker(eng) -> None:
                 self._bump_priority()
+                # hybrid OCR v0.5：非 TRT 车道（OV）挂**独立流**的设备
+                # prep——见 ocr_lane_prep 的流语义注释。单引擎/双实例
+                # ONNX 路径 _lane_prep 恒 None（行为不变）。
+                _lane_prep = None
+                if (getattr(eng, '_trt', None) is None
+                        and getattr(eng, 'backend_name', '') == 'openvino'
+                        and spec.gpu_pipeline_mode
+                        and len(engines) == 2):
+                    try:
+                        from video_ocr_engine.ocr.native import ocr_lane_prep
+                        _lane_prep = ocr_lane_prep(eng)
+                    except Exception:  # noqa: BLE001
+                        logger.debug("车道 prep 挂载失败，回退宿主路径",
+                                     exc_info=True)
+                        _lane_prep = None
                 # TRT_DEFER_SYNC（默认关）：单 TRT 引擎 + raw 直通批走深度 2
                 # 延迟收集——提交不等待，结果滞后一批交付（提交序 FIFO，
                 # 协议见 ocr/native.py 延迟收集组）。pending 记已提交未交付
@@ -454,6 +507,12 @@ class OcrSession:
                             res = eng._gpu_raw_collect()
                             if res is not None and pending:
                                 _deliver(pending.popleft(), res)
+                        elif item.infos is not None and _lane_prep is not None:
+                            # hybrid OCR v0.5：OV 车道吃设备 prep 共享的
+                            # 已预处理张量——一次 GPU prep（本车道独立流）
+                            # + D2H + call_prepped（跳过宿主 resize）。
+                            res = _lane_infer(_lane_prep, eng, item)
+                            _deliver(item, res)
                         else:
                             res = (eng.call_gpu_raw(
                                        item.infos,
@@ -465,6 +524,46 @@ class OcrSession:
                             spec.prof_end('ocr', 'infer', _t_i)
                 except Exception as e:
                     self.err.append(e)
+
+            def _lane_infer(pre, eng, item) -> list:
+                """OV 车道：设备 prep（独立流）→ D2H 已预处理张量 → 推理。
+
+                pad 宽口径与 TRT 车道同源（ocr_pad_floor + 批内最大内容宽）
+                ——两车道结果可比；D2H 是 (B,3,48,W) float32 ≈ 10.7KB/帧
+                （B=16/W=224 时 172KB/批），相对宿主 resize 的 1.37ms/段
+                是噪声。
+
+                ⚠️ D2H 必须 **pinned + 异步**（2026-09-20 实测教训）：首版用
+                同步 `cudaMemcpy`（pageable）——它对设备是全局同步，每批都
+                把 TRT 车道的在途推理打断，双车道 infer 忙时从 36.9s 涨到
+                69.2s（两车道互相串行化），墙钟只落 −1.6%。pinned 缓冲 +
+                同流异步拷贝 + 事件同步只等本车道 prep，TRT 在途不受影响。
+                """
+                import numpy as np
+                from cuda.bindings import runtime as cudart
+                from video_ocr_engine.ocr.native import ocr_pad_floor
+                from video_ocr_engine.config import constants as _cfg
+                infos = item.infos
+                src_h = int(infos[0].h)
+                _floor = ocr_pad_floor(eng._variant, eng._fill_width,
+                                       eng._pad_floor_env)
+                fa = float(item.force_aspect or 0.0)
+                if fa > 0:
+                    _ratio = fa
+                else:
+                    _ratio = max(float(t.span[1]) for t in infos) / float(src_h)
+                out_width = int(_cfg.OCR_TARGET_H * max(
+                    _floor / _cfg.OCR_TARGET_H, _ratio))
+                dev_ptr, shape = pre.process_gray_raw(
+                    infos, out_width, force_aspect=fa)
+                nbytes = int(np.prod(shape)) * 4
+                host = _lane_host(eng, shape, cudart)
+                cudart.cudaMemcpyAsync(
+                    host[0], dev_ptr, nbytes,
+                    cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, pre._stream)
+                cudart.cudaEventRecord(_lane_ev(eng, cudart), pre._stream)
+                cudart.cudaEventSynchronize(_lane_ev(eng, cudart))
+                return eng.call_prepped(host[1])
 
             infer_threads = [
                 threading.Thread(target=infer_worker, args=(eng,), daemon=True)
@@ -486,12 +585,22 @@ class OcrSession:
                 # 一批；ONNX/回退引擎全程 crop）→ 拆批投递，不混流。
                 # raw 代表帧：gray = decord gray NDArray 指针；yuv =
                 # _YFramePool 池帧提取的 Y 平面（由 GPU 管线保证）。
+                # hybrid OCR v0.5（2026-09-20）：双车道（TRT+OV）时设备项
+                # 也走 raw——TRT 车道沿用 call_gpu_raw（设备 prep 在引擎
+                # 自己的流上），OV 车道由 infer_worker 用车道独立流的
+                # GpuPreprocessor 做一次 prep + D2H 已预处理张量后调
+                # call_prepped（跳过宿主 resize——v0 的 1.37ms/段回归根因）。
+                _dual = (len(engines) == 2 and spec.gpu_pipeline_mode
+                         and {getattr(e, 'backend_name', '') for e in engines}
+                         == {'tensorrt', 'openvino'})
                 raw_sel = [
                     i for i in range(len(b_devs))
                     if b_devs[i] is not None
-                    and len(engines) == 1
-                    and getattr(engines[0], '_trt', None) is not None
-                    and spec.gpu_pipeline_mode]
+                    and spec.gpu_pipeline_mode
+                    and (_dual
+                         or (len(engines) == 1
+                             and getattr(engines[0], '_trt', None) is not None))
+                    ]
                 if raw_sel:
                     # 批量预处理（emit 时推迟的 5 元组项）：yuv 批量 luma
                     # 提取 + 一次 col_ink_batch 裁切区间，整批一次 sync，
