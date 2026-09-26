@@ -146,8 +146,13 @@ def check_no_import_side_effects() -> str | None:
 
 
 def check_docs_budget() -> str | None:
-    """[18] 知识库与活文档预算（§14.2）。"""
-    limits = (("knowledge/conclusions.md", 12 * 1024),
+    """[18] 知识库与活文档预算（§14.2）。
+
+    conclusions ≤ 14 KB（2026-09-20 稳健性轮由 12KB 上调：按需读取非
+    注入，饱和后每条新结论都要修剪旧规范性文本——实测审查负担大于
+    读取成本；与 tests/knowledge/test_budgets.py 同步）。
+    """
+    limits = (("knowledge/conclusions.md", 14 * 1024),
               ("knowledge/knobs.yaml", 24 * 1024),
               ("AGENTS.md", 14 * 1024))
     for rel, cap in limits:

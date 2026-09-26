@@ -96,8 +96,10 @@ def _collect(path: Path) -> tuple[set[tuple[str, str]], set[str]]:
             if args and isinstance(args[0], ast.Constant):
                 checkpoints.add(args[0].value)
             continue
-        if name in ("_prof", "prof_end", "_prof_end"):
-            # _prof(spec, group, key, t0) / prof_end(group, key, t0)
+        if name in ("_prof", "prof_end", "_prof_end", "tick"):
+            # _prof(spec, group, key, t0) / prof_end(group, key, t0) /
+            # tick(group, key, t0)——tick 是 gpu/device.DevHooks 的同义
+            # 脊柱（P9 后设备侧经由它转发 prof_end）
             gi, ki = (1, 2) if name == "_prof" else (0, 1)
             if (len(args) > ki
                     and isinstance(args[gi], ast.Constant)

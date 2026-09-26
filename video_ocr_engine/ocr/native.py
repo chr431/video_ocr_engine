@@ -34,7 +34,7 @@ log = logging.getLogger(__name__)
 _models_dir = config.models_dir
 
 
-def cpu_physical_cores() -> int:  # noqa: F401（re-export）
+def cpu_physical_cores() -> int:  # noqa: F401  # re-export
     """物理核数——2026-09-18 迁 config.decode_caliber（单一事实源）。"""
     from video_ocr_engine.config.decode_caliber import cpu_physical_cores as _c
     return _c()
@@ -501,14 +501,13 @@ class OcrEngine:
         self._drain_defer_to_fifo()
         self._get_gpu_pre()
         src_h = int(infos[0].h)
-        src_w = int(infos[0].w)
         # 优先级同 __call__：env OCR_PAD_SMALL > fill_width > 模型下限。
         _floor = ocr_pad_floor(self._variant, self._fill_width,
                                self._pad_floor_env)
         if force_aspect and force_aspect > 0:
             _ratio = float(force_aspect)
         else:
-            # pad 宽按批内最大「裁后内容宽」计（未裁项即 src_w）
+            # pad 宽按批内最大「裁后内容宽」计（未裁项即源宽）
             _ratio = max(float(t.span[1]) for t in infos) / float(src_h)
         max_wh = max(_floor / config.OCR_TARGET_H, _ratio)
         out_width = int(config.OCR_TARGET_H * max_wh)

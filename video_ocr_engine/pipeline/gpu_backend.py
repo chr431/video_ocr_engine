@@ -37,40 +37,6 @@ _PRODUCER_JOIN_TIMEOUT = 5.0
 _KEEP_CROPS_WINDOW = 16   # S6-b：keep_crops 的 D2H 并批窗口（段数计）
 
 
-class _SpecView:
-    """设备侧协作函数的 ex 适配视图（迁移期桥接）。
-
-    _gpu_prepare_calibration / _gpu_frame_stream_* 只读 ex 的 4 个属性
-    （_color_range / _batch_luma / _bin_thresh / _prof_end）。本视图把它们
-    指向 spec 注入的回调——设备函数零改动，S4 拆分时随迁消除。
-    """
-
-    def __init__(self, spec: GpuRunSpec, batch_luma: Callable) -> None:
-        self._spec = spec
-        self._batch_luma = batch_luma
-
-    @property
-    def _color_range(self):
-        return self._spec.color_range
-
-    @property
-    def _bin_thresh(self):
-        return self._spec.bin_thresh_ref[0]
-
-    @_bin_thresh.setter
-    def _bin_thresh(self, th):
-        self._spec.bin_thresh_ref[0] = th
-        if self._spec.on_bin_thresh is not None:
-            self._spec.on_bin_thresh(th)
-
-    def _batch_luma(self, crops):
-        return self._batch_luma(crops)
-
-    def _prof_end(self, group, key, t0):
-        if self._spec.prof_end is not None:
-            self._spec.prof_end(group, key, t0)
-
-
 @dataclass
 class GpuRunSpec:
     """GPU 驱动的全量输入契约。"""
@@ -190,7 +156,7 @@ class _GpuLane:
         self._spec = spec
         self._release = _gpu_release_partial
         self._ctx = None        # _GpuRunCtx（after_open 前置装配）
-        self._exv = None        # 设备函数的 ex 适配视图
+        self._hooks = None      # 设备函数显式依赖（gpu/device.DevHooks）
         self._prepare = None    # _gpu_prepare_calibration
         self._stream_fn = None  # (nvdec, cpu) 两帧流
         self._YFramePool = None
@@ -219,12 +185,17 @@ class _GpuLane:
 
     # ── 生命周期挂钩 ──────────────────────────────────────────────
     def after_open(self, vr) -> None:
-        from ..gpu.device import (_GpuRunCtx, _gpu_frame_stream_cpu,
+        from ..gpu.device import (DevHooks, _GpuRunCtx,
+                                  _gpu_frame_stream_cpu,
                                   _gpu_frame_stream_nvdec,
                                   _gpu_prepare_calibration)
         spec = self._spec
         self._ctx = _GpuRunCtx()
-        self._exv = _SpecView(spec, spec.batch_luma)
+        # 设备侧协作函数的显式依赖（P1 前为 _SpecView ex 视图桥接）
+        self._hooks = DevHooks(
+            limited=spec.color_range != 1, batch_luma=spec.batch_luma,
+            bin_ref=spec.bin_thresh_ref, on_bin=spec.on_bin_thresh,
+            prof=spec.prof_end)
         self._prepare = _gpu_prepare_calibration
         self._stream_fn = (_gpu_frame_stream_nvdec, _gpu_frame_stream_cpu)
         # F-6：on_gpu 必须在 open_vr **之后**判定——backend 标签由 open 写入
@@ -237,7 +208,7 @@ class _GpuLane:
     def calibrate(self, spec, vr, frames, ocr_session):
         x1, y1, x2, y2 = spec.roi
         ok, th = self._prepare(
-            self._exv, self._ctx, vr, frames, on_gpu=self._on_gpu,
+            self._hooks, self._ctx, vr, frames, on_gpu=self._on_gpu,
             yuv=self._yuv, roi=(x1, y1, x2 + 1, y2 + 1))
         self._th = th
         return ok, th
@@ -292,7 +263,7 @@ class _GpuLane:
         self._producer_q = Queue(maxsize=max(8, spec.buffer_size))
         x1, y1, x2, y2 = spec.roi
         self._stream = self._stream_fn[0 if self._on_gpu else 1](
-            self._exv, self._ctx, vr, frames, yuv=self._yuv,
+            self._hooks, self._ctx, vr, frames, yuv=self._yuv,
             roi=(x1, y1, x2 + 1, y2 + 1), th=self._th)
         self._producer = threading.Thread(target=self._producer_loop,
                                           daemon=True)

@@ -19,6 +19,10 @@
 ----
     python tools/_probe_index_audit.py
     python tools/_probe_index_audit.py --fix-hint   # 额外打印可直接粘贴的修正值
+    python tools/_probe_index_audit.py --fix        # 就地校准全部计数后仍重跑审计
+                                                     # （结构问题：未索引/拼错/漏归类
+                                                     #   依旧非 0 退出——哪些文件进
+                                                     #   索引是人工判断，脚本不猜）
 
 退出码 0 = 全部一致；1 = 发现不一致（CI 可直接用）。
 """
@@ -77,6 +81,13 @@ def fix_index(lines_of: dict[str, int], bytes_of: dict[str, int]) -> None:
     # 括号+要求行尾 KB，永不匹配 → 头部合计从未被 --fix 校准过
     src = re.sub(r"(\*\*\d+\s*个\s*`\.py`\*\*)（[\d,]+\s*行",
                  r"\1（%s 行" % format(n_line, ","), src, count=1)
+    # 文件数 + 探针数（2026-09-20 稳健性轮：此前只修行数——新增探针时
+    # 文件数/探针数仍需手工同步，每次两处、忘一处即审计红）
+    n_probe = sum(1 for k in lines_of if k.startswith("_probe_"))
+    src = re.sub(r"\*\*\d+\s*个\s*`\.py`\*\*", "**%d 个 `.py`**" % n_file,
+                 src, count=1)
+    src = re.sub(r"其中\s*\d+\s*个是探针", "其中 %d 个是探针" % n_probe,
+                 src, count=1)
 
     m = re.search(r"## D\..*?(?=\n## E\.)", src, re.S)
     if m:
@@ -113,7 +124,9 @@ def main() -> int:
             files[os.path.basename(f)] = read_bytes(f)
         fix_index({k: v.count(b"\n") + 1 for k, v in files.items()},
                   {k: _lf_bytes(v) for k, v in files.items()})
-        return 0
+        # 修完计数后**继续跑完整审计**：结构问题（未索引/拼错/漏归类）
+        # 依旧非 0 退出——哪些文件进索引是人工判断，脚本不猜。
+        print("（--fix 已校准计数，结构复核如下）")
 
     problems: list[str] = []
 

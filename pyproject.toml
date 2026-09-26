@@ -52,3 +52,11 @@ testpaths = ["tests"]
 markers = [
   "gpu: 需要 GPU + decord fork + 真值视频（S4 双后端等价门禁）",
 ]
+
+[tool.ruff]
+# 精选集（2026-09-20 稳健性轮）：E4/E7/E9/F，产品代码零违规基线。
+# 范围 = video_ocr_engine/（tools/ 探针多为 frozen 证据，不承担 lint
+# 义务）；风格类规则（E501/I001/UP 系）不启用——% 格式化与长中文注释
+# 行是本仓既有风格。执行：ruff check video_ocr_engine/
+target-version = "py311"
+select = ["E4", "E7", "E9", "F"]

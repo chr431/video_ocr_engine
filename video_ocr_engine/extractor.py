@@ -55,6 +55,13 @@ from .domain.metrics import (
 from .pipeline.engine import SegmentEngine
 from .pipeline.gpu_backend import GpuRunSpec, run_gpu_pipeline
 from .pipeline.host_backend import HostRunSpec, run_host_pipeline
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # 仅为 `_start_ocr_session` 的返回注解服务（运行期懒导入，避免
+    # extractor → ocr_stage 的导入环；此前注解裸引 "OcrSession" 是
+    # F821，lint 基线轮修正）
+    from .pipeline.ocr_stage import OcrSession
 from .domain.diagnostics import NULL_DIAG, open_diagnostics
 from .pipeline.report import build_report, write_report_file
 

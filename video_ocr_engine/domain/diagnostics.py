@@ -335,7 +335,8 @@ def open_diagnostics(report_file: str | None, *, metrics=None,
         # 落盘停顿现场，此前用 drain 语义的 snapshot 会把已累计的桶全部
         # 吃掉——停顿之后的最终 RunReport 只剩停顿后的样本，PI-3/PI-10
         # 等阈值指标偏小 → 门禁静默放行。
-        snap = lambda: metrics.snapshot(drain=False)
+        def snap():
+            return metrics.snapshot(drain=False)
     wd = StallWatchdog(progress, base + ".diag", stall_s=stall_s,
                        journal=journal, snapshot=snap)
     diag = Diagnostics(progress, wd, journal)

@@ -95,6 +95,8 @@ def main() -> int:
                     help="配对差分均值 %% 判决阈值")
     ap.add_argument("--baseline-rev", default="HEAD")
     args = ap.parse_args()
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from _worker_lib import acquire_probe_lock
 
     specs = []
     for tok in args.configs.split(","):
@@ -111,6 +113,7 @@ def main() -> int:
         return 2
     fail = 0
     try:
+      with acquire_probe_lock("worktree_ab"):
         for config, ocr in specs:
             tag = f"host:{config}" if ocr else config
             print(f"\n== {tag}（A=旧 {args.baseline_rev} / B=新工作树，"

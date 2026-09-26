@@ -12,6 +12,8 @@ tests/pipeline/test_gpu_pipeline.py patch 面）。
 import logging
 import threading
 import time
+from dataclasses import dataclass
+from typing import Callable
 
 import numpy as np
 
@@ -27,6 +29,33 @@ logger = logging.getLogger(__name__)
 # producer_stop 后立即退出；这里只作防挂死兜底——无超时 join 一旦碰上
 # producer 卡在 put，会把"线程泄漏"升级成"整条流水线永久阻塞"。
 _PRODUCER_JOIN_TIMEOUT = 5.0
+
+
+@dataclass
+class DevHooks:
+    """设备侧协作函数的显式依赖（P1 后取代 ex 适配视图 _SpecView 桥接）。
+
+    limited    —— color_range != 1（YUV 的 luma 展开口径）
+    batch_luma —— CPU 解码分支的宿主灰度回调 (B,H,W[,C])->(B,h,w)
+    bin_ref    —— [th] 单元素盒：校准写入、判定回调读
+    on_bin     —— 阈值即时回写（F-4 流式合并活读；可 None）
+    prof       —— 计时脊柱 (group, key, t0)（可 None）
+    """
+
+    limited: bool
+    batch_luma: "Callable | None"
+    bin_ref: list
+    on_bin: "Callable | None" = None
+    prof: "Callable | None" = None
+
+    def set_bin(self, th: int) -> None:
+        self.bin_ref[0] = th
+        if self.on_bin is not None:
+            self.on_bin(th)
+
+    def tick(self, group: str, key: str, t0: float) -> None:
+        if self.prof is not None:
+            self.prof(group, key, t0)
 
 
 def _cuda_python_available() -> bool:
@@ -399,13 +428,13 @@ def _gpu_release_partial(ctx: _GpuRunCtx) -> None:
         ctx.analyzer = None
 
 
-def _gpu_prepare_calibration(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
+def _gpu_prepare_calibration(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list, *,
                              on_gpu: bool, yuv: bool,
                              roi: tuple) -> "tuple[bool, int]":
     """GPU 管线校准：解码校准帧 + 逐帧直方图 Otsu（阈值取中位数）。
 
     填充 ctx（analyzer/pool/calib_owner/calib_nds/calib_base/calib_gray/
-    src_h/src_w/fnb/calib_n）并写 ex._bin_thresh。返回 (ok, th)；
+    src_h/src_w/fnb/calib_n）并写 hooks 阈值盒。返回 (ok, th)；
     False = 帧形状不符（GPU 分段不支持），调用方回退宿主管线。
     """
     from cuda.bindings import runtime as cudart
@@ -426,7 +455,7 @@ def _gpu_prepare_calibration(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
             ctx.src_w = calib_shape[2]
             ctx.calib_gray = analyzer.extract_luma(
                 calib_base, calib_n, ctx.src_h, ctx.src_w,
-                limited=ex._color_range != 1)
+                limited=hooks.limited)
         else:
             if len(calib_shape) != 4 or calib_shape[-1] != 1:
                 # 灰度帧非 4D 单通道（部分 decord fork 输出 (B,H,W)）：GPU
@@ -451,7 +480,7 @@ def _gpu_prepare_calibration(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
                 return False, 0
             ctx.src_h, ctx.src_w = crops.shape[1], crops.shape[2]
         ctx.fnb = ctx.src_h * ctx.src_w
-        g = np.ascontiguousarray(ex._batch_luma(crops))
+        g = np.ascontiguousarray(hooks.batch_luma(crops))
         if g.shape != (calib_n, ctx.src_h, ctx.src_w):
             return False, 0
         # 池子必须容得下**校准批**（SEG_CALIB_FRAMES=50 行）：calib_owner 与
@@ -478,12 +507,12 @@ def _gpu_prepare_calibration(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
         calib_gray_dev, calib_n, ctx.src_h, ctx.src_w)
     th = otsu_median_threshold(
         [_otsu_from_hist(_hist_mat[k]) for k in range(calib_n)])
-    ex._bin_thresh = th
+    hooks.set_bin(th)
     return True, th
 
 
 
-def _gpu_frame_stream_nvdec(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
+def _gpu_frame_stream_nvdec(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list, *,
                             yuv: bool, roi: tuple, th: int):
     """NVDEC 设备批直通帧流：yield (frame_idx, dev, sharp, cluster)。
 
@@ -494,7 +523,7 @@ def _gpu_frame_stream_nvdec(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
     from cuda.bindings import runtime as cudart
     DECODE_BATCH = config.GPU_PIPELINE_DECODE_BATCH
     _d2d = cudart.cudaMemcpyKind.cudaMemcpyDeviceToDevice
-    limited = ex._color_range != 1
+    limited = hooks.limited
     analyzer = ctx.analyzer
 
     def _analyze_batch(gray_base, prev_single, B, H, W):
@@ -562,7 +591,7 @@ def _gpu_frame_stream_nvdec(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
                 # _probe_roi_decode 已证 CPU 路径两种传法等价）。
                 _t_dec = time.perf_counter()
                 nds = vr.get_batch(frames[bstart:bstart + DECODE_BATCH])
-                ex._prof_end('producer', 'decode_batch', _t_dec)
+                hooks.tick('producer', 'decode_batch', _t_dec)
                 yield bstart, nds
             return
         import queue as _queue
@@ -576,7 +605,7 @@ def _gpu_frame_stream_nvdec(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
                     bend = min(bstart + DECODE_BATCH, len(frames))
                     _t_dec = time.perf_counter()
                     nds = vr.get_batch(frames[bstart:bend])
-                    ex._prof_end('producer', 'decode_batch', _t_dec)
+                    hooks.tick('producer', 'decode_batch', _t_dec)
                     _q.put((bstart, nds))
             except BaseException as e:  # noqa: BLE001
                 _err.append(e)
@@ -619,7 +648,7 @@ def _gpu_frame_stream_nvdec(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
             prev_s = ctx.prev_ptr
         _t_an = time.perf_counter()
         sums, fnb = _analyze_batch(gray_base, prev_s, B, H, W)
-        ex._prof_end('producer', 'stream_analyze', _t_an)
+        hooks.tick('producer', 'stream_analyze', _t_an)
         if yuv and have_prev_front:
             cudart.cudaMemcpyAsync(
                 prev_front, gray_base + (B - 1) * fnb, fnb,
@@ -638,7 +667,7 @@ def _gpu_frame_stream_nvdec(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
             have_prev_front = True
 
 
-def _gpu_frame_stream_cpu(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
+def _gpu_frame_stream_cpu(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list, *,
                           yuv: bool, roi: tuple, th: int):
     """CPU 解码（P1-3）帧流：get_batch → 宿主灰度 → H2D → analyze。
 
@@ -677,7 +706,7 @@ def _gpu_frame_stream_cpu(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
         _t_dec = time.perf_counter()
         nds = vr.get_batch(frames[bstart:bend], roi=roi)
         crops = nds.asnumpy()
-        ex._prof_end('producer', 'decode_batch', _t_dec)
+        hooks.tick('producer', 'decode_batch', _t_dec)
         if yuv:
             if crops.ndim != 3:
                 raise RuntimeError(
@@ -687,8 +716,8 @@ def _gpu_frame_stream_cpu(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
                 raise RuntimeError(
                     "GPU 分段仅支持 decord gray 输出")
         _t_gray = time.perf_counter()
-        g = np.ascontiguousarray(ex._batch_luma(crops))
-        ex._prof_end('producer', 'gray_batch', _t_gray)
+        g = np.ascontiguousarray(hooks.batch_luma(crops))
+        hooks.tick('producer', 'gray_batch', _t_gray)
         if g.shape != (B, src_h, src_w):
             raise RuntimeError(
                 f"GPU(CPU解码) 灰度形状不符: {g.shape} != "
@@ -704,11 +733,11 @@ def _gpu_frame_stream_cpu(ex, ctx: "_GpuRunCtx", vr, frames: list, *,
         _gpu_fill_prev(analyzer, prev_buf, base, B, fnb, prev_ptr)
         sums = analyzer.analyze_batch(
             base, prev_buf, B, src_h, src_w, th)
-        ex._prof_end('producer', 'stream_analyze', _t_an)
+        hooks.tick('producer', 'stream_analyze', _t_an)
         for k in range(B):
             yield (frames[bstart + k],
                    DeviceRef(ptr=base + k * fnb, h=src_h, w=src_w,
                              owner=_CpuFrameRef(owner, k)),
                    float(sums[k, 0]), float(sums[k, 1]))
-        prev_owner = owner
+        prev_owner = owner  # noqa: F841  # 保活：下批 fill_prev 读 prev_ptr（旧 owner 设备内存）期间不得回收
         prev_ptr = base + (B - 1) * fnb

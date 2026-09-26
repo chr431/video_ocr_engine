@@ -21,15 +21,14 @@ import argparse
 import json
 import os
 import statistics
-import subprocess
 import sys
 import time
+from _worker_lib import (acquire_probe_lock, run_worker, watchdog_prelude,
+                         worker_prelude)
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-os.environ["PROBE_ROOT"] = str(ROOT)   # `python -c` WORKER 无 __file__
 _BATCH_DIR = Path(os.environ.get("RACELOG_BATCH_DIR", r"D:\Videos\batch_test"))
-PY = sys.executable
 
 #: 臂 → (decode_backend, ocr_backend, 收集文本)；D = 纯解码上限参考
 ARMS: dict[str, tuple[str, str, bool]] = {
@@ -39,9 +38,8 @@ ARMS: dict[str, tuple[str, str, bool]] = {
     "D": ("decode-only:nvdec", "", False),
 }
 
-WORKER = r"""
-import os, sys, time, json
-sys.path.insert(0, os.environ["PROBE_ROOT"])
+WORKER = worker_prelude + watchdog_prelude + r"""
+import time, json
 os.environ['ENGINE_PROFILE'] = '1'
 path, roi_s, n, stride, dbe, obe, want_texts = sys.argv[1:8]
 roi = tuple(int(x) for x in roi_s.split(','))
@@ -89,15 +87,11 @@ print(json.dumps(out))
 
 def run_arm(video, roi, n, stride, arm):
     dbe, obe, want_texts = ARMS[arm]
-    e = dict(os.environ)
-    p = subprocess.run(
-        [PY, "-c", WORKER, video, roi, str(n), str(stride), dbe, obe,
-         "1" if want_texts else "0"],
-        capture_output=True, text=True, env=e)
-    out = (p.stdout or "").strip().splitlines()
-    if p.returncode != 0 or not out:
-        raise RuntimeError(f"{arm} FAIL: {(p.stderr or '').strip()[-400:]}")
-    return json.loads(out[-1])
+    d = run_worker(WORKER, [video, roi, n, stride, dbe, obe,
+                            "1" if want_texts else "0"])
+    if "err" in d:
+        raise RuntimeError("%s FAIL: %s" % (arm, d["err"]))
+    return d
 
 
 def _fmt(d):
@@ -131,19 +125,20 @@ def main() -> int:
     texts = {}
     out_dir = Path(a.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    for r in range(a.rounds):
-        order = arms[r % len(arms):] + arms[:r % len(arms)]   # 轮转臂序
-        for arm in order:
-            d = run_arm(a.video, a.roi, a.frames, a.stride, arm)
-            data[arm].append(d)
-            if "texts" in d and arm not in texts:
-                texts[arm] = d.pop("texts")
-            print(f"  r{r} {arm} {_fmt(d)}")
-            time.sleep(a.cooldown)
-        if texts:
-            (out_dir / f"{Path(a.video).stem}_texts_r{r}.json").write_text(
-                json.dumps({k: v for k, v in texts.items()},
-                           ensure_ascii=False), encoding="utf-8")
+    with acquire_probe_lock("hybridocr_prize"):
+        for r in range(a.rounds):
+            order = arms[r % len(arms):] + arms[:r % len(arms)]   # 轮转臂序
+            for arm in order:
+                d = run_arm(a.video, a.roi, a.frames, a.stride, arm)
+                data[arm].append(d)
+                if "texts" in d and arm not in texts:
+                    texts[arm] = d.pop("texts")
+                print(f"  r{r} {arm} {_fmt(d)}")
+                time.sleep(a.cooldown)
+            if texts:
+                (out_dir / f"{Path(a.video).stem}_texts_r{r}.json").write_text(
+                    json.dumps({k: v for k, v in texts.items()},
+                               ensure_ascii=False), encoding="utf-8")
     (out_dir / f"{Path(a.video).stem}_runs.json").write_text(
         json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
 

@@ -9,8 +9,13 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_conclusions_budget():
+    # 14 KB（2026-09-20 稳健性轮由 12KB 上调）：CONCLUSIONS.md 按需读取
+    # （非会话注入），14KB≈3.5k tok/次定位成本；12KB 饱和后每次新条目
+    # 都要修剪旧规范性文本（实测三轮修剪触碰 20+ 条措辞）——审查负担
+    # 与漂移风险大于读取成本。超预算时的压缩顺序：evidence 字段
+    # （机械可压 ~15%）→ premises → conclusion 正文最后动。
     size = (ROOT / "knowledge" / "conclusions.md").stat().st_size
-    assert size <= 12 * 1024, "conclusions.md %d B 超 12 KB 预算" % size
+    assert size <= 14 * 1024, "conclusions.md %d B 超 14 KB 预算" % size
 
 
 def test_knobs_budget():

@@ -27,15 +27,14 @@ import argparse
 import json
 import os
 import statistics
-import subprocess
 import sys
 import time
+from _worker_lib import (acquire_probe_lock, run_worker, watchdog_prelude,
+                         worker_prelude)
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-os.environ["PROBE_ROOT"] = str(ROOT)   # `python -c` WORKER 无 __file__
 _BATCH_DIR = Path(os.environ.get("RACELOG_BATCH_DIR", r"D:\Videos\batch_test"))
-PY = sys.executable
 
 ARMS: dict[str, dict[str, str]] = {
     "A1": {"OCR_ROI_AUTOCROP": "0", "OCR_REORDER_WINDOW": "1"},
@@ -47,10 +46,8 @@ ARMS: dict[str, dict[str, str]] = {
              "OCR_PAD_SMALL": "639"},
 }
 
-WORKER = r"""
-import os, sys, time, json, statistics
-sys.path.insert(0, os.environ["PROBE_ROOT"])
-os.environ['ENGINE_PROFILE'] = '1'
+WORKER = worker_prelude + watchdog_prelude + r"""
+import time, json, statistics
 path, roi_s, n, dbe, obe, stride = sys.argv[1:7]
 roi = tuple(int(x) for x in roi_s.split(','))
 from video_ocr_engine import FieldExtractor
@@ -77,18 +74,12 @@ _CLEAR = ("OCR_ROI_AUTOCROP", "OCR_REORDER_WINDOW", "OCR_PAD_SMALL")
 
 
 def run_arm(video, roi, n, dbe, obe, stride, arm, reps):
-    e = dict(os.environ)
-    for k in _CLEAR:
-        e.pop(k, None)
-    e.update(ARMS[arm])
-    p = subprocess.run(
-        [PY, "-c", WORKER, video, roi, str(n), dbe, obe, str(stride),
-         str(reps)],
-        capture_output=True, text=True, env=e)
-    out = (p.stdout or "").strip().splitlines()
-    if p.returncode != 0 or not out:
-        raise RuntimeError(f"{arm} FAIL: {(p.stderr or '').strip()[-400:]}")
-    return json.loads(out[-1])
+    runs = run_worker(
+        WORKER, [video, roi, n, dbe, obe, stride, reps],
+        env_extra={**ARMS[arm], 'ENGINE_PROFILE': '1'}, env_clear=_CLEAR)
+    if "err" in runs:
+        raise RuntimeError("%s FAIL: %s" % (arm, runs["err"]))
+    return runs
 
 
 def _fmt(d):
@@ -181,7 +172,8 @@ def main() -> int:
     a = ap.parse_args()
     print(f"=== 裁切复测 [{a.mode}] {Path(a.video).name} "
           f"{a.frames}帧 stride={a.stride} decode={a.dbe} ocr={a.ocr} ===")
-    return (mode_accuracy(a) if a.mode == "accuracy" else mode_perf(a))
+    with acquire_probe_lock("autocrop_retest"):
+        return (mode_accuracy(a) if a.mode == "accuracy" else mode_perf(a))
 
 
 if __name__ == "__main__":
