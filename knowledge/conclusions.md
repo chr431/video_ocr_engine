@@ -30,29 +30,29 @@
   evidence: PERF §21 §22.1；log 2026-09-08
 
 - id: C-05
-  conclusion: hybrid = fork 原生（TRT→hybrid_gpu、CPU→宿主帧）。收益面=TRT 路径；ONNX 宿主不反超→选 nvdec。解码率可见性 2.45×/17%/30%；e2e 见 C-53
+  conclusion: hybrid=fork 原生（TRT→hybrid_gpu、CPU→宿主帧）；收益面=TRT；ONNX 不反超→选 nvdec；可见性 2.45×/17%/30%；e2e 见 C-53
   status: active
   premises: 4060/16C32T；0.8.3；fork ≥6da2957
   revisit: >32 核 / 残余=每臂混跑干扰
-  evidence: log 2026-09-11-hybrid差距分解；09-13 可见性重评
+  evidence: log 09-11-hybrid差距分解；09-13 可见性
 
 - id: C-06
   status: superseded
   replaced_by: C-05
 
 - id: C-07
-  conclusion: `auto` 不区分 OCR 后端、一律尝试 NVDEC：批量互补必须显式 `decode_backend="cpu"` 并核验 `_backend`
+  conclusion: auto 一例试 NVDEC；批量互补须显式 `cpu` 并核验 `_backend`
   status: active
   premises: —
   revisit: auto 实现按 ocr_backend 分叉后复核
-  evidence: README 批量章；PERF §19 §21
+  evidence: README 批量章；PERF §19
 
 - id: C-08
-  conclusion: `auto` 在 h264 非最优（CPU+TRT 快 1.7~2.8×）但**恒 NVDEC 优先是刻意决策**：弱 CPU 可能反慢+争用/功耗代价；峰值走显式 cpu
+  conclusion: h264 上 CPU 快 1.7~2.8× 但**恒 NVDEC 优先是刻意决策**（稳妥>峰值）；峰值走显式 cpu
   status: active
   premises: 稳妥性>峰值吞吐（用户拍板）
   revisit: 「NVDEC 不可用」级前提变化
-  evidence: DECISIONS A2；log 2026-09-09 深度性能优化
+  evidence: DECISIONS A2；09-09 深度优化
 
 - id: C-09
   conclusion: GPU 分段+ONNX 无净收益，GPU 管线默认只放行 NVDEC+TRT
@@ -66,7 +66,7 @@
   status: active
   premises: 解码仍是瓶颈（消费不反超供给）
   revisit: OCR 提速使消费反超解码供给
-  evidence: 提交 9b83cba；2026-09-09 复确认零收益
+  evidence: 提交 9b83cba；09-09 复确认
 
 - id: C-11
   status: superseded
@@ -77,28 +77,28 @@
   status: active
   premises: h264、fork 0.7.x
   revisit: 新编码 / 更激进的过滤方案
-  evidence: DECISIONS「下一步三目标轮」
+  evidence: DECISIONS 三目标轮
 
 - id: C-14
   conclusion: skip_loop_filter 1.11–1.36× 但改变像素；默认 opt-in
   status: active
   premises: —
   revisit: 下游证实对像素不敏感且需提速率
-  evidence: DECISIONS「P0-6 翻案」
+  evidence: DECISIONS P0-6 翻案
 
 - id: C-15
   conclusion: **OCR 输入侧参数都不是杠杆**。pad 下限 224 保持（160/320 证伪）；预处理六变体仅一非负 +7 帧；翻转系实例级判决
   status: active
-  premises: v6_small + racelog 内容
+  premises: v6_small+racelog
   revisit: pad/预处理架构变更；换模型或字体/ROI 形态
-  evidence: log 2026-09-12-准确项 §4.1
+  evidence: log 09-12-准确项 §4.1
 
 - id: C-16
   conclusion: OCR 裁切余量 10% 优于 0%；裁切提准确率（旧"守卫"前提错）
   status: active
   premises: —
   revisit: ROI 形态 / 分辨率大变
-  evidence: DECISIONS「第四轮」
+  evidence: DECISIONS 第四轮
 
 - id: C-26
   status: superseded
@@ -123,8 +123,8 @@
   conclusion: 实现唯一出处=segmentation.py：宿主直调，GPU kernel 逐位镜像、判据同文件；不做插件抽象面（已回退）
   status: active
   premises: 0.11.0；两侧行为由真值用例逐位守护
-  revisit: 出现真实的 GPU 侧算法插件需求
-  evidence: log 2026-09-09 引擎四方向；tests/ 全套
+  revisit: 真实 GPU 侧插件需求出现
+  evidence: log 2026-09-09 引擎四方向
 
 - id: C-33
   status: superseded
@@ -137,11 +137,11 @@
   replaced_by: C-53
 
 - id: C-36
-  conclusion: 冷启动 = cuda.core 0.22s + NVRTC 0.09s + TRT 反序列化 0.39–0.44s；显式 `warmup()` 移出首 extract（首视频 −33%）
+  conclusion: 冷启动=cuda.core 0.22+NVRTC 0.09+TRT 0.39–0.44s；`warmup()` 移出首 extract（−33%）
   status: active
   premises: 引擎已缓存；首个 extract
   revisit: 换后端/引擎格式
-  evidence: log §3；tests/pipeline/test_warmup.py
+  evidence: log §3；test_warmup
 
 - id: C-37
   conclusion: 消费端提交可批量化：归约 D2H 异步+本流同步（−5.19%）、keep_crops 并批窗 16（−2.45%）；按宽分组无收益
@@ -151,17 +151,17 @@
   evidence: log §4-§6
 
 - id: C-38
-  conclusion: **合并判定「稠密簇门」**（win3≥SEG_C 恒不合并，默认开）净 +226 帧；段数 +1.2~3.6%
+  conclusion: **合并判定稠密簇门**（win3≥SEG_C 恒不合并，默认开）+226 帧；段数 +1.2~3.6%
   status: active
   premises: 六片真值；宿主/GPU 逐位一致
   revisit: 大字号字体 / OCR-bound 部署
-  evidence: log 2026-09-12-准确项 §3 §6
+  evidence: log 09-12-准确项 §3
 
 - id: C-39
-  conclusion: **NVML NVDEC% 是「在用」指示器非占空比**（35% 忙仍读 98%）——忙闲用 fork busy 计数；NVML 价值=时钟+热降位
+  conclusion: **NVML NVDEC%=在用指示器非占空比**（35% 忙仍读 98%）；忙闲用 fork busy 计数，NVML 只管时钟/热
   status: active
   premises: full 档 + fork ≥6da2957；本机单卡
-  revisit: 换卡（NVDEC% 语义随驱动/卡型变）/ fork 换代
+  revisit: 换卡（NVDEC% 语义随卡变）/ fork 换代
   evidence: log 2026-09-13-hybrid可见性重评
 
 - id: C-40
@@ -169,7 +169,7 @@
   status: active
   premises: 4060/16C32T；fork ≥a6cdeb7（熟前挂起+窗口尾 ETA 派工）
   revisit: 换卡 / GOP 尺寸极端小 / <500 帧短片
-  evidence: log 2026-09-18-hybrid启动轮 §4
+  evidence: log 09-18-hybrid启动轮 §4
 
 - id: C-41
   status: superseded
@@ -198,21 +198,21 @@
   replaced_by: C-46
 
 - id: C-46
-  conclusion: **hybrid=包缓存+供料期 GOP 派工（fork fef3c4b）**：Push 只入 512MB 包缓存，泵按速率贪心派工；**kick 必须经泵按流序注入**（错位=段数漂移）。机制 A/B hevc −6.29%/h264 −4.78%；并联 96/92/96%
+  conclusion: **hybrid=包缓存+供料期 GOP 派工（fork fef3c4b）**：Push 只入 512MB 缓存，泵按速率贪心派工；**kick 必须经泵按流序注入**（错位=段数漂移）；机制 A/B hevc −6.29%/h264 −4.78%
   status: active
   premises: 达成率=同会话三臂
   revisit: 换卡 / fork 换代 / 截断流·bf16 重跑
   evidence: log 2026-09-13-hybrid重设计分支；2026-09-14 达成率定稿
 
 - id: C-47
-  conclusion: **OCR 批延迟残差=GPU 链争用主导**：TRT_DEFER_SYNC 机制成立、逐位一致但 e2e 平价（与 CUDA Graph 同判）；再提速只能减 GPU 工作量/争用
+  conclusion: **OCR 批延迟残差=GPU 链争用主导**：DEFER_SYNC 机制成立、逐位一致但 e2e 平价；提速只能减 GPU 争用
   status: active
   premises: 逐位+ab 热池；trt_call 13.9ms/批占 87%
   revisit: 换卡 / TRT 换代 / 解码下 GPU
   evidence: log 2026-09-14-TRT延迟收集流水
 
 - id: C-48
-  conclusion: **CPU OCR=OpenVINO 唯一（ORT 已移除）**：模型级 2.1×；真值零差；h264-cpu 热池 −27.96%；冻结包 73MB
+  conclusion: **CPU OCR=OpenVINO 唯一**：模型级 2.1×；真值零差；热池 −27.96%；冻结包 73MB
   status: active
   premises: 4060/Zen4；openvino 2026.3.1
   revisit: 换 CPU（非 x86）/ openvino 换代 / 内容族大变
@@ -244,36 +244,42 @@
   status: active
   premises: 4060/16C32T；fork ≥a6cdeb7
   revisit: 换卡 / fork 换代
-  evidence: log 2026-09-18-hybrid启动轮
+  evidence: log 09-18-hybrid启动轮
 
 - id: C-54
   conclusion: **启动+窗口尾轮（fork a6cdeb7）：熟前挂起+防饿死盲派+窗口尾 ETA**——盲派 13→2、hevc 交叉点 ~1200；h264 残余=冷税 ~95ms+尾 69ms；H2D 聚合修法机制成立（put_block −23%）无净收益→默认关
   status: active
   premises: 盲承诺下界=2 GOP
   revisit: 换卡 / fork 换代 / infer 暴露复现日
-  evidence: log 2026-09-18-hybrid启动轮；bench/hybrid_startup.json
+  evidence: log 09-18-hybrid启动轮；bench/hybrid_startup.json
 
 - id: C-55
-  conclusion: **池复用必须换壳**（CPython 复活对象二次死亡不触发 __del__）+放弃路径直释——旧 Y 池两层皆漏=+2.0 MiB/轮，修复后 +0.000
+  conclusion: **池复用必须换壳**（复活对象二次死亡不触发 __del__）；旧 Y 池两层漏 +2.0 MiB/轮→修复后 +0.000
   status: active
   premises: CPython；4 钉子
   revisit: PyPy finalizer 语义 / 池契约重构
   evidence: log 2026-09-20-审计修复轮 §2
 - id: C-57
-  conclusion: **hybrid 硬窗 × seek(start>0) fork 缺陷：尾帧 EOF 容错静默替补**（帧数守恒、尾 ~20 帧像素错；start=0 干净）——引擎谓词 `start<窗长` 是唯一防线
+  conclusion: **hybrid 硬窗 × seek(start>0) fork 缺陷：尾帧 EOF 容错静默替补**（帧数守恒、尾 ~20 帧像素错；start=0 干净）；防线=谓词 `start<窗长`
   status: active
   premises: fork 0.8.4 与 dev 均在
   revisit: fork 迟包供给专项落地后解除谓词
-  evidence: log 2026-09-20-审计修复轮 §4
+  evidence: log 09-20 审计轮 §4
 - id: C-58
-  conclusion: **hybrid OCR 双车道（TRT+OV）v0.5：回归已消除（+48%→−1.8%）但本机无净收益**——容量理论 +54% 实测 +18%（OV 产能=TRT 1/3；争用 +20%；CPU 臂无余量）。触发=NVDEC 纯解码+OCR 需求高
+  conclusion: **hybrid OCR 双车道（TRT+OV）v0.5：回归已消除（+48%→−1.8%）但本机无净收益**——容量理论 +54% 实测 +18%（OV 产能=TRT 1/3；争用 +20%；CPU 臂无余量）；触发条件实测见 C-60
   status: active
   premises: batch_test 字幕 stride=1；16C32T 三层占满
   revisit: NVDEC 纯解码部署 / 多 NVDEC 卡 / OCR 变重
-  evidence: log 2026-09-20-批量策略与hybridOCR轮 §3-4
+  evidence: log 09-20 批量策略轮 §3-4
 - id: C-59
-  conclusion: 宽 ROI 字幕：裁切文本效应=临界字形宽度彩票（C639≡C 不翻、C781 纯 pad 翻 14 段；高恒 48 字形尺寸不变），随集波动（ep01 −7/ep02 +40 全修复）；性能真收益（墙钟 −6.6% 同窗口/−9.0% vs 旧默认；OCR 负担降→解码争用减；infer 对 pad 宽不敏感）。默认维持；L2 同属宽度扰动
+  conclusion: 宽 ROI 字幕：裁切文本效应=临界字形宽度彩票（C639≡C 不翻、C781 纯 pad 翻 14 段；高恒 48 字形尺寸不变），随集波动（ep01 −7/ep02 +40）；性能真收益（墙钟 −6.6% 同窗口/−9.0% vs 旧默认；OCR 负担降→解码争用减；infer 对 pad 宽不敏感）。默认维持；L2 同属宽度扰动
   status: active
   premises: 新三国01/02 stride=1；dbe=cpu+TRT；真值视觉+抽帧复核
   revisit: 换模型 / PAD_SMALL×裁切联调 / NVDEC 纯解码 / dbe 变更
   evidence: log 2026-09-20-裁切复测轮
+- id: C-60
+  conclusion: hybrid OCR 奖金池负结果：CPU 空闲已兑现（hevc NVDEC 纯解码 7600fps=墙钟 15%）双车道仍只兑 −4.9%±0.1（TRT 劣化 ~28%[GPU 共享]+OV 1/3 短板），双双 hybrid >15× 病理超时；动态分配不立项——瓶颈不在可分配资源；文本 B≡A 0/48054
+  status: active
+  premises: hevc 转码集整集 3 轮交错；阈值 5% 预注册
+  revisit: OV 产能>TRT 1/2 / GPU 分离部署（解码/OCR 异卡）
+  evidence: log 2026-09-20-hybridOCR奖金池裁决
