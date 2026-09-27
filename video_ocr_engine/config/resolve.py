@@ -1,8 +1,8 @@
 """resolve() —— 全仓库唯一的 env 读取点（D6：构造期一次冻结，r3 裁决）。
 
 优先级（Q5 裁决）：**显式参数 > env > 注册表默认**。
-v1 相反（env 盖过构造参数，README 自称排查陷阱）；逃生门 `VOE_ENV_WINS=1`
-恢复 v1 语义并发 DeprecationWarning（0.14.0 移除，§10.2/§10.3）。
+v1 相反（env 盖过构造参数，README 自称排查陷阱）；过渡逃生门
+`VOE_ENV_WINS=1` 已于 0.16.0 删除——v1 语义不再可恢复（§10.2/§10.3）。
 
 本模块不读 os.environ 之外的任何环境状态；测试传入显式 env 映射。
 解析语义与 engine_config.env_* 逐位一致（由 tests/config/test_resolve.py
@@ -13,7 +13,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import warnings
 from typing import Any, Mapping
 
 from .knobs import KNOBS
@@ -21,7 +20,6 @@ from .run_config import RunConfig
 
 _TRUTHY = ("1", "true", "yes", "on")
 _FALSY = ("0", "false", "no", "off")
-ENV_WINS = "VOE_ENV_WINS"
 
 # 枚举型 str 旋钮的已知取值（2026-09-19 审查轮）：_parse 对 str 做
 # 「忽略大小写后命中」归一，避免 VOE_TELEMETRY=FULL 这类输入被当成
@@ -87,12 +85,6 @@ def resolve(*, env: Mapping[str, str] | None = None,
     """
     env = os.environ if env is None else env
     overrides = overrides or {}
-    env_wins = env.get(ENV_WINS, "").strip().lower() in _TRUTHY
-    if env_wins:
-        warnings.warn(
-            "VOE_ENV_WINS=1 恢复 v1 的 env>参数 语义（0.14.0 移除）；"
-            "v2 默认显式参数 > env > 默认（v2 §10.2）",
-            DeprecationWarning, stacklevel=2)
 
     values: dict[str, Any] = {}
     for k in KNOBS.knobs:
@@ -100,7 +92,7 @@ def resolve(*, env: Mapping[str, str] | None = None,
         raw = env.get(k.env) if k.env else None
         if raw is not None:
             parsed = _parse(k, raw)
-            if env_wins or ov is None:
+            if ov is None:
                 values[k.name] = parsed
                 continue
         values[k.name] = ov if ov is not None else k.default

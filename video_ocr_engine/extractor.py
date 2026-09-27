@@ -121,18 +121,10 @@ class FieldExtractor:
         # S9-2（D6/Q5）：配置构造期一次解析并冻结（resolve 为唯一 env
         # 读取点；构造后改 env 不再生效——v1 README 曾承诺"仍生效"，
         # 属有意行为变更，见 docs/MIGRATION.md）。优先级：显式参数 >
-        # env > 默认（Q5）；VOE_ENV_WINS=1 逃生门恢复 v1 语义（resolve
-        # 内发 DeprecationWarning，0.14.0 移除）。
+        # env > 默认（Q5）；v1 逃生门 VOE_ENV_WINS 已于 0.16.0 删除。
         self._rc = resolve(env=_os.environ)
-        _env_wins = _os.environ.get("VOE_ENV_WINS", "").strip().lower() in (
-            "1", "true", "yes", "on")
         _pad_env = self._rc.ocr_pad_small
-        if _env_wins:
-            # v1 语义：env 恒先于参数（经 pad_floor_env 注入复刻）
-            self._fill_width = (fill_width if fill_width is not None
-                                else config.DEFAULT_FILL_WIDTH)
-            self._pad_floor_env = _pad_env
-        elif fill_width is not None:
+        if fill_width is not None:
             self._fill_width = fill_width          # Q5：显式参数锁定
             self._pad_floor_env = 0
         else:
@@ -176,8 +168,11 @@ class FieldExtractor:
         # OCR_PAD_SMALL/OCR_GAMMA 等同时机，构造后改 env 即生效）。
         self._progress = progress_cb or (lambda m, p: None)
         self._cancel = cancel_check or (lambda: None)
-        self.timing: dict = {}
-        self.crops: dict = {}
+        # R2（0.16.0）：run 态全部私有（ex.timing/crops/frames 兼容副产物
+        # 已删除，读面 = ExtractionResult：timing / frames / segments[*].rep_crop）。
+        # profile 例外保留公开：ENGINE_PROFILE=1 的唯一读面（result 不携带）。
+        self._timing: dict = {}
+        self._crops: dict = {}
         self._frames: list = []
         self._ocr_texts: list = []
         self._ocr_confs: list = []
@@ -185,8 +180,8 @@ class FieldExtractor:
         self._profile_enabled = self._rc.diag_profile
         # R1：计时脊柱（domain/prof.ProfSpine）——extract() 每 run 重建；
         # 此处的初版仅供 extract 之前的 _prof_end 偶发调用（NULL_METRICS）。
+        # profile 读面 = 只读 property（ENGINE_PROFILE 唯一出口）。
         self._spine = ProfSpine(self._profile_enabled, NULL_METRICS)
-        self.profile: dict = self._spine.profile
         # F-5：GPU lane 前置位单元素盒（引擎 lane 启动写、SessionSpec 与
         # 报告组装读；兼容读面见 _gpu_pipeline_mode property）
         self._gpu_mode_box = [False]
@@ -404,8 +399,8 @@ class FieldExtractor:
         # （README 却声称"每次全量重跑并覆盖实例状态"）。
         # 不重置：_fps（B2：同实例同视频，文档化缓存）。
         self._degraded = []
-        self.timing = {}
-        self.crops = {}
+        self._timing = {}
+        self._crops = {}
         self._frames = []
         self._ocr_texts = []
         self._ocr_confs = []
@@ -438,10 +433,9 @@ class FieldExtractor:
             else:
                 logger.warning("VOE_TRACE_FILE 需 VOE_TELEMETRY != off，已忽略")
         # R1：计时脊柱（原 _profile_enabled/_prof_lock/_metric_totals/
-        # _metric_max 的 B1 重置至此一并完成；profile 字典即 self.profile）
+        # _metric_max 的 B1 重置至此一并完成；profile 读面 = 派生 property）
         self._spine = ProfSpine(self._profile_enabled, self._metrics,
                                 self._trace, self._diag)
-        self.profile = self._spine.profile
         try:
             _outcome = self._run_pipelined()   # S9-6：RunOutcome（裸 5 元组已退场）
         finally:
@@ -466,7 +460,7 @@ class FieldExtractor:
                 rep_frame=rep_frames[i],
                 text=texts[i] if i < len(texts) else None,
                 confidence=confs[i] if i < len(confs) else 0.0,
-                rep_crop=(self.crops.get(rep_frames[i])
+                rep_crop=(self._crops.get(rep_frames[i])
                           if self._keep_crops else None))
             for i, seg in enumerate(segs)
         ]
@@ -481,7 +475,7 @@ class FieldExtractor:
             segments=segments,
             frames=frames if self._keep_frames else [],
             fps=self._fps or 0.0,
-            timing=dict(self.timing),
+            timing=dict(self._timing),
             meta=meta)
 
     def _build_meta(self, segments: list, wall: float) -> dict:
@@ -531,7 +525,7 @@ class FieldExtractor:
         """把单次 run 的观测收敛成 RunReport（实现：pipeline/report.
         finalized_report；off 档返回 {}）。"""
         rep = finalized_report(
-            self._metrics, self._spine, self.timing, self._trace,
+            self._metrics, self._spine, self._timing, self._trace,
             self._diag, self._degraded,
             wall=wall, n_segments=n_segments,
             backend=self._backend, ocr_backend=self._ocr_backend_used,
@@ -542,13 +536,13 @@ class FieldExtractor:
         return rep
 
     @property
-    def frames(self) -> list:
-        """全部采样帧号（run 后有效）。"""
-        return self._frames
+    def profile(self) -> dict:
+        """ENGINE_PROFILE=1 的 13 相位原始字典（run 后有效）。
 
-    @frames.setter
-    def frames(self, v: list) -> None:
-        self._frames = v
+        R2（0.16.0）：这是 ENGINE_PROFILE 的**唯一读面**（result 不携带）；
+        遥测口径（std/full 档）请读 result.report（RunReport 类型化视图）。
+        """
+        return self._spine.profile
 
     def warmup(self) -> int:
         """显式预热 OCR 引擎池（v2 §7.5 P-b / S6-e）。
@@ -713,9 +707,9 @@ class FieldExtractor:
         # 状态同步（原 _run_pipelined_gpu/_host 尾部的双份收口至此单处）
         self._fps = outcome.fps
         self._bin_thresh = outcome.bin_thresh
-        self.timing.update(outcome.timing)
+        self._timing.update(outcome.timing)
         self._n_segments = outcome.n_segments
-        self.crops = outcome.crops
+        self._crops = outcome.crops
         self._fork_stats = outcome.fork_stats
         self._ocr_texts = outcome.texts
         self._ocr_confs = outcome.confs

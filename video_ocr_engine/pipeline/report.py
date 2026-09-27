@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 # schema 版本：**只增不改**；任何结构演进必须 bump + 快照测试。
@@ -247,6 +248,89 @@ def build_report(metrics, *, wall: float, config_digest: str = "",
     if extra:
         rep.update(extra)
     return rep
+
+
+@dataclass(frozen=True)
+class RunReport:
+    """RunReport（schema v6）的类型化只读视图（R2，0.16.0）。
+
+    序列化**唯一形态**是 build_report 产出的 dict（`meta['report']` 与
+    JSON sidecar/registry 同源，schema 只增不改、REPORT_VERSION 单点）；
+    本视图零复制地提供类型化导航——`result.report` 是 `meta['report']`
+    的继任读法。嵌套 section（spans/gauges/...）与 data 共享，勿改写。
+    """
+
+    data: dict
+
+    def to_dict(self) -> dict:
+        """序列化形态（浅拷贝；嵌套 section 仍与视图共享）。"""
+        return dict(self.data)
+
+    # ── 恒有段（build_report 的核心 12 键）────────────────────────
+    @property
+    def report_version(self) -> int:
+        return self.data["report_version"]
+
+    @property
+    def tier(self) -> str:
+        return self.data["tier"]
+
+    @property
+    def wall_s(self) -> float:
+        return self.data["wall_s"]
+
+    @property
+    def spans(self) -> dict:
+        return self.data["spans"]
+
+    @property
+    def counters(self) -> dict:
+        return self.data["counters"]
+
+    @property
+    def gauges(self) -> dict:
+        return self.data["gauges"]
+
+    @property
+    def health(self) -> dict:
+        return self.data["health"]
+
+    @property
+    def environment(self) -> dict:
+        return self.data["environment"]
+
+    @property
+    def pipeline(self) -> dict:
+        return self.data["pipeline"]
+
+    @property
+    def degradations(self) -> list:
+        return self.data["degradations"]
+
+    @property
+    def span_relations(self) -> dict:
+        return self.data["span_relations"]
+
+    # ── 可选段（**缺席 ≠ 空值**：仅对应档位/条件产出才写键）────────
+    @property
+    def resources(self) -> dict | None:
+        return self.data.get("resources")
+
+    @property
+    def hardware(self) -> dict | None:
+        return self.data.get("hardware")
+
+    @property
+    def histograms(self) -> dict | None:
+        return self.data.get("histograms")
+
+    @property
+    def diagnostics(self) -> dict | None:
+        return self.data.get("diagnostics")
+
+    @property
+    def hybrid(self) -> dict | None:
+        return self.data.get("hybrid")
 
 
 def write_report_file(report: dict, path: str) -> None:

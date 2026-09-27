@@ -27,7 +27,7 @@ decode 侧以 DecordFrameSource 适配器落地打开与格式适配，driver �
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Protocol, Sequence
+from typing import Any, Callable, Protocol, Sequence
 
 from ..domain.metrics import NULL_METRICS
 from .gpu_backend import GpuRunSpec, run_gpu_pipeline
@@ -95,7 +95,7 @@ class EngineInputs:
     gpu_mode_box: list = field(default_factory=lambda: [False])  # F-5 前置位
     degraded: list = field(default_factory=list)                # D3 降级原因
     # S6-0：注入的指标记录器（§8.6 N-2；off 档为 NullMetrics 单例）
-    metrics: object = NULL_METRICS
+    metrics: Any = NULL_METRICS
 
 
 @dataclass

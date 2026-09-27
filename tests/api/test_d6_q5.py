@@ -47,15 +47,6 @@ def test_q5_env_applies_when_param_absent(monkeypatch):
     assert ex._pad_floor_env == 320          # env 抬升下限（在引擎内生效）
 
 
-def test_q5_escape_hatch_restores_v1(monkeypatch):
-    monkeypatch.setenv("OCR_PAD_SMALL", "320")
-    monkeypatch.setenv("VOE_ENV_WINS", "1")
-    with pytest.warns(DeprecationWarning):
-        ex = _make(fill_width=224)
-    assert ex._fill_width == 224
-    assert ex._pad_floor_env == 320          # v1：env 恒先于参数
-
-
 def test_q5_merge_text_sep_param_beats_env(monkeypatch):
     monkeypatch.setenv("TEXT_SEP_MERGE", "off")
     ex = _make(merge_text_sep="binary")

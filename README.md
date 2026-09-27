@@ -84,8 +84,10 @@ for seg in result.segments:
 ```
 
 > `FieldExtractor` 是**单次提取**对象：`extract()` 每次全量重跑（重新打开
-> 解码器/校准/取 OCR 引擎）并覆盖实例状态。结果请以返回值为准；
-> `ex.frames / ex.crops / ex.timing` 等实例属性是兼容性副产物，勿与返回值混用。
+> 解码器/校准/取 OCR 引擎）并覆盖实例状态。**结果唯一读面是返回值**——
+> `ex.frames / ex.crops / ex.timing` 兼容实例属性已于 0.16.0 删除（分别改读
+> `result.frames` / `result.segments[i].rep_crop` / `result.timing`）；
+> `ex.profile` 保留，是 `ENGINE_PROFILE=1` 的唯一读面。
 > 批量多视频请各建实例（见下文"批量处理"）。
 
 > 参数选择提示：`fill_width`（OCR 输入 pad 宽下限）的最优值依赖 `force_aspect`
@@ -201,10 +203,10 @@ for kw in items:                       # 逐文件顺序跑
     results.append(FieldExtractor(**kw).extract())
 ```
 
-> 历史背景：`ExtractionPool.run`（互补配对，曾实测 −20.6%）已于 0.15 起
-> **废弃**（其收益基线是"全 nvdec 派工"时代；调用时发 `DeprecationWarning`，
-> 0.16 删除）。当时的并发配对结论仍有效于「无 hybrid 可用」的场合，机制
-> 记录见 `docs/log/`（C-01/C-52）与下表——若你必须并发（如 hybrid 不可用）：
+> 历史背景：`ExtractionPool.run`（互补配对，曾实测 −20.6%）已于 0.16.0
+> **删除**（0.15 起废弃；其收益基线是"全 nvdec 派工"时代）。当时的并发
+> 配对结论仍有效于「无 hybrid 可用」的场合，机制记录见 `docs/log/`
+> （C-01/C-52）与下表——若你必须并发（如 hybrid 不可用）：
 
 | 配对 | 聚合加速 | 说明 |
 |---|---:|---|
@@ -230,9 +232,11 @@ ex.extract()         # 首个 extract 的 ocr.engine_init → ~0.0001s，首视�
 即可（引擎池按"模型/引擎类型/pad 下限/线程数"共享）。
 
 **运行报告**：`extract()` 返回的 `result.meta["report"]` 里带一份 RunReport
-（schema 版本化，当前 **v3**）：相位 span、全部计数器、PI 健康判定（热池
+（schema 版本化，当前 **v6**；`result.report` 是它的类型化只读视图——
+`result.report.spans / .health / .pipeline` 等直接导航，序列化形态仍是
+dict）：相位 span、全部计数器、PI 健康判定（热池
 `engine_init` <0.1s、`syncs/chunk` ≤3）、环境指纹（commit 之外的
-GPU/driver/TRT/decord 版本）、v2 新增的**资源段**、v3 新增的**自诊断段**：
+GPU/driver/TRT/decord 版本）、**资源段**、**自诊断段**：
 
 | 段 | 档位 | 内容 |
 |---|---|---|
@@ -314,15 +318,17 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 > 构造参数已覆盖绝大多数用法；环境变量仅在**批量调优/诊断**时使用。
 > 未设置 = 引擎默认值（已按实测调优，见 `docs/log/PERFORMANCE.md`"已锁定参数"）。
 
-**优先级**：同一旋钮多入口时按 **env > 构造参数 > `engine_config` 常量** 生效
-（例：构造 `fill_width=320` 会被残留的 `OCR_PAD_SMALL` 静默盖过——排查调参时
-先确认 env 是否残留）。**仅 env 入口**（无构造参数承接）的旋钮：
-`OCR_GAMMA`、`OCR_ROI_AUTOCROP / _MARGIN / _MIN_GAIN`、`OCR_REORDER_WINDOW`、
-`OCR_INSTANCES`、`GPU_PIPELINE`、`DECODE_THREADS`、`HYBRID_CPU_THREADS`。
+**优先级**：同一旋钮多入口时按 **显式构造参数 > env > 引擎默认值** 生效
+（Q5 裁决，0.11 起；构造 `fill_width=320` 会**锁定** 320，残留的
+`OCR_PAD_SMALL` 不再盖过——v1 相反且是排查陷阱，过渡逃生门
+`VOE_ENV_WINS` 已于 0.16.0 删除）。**仅 env 入口**（无构造参数承接）的
+旋钮：`OCR_GAMMA`、`OCR_ROI_AUTOCROP / _MARGIN / _MIN_GAIN`、
+`OCR_REORDER_WINDOW`、`OCR_INSTANCES`、`GPU_PIPELINE`、`DECODE_THREADS`、
+`HYBRID_CPU_THREADS`。
 
-**生效时机**：下列 env 全部为**调用期读取**——构造 `FieldExtractor(...)` 之后
-再改 env 同样生效，无需重建实例（`DECORD_SKIP_LOOP_FILTER` 例外，由 decord
-在打开解码器时读取）。
+**生效时机**：env 在**构造期一次解析并冻结**（D6，0.11 起）——构造
+`FieldExtractor(...)` 之后再改 env 不再生效，批量调参须新建实例
+（`DECORD_SKIP_LOOP_FILTER` 例外，由 decord 在打开解码器时读取）。
 
 ### 用户调参（了解影响后再动）
 

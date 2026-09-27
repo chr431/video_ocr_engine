@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
 import numpy as np
 
@@ -61,7 +61,7 @@ class HostRunSpec:
     # 可变盒（门面持有缓存，后端读写）
     fps_box: list = field(default_factory=lambda: [None])     # B2：同实例缓存
     # S6-0：注入的指标记录器（§8.6 N-2；off 档为 NullMetrics 单例）
-    metrics: object = NULL_METRICS
+    metrics: Any = NULL_METRICS
 
 
 @dataclass
@@ -217,7 +217,8 @@ class _HostLane:
         self._th = 0
         self._seg_idx = 0
         self._rep_crops: dict = {}
-        self._put_ocr = None
+        # calibrate() 前置装配（驱动顺序保证 run 期恒非 None）
+        self._put_ocr: Any = None
 
     @property
     def crops(self) -> dict:

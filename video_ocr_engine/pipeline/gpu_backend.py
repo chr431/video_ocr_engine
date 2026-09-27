@@ -23,7 +23,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from queue import Empty, Full, Queue
-from typing import Callable
+from typing import Any, Callable
 
 import numpy as np
 
@@ -72,7 +72,7 @@ class GpuRunSpec:
     # 可变盒（门面持有缓存）
     fps_box: list = field(default_factory=lambda: [None])
     # S6-0：注入的指标记录器（§8.6 N-2；off 档为 NullMetrics 单例）
-    metrics: object = NULL_METRICS
+    metrics: Any = NULL_METRICS
 
 
 @dataclass
@@ -155,25 +155,27 @@ class _GpuLane:
         from ..gpu.streams import _gpu_release_partial   # S9-5 设备侧机制（S4 拆分后规范位置）
         self._spec = spec
         self._release = _gpu_release_partial
-        self._ctx = None        # _GpuRunCtx（after_open 前置装配）
-        self._hooks = None      # 设备函数显式依赖（gpu/device.DevHooks）
-        self._prepare = None    # _gpu_prepare_calibration
-        self._stream_fn = None  # (nvdec, cpu) 两帧流
-        self._YFramePool = None
+        # 惰性装配字段（after_open/after_calibrate 前置装配；驱动顺序保证
+        # run 期恒非 None——mypy 按 Any 容忍，勿在装配前调用）
+        self._ctx: Any = None        # _GpuRunCtx（after_open 前置装配）
+        self._hooks: Any = None      # 设备函数显式依赖（gpu/device.DevHooks）
+        self._prepare: Any = None    # _gpu_prepare_calibration
+        self._stream_fn: Any = None  # (nvdec, cpu) 两帧流
+        self._YFramePool: Any = None
         self._on_gpu = False
         self._yuv = spec.yuv_output
         self._limited = spec.color_range != 1
         self._th = 0
         # 生产者线程 / 队列 / 错误槽
-        self._producer = None
+        self._producer: Any = None
         self._producer_q: Queue | None = None
-        self._stream = None
+        self._stream: Any = None
         self.producer_stop = threading.Event()
         self.producer_err: list = []
         # 消费侧运行态
-        self._session = None
-        self._put_ocr = None
-        self._raw_ready = None
+        self._session: Any = None
+        self._put_ocr: Any = None
+        self._raw_ready: Any = None
         self._rep_crops: dict = {}
         self._pending_crops: list = []          # [(r_frame, dev, prefer_device)]
         self._seg_idx = 0
@@ -289,11 +291,13 @@ class _GpuLane:
         # P2c 覆盖：生产者侧背压此前无对应物（宿主路径 q_put_block 一直
         # 有）——FULL 重试等待正是"OCR 消费不动生产者"的直接证据。
         spec = self._spec
+        q = self._producer_q
+        assert q is not None   # frame_items 先于 producer 线程启动装配
         _t_put = time.perf_counter()
         try:
             while not self.producer_stop.is_set():
                 try:
-                    self._producer_q.put(item, timeout=0.2)
+                    q.put(item, timeout=0.2)
                     return True
                 except Full:
                     continue

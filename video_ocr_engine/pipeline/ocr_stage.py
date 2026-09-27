@@ -14,8 +14,7 @@ import sys
 import threading
 from collections import deque
 from dataclasses import dataclass
-from typing import NamedTuple
-from typing import Callable
+from typing import Any, Callable, NamedTuple
 
 from video_ocr_engine.config import constants as config
 from video_ocr_engine.domain.metrics import NULL_METRICS
@@ -95,7 +94,7 @@ class SessionSpec:
     pad_floor_env: int | None = None
     # S6-0：注入的指标记录器（§8.6 N-2；off 档为 NullMetrics 单例）；
     # 线程口径：worker 线程局部累积，drain 时由门面 snapshot 合并
-    metrics: object = NULL_METRICS
+    metrics: Any = NULL_METRICS
 
 
 def acquire_engines(spec: "SessionSpec") -> "tuple[list, str]":
@@ -116,7 +115,7 @@ def acquire_engines(spec: "SessionSpec") -> "tuple[list, str]":
         # 要求单 TRT 引擎 → 双引擎自动回退宿主 crop 路径（GPU 管线的
         # ONNX 回退既有机制，D2H 每代表帧 ≤ROI 字节）。TRT 不可用时
         # OcrEngine 内部回退 OV → 双 OV 仍成立（等价双实例）。
-        engines = [
+        engines: list = [
             acquire_ocr_engine(
                 spec.model, 'tensorrt',
                 fill_width=spec.fill_width, num_threads=ot,
@@ -134,7 +133,7 @@ def acquire_engines(spec: "SessionSpec") -> "tuple[list, str]":
     ocr_instances = (engine_type == 'onnxruntime'
                      and ot >= config.OCR_INSTANCES_MIN_THREADS
                      and _inst)
-    engines: list = []
+    engines = []
     try:
         if ocr_instances:
             half = max(2, ot // 2)
@@ -470,7 +469,7 @@ class OcrSession:
                             and getattr(eng, '_defer_sync', False)
                             and eng is engines[0]
                             and getattr(eng, '_trt', None) is not None)
-                pending = deque()
+                pending: "deque[Any]" = deque()
 
                 def _deliver(item, res) -> None:
                     _t_c = time.perf_counter()
@@ -570,7 +569,11 @@ class OcrSession:
                 for eng in engines]
             for t in infer_threads:
                 t.start()
-            b_idx, b_reps, b_crops, b_devs, b_fracs = ([], [], [], [], [])
+            b_idx: list = []        # flush 批簿记：段索引/代表帧号/crop/dev/frac
+            b_reps: list = []
+            b_crops: list = []
+            b_devs: list = []
+            b_fracs: list = []
 
             def _count_chunks(n: int) -> None:
                 """S6-0：chunk 计数（PI-3 的分母；细档另记 per-chunk span）。"""
@@ -649,7 +652,7 @@ class OcrSession:
                     _acc_l = _acc_a = _acc_r = 0.0
                     # 内容宽度自适应裁切（统一实现见 segmentation.
                     # crop_to_content / crop_after_aspect）。
-                    prepped = []
+                    prepped: list = []   # [(i, ndarray)]：宿主预处理产物（分组批）
                     for i in host_sel:
                         c = b_crops[i]
                         if spec.yuv_output:
@@ -695,12 +698,14 @@ class OcrSession:
                         prepped.sort(key=lambda t: t[1].shape[1])
                     _count_chunks(-(-len(prepped) // chunk))
                     for s in range(0, len(prepped), chunk):
-                        chk = prepped[s:s + chunk]
+                        # hchk：元素是 (i, ndarray) 二元组（与 raw 路径的
+                        # chk=list[int] 同名不同物，改名让类型面不合并）
+                        hchk = prepped[s:s + chunk]
                         if not _put_infer(InferBatch(
-                                [b_idx[t[0]] for t in chk],
-                                [b_reps[t[0]] for t in chk],
-                                [t[1] for t in chk],
-                                [b_fracs[t[0]] for t in chk])):
+                                [b_idx[t[0]] for t in hchk],
+                                [b_reps[t[0]] for t in hchk],
+                                [t[1] for t in hchk],
+                                [b_fracs[t[0]] for t in hchk])):
                             return
                 b_idx.clear()
                 b_reps.clear()

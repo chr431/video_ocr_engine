@@ -32,6 +32,19 @@ class ExtractionResult:
     timing: dict = field(default_factory=dict)     # 各阶段耗时
     meta: dict = field(default_factory=dict)       # backend/codec/参数/降级原因等
 
+    @property
+    def report(self):
+        """RunReport v6 的类型化只读视图（R2/0.16.0）。
+
+        telemetry≠off 时返回 RunReport（meta['report'] 的继任读法），
+        off 档返回 None（meta 无 report 键，不冒充空值）。
+        """
+        raw = (self.meta or {}).get("report")
+        if not raw:
+            return None
+        from video_ocr_engine.pipeline.report import RunReport
+        return RunReport(raw)
+
     def rep_crop_rgb(self, seg):
         """段代表帧 → RGB (H, W, 3) uint8 预览（DESIGN-REVIEW D4 helper）。
 

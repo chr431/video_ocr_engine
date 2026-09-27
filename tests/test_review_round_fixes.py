@@ -323,14 +323,6 @@ def test_journal_report_includes_last_error(tmp_path):
     assert j2.report()["last_error"], "落盘失败原因必须出现在报告里"
 
 
-# ── pool.run([]) ────────────────────────────────────────────────────
-
-def test_pool_run_empty_returns_empty():
-    """空输入：返回 []（原 max_workers=0 → ValueError）。"""
-    from video_ocr_engine.pipeline import pool as _pool
-
-    assert _pool.run([]) == []
-
 
 # ── OCR 引擎池：淘汰不自噬 + key 含 gamma ────────────────────────────
 

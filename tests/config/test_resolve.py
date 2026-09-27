@@ -33,7 +33,7 @@ def test_knob_registry_shape():
         assert k.rationale_id, k.name          # 每个旋钮有依据锚点（D5）
 
 
-# ── 优先级：显式参数 > env > 默认（Q5/r3）；VOE_ENV_WINS 逃生门 ──────
+# ── 优先级：显式参数 > env > 默认（Q5/r3；v1 逃生门 VOE_ENV_WINS 已删）──
 def test_priority_param_beats_env_beats_default():
     rc = resolve(env={"OCR_GAMMA": "2.5"},
                  overrides={"ocr.gamma": 2.2})
@@ -49,11 +49,12 @@ def test_override_none_means_not_given():
     assert rc.ocr_gamma == 2.5                 # None 不锁定（v1 参数默认 None 语义）
 
 
-def test_env_wins_escape_hatch_restores_v1_semantics():
-    with pytest.warns(DeprecationWarning):
-        rc = resolve(env={"VOE_ENV_WINS": "1", "OCR_GAMMA": "2.5"},
-                     overrides={"ocr.gamma": 2.2})
-    assert rc.ocr_gamma == 2.5                 # v1：env 盖过参数
+def test_voe_env_wins_stays_deleted(monkeypatch):
+    """v1 逃生门（0.16.0 删除）不得静默复活：设了也不改优先级。"""
+    monkeypatch.setenv("VOE_ENV_WINS", "1")
+    rc = resolve(env={"VOE_ENV_WINS": "1", "OCR_GAMMA": "2.5"},
+                 overrides={"ocr.gamma": 2.2})
+    assert rc.ocr_gamma == 2.2                 # 显式参数仍然锁定
 
 
 # ── 解析语义：与 v1 engine_config.env_* 逐位等价（随机对账）─────────

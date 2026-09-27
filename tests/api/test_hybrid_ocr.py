@@ -1,9 +1,9 @@
-"""hybrid OCR（双车道 TRT+OpenVINO，2026-09-20）与 pool 废弃的回归钉子。
+"""hybrid OCR（双车道 TRT+OpenVINO，2026-09-20）的回归钉子。
 
 覆盖：
 - ocr_backend='hybrid' 合法（构造期不炸）且映射 engine_type='hybrid'
 - acquire_engines('hybrid') 取双擎（tensorrt + onnxruntime 各一，池 key 同参）
-- pool.run 发 DeprecationWarning（0.15 废弃，0.16 删除）
+（pool.run 的废弃钉子随 pool.py 于 0.16.0 删除一并退场）
 性能/正确性实测（v0 = OCR-bound 负载 +51% 回归、文本 3/26461 差异）由
 tools/_probe_hybrid_ocr.py 承载，不入单测。
 """
@@ -69,13 +69,3 @@ def test_acquire_engines_hybrid_takes_two(monkeypatch):
     # 两擎同池 key 参数（fill_width/threads/gamma 一致）——除 engine_type 外
     assert calls[0][2] == calls[1][2]
 
-
-def test_pool_run_deprecated_warns():
-    """pool.run 0.15 起发 DeprecationWarning（空输入短路也在警告之后）。"""
-    import warnings as _w
-    from video_ocr_engine.pipeline import pool as _pool
-    with _w.catch_warnings(record=True) as rec:
-        _w.simplefilter("always")
-        assert _pool.run([]) == []
-    assert any(issubclass(r.category, DeprecationWarning) for r in rec), \
-        "pool.run 必须发 DeprecationWarning（0.16 删除前的过渡）"

@@ -62,7 +62,7 @@ print(json.dumps({
     'segs': len(r.segments),
     'uniq': len(texts),
     'sample': texts[:40],
-    'timing': {k: round(v, 3) for k, v in ex.timing.items()},
+    'timing': {k: round(v, 3) for k, v in r.timing.items()},
     'producer': {k: round(v, 3) for k, v in
                  sorted(prof.items(), key=lambda kv: -kv[1])[:5]},
     'ocr': {k: round(v, 3) for k, v in

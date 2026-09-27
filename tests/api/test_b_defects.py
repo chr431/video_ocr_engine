@@ -35,10 +35,11 @@ def test_b3_valid_backends_accepted():
 
 def test_b1_second_extract_resets_run_state(monkeypatch):
     ex = _make()
-    # 污染运行态（模拟上一次 extract 的残留）
+    # 污染运行态（模拟上一次 extract 的残留；profile 读面已为只读
+    # property——直接污染 spine 内字典）
     ex._degraded = ["上次的原因"]
-    ex.timing = {"decode": 9.9}
-    ex.profile = {"ocr": {"x": 1}}
+    ex._timing = {"decode": 9.9}
+    ex._spine.profile["ocr"] = {"x": 1}
     ex._backend = "decord/CPU"
     ex._ocr_backend_used = "tensorrt"
     ex._bin_thresh = 77
@@ -50,7 +51,7 @@ def test_b1_second_extract_resets_run_state(monkeypatch):
         lambda self: RunOutcome())
     r = ex.extract()
     assert ex._degraded == []
-    assert ex.timing == {}
+    assert ex._timing == {}
     assert ex.profile == {}
     assert ex._backend == ""
     assert ex._ocr_backend_used == ""

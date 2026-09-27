@@ -19,8 +19,8 @@ from _paths import PKG
 from video_ocr_engine.domain.metrics import NULL_METRICS, Metrics
 from video_ocr_engine.domain.resources import (NvmlSampler, ResourceProbe,
                                                _HostCounters)
-from video_ocr_engine.pipeline.report import (REPORT_VERSION, build_report,
-                                              health)
+from video_ocr_engine.pipeline.report import (REPORT_VERSION, RunReport,
+                                              build_report, health)
 
 # v2 快照：新增键只允许**加**，改语义/删键必须 bump REPORT_VERSION。
 # v3（2026-09-13）：加 `diagnostics`（自诊断，仅 opt-in 时出现）→ 已 bump。
@@ -76,6 +76,42 @@ def test_report_schema_snapshot():
         assert {"metric", "value", "limit", "ok"} <= set(v), k
     assert rep["environment"]["python"].startswith("3.")
     assert set(rep["resources"]) == RESOURCE_KEYS
+
+
+def test_runreport_view_and_result_report():
+    """R2（0.16.0）：RunReport 类型化只读视图 + result.report 派生读面。
+
+    视图零复制（嵌套 section 与 data 共享）；序列化唯一形态仍是 dict
+    （to_dict() 与 meta['report'] 同源）；可选段缺席 = None ≠ 空值冒充。
+    """
+    from video_ocr_engine._result_types import ExtractionResult
+
+    rep = build_report(_std_metrics(), wall=0.5, config_digest="deadbeef",
+                       n_segments=7, backend="decord/GPU",
+                       ocr_backend="tensorrt")
+    view = RunReport(rep)
+    assert view.report_version == REPORT_VERSION
+    assert view.tier == "std"
+    assert view.wall_s == pytest.approx(0.5)
+    assert view.spans["pipeline.decode"]["sum"] == pytest.approx(0.12)
+    assert view.counters["ocr.chunks"] == 3
+    assert view.pipeline["n_segments"] == 7
+    assert view.degradations == []
+    assert view.health is rep["health"]            # 零复制：section 共享
+    assert view.to_dict() == rep                   # 序列化同源（v6 dict）
+    # 可选段（本构造无 hardware/histograms/hybrid）缺席 = None
+    assert view.hardware is None
+    assert view.histograms is None
+    assert view.hybrid is None
+    with pytest.raises(AttributeError):
+        view.tier = "full"                          # frozen：只读
+
+    r = ExtractionResult(meta={"report": rep})
+    assert r.report is not None
+    assert r.report.tier == "std"
+    # off 档（meta 无 report 键）：None，不冒充空值
+    assert ExtractionResult(meta={}).report is None
+    assert ExtractionResult().report is None
 
 
 def test_other_span_derivation_host_vs_gpu():

@@ -1,4 +1,4 @@
-# API 迁移指南（v0.11 → v0.13）
+# API 迁移指南（v0.11 → v0.16）
 
 > 面向 `RaceVideoToLog` / `video_subtitle_extractor` 及任何直接使用本引擎的
 > 下游。**未列出的部分 = 语义不变**；全部变更由金标向量（28 用例逐位一致）
@@ -6,14 +6,31 @@
 
 ## TL;DR
 
-95% 的下游**零改动可跑**：`FieldExtractor` / `ExtractedSegment` /
-`ExtractionResult` / `meta` 9 键 / `timing` 3 键 / 18 个 env 旋钮名全部原样。
-需要动作的只有三类：①导入路径迁移（旧路径 0.14.0 删除）；②若你依赖
+绝大多数下游**零改动可跑**：`FieldExtractor` / `ExtractedSegment` /
+`ExtractionResult` / `meta` 9 键 / `timing` 3 键 / env 旋钮名全部原样。
+需要动作的只有四类：①导入路径迁移（旧路径 0.14.0 删除）；②若你依赖
 "构造后改 env 仍生效"或"env 盖过构造参数"；③若你读取 OMP_WAIT_POLICY
-被引擎隐式设置。
+被引擎隐式设置；④0.16.0 删除面（pool / v1 逃生门 / 实例兼容属性）。
 
-**0.15（2026-09-20 批量策略轮）**：`ExtractionPool.run` 标废弃
-（`DeprecationWarning`，**0.16 删除**）——批量改「逐文件
+**0.16.0（2026-09-27 R2 API 定型轮，破坏性收口）**：
+- **删除 `ExtractionPool`（`video_ocr_engine.pipeline.pool` 整模块）**——
+  0.15 公告废弃、原定 0.16 删除（0.15 未发版，废弃窗口实际在
+  0.14.1→0.16.0 开发期）；批量改「逐文件 `decode_backend="hybrid"`
+  顺序跑」（实测快于任何跨视频并发，C-53）。
+- **删除 env `VOE_ENV_WINS`**（v1 `env>参数` 逃生门，原计划 0.14.0）：
+  设了不再有任何效果（不再发 DeprecationWarning）。优先级恒为
+  **显式构造参数 > env > 默认**。
+- **删除实例兼容属性 `ex.frames` / `ex.crops` / `ex.timing`**（与返回值
+  双真相是误用源）——分别改读 `result.frames` / `result.segments[i].rep_crop` /
+  `result.timing`。**`ex.profile` 保留**：`ENGINE_PROFILE=1` 的唯一读面。
+- **新增 `result.report`**（RunReport v6 的类型化只读视图：
+  `result.report.spans / .gauges / .health / .pipeline`...；序列化唯一
+  形态仍是 `meta['report']` 的 dict，JSON sidecar/registry 不变）。
+- 引擎内部结构重组（R1：门面拆解 + 端口接线 + SegmentEngine 注入式编排）
+  **不影响公共 API**——金标 28/28 逐位一致背书。
+
+**0.15（2026-09-20 批量策略轮，未单独发版）**：`ExtractionPool.run` 标废弃
+（`DeprecationWarning`，0.16.0 删除）——批量改「逐文件
 `decode_backend="hybrid"` 顺序跑」（实测快于任何跨视频并发，README 批量
 章）；新增 `ocr_backend="hybrid"`（双车道 TRT+OpenVINO，实验性，OCR-bound
 负载 v0 实测慢于单 TRT，勿用于生产）。

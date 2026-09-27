@@ -134,6 +134,8 @@ DELETED_NAMES = {
     "video_ocr_engine.config.constants": ("TEXT_SEP_MERGE_CONTRAST",),
     "video_ocr_engine.gpu.context": ("select_backend", "get_engine_type",
                                      "get_setup_advice"),
+    # 0.16.0（R2 删除轮）：v1 逃生门与跨视频并发池
+    "video_ocr_engine.config.resolve": ("ENV_WINS",),
 }
 
 
@@ -141,12 +143,22 @@ def test_deleted_names_stay_deleted():
     import video_ocr_engine as pkg
     import video_ocr_engine.config.constants as cfg
     import video_ocr_engine.gpu.context as gctx
+    import video_ocr_engine.config.resolve as rsv
     for name in DELETED_NAMES["video_ocr_engine"]:
         assert not hasattr(pkg, name), name
     for name in DELETED_NAMES["video_ocr_engine.config.constants"]:
         assert not hasattr(cfg, name), name
     for name in DELETED_NAMES["video_ocr_engine.gpu.context"]:
         assert not hasattr(gctx, name), name
+    for name in DELETED_NAMES["video_ocr_engine.config.resolve"]:
+        assert not hasattr(rsv, name), name
+
+
+def test_pool_module_stays_deleted():
+    """ExtractionPool（0.15 废弃 → 0.16.0 删除）不得静默复活。"""
+    import importlib
+    with pytest.raises(ImportError):
+        importlib.import_module("video_ocr_engine.pipeline.pool")
 
 
 def test_models_dir_alias():

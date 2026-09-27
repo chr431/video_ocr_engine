@@ -9,8 +9,20 @@
   kind: env
   replaced_by: "(无——v2 语义本身)"
   deprecated_in: "0.12.0"
-  remove_in: "0.14.0"
+  remove_in: "0.16.0（已移除；原计划 0.14.0，0.15 未发版顺延）"
   reason: "Q5 优先级反转的过渡逃生门"
+- name: ExtractionPool.run
+  kind: api
+  replaced_by: "逐文件 decode_backend=hybrid 顺序跑（C-53 实测更快）"
+  deprecated_in: "0.15.0"
+  remove_in: "0.16.0（已移除，pool.py 删除）"
+  reason: "收益基线是全 nvdec 派工时代；单 NVDEC 单元上跨视频并发无增益（C-52→C-53）"
+- name: ex.frames / ex.crops / ex.timing 实例兼容属性
+  kind: api
+  replaced_by: "result.frames / result.segments[i].rep_crop / result.timing"
+  deprecated_in: "0.16.0"
+  remove_in: "0.16.0（已移除；ex.profile 保留=ENGINE_PROFILE 唯一读面）"
+  reason: "与返回值双真相是误用源（README 曾警告勿混用）"
 - name: NVDEC rep_frame 网格外帧号
   kind: behavior
   replaced_by: "采样网格帧号（f0 + k×stride 语义修正）"

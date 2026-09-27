@@ -38,13 +38,13 @@ def test_extract_sets_frames_and_defaults_keep(monkeypatch):
     ex = _make()
 
     def fake_run(self):
-        self.crops = {1: "crop1", 2: "crop2"}
+        self._crops = {1: "crop1", 2: "crop2"}
         return RunOutcome([0, 1, 2], [[0, 1], [2]], ["a", "b"],
                           [0.9, 0.8], [1, 2])
 
     monkeypatch.setattr(FieldExtractor, "_run_pipelined", fake_run)
     result = ex.extract()
-    assert ex.frames == [0, 1, 2]
+    # ex.frames 兼容读面已删（0.16.0）：帧号只看 result.frames
     assert result.frames == [0, 1, 2]
     assert result.segments[0].frames == (0, 1)
     assert result.segments[1].frames == (2,)
@@ -56,7 +56,7 @@ def test_extract_keep_crops_false(monkeypatch):
     ex = _make(keep_crops=False)
 
     def fake_run(self):
-        self.crops = {}
+        self._crops = {}
         return RunOutcome([0, 1, 2], [[0, 1], [2]], ["a", "b"],
                           [0.9, 0.8], [1, 2])
 
@@ -69,7 +69,7 @@ def test_extract_keep_frames_false(monkeypatch):
     ex = _make(keep_frames=False)
 
     def fake_run(self):
-        self.crops = {1: "crop1", 2: "crop2"}
+        self._crops = {1: "crop1", 2: "crop2"}
         return RunOutcome([0, 1, 2], [[0, 1], [2]], ["a", "b"],
                           [0.9, 0.8], [1, 2])
 
