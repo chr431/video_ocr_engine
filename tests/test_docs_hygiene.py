@@ -201,6 +201,9 @@ def test_no_dangling_file_refs() -> None:
                     continue
                 if name.startswith("bench/"):
                     continue  # 本地证据产物（.gitignore 目录）：存在性随机器，不判悬空
+                if name.startswith("decord/"):
+                    continue  # 跨仓引用（chr431/decord fork，R4 起）：主仓
+                    # 不可判其存在性；前缀约定 = fork 仓库根相对路径
                 if "/" in name:
                     ok = name in tracked_set or (ROOT / name).is_file()
                 else:

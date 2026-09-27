@@ -38,15 +38,27 @@
 ## 已知问题与注意
 
 ### decord（自建 fork，pip wheel 安装）
+- **0.8.5（2026-09-28 版本号已 bump，三源一致；**tag/release 待审核，
+  wheel 未构建**）**：0.8.5 = 0.8.4 + 夜间重构轮五提交——EOF 预算在途
+  宽限（av1 顺序读停滞 FATAL 根治，见 log 2026-09-28）+ 三条静默路径
+  取证硬化 + GPU-only 解包（USE_CUDA 不可关，构建仍零 Toolkit）+
+  hybrid TU 拆分（src/video/hybrid/ 四文件）+ 契约面
+  （`decord.CONTRACT_VERSION`/`features()`，引擎 decode/contract.py
+  协商，tests/decode/test_contract.py 对账）+ CMakePresets。
+  **⚠️ 本机现为 dev 部署态（2026-09-28 夜间轮）**：site-packages
+  DLL 为 dev 构建 `1cc75ae30e95`（= 上述全部改动，master 771d5e0；
+  fork 测试经 `DECORD_LIBRARY_PATH=build-081fix`）。python 面仍为
+  0.8.4 wheel（无 `features()`——引擎协商自动回退结构性探测，行为
+  不变；对账测试 skip 至 wheel 更新）。
+  回 wheel 态：`pip install --force-reinstall --no-deps
+  <decord-0.8.5-cp313-cp313-win_amd64.whl>`（构建待审核后）。
 - **0.8.4（2026-09-19 已发布，tag v0.8.4，cp39–cp314 + win64-gpu.zip）**：
   v0.8.4 = v0.8.3 + 冻结前清理（cuMemcpyPeerAsync 符号修复 / 死代码
   −14.6k 行 / nvml.h 手写替代 795KB→45 行）+ 性能参考纯解码口径
   （详见 log 2026-09-19-decord发布与引擎清理）。
-  **⚠️ 本机现为 dev 部署态（2026-09-20 审计修复轮）**：site-packages
-  DLL 为 dev 构建 `a2deb3c2`（= v0.8.4 + 未发布改动：错误槽
-  per-instance / H2D 积攒窗默认关 / update_version.py argv 化）。
-  回 wheel 态：`pip install --force-reinstall --no-deps
-  <decord-0.8.4-cp313-cp313-win_amd64.whl>`。
+  （2026-09-20 审计修复轮曾处 dev 部署态 `a2deb3c2`——错误槽
+  per-instance / H2D 积攒窗默认关 / update_version.py argv 化，
+  已并入上述 0.8.5 dev 链。）
 - **0.8.3（2026-09-12 已发布，tag v0.8.3，cp39–cp314 + win64-gpu.zip；
   CI cp313 wheel 抽验：金标 28/28 + 宿主挂死用例干净 + TRT 段数一致）**：
   v0.8.3 = 0.8.2 + 十一个提交（73e5540 析构 UAF 修复 /
