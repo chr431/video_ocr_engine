@@ -17,6 +17,14 @@
 > `tensorrt` 元包与 `tensorrt_*_libs`（~2.2GB DLL）被有意排除。运行时从
 > NVIDIA 官网安装的 CUDA Toolkit / TensorRT 的 `bin` 目录加载 DLL。
 
+## 开发依赖（dev extras，2026-09-20 稳健性轮起与 CI lint job 同源）
+
+| 包 | 当前版本 | 说明 |
+| --- | --- | --- |
+| pytest | 8+/9+ | 测试 |
+| ruff | 0.16.6 | 精选集 E4/E7/E9/F（pyproject `[tool.ruff.lint]`）；产品代码零违规基线；风格类规则不启用（% 格式化与长中文注释是本仓风格） |
+| mypy | 2.3.1 | **domain/ 严格试点**（`files` + `follow_imports=skip` 边界）；无 stubs 第三方（decord/cuda/psutil/tensorrt）按 Any 容忍 |
+
 ## GPU 加速（运行时，不打包）
 
 | 组件 | 来源 | 说明 |

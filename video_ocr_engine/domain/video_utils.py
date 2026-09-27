@@ -93,8 +93,8 @@ def nv12_to_rgb(crop: "np.ndarray", color_range: int = 0) -> "np.ndarray":
         y = (crop[:h].astype(np.float32) - 16.0) / 255.0
     uv_rows = (h + 1) // 2
     uv = crop[h:h + uv_rows, :w // 2 * 2]
-    u = uv[:, 0::2].astype(np.float32)
-    v = uv[:, 1::2].astype(np.float32)
+    u: np.ndarray = uv[:, 0::2].astype(np.float32)
+    v: np.ndarray = uv[:, 1::2].astype(np.float32)
     # nearest 上采样到 luma 分辨率（每个 2x2 块共用同一 chroma 样本；
     # 奇数宽/高时末行末列补中性色度 128）
     if u.shape[0] * 2 < h:
@@ -161,7 +161,7 @@ def _np_resize(img: "np.ndarray", new_w: int, new_h: int) -> "np.ndarray":
     if new_w == src_w and new_h == src_h:
         return img.astype(np.float32)
     x0, x1, y0, y1, wx, wy = _resize_map(src_w, src_h, new_w, new_h)
-    f = img.astype(np.float32)
+    f: np.ndarray = img.astype(np.float32)
     one_ch = f.ndim == 2
     if one_ch:
         f = f[..., None]

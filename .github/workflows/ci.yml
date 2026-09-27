@@ -14,10 +14,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      # 精选集 E4/E7/E9/F（2026-09-20 稳健性轮立的零违规基线）；
-      # 配置在 pyproject [tool.ruff]，与本机行为一致
-      - run: pip install ruff
+      # 精选集 E4/E7/E9/F（2026-09-20 稳健性轮立的零违规基线）+
+      # mypy domain/ 严格试点（S4 拆分轮落地）；配置都在 pyproject
+      - run: pip install ruff mypy
       - run: ruff check video_ocr_engine/
+      - run: mypy
 
   test:
     strategy:

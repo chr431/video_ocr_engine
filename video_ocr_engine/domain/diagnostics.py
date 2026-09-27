@@ -30,6 +30,7 @@ import threading
 import time
 import traceback
 from collections import deque
+from typing import TextIO
 from pathlib import Path
 
 #: 环形缓冲上限：崩溃日志在内存里最多攒这么多条里程碑（约 200 KB 级）
@@ -81,7 +82,7 @@ class RunJournal:
         self._n_dropped = 0
         self._last_err: str = ""   # 2026-09-19 审查轮：此前只在 except
                                    # 分支赋值，report() 读它会 AttributeError
-        self._fh = None
+        self._fh: "TextIO | None" = None
 
     def add(self, event: str, **fields) -> None:
         rec = {"t": round(time.monotonic(), 4), "wall": time.time(),
@@ -240,7 +241,7 @@ class StallWatchdog:
             if t.name == "voe-watchdog":
                 continue
             out[t.name] = {"daemon": t.daemon, "alive": t.is_alive(),
-                           "stack": _stack_of(frames, t.ident)}
+                           "stack": _stack_of(frames, t.ident or 0)}
         return out
 
     def _depth_dump(self) -> dict:
@@ -272,7 +273,7 @@ class StallWatchdog:
         return self.report()
 
     def report(self) -> dict:
-        out = {"armed": True, "stall_s": self._stall_s,
+        out: dict[str, object] = {"armed": True, "stall_s": self._stall_s,
                "polls": int(self._stalls), "stalls": self._stalls}
         if self._stall_reports:
             out["dumps"] = list(self._stall_reports)

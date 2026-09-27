@@ -17,7 +17,7 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Iterator, Literal
+from typing import Iterator, Literal, cast
 
 from .resources import NvmlSampler, ResourceProbe
 
@@ -172,7 +172,9 @@ class MetricRegistry:
         return tuple(self._by_name)
 
 
-METRICS = MetricRegistry(tuple(MetricSpec(*row) for row in _SEED))
+METRICS = MetricRegistry(tuple(
+    MetricSpec(row[0], cast(MetricKind, row[1]), *row[2:]) for row in _SEED))
+    # row 为普通 tuple，splat 丢 Literal——cast 只还类型不改运行时
 
 # ── 单一计时脊柱（§8.6 N-2）──────────────────────────────────────────
 # 编排三段与 Protocol 边界的既有计时点（`_prof_end(group, key, t0)`）直接
@@ -280,8 +282,9 @@ class Metrics:
         # domain/resources.py 的成本实测）；L2 设备峰值采样仅 full 档显式启动。
         # None = off 档永不采样；False = std+ 但本 run 还没到边界（惰性建探针：
         # 探针构造含 ctypes 结构定义，宿主/短路径不必付这笔钱）。
-        self._resources = None if tier == "off" else False
-        self._hw = None
+        self._resources: "ResourceProbe | bool | None" = (
+            None if tier == "off" else False)   # 三态：None=off/False=未建/probe=已建
+        self._hw: "NvmlSampler | None" = None
 
     def _check(self, name: str) -> None:
         """N-1：未注册的名字不得上报（校验结果缓存，热路径只做集合命中）。"""
@@ -329,12 +332,13 @@ class Metrics:
             return
         if r is False:
             r = self._resources = ResourceProbe()
+        assert isinstance(r, ResourceProbe)   # 三态契约收口（见 __init__ 注）
         r.checkpoint(phase)
 
     def resource_report(self) -> dict | None:
         """`{"sources":…, "per_phase":…}`；off 档 / 未建探针 → None。"""
         r = self._resources
-        if not r:
+        if not isinstance(r, ResourceProbe):
             return None
         return {"sources": r.sources, "per_phase": r.per_phase()}
 

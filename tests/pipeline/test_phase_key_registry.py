@@ -44,7 +44,7 @@ PHASE_KEYS_BY_MODULE: dict[str, set[tuple[str, str]]] = {
         ("producer", "merge_pair"),
         ("producer", "q_put_block"),
     },
-    "video_ocr_engine/gpu/device.py": {
+    "video_ocr_engine/gpu/streams.py": {
         ("producer", "decode_batch"),
         ("producer", "gray_batch"),
         ("producer", "stream_analyze"),

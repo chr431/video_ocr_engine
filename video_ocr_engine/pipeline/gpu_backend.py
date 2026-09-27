@@ -152,7 +152,7 @@ class _GpuLane:
     debug_tag = 'GB'
 
     def __init__(self, spec: GpuRunSpec) -> None:
-        from ..gpu.device import _gpu_release_partial   # S9-5：设备侧机制迁 gpu/device.py
+        from ..gpu.streams import _gpu_release_partial   # S9-5 设备侧机制（S4 拆分后规范位置）
         self._spec = spec
         self._release = _gpu_release_partial
         self._ctx = None        # _GpuRunCtx（after_open 前置装配）
@@ -185,10 +185,10 @@ class _GpuLane:
 
     # ── 生命周期挂钩 ──────────────────────────────────────────────
     def after_open(self, vr) -> None:
-        from ..gpu.device import (DevHooks, _GpuRunCtx,
-                                  _gpu_frame_stream_cpu,
-                                  _gpu_frame_stream_nvdec,
-                                  _gpu_prepare_calibration)
+        from ..gpu.streams import (DevHooks, _GpuRunCtx,
+                                   _gpu_frame_stream_cpu,
+                                   _gpu_frame_stream_nvdec,
+                                   _gpu_prepare_calibration)
         spec = self._spec
         self._ctx = _GpuRunCtx()
         # 设备侧协作函数的显式依赖（P1 前为 _SpecView ex 视图桥接）
@@ -222,7 +222,7 @@ class _GpuLane:
             spec.on_bin_thresh(th)
         # B5（真装配点）：y_pool 依赖校准产出的 src_h/src_w；生产者未启动，
         # 此处赋值先行于一切并发读者。
-        from ..gpu.device import _YFramePool
+        from ..gpu.pools import _YFramePool
         self._ctx.y_pool = (_YFramePool(self._ctx.src_h * self._ctx.src_w)
                             if (self._yuv and self._on_gpu) else None)
         ocr_session.autocropper = _DeferredAutocropper(self._ctx, spec,

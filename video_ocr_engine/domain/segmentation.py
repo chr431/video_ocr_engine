@@ -147,7 +147,7 @@ def _cluster_win3(diff: np.ndarray) -> float:
     if not diff.any():
         return 0.0
     # bool 与 uint8 同为 1 字节 → view 零拷贝；非连续时退回 astype
-    s = diff.view(np.uint8) if diff.flags.c_contiguous else diff.astype(np.uint8)
+    s: np.ndarray = diff.view(np.uint8) if diff.flags.c_contiguous else diff.astype(np.uint8)
     # 行向 3 列和（左右越界 0）
     c3 = s.copy()
     c3[:, 1:] += s[:, :-1]
@@ -221,7 +221,7 @@ def _text_sep_binary(gray: np.ndarray, th: int) -> np.ndarray:
 
     用阈值把文字变白、背景变黑（float32 255/0）。
     """
-    g = gray.astype(np.float32)
+    g: np.ndarray = gray.astype(np.float32)
     return np.where(g > th, 255.0, 0.0).astype(np.float32)
 
 
@@ -262,7 +262,7 @@ class SegmentStateMachine:
         self.segs: list = []
         self._s = 0
         self._started = False
-        self._prev_bin = None
+        self._prev_bin: "np.ndarray | None" = None   # _started 门保证第二帧起非 None
         self._rep_payload = None
         self._last_rep_payload = None
         self._rep_sharp = -1.0
@@ -278,11 +278,13 @@ class SegmentStateMachine:
         """消费一帧。宿主管线传 bin（二值图），GPU 管线传 cluster（win3 分数）。"""
         if self._started:
             if bin is not None:
-                d = self._prev_bin != bin
-                score = _cluster_win3(d)
+                # feed 契约：宿主传 bin / GPU 传 cluster，恰传其一；
+                # _started 后 _prev_bin 必为 ndarray（热路径不加 assert）
+                d = self._prev_bin != bin  # type: ignore[operator]
+                score = _cluster_win3(d)  # type: ignore[arg-type]  # 同上行契约
                 changed = score >= self._C
             else:
-                score = float(cluster)
+                score = float(cluster)  # type: ignore[arg-type]  # 契约：bin=None 时 cluster 必传
                 changed = score >= self._C
             if changed:
                 seg = self._frames[self._s:k]
@@ -465,7 +467,7 @@ def preprocess_standard(crop: np.ndarray, force_aspect: float = 0.0,
     if new_w == w and abs(target_h - h) <= config.OCR_RESIZE_TOL * target_h:
         # 目标尺寸已一致（或高差在容差内）→ 跳过无谓 resize；宽高任一需变
         # 都必须走 _np_resize（force_aspect 改宽时不能只比高度）
-        resized = src.astype(np.float32)
+        resized: np.ndarray = src.astype(np.float32)
     else:
         resized = _np_resize(src, new_w, target_h)
     if gamma > 0:

@@ -21,6 +21,10 @@ from __future__ import annotations
 import json
 import threading
 import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .resources import NvmlSampler   # 仅类型：运行期在方法内导入（NVML 缺席容忍）
 
 __all__ = ["TraceRecorder"]
 
@@ -35,7 +39,7 @@ class TraceRecorder:
         self._buckets: list = []
         self._lock = threading.Lock()
         self._t0 = time.perf_counter()
-        self._nvml = None
+        self._nvml: "NvmlSampler | None" = None   # 前向引用：导入在方法内（NVML 缺席容忍）
 
     def record(self, name: str, t0: float, t1: float | None = None) -> None:
         """记一条事件（热路径：一次 list.append；t1 缺省现取）。"""
