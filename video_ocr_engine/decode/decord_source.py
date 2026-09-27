@@ -22,6 +22,7 @@ from pathlib import Path
 import numpy as np
 
 from video_ocr_engine.config.decode_caliber import decode_num_threads
+from video_ocr_engine.decode.contract import probe_contract
 from video_ocr_engine.domain.segmentation import (
     _gray_seg, _gray_seg_batch,
     _gray_seg_yuv, _gray_seg_yuv_batch,
@@ -39,10 +40,18 @@ def ensure_roi_capable_decoder() -> None:
     形状不齐恒 False）——静默错误比报错更危险，故直接拒绝。
     decord 未安装时不在此拦截（保持"构造不依赖 decord"的测试约定），
     由 extract() 打开解码器时自然报错。
+
+    R4 起契约面优先：fork ≥0.8.5 用 features()['roi_first'] 断言
+    （DC-01）；无契约面的 decord 回退 hasattr 结构性探测，行为不变。
     """
     try:
         import decord.video_reader as _vr_mod
     except ImportError:
+        return
+    contract = probe_contract()
+    if contract is not None:
+        contract.require('roi_first', 'DC-01',
+                         'ROI-first 解码（引擎性能地基，无降级路径）')
         return
     if not hasattr(_vr_mod, '_CAPI_VideoReaderSetRoi'):
         raise ValueError(
@@ -204,6 +213,18 @@ class DecordFrameSource:
             #     时选它；
             #   hybrid：输出宿主帧（与 cpu() 同布局），OCR on CPU / 宿主管线
             #     时选它。
+            # R4 契约协商（DC-03）：hybrid ctx 是显式 decode_backend 选择，
+            # 缺能力=配置错误而非环境波动——契约面在时**在降级 try 之外**
+            # 显式拒绝（放 try 内会被 except 吞成静默回退纯 GPU，恰好抹掉
+            # 本要提供的诊断）。契约面不在时保持既有 try-open 降级（旧
+            # fork wheel 兼容，行为不变）。
+            _contract = probe_contract()
+            if _contract is not None:
+                _contract.require(
+                    'hybrid_gpu_ctx' if (self._ocr_on_gpu_fn is not None
+                                         and self._ocr_on_gpu_fn())
+                    else 'hybrid_ctx',
+                    'DC-03', 'hybrid/hybrid_gpu 设备上下文')
             try:
                 from decord import hybrid as _hy, hybrid_gpu as _hyg
                 _ct = self._hybrid_cpu_threads
@@ -236,6 +257,15 @@ class DecordFrameSource:
                 # fork 深库存行为不变。需 fork ≥ 遥测穿透版（stock decord
                 # 无此方法，getattr 容忍）。
                 _sdw = getattr(vr, 'set_decode_window', None)
+                if (_contract is not None and not _contract.has(
+                        'hard_decode_window')):
+                    # R4：契约面在而硬窗能力缺 → 显式记降级（getattr 裸探测
+                    # 留给无契约面的旧 fork，行为不变）
+                    self._degraded.append(
+                        'decord 契约面无硬窗能力（hard_decode_window），'
+                        '短窗全片供料')
+                    logger.info('decord 无 set_decode_window 能力，跳过硬窗')
+                    _sdw = None
                 if (_sdw is not None and self._frame_end is not None
                         and self._frame_start < (self._frame_end - self._frame_start)
                         and self._frame_end - self._frame_start < len(vr)):
