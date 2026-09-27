@@ -65,9 +65,9 @@ python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.
 
 | 阶段 | 入口 |
 |---|---|
-| 解码 | `decord.VideoReader.get_batch`（**唯一入口**；decode_backend=hybrid 走 decord 原生混合解码 ctx） |
+| 解码 | `decord.VideoReader.get_batch`（**唯一入口**；hybrid 走 decord 原生 ctx；打开与格式适配在 `video_ocr_engine/decode/decord_source.py`，DecordFrameSource=FrameSource 端口接线） |
 | 分段 | `video_ocr_engine/domain/segmentation.py` |
-| 编排引擎 | `video_ocr_engine/pipeline/engine.py`（SegmentEngine 唯一入口；生命周期单出处 `_driver.py`，lane 策略） |
+| 编排引擎 | `video_ocr_engine/pipeline/engine.py`（SegmentEngine 唯一入口，EngineInputs 显式 run 契约；生命周期单出处 `_driver.py`，lane 策略；策略纯函数 `video_ocr_engine/pipeline/policy.py`） |
 | 宿主后端 | `video_ocr_engine/pipeline/host_backend.py` |
 | GPU 后端 | `video_ocr_engine/pipeline/gpu_backend.py`（gray+NVDEC+TRT 默认；设备侧拆分：gpu 包 pools=池/streams=流/device=探测） |
 | OCR 会话 | `video_ocr_engine/pipeline/ocr_stage.py`（SessionSpec 契约；CPU 引擎=OpenVINO 唯一，C-48） |
@@ -75,7 +75,7 @@ python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.
 | TRT | `video_ocr_engine/ocr/trt.py` + `video_ocr_engine/_gpu_kernels.py` |
 | 配置常量 | `video_ocr_engine/config/constants.py`；旋钮注册表 `video_ocr_engine/config/` |
 | 运行报告 | `video_ocr_engine/pipeline/report.py`（RunReport schema **v2** → `meta['report']`；v2 加 `resources`/`hardware`）；指标注册表 `video_ocr_engine/domain/metrics.py`；资源层 `video_ocr_engine/domain/resources.py`（L1 边界差分 / L2 NVML） |
-| 分相打桩 | `video_ocr_engine/extractor.py` 的 `_prof_end`（**单一计时脊柱**：同一 t0 喂 profile 与指标） |
+| 分相打桩 | `video_ocr_engine/domain/prof.py` 的 `ProfSpine`（**单一计时脊柱**：同一 t0 喂 profile 与指标；门面 `_prof_end` 薄委托） |
 | 性能 A/B | `tools/bench.py`（`run`/`diff`/`show`/`ab`/`telemetry-check`；报告落 `bench/registry.jsonl`） |
 
 ⚠️ **A/B 必须交错**（`bench ab`，2026-09-17 起含臂序轮转 + GPU 时钟门禁
@@ -127,10 +127,9 @@ python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.
 
 ## 编辑护栏（docs/log/PERFORMANCE.md）
 
-✅ **纯 LF，裸 CR = 0**（2026-08-31 清除 934 处，提交 `fd2a76a`）——文本模式
-（含默认 `newline=None`）、Edit 工具、二进制模式**都 100% 保真**。自检
-`open(p,'rb').read().count(b'\r') == 0`；防护 `tests/test_docs_hygiene.py`；
-934 处的成因与修法见 `docs/log/DECISIONS.md`「编辑护栏：934 裸 CR 清除记」。
+✅ **纯 LF，裸 CR = 0**——文本/Edit/二进制三种写法实测都保真（2026-08-31
+清 934 处，成因与「工具不安全」旧规勘误见 DECISIONS「编辑护栏」两节）；
+自检 `open(p,'rb').read().count(b'\r') == 0`，防护 `tests/test_docs_hygiene.py`。
 
 ## 纪律与自动化守卫
 
@@ -167,9 +166,6 @@ python tools/_probe_index_audit.py               # tools/INDEX.md 数字一致�
   （RaceVideoToLog 33 文件 / video_subtitle_extractor）已先行迁移；
   迁移表 `docs/MIGRATION.md` §1。
 - **文档裸 CR = 0、AGENTS.md ≤ 14 KB**：`tests/test_docs_hygiene.py` 守护。
-
-（旧「只能用二进制」「Edit 工具不安全」两条规矩**双向都错**，勘误原文见
-`docs/log/DECISIONS.md` 2026-09-12「编辑护栏勘误」。）
 
 ## 环境与命令
 

@@ -259,6 +259,53 @@ def write_report_file(report: dict, path: str) -> None:
                  encoding="utf-8", newline="\n")
 
 
+def finalized_report(metrics, spine, timing: dict, trace, diag,
+                     degraded: list, *, wall: float, n_segments: int,
+                     backend: str, ocr_backend: str, hardware,
+                     fork_stats, gpu_mode: bool,
+                     config_digest: str) -> dict:
+    """把单次 run 的观测收敛成 RunReport（off 档返回 {}）。
+
+    R1（2026-09-27）自 extractor._assemble_report 下放：输入全部显式
+    （Metrics / ProfSpine / timing 字典 / trace 记录器 / 诊断 / 降级列表），
+    不再读门面属性。编排三段（decode/ocr/ocr_tail）由 res.timing 转
+    正样本 span；trace 派生段用近似锚点（t1=组装时刻，误差=ocr_tail+
+    组装时长，dump note 有说明——真实锚点由脊柱事件提供）。
+    """
+    import time
+    if not metrics.enabled:
+        return {}
+    for name, total in spine.totals.items():
+        metrics.gauge(name, total)
+    for name, mx in spine.maxes.items():
+        metrics.gauge(name, mx)      # 单次最长（0 = 一次都没发生）
+    # 编排三段的显式计时段（res.timing 由两后端直写；此处转成正样本 span）
+    for _k, _name in (("decode", "pipeline.decode"),
+                      ("ocr", "pipeline.ocr"),
+                      ("ocr_tail", "pipeline.ocr_tail")):
+        _v = timing.get(_k)
+        if _v is not None:
+            metrics.record_span(_name, float(_v))
+    if trace is not None:
+        _now = time.perf_counter()
+        for _k, _name in (("decode", "pipeline.decode"),
+                          ("ocr", "pipeline.ocr"),
+                          ("ocr_tail", "pipeline.ocr_tail")):
+            _v = timing.get(_k)
+            if _v is not None:
+                trace.record(_name, _now - float(_v), _now)
+    # 诊断收尾：停看门狗、冲刷崩溃日志（未 arming 时是空字典）
+    diag_rep = diag.stop() if diag.armed else {}
+    return build_report(
+        metrics, wall=wall, config_digest=config_digest,
+        degradations=degraded, n_segments=n_segments,
+        backend=backend, ocr_backend=ocr_backend,
+        hardware=hardware, diagnostics=diag_rep,
+        span_path=("gpu" if gpu_mode else "host"),
+        # fork 遥测穿透（hybrid 解码器才有；缺席≠空值）
+        extra=({"hybrid": fork_stats} if fork_stats else None))
+
+
 def red_flags(report: dict) -> list:
     """报告中的失败项（bench 在线判失败用）。"""
     return [k for k, v in (report.get("health") or {}).items()

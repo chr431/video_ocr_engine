@@ -6,14 +6,21 @@
 方法体最初由既有视频项目的历史 tools/archive 生成脚本从 segment_flow.py
 抽取；独立成仓后随引擎维护，不再依赖任何下游仓库。
 
-模块划分（S9 模块化后的现行布局；旧扁平面 `_host_pipeline.py` /
-`_gpu_pipeline.py` / `_ocr_session.py` 均已删除）：
-  extractor.py  — 引擎骨架：构造/参数校验/解码器打开/后端分发/结果组装（门面）
-  pipeline/     — engine=SegmentEngine 唯一编排入口；host_backend / gpu_backend
-                  两个执行后端（HostRunSpec / GpuRunSpec 显式契约）；
-                  ocr_stage=OcrSession（吃 SessionSpec）；report=RunReport
+模块划分（S9 模块化 + R1 门面拆解后的现行布局；旧扁平面
+`_host_pipeline.py` / `_gpu_pipeline.py` / `_ocr_session.py` 均已删除）：
+  extractor.py  — 薄门面：构造/参数校验/run 态重置/结果组装；
+                  实现一律下放（本文件只保留委托与状态同步）
+  decode/       — port=FrameSource 协议；decord_source=打开决策树 +
+                  输出格式适配（R1 落地的 decord 适配器）
+  pipeline/     — engine=SegmentEngine 唯一编排（EngineInputs 显式
+                  run 契约，注入式，R1 起不再反向调门面 _run_*）；
+                  host_backend / gpu_backend 两个执行后端
+                  （HostRunSpec / GpuRunSpec 显式契约）；policy=后端
+                  选择纯函数；ocr_stage=OcrSession（吃 SessionSpec）；
+                  report=RunReport 组装；_driver=生命周期单出处
   domain/       — segmentation=分段/状态机/裁切/预处理的**唯一实现处**；
-                  video_utils=像素转换；metrics=指标注册表；resources=资源层
+                  prof=计时脊柱（ProfSpine）；video_utils=像素转换；
+                  metrics=指标注册表；resources=资源层
   ocr/          — native=OCR 调度+引擎池；trt=TRT 执行；port=后端协议
   gpu/          — context=DLL 注册 / device=设备池+帧流+校准 / frame_ref=DeviceRef
   config/       — constants + 旋钮注册表/解析（env 读取唯一入口）
@@ -24,21 +31,16 @@
 """
 import logging
 import os as _os
-import threading
 import time
 from pathlib import Path
 
 import numpy as np
 
 from video_ocr_engine.config import constants as config
-from video_ocr_engine.domain.segmentation import (
-    _gray_seg, _gray_seg_batch,
-    _gray_seg_yuv, _gray_seg_yuv_batch,
-    _text_sep_binary,
-)
-# 下列 re-export 为引擎内部结构（_helpers/_result_types/_host_pipeline 均
-# 属下划线私有命名，从 extractor 再导出仅为旧导入路径兼容，勿直接 import；
-# 公共入口是 video_ocr_engine.__init__ 的三件套）。
+from video_ocr_engine.domain.segmentation import _text_sep_binary
+# 下列 re-export 为引擎内部结构（_helpers/_result_types 均属下划线私有
+# 命名，从 extractor 再导出仅为旧导入路径兼容，勿直接 import；公共入口
+# 是 video_ocr_engine.__init__ 的三件套）。
 from ._result_types import (  # noqa: F401
     ExtractedSegment, ExtractionResult,
 )
@@ -48,13 +50,14 @@ from ._helpers import (  # noqa: F401
     _read_fps_from_vr,
 )
 from .config import resolve
-from .domain.metrics import (
-    NULL_METRICS, PROFILE_GAUGES, PROFILE_SPANS, PROFILE_TOTALS,
-    PROFILE_TOTALS_HIST, PROFILE_TOTALS_MAX, PROFILE_TOTALS_N, make_metrics,
+from .decode.decord_source import DecordFrameSource, ensure_roi_capable_decoder
+from .domain.metrics import NULL_METRICS, make_metrics
+from .domain.prof import ProfSpine
+from .pipeline.engine import EngineInputs, SegmentEngine
+from .pipeline.policy import (
+    gpu_pipeline_enabled, merge_effective_mode,
+    ocr_engine_type, ocr_num_threads, ocr_on_gpu,
 )
-from .pipeline.engine import SegmentEngine
-from .pipeline.gpu_backend import GpuRunSpec, run_gpu_pipeline
-from .pipeline.host_backend import HostRunSpec, run_host_pipeline
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -63,7 +66,7 @@ if TYPE_CHECKING:
     # F821，lint 基线轮修正）
     from .pipeline.ocr_stage import OcrSession
 from .domain.diagnostics import NULL_DIAG, open_diagnostics
-from .pipeline.report import build_report, write_report_file
+from .pipeline.report import finalized_report, write_report_file
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +171,7 @@ class FieldExtractor:
         self._bin_thresh = 0
         self._degraded: list = []        # 本次提取的降级/回退原因（D3，meta 透出）
         # OCR 输入宽度自适应裁切（宽 ROI 字幕省卷积）+ 跨批按宽度分组。
-        # 详见 _host_pipeline._crop_to_content 与 config 中的实测注释。
+        # 详见 segmentation.content_range_to_crop 与 config 中的实测注释。
         # 四个 autocrop/重排旋钮为 property 调用期读 env（A6：与
         # OCR_PAD_SMALL/OCR_GAMMA 等同时机，构造后改 env 即生效）。
         self._progress = progress_cb or (lambda m, p: None)
@@ -180,19 +183,23 @@ class FieldExtractor:
         self._ocr_confs: list = []
         self._n_segments = 0
         self._profile_enabled = self._rc.diag_profile
-        self.profile: dict = {}
-        self._prof_lock = None
-        if self._profile_enabled:
-            self._prof_lock = threading.Lock()
+        # R1：计时脊柱（domain/prof.ProfSpine）——extract() 每 run 重建；
+        # 此处的初版仅供 extract 之前的 _prof_end 偶发调用（NULL_METRICS）。
+        self._spine = ProfSpine(self._profile_enabled, NULL_METRICS)
+        self.profile: dict = self._spine.profile
+        # F-5：GPU lane 前置位单元素盒（引擎 lane 启动写、SessionSpec 与
+        # 报告组装读；兼容读面见 _gpu_pipeline_mode property）
+        self._gpu_mode_box = [False]
+        # R1：解码源适配器（open 前无资源；_open_vr 每次重建并同步状态）
+        self._source = self._make_source()
         # S6-0（§8.6 N-2/N-3）：每次 run 新建 Metrics 与报告（B1 同类重置）。
         # telemetry=off → NULL_METRICS 单例，全链路空调用、不组装报告。
         self._metrics = NULL_METRICS
         self._diag = NULL_DIAG
-        self._metric_totals: dict = {}
         self._report: dict = {}
         self._trace = None
         self._validate_params()
-        self._ensure_roi_capable_decoder()
+        ensure_roi_capable_decoder()
         roi_w = max(1, self._roi[2] - self._roi[0] + 1)
         roi_h = max(1, self._roi[3] - self._roi[1] + 1)
         self._merge_max_changed_pixels = max(
@@ -255,36 +262,10 @@ class FieldExtractor:
     def _ocr_reorder_window(self) -> int:
         return max(1, self._rc.ocr_reorder_window)
 
-    def _ensure_roi_capable_decoder(self) -> None:
-        """构造期校验解码器支持 ROI-first 输出（DESIGN-REVIEW C8）。
-
-        无 `_CAPI_VideoReaderSetRoi` 的 decord（如 PyPI 版）会让引擎静默按
-        **整帧**处理（roi 参数被忽略、校准阈值与分段数据尺寸错位、merge 因
-        形状不齐恒 False）——静默错误比报错更危险，故直接拒绝。
-        decord 未安装时不在此拦截（保持"构造不依赖 decord"的测试约定），
-        由 extract() 打开解码器时自然报错。
-        """
-        try:
-            import decord.video_reader as _vr_mod
-        except ImportError:
-            return
-        if not hasattr(_vr_mod, '_CAPI_VideoReaderSetRoi'):
-            raise ValueError(
-                "当前 decord 不支持 ROI-first 解码（缺 _CAPI_VideoReaderSetRoi）。"
-                "引擎需要 chr431/decord fork（见 README「解码后端」）；"
-                "拒绝在整帧模式下静默忽略 roi 参数。")
-
     def _merge_effective_mode(self) -> str:
-        """merge_similar 使用的分离模式（env 钩子优先级与 _segments_similar
-        一致）：'binary' | ''（原始灰度比较）。contrast 模式已移除
-        （实验证实无净收益，0.9.0 清理；历史见 docs/PERFORMANCE.md）。"""
-        # S9-2(D6)：构造期解析（参数>env>默认），不再调用期读 env
-        _m = (self._merge_text_sep or '').strip().lower()
-        if _m in ('2', 'binary'):
-            return 'binary'
-        if _m in ('off', ''):
-            return ''
-        return 'binary'   # contrast/未知值 → 引擎默认 binary
+        """分离模式归一（实现：pipeline/policy.merge_effective_mode，
+        env 钩子优先级与 _segments_similar 一致）：'binary' | ''。"""
+        return merge_effective_mode(self._merge_text_sep)
 
     # ═══════════════ OCR 输入宽度自适应裁切 ═══════════════
     # 统一实现（含余量/最小收益门槛的实测依据 docstring）在
@@ -351,7 +332,7 @@ class FieldExtractor:
             reorder_window=_window,
             yuv_output=s._yuv_output,
             color_range=s._color_range,
-            gpu_pipeline_mode=getattr(s, '_gpu_pipeline_mode', False),
+            gpu_pipeline_mode=s._gpu_mode_box[0],
             num_threads_fn=s._ocr_num_threads,
             engine_type_fn=s._ocr_engine_type,
             crop_to_content=s._crop_to_content,
@@ -380,6 +361,8 @@ class FieldExtractor:
         只用平均绝对差会把宽 ROI 中的单字短字幕（如“在”“不”）误判为噪声：
         大部分区域未变，均值被稀释。因此额外限制 abs(diff)>10 的像素数。
         分离模式由 _merge_effective_mode 决定（binary 为引擎默认）。
+        （R1 留在门面：探针对本方法有类级 patch 面；判定原语唯一出处
+        仍是 segmentation.py，C-32。）
         """
         _text_mode = self._merge_effective_mode()
         if _text_mode == 'binary':
@@ -423,7 +406,6 @@ class FieldExtractor:
         self._degraded = []
         self.timing = {}
         self.crops = {}
-        self.profile = {}
         self._frames = []
         self._ocr_texts = []
         self._ocr_confs = []
@@ -437,8 +419,6 @@ class FieldExtractor:
         # 未 opt-in → NULL_DIAG，下面 tick 是一次属性判断即返回。
         self._diag = open_diagnostics(self._rc.diag_report_file,
                                       metrics=self._metrics)
-        self._metric_totals = {}
-        self._metric_max = {}
         self._report = {}
         self._hardware = None
         self._trace = None
@@ -457,6 +437,11 @@ class FieldExtractor:
                 self._trace.start_hardware()
             else:
                 logger.warning("VOE_TRACE_FILE 需 VOE_TELEMETRY != off，已忽略")
+        # R1：计时脊柱（原 _profile_enabled/_prof_lock/_metric_totals/
+        # _metric_max 的 B1 重置至此一并完成；profile 字典即 self.profile）
+        self._spine = ProfSpine(self._profile_enabled, self._metrics,
+                                self._trace, self._diag)
+        self.profile = self._spine.profile
         try:
             _outcome = self._run_pipelined()   # S9-6：RunOutcome（裸 5 元组已退场）
         finally:
@@ -543,44 +528,16 @@ class FieldExtractor:
         return meta
 
     def _assemble_report(self, wall: float, n_segments: int) -> dict:
-        """把单次 run 的观测收敛成 RunReport（off 档返回 {}）。"""
-        m = self._metrics
-        if not m.enabled:
-            return {}
-        for name, total in self._metric_totals.items():
-            m.gauge(name, total)
-        for name, mx in self._metric_max.items():
-            m.gauge(name, mx)      # 单次最长（0 = 一次都没发生）
-        # 编排三段的显式计时段（res.timing 由两后端直写；此处转成正样本 span）
-        for _k, _name in (("decode", "pipeline.decode"),
-                          ("ocr", "pipeline.ocr"),
-                          ("ocr_tail", "pipeline.ocr_tail")):
-            _v = self.timing.get(_k)
-            if _v is not None:
-                m.record_span(_name, float(_v))
-        # P4 trace：timing 派生段的近似锚点（t1=组装时刻；误差=ocr_tail+
-        # 组装时长，dump note 里有说明——真实锚点由 pipeline.run/consumer
-        # 等脊柱事件提供）
-        if self._trace is not None:
-            _now = time.perf_counter()
-            for _k, _name in (("decode", "pipeline.decode"),
-                              ("ocr", "pipeline.ocr"),
-                              ("ocr_tail", "pipeline.ocr_tail")):
-                _v = self.timing.get(_k)
-                if _v is not None:
-                    self._trace.record(_name, _now - float(_v), _now)
-        # 诊断收尾：停看门狗、冲刷崩溃日志（未 arming 时是空字典）
-        diag_rep = self._diag.stop() if self._diag.armed else {}
-        rep = build_report(
-            m, wall=wall, config_digest=self._rc.config_digest,
-            degradations=self._degraded, n_segments=n_segments,
+        """把单次 run 的观测收敛成 RunReport（实现：pipeline/report.
+        finalized_report；off 档返回 {}）。"""
+        rep = finalized_report(
+            self._metrics, self._spine, self.timing, self._trace,
+            self._diag, self._degraded,
+            wall=wall, n_segments=n_segments,
             backend=self._backend, ocr_backend=self._ocr_backend_used,
-            hardware=self._hardware, diagnostics=diag_rep,
-            span_path=("gpu" if getattr(self, "_gpu_pipeline_mode", False)
-                       else "host"),
-            # fork 遥测穿透（hybrid 解码器才有；缺席≠空值）
-            extra=({"hybrid": self._fork_stats}
-                   if self._fork_stats else None))
+            hardware=self._hardware, fork_stats=self._fork_stats,
+            gpu_mode=self._gpu_mode_box[0],
+            config_digest=self._rc.config_digest)
         self._report = rep
         return rep
 
@@ -617,321 +574,63 @@ class FieldExtractor:
         return n
 
     def _prof_end(self, group: str, key: str, t0: float) -> None:
-        """单一计时脊柱（§8.6 N-2）：同一 t0 同时喂 profile 与指标。
-        profile（diagnostics.profile）保留 v1 的 13 相位原始字典；
-        telemetry（std/full）走注册指标名。两档都关时**只做两次属性判断**，
-        连 perf_counter 都不调用——PI-15 的 off 档"一行关闭"靠这里兑现。
-        """
-        prof = self._profile_enabled
-        met = self._metrics.enabled
-        if not (prof or met):
-            return
-        elapsed = time.perf_counter() - t0
-        if prof:
-            with self._prof_lock:
-                d = self.profile.setdefault(group, {})
-                d[key] = d.get(key, 0.0) + elapsed
-        if met:
-            name = self._metric_from_profile(group, key, elapsed)
-            # P4 trace（默认关）：t1 复用已算好的 t0+elapsed，不另取时钟；
-            # 关闭时这条 = 一次 is-not-None 判断（成本守卫背书零成本）。
-            if self._trace is not None and name is not None:
-                self._trace.record(name, t0, t0 + elapsed)
-            if self._diag.armed:      # 进展心跳：挂死时可归因到相位
-                self._diag.tick("%s.%s" % (group, key),
-                                "%.4fs" % elapsed)
+        """单一计时脊柱（§8.6 N-2）的薄委托（实现：domain/prof.ProfSpine）。
 
-    def _metric_from_profile(self, group: str, key: str,
-                             elapsed: float) -> str | None:
-        """(group, key) → 注册指标名（映射表在 domain/metrics.py，单一出处）。
-
-        返回主指标名（P4 trace 用）；未映射键返回 None。
+        同一 t0 同时喂 profile 与指标；两档都关时只做两次属性判断——
+        PI-15 的 off 档"一行关闭"由 spine 兑现。
         """
-        m = self._metrics
-        name = PROFILE_GAUGES.get((group, key))
-        if name is not None:
-            m.gauge(name, elapsed)          # 单值量：末次即本 run 的 engine_init
-            return name
-        name = PROFILE_SPANS.get((group, key))
-        if name is not None:
-            m.record_span(name, elapsed)    # 有界相位：std 档逐次采样
-            return name
-        name = PROFILE_TOTALS.get((group, key))
-        if name is not None:
-            t = self._metric_totals
-            t[name] = t.get(name, 0.0) + elapsed
-            # std 档也留「次数 + 单次最长」：背压分诊的最小充分集
-            _n = PROFILE_TOTALS_N.get((group, key))
-            if _n is not None:
-                m.counter(_n)
-                _mx = PROFILE_TOTALS_MAX[(group, key)]
-                if elapsed > self._metric_max.get(_mx, 0.0):
-                    self._metric_max[_mx] = elapsed
-            if m.detailed:
-                m.record_span(name, elapsed)   # full 档另留逐次样本
-                # W1：分布形状（full 档专属；每事件 0.165µs，std 预算付不起）
-                _h = PROFILE_TOTALS_HIST.get((group, key))
-                if _h is not None:
-                    m.histogram(_h, elapsed)
-            return name
-        return None
+        self._spine.end(group, key, t0)
+
+    # ── 解码器打开（决策树实现：decode/decord_source.DecordFrameSource）──
+    def _make_source(self) -> DecordFrameSource:
+        """构建解码源适配器（open 前无资源；每 run 由 _open_vr 重建）。"""
+        return DecordFrameSource(
+            self._video_path, self._roi, self._decode_backend,
+            yuv_output=self._yuv_output, degraded=self._degraded,
+            frame_start=self._frame_start, frame_end=self._frame_end,
+            decode_threads_fn=self._decode_num_threads,
+            hybrid_cpu_threads=self._rc.decode_hybrid_cpu_threads,
+            ocr_on_gpu_fn=self._ocr_on_gpu)
 
     def _open_vr(self):
         """按 decode_backend 打开解码器（auto/cpu/nvdec/hybrid）。
 
-            auto: 尝试 GPU (NVDEC) 失败回退 CPU。cpu: 强制 CPU。
-            nvdec: 强制 GPU（失败回退 CPU 并警告）。
-            hybrid: CPU+NVDEC 混合解码（HybridDecoder，kfe 分片双生产者竞争）；
-                NVDEC 不可用时回退 CPU 并警告；激活安全门见下方条件。
-
-            ROI-first（decord ≥0.7.5）：构造时传入固定 ROI（半开区间）——
-            解码器只输出该矩形（CPU filter 先 crop 再转换 / GPU 转换 kernel
-            只算 ROI 窗口 + 输出池 ROI 尺寸），免全帧转换与逐帧裁剪。
-            """
-        from decord import cpu as _cpu
-        try:
-            import decord.video_reader as _vr_mod
-            _has_roi_api = hasattr(_vr_mod, '_CAPI_VideoReaderSetRoi')
-        except ImportError:
-            _has_roi_api = False
-        from video_ocr_engine.config.decode_caliber import roi_for_decord
-        roi = roi_for_decord(self._roi)
-        roi_kw = {'roi': roi} if _has_roi_api else {}
-        backend = (self._decode_backend or 'auto').lower()
-        vr = None
-        label = 'CPU'
-        # ⚠️ auto 恒为 NVDEC 优先是**刻意决策**（2026-09-10 重申，勿再改）：
-        # 本机强多核下实测 h264 CPU 软解确比 NVDEC 快 1.7~2.8×，但 auto 不
-        # 据此分流——弱 CPU 上 h264 软解可能慢于 NVDEC，且 CPU 解码必然
-        # 引入资源争用与整机功耗上升，NVDEC 稳妥优先。峰值吞吐差异留给
-        # 用户显式 decode_backend="cpu"。见 CONCLUSIONS C-07/C-08/C-33。
-        if backend in ('auto', 'nvdec', 'hybrid'):
-            try:
-                from decord import gpu as _g
-                vr = self._open_decord_reader(_g(0), roi_kw)
-                label = 'GPU'
-            except Exception as e:  # noqa: BLE001
-                # 保留异常文本（2026-09-19 审查轮）：此前吞掉原始异常，
-                # 「驱动/权限不可用」与「代码 bug 导致打开失败」在
-                # auto 路径下完全无法区分，性能回归静默发生。
-                vr = None
-                self._degraded.append('NVDEC 打开失败，回退 CPU: %r' % (e,))
-                logger.warning('NVDEC 解码不可用，回退 CPU: %r', e,
-                               exc_info=True)
-        if vr is None:
-            vr = self._open_decord_reader(_cpu(0), roi_kw, num_threads=self._decode_num_threads())
-            label = 'CPU'
-        self._backend = f'decord/{label}'
-        if label == 'CPU':
-            try:
-                self._codec = str(vr.get_codec() or '').lower()
-            except Exception:  # noqa: BLE001
-                # 探测失败=线程档位按默认 h264 走（hevc/av1 实测差
-                # 4~13%）——记降级原因（2026-09-19 审查轮）。
-                self._codec = ''
-                self._degraded.append('codec 探测失败，解码线程档位按默认')
-                logger.debug('codec 探测失败', exc_info=True)
-            # codec 感知线程档位（2026-09-10 实测表，见 _decode_num_threads）：
-            # hevc/av1 在 FFmpeg9 下的帧线程扩展性与 h264 分化（hevc
-            # stride=1 到 32 线程仍在涨、av1 stride=8 最优 48），通用档位
-            # 按最常见 h264 设定，打开后读 codec、档位不同则重开一次
-            # （实测重开 ~20-30ms，hevc stride1 墙钟 -27%）。
-            nt = self._decode_num_threads()
-            nt_codec = self._decode_num_threads(codec=self._codec or None)
-            if nt_codec != nt:
-                vr = self._open_decord_reader(_cpu(0), roi_kw,
-                                              num_threads=nt_codec)
-        else:
-            try:
-                self._codec = str(vr.get_codec() or '').lower()
-            except Exception:  # noqa: BLE001
-                # 探测失败=线程档位按默认 h264 走（hevc/av1 实测差
-                # 4~13%）——记降级原因（2026-09-19 审查轮）。
-                self._codec = ''
-                self._degraded.append('codec 探测失败，解码线程档位按默认')
-                logger.debug('codec 探测失败', exc_info=True)
-        self._remember_color_range(vr)
-        # CPU+NVDEC 混合解码（decode_backend="hybrid" 显式选择，与 auto/cpu/nvdec
-        # 并列）：速率比例分界 + 两端连续扫掠（HybridDecoder v3/v4）。
-        # NVDEC 可用即包装（GPU 全驻留管线开启时由其 CPU 分支消费宿主数组，
-        # §8.3 合并；关闭时走宿主管线，行为不变）。
-        # **stride>1 已解禁**（原门控要求 stride==1，理由是 next_roi 的
-        # 顺序交付语义）：next_roi 现在按 _sample_stride 推进（见
-        # hybrid_decode），且 stride>1 时宿主校准与主循环都走 get_batch
-        # 等差快速路径、不碰 next_roi。解禁的意义是 hybrid 只在"解码占
-        # 墙钟大头"时才可能赢，而 stride>1 恰恰把解码占比推到最高。
-        # 编码（含 AV1）不再回退——v3 的速率比例分界已实测：CPU 慢于
-        # NVDEC 的 HEVC/AV1 场景与纯 NVDEC 持平不退化，CPU 快于 NVDEC 的
-        # h264 场景显著更快；尊重用户显式选择。NVDEC 不可用时上面已回退
-        # CPU 并警告；初始化失败回退纯 GPU 不致命。
-        if backend == 'hybrid' and label == 'GPU':
-            # ── decord 原生混合解码（fork ≥ v0.7.15，2026-09）──────────
-            # 单 demux 流在解码器内部按关键帧 chunk 路由 CPU 软解 + NVDEC，
-            # 引擎只需把 ctx 换成 hybrid/hybrid_gpu，参数面（output_format /
-            # roi / num_threads）与 cpu/gpu 完全一致 —— 零适配透传：
-            #   hybrid_gpu：输出帧驻留显存（GPU chunk 零拷贝、CPU chunk 解码
-            #     器内部 H2D 上载），get_batch 返回 CUDA 批 —— gpu_pipeline 的
-            #     设备指针通路（_ndarray_device_ptr）直接可用，OCR on GPU（TRT）
-            #     时选它；
-            #   hybrid：输出宿主帧（与 cpu() 同布局），OCR on CPU / 宿主管线
-            #     时选它。
-            # 旧 decord（无 hybrid ctx）回退项目层 HybridDecoder 壳（v3~v7）。
-            try:
-                from decord import hybrid as _hy, hybrid_gpu as _hyg
-                _ct = self._rc.decode_hybrid_cpu_threads
-                if _ct <= 0:
-                    # §14 定档（2026-09-12，引擎全片 e2e 配对 A/B，三码文本
-                    # 集逐位一致）：hybrid CPU 臂与 cpu 后端共用同一 codec
-                    # 感知策略（_decode_num_threads）——本机 h264+TRT=32 /
-                    # hevc=32 / av1=24，恰为各码实测最优：h264lg 16→24
-                    # −5.9%（3/3）、24→32 再 −4.8%（3/3）；hevc 16→24
-                    # −4.4%（3/3）、24→32 持平；av1 16→24 −12.8%（3/3）但
-                    # 32 反向 +5.1%（dav1d 过订阅）。旧"逻辑核//2 钳 [8,16]"
-                    # 是项目层 hybrid 时代残留（S6 续只测到 16 为止），三码
-                    # 全劣 4~13%。decode-only 口径 24T 已饱和、32T 无增益，
-                    # 但引擎消费节奏（OCR/分段线程与解码共存）顶点更高——
-                    # 档位以引擎口径为准。复评触发：decord 再换代 / 核数
-                    # 格局变化。
-                    _ct = (self._decode_num_threads(codec=self._codec or None)
-                           or 16)
-                _hctx = _hyg(0) if self._ocr_on_gpu() else _hy(0)
-                vr = self._open_decord_reader(_hctx, roi_kw, num_threads=_ct)
-                # 硬窗界（2026-09-17 越窗修复）：短窗时声明消费上限，fork
-                # 的 demux 与 GOP 派工在窗缘硬停——窗口外一个包都不读
-                # （实测 w3000 曾把全片 7761 包喂进两臂）。仅当窗口 < 全长
-                # 且 **start < 窗长** 才设：后者不是任意保守——fork 实测
-                # （2026-09-20 起点轮）晚起点（start=5000/win=1000）+
-                # seek_accurate + 硬窗交付的帧与 cpu/nvdec 基线**位级不
-                # 一致**（同请求无窗时三者一致）→ 晚起点硬窗存在 fork 级
-                # 缺陷，此谓词是唯一防线，修复前不得删。全片运行不设 =
-                # fork 深库存行为不变。需 fork ≥ 遥测穿透版（stock decord
-                # 无此方法，getattr 容忍）。
-                _sdw = getattr(vr, 'set_decode_window', None)
-                if (_sdw is not None and self._frame_end is not None
-                        and self._frame_start < (self._frame_end - self._frame_start)
-                        and self._frame_end - self._frame_start < len(vr)):
-                    _sdw(self._frame_end - self._frame_start)
-                self._backend = 'decord/hybrid'
-                logger.info('混合解码开启(原生): codec=%s ctx=%s cpuT=%d',
-                            self._codec,
-                            'hybrid_gpu' if self._ocr_on_gpu() else 'hybrid',
-                            _ct)
-            except Exception as e:  # noqa: BLE001
-                self._degraded.append(f'hybrid 打开失败，回退纯 GPU: {e}')
-                logger.warning('原生混合解码打开失败，回退纯 GPU: %s', e)
+        决策树与降级链在 DecordFrameSource.open（decode/decord_source）；
+        返回 reader 本体（driver 消费面）。open 后同步四个门面读点
+        （_backend/_codec/_color_range/_yuv_output——yuv 不可用回退 gray
+        时源内翻转）。
+        """
+        src = self._make_source()
+        self._source = src
+        vr = src.open()
+        self._backend = src.backend_label
+        self._codec = src.codec
+        self._color_range = src.color_range
+        self._yuv_output = src.yuv_output
         return vr
 
     def _decord_format(self) -> str:
-        """当前管线请求的 decord output_format。
-
-        内部链永远只消费单通道（Y 平面 / decord gray，不再输出 RGB）：
-        - keep_crops 需要 YUV 代表帧 → 'yuv420'（packed NV12；内部取 Y 平面，
-          等价灰度，另保留 UV 供外部 nv12_to_rgb）
-        - 否则 'gray'
-        """
-        return 'yuv420' if self._yuv_output else 'gray'
+        """当前管线请求的 decord output_format（'yuv420' | 'gray'）。"""
+        return self._source.decord_format()
 
     def _ocr_on_gpu(self) -> bool:
-        """OCR 推理是否卸载到 GPU（TensorRT）。
+        """OCR 推理是否卸载到 GPU（实现：pipeline/policy.ocr_on_gpu）。"""
+        return ocr_on_gpu(self._ocr_backend)
 
-            为 True 时 host CPU 在解码阶段基本空闲（TRT 只占少量提交线程），
-            解码可以放宽线程预算（见 _decode_num_threads）。
-            仅按配置判断，不表示 TRT 一定可用（不可用时 OcrEngine 内部回退
-            ONNX，此时解码线程偏多只是轻微过订阅，实测不劣化）。
-            """
-        return (self._ocr_backend or 'auto').lower() != 'cpu'
+    @property
+    def _gpu_pipeline_mode(self) -> bool:
+        """F-5 前置位的兼容读面（真值在 _gpu_mode_box；写经引擎 lane）。"""
+        return self._gpu_mode_box[0]
 
     def _gpu_pipeline_enabled(self) -> bool:
-        """GPU 全驻留零拷贝管线：NVDEC 直通或 CPU 解码 + H2D（P1-3）。
+        """GPU 全驻留管线门控（实现：pipeline/policy.gpu_pipeline_enabled）。
 
-        默认（GPU_PIPELINE 未设置）启用条件（全部满足）：
-        - decode_backend ∈ {auto, nvdec, cpu, hybrid}：auto/nvdec 走 NVDEC
-          设备指针直通（NVDEC 打开失败时回退 CPU 解码分支）；cpu 显式
-          选择 CPU 软解 + H2D 进 GPU 分段/OCR（P1-3 解耦——CPU 解码的
-          墙钟收益与零拷贝 OCR 不再互斥）；hybrid 走 CPU 分支消费
-          HybridDecoder 交付的宿主数组（§8.3：双解码收益 + 零拷贝 OCR
-          叠加，原互斥门控已移除）。
-        - TensorRT 可用且 ocr_backend ≠ cpu —— 全程 raw 才有净收益
-          （GPU 分段+ONNX 实测无优势，默认走宿主管线，配置面更简）
-        - cuda-python（cuda.core / cuda.bindings）可导入
-        force_aspect 已支持（contrast 模式已随 0.9.0 删除，不再门控回退）。
-
-        env GPU_PIPELINE：'0' 显式关闭；'1' 强制尝试（跳过 TRT 要求，
-        允许 GPU 分段+ONNX 等实验组合）；不设置 = 上述默认规则。
+        判定依据与三态语义的完整 docstring 见 policy 模块；门控对
+        `gpu.device` 模块属性的 patch 点在 policy 内函数级 import 保持。
         """
-        from .gpu import device as _gp
-        # 经模块属性解析:tests/探针 patch gpu.device.nvdec_available
-        # 等模块级名字(§10.4 patch 点),函数级导入保持该间接性
-        _cuda = _gp._cuda_python_available
-        # S9-2(D6)：三态旋钮构造期冻结（未设 None=规则 / falsy 关 /
-        # truthy 强制 / 非法值=关——resolve 逐位复刻 v1 解析）
-        _val = self._rc.pipeline_gpu
-        if _val is not None:
-            if not _val:
-                return False
-            forced = True
-        else:
-            forced = False
-        backend = (self._decode_backend or 'auto').lower()
-        if backend not in ('auto', 'nvdec', 'cpu', 'hybrid'):
-            return False
-        if not _cuda():
-            return False
-        if not forced:
-            if (self._ocr_backend or 'auto').lower() == 'cpu':
-                return False
-            if not _gp.tensorrt_available():
-                return False
-        if backend == 'cpu':
-            # CPU 解码分支不依赖 NVDEC：跳过 nvdec 探测（避免无谓的
-            # GPU reader 试开；TRT 可用性已由上方门控确认）。
-            return True
-        return _gp.nvdec_available(str(self._video_path))
-
-    def _run_pipelined_gpu(self, _ocr_engines: list | None = None):
-        """GPU 全驻留管线门面（S3-3c）：构建显式 GpuRunSpec → 调用
-        pipeline.gpu_backend.run_gpu_pipeline → 同步结果回实例。
-
-        驱动主体已迁入 gpu_backend（B4 autocropper / B5 y_pool 构造注入）；
-        形状不符回退时由门面把已打开的 reader 移交宿主路径（C10）。"""
-        self._gpu_pipeline_mode = True   # 会话启动前置位（F-5）
-        spec = GpuRunSpec(
-            frame_start=self._frame_start, frame_end=self._frame_end,
-            sample_stride=self._sample_stride, roi=tuple(self._roi),
-            buffer_size=self._buffer_size,
-            C=self._C, merge_similar=self._merge_similar,
-            merge_similar_threshold=self._merge_similar_threshold,
-            merge_max_changed_pixels=self._merge_max_changed_pixels,
-            merge_dense_gate=self._merge_dense_gate,
-            keep_crops=self._keep_crops, yuv_output=self._yuv_output,
-            color_range=self._color_range, ocr_autocrop=self._ocr_autocrop,
-            bin_thresh_ref=[self._bin_thresh],
-            backend_label=lambda: self._backend,
-            ocr_on_gpu=self._ocr_on_gpu,
-            merge_effective_mode=self._merge_effective_mode,
-            content_range_to_crop=self._content_range_to_crop,
-            open_vr=self._open_vr,
-            start_ocr_session=self._start_ocr_session,
-            batch_luma=self._batch_luma,
-            progress=self._progress, cancel=self._cancel,
-            prof_end=self._prof_end,
-            on_bin_thresh=self._set_bin_thresh,
-            metrics=self._metrics,
-            fps_box=[self._fps])
-        res = run_gpu_pipeline(spec, _ocr_engines)
-        if res.fell_back_to_host:
-            self._degraded.append('GPU 管线形状不符，回退宿主管线')
-            return self._run_pipelined_host(res.fallback_engines,
-                                            res.fallback_vr)
-        self._fps = spec.fps_box[0]
-        self._bin_thresh = res.bin_thresh
-        self.timing.update(res.timing)
-        self._n_segments = res.n_segments
-        self.crops = res.crops
-        self._fork_stats = getattr(res, "fork_stats", None)
-        self._ocr_texts = res.texts
-        self._ocr_confs = res.confs
-        return res.as_tuple()
+        return gpu_pipeline_enabled(self._rc, self._decode_backend,
+                                    self._ocr_backend,
+                                    str(self._video_path))
 
     def _decode_num_threads(self, codec: str | None=None) -> int | None:
         """CPU 软解的 decord FFmpeg 帧线程数（按 codec/stride/OCR 位置分档）。
@@ -945,150 +644,79 @@ class FieldExtractor:
             ocr_on_gpu=self._ocr_on_gpu(),
             override=self._rc.decode_num_threads)
 
-    def _open_decord_reader(self, ctx, roi_kw: dict, num_threads=None):
-        """按当前输出格式打开 decord reader。
-
-            yuv420 仅在 fork ≥0.7.10 可用：旧 DLL 会抛 ValueError，此时
-            回退 gray（分段/OCR 不变，仅代表帧预览退化灰度）并重置标志。
-            num_threads：CPU 软解的 FFmpeg 帧线程数（少核分核，None=decord
-            默认；GPU/NVDEC 不传）。
-            """
-        from decord import VideoReader
-        fmt = self._decord_format()
-        nt_kw = {'num_threads': num_threads} if num_threads else {}
-        try:
-            return VideoReader(str(self._video_path), ctx=ctx, output_format=fmt, **nt_kw, **roi_kw)
-        except ValueError:
-            if not self._yuv_output:
-                raise
-            logger.warning('当前 decord 不支持 yuv420 输出，回退 gray （代表帧预览将为灰度）')
-            self._degraded.append('decord 不支持 yuv420 输出，代表帧退化灰度')
-            self._yuv_output = False
-            self._color_range = 0
-            return VideoReader(str(self._video_path), ctx=ctx, output_format='gray', **nt_kw, **roi_kw)
-
-    def _remember_color_range(self, vr) -> None:
-        """YUV 模式下从 decoder 读取流 color_range（0=limited/tv）。"""
-        if not self._yuv_output:
-            return
-        try:
-            self._color_range = int(vr.get_color_range() or 0)
-        except Exception:  # noqa: BLE001
-            # 失败按 limited 处理但**记录**（2026-09-19 审查轮）：full
-            # range 流被当 limited 会错误拉伸 Y → 分段阈值/OCR 像素静默
-            # 改变，此前 meta['color_range']=0 与"真的是 limited"不可分。
-            self._color_range = 0
-            self._degraded.append('color_range 读取失败，按 limited 处理')
-
+    # ── 输出格式适配（实现：DecordFrameSource；活读 yuv/color_range）──
     def _crop_luma(self, crop: np.ndarray) -> np.ndarray:
-        """crop → 分段/OCR 灰度：YUV 时取 Y 并按 range 展开，否则 _gray_seg。"""
-        if self._yuv_output:
-            return _gray_seg_yuv(crop, self._color_range)
-        return _gray_seg(crop)
+        """crop → 分段/OCR 灰度（YUV 取 Y 按 range 展开，否则 _gray_seg）。"""
+        return self._source.crop_luma(crop)
 
     def _batch_luma(self, crops: np.ndarray) -> np.ndarray:
-        if self._yuv_output:
-            return _gray_seg_yuv_batch(crops, self._color_range)
-        return _gray_seg_batch(crops)
+        return self._source.batch_luma(crops)
 
     def _batch_luma_out(self, crops: np.ndarray,
                         out: np.ndarray) -> np.ndarray:
         """批量灰度写入预分配 out（省每批临时数组分配；形状恒定才可复用）。"""
-        if self._yuv_output:
-            from video_ocr_engine.domain.segmentation import _nv12_batch_luma_full_out
-            return _nv12_batch_luma_full_out(crops, self._color_range, out)
-        from video_ocr_engine.domain.segmentation import _gray_batch_out
-        return _gray_batch_out(crops, out)
+        return self._source.batch_luma_out(crops, out)
 
     def _crop_is_expected(self, c: np.ndarray, roi_h: int, roi_w: int) -> bool:
         """ROI-first 输出尺寸是否符合当前输出格式（旧路径全帧则 False）。"""
-        if self._yuv_output:
-            return c.ndim == 2 and c.shape[0] == roi_h + (roi_h + 1) // 2 and (c.shape[1] == roi_w)
-        return c.shape[0] == roi_h and c.shape[1] == roi_w
+        return self._source.crop_is_expected(c, roi_h, roi_w)
 
     def _ocr_engine_type(self) -> str:
-        """OCR 推理后端：auto/tensorrt → tensorrt（OcrEngine 失败回退 CPU 路径），cpu → openvino。
-
-        hybrid（2026-09-20 hybrid ocr 轮，opt-in）→ 'hybrid'：TRT 设备
-        车道 + OpenVINO CPU 车道各一引擎（ocr_stage.acquire_engines 取双
-        擎、共享 infer_q 工作窃取）。收益面 = OCR-bound 场景（当前实测
-        仅 batch_test 稠密字幕 stride=1 类负载，infer 忙时 92% wall）；
-        decode-bound 的常规负载零收益（L3 本就空等）。"""
-        _b = (self._ocr_backend or 'auto').lower()
-        if _b == 'cpu':
-            return 'onnxruntime'
-        if _b == 'hybrid':
-            return 'hybrid'
-        return 'tensorrt'
+        """OCR 推理后端类型（实现：pipeline/policy.ocr_engine_type）。"""
+        return ocr_engine_type(self._ocr_backend)
 
     def _ocr_num_threads(self) -> int:
-        """OCR 推理线程预算：OCR_THREADS env 钩子优先，否则全物理核；
-            CPU 软解且物理核 ≤ 8 时与解码显式分核（cores//2，防过订阅）。
-
-            解码（NVDEC 全卸载 / CPU 下 FFmpeg 帧线程 2 + filter auto 只占
-            SMT 份额）不抢物理核，OCR 吃满全部物理核；CPU 软解在少核机上
-            FFmpeg 帧线程与 OCR 争抢（实测 4 核 ocrT=2 28.0s vs 全核 33.1s、
-            8 核 ocrT=4 17.8s vs 20.7s），分核更优；核数多时（16）分核反而
-            差 → 保持全核。显式参数传入引擎，不污染全局 env。
-            """
-        from video_ocr_engine.ocr.native import auto_ocr_thread_count
-        _env = self._rc.ocr_threads
-        if _env:
-            return max(1, _env)
-        cores = auto_ocr_thread_count()
-        if getattr(self, '_codec', '') == 'av1' and getattr(self, '_backend', '').startswith('decord/CPU'):
-            return max(2, cores // 2)
-        if getattr(self, '_backend', '').startswith('decord/CPU') and cores <= config.CPU_CORES_SPLIT_THRESHOLD:
-            return max(2, cores // 2)
-        return cores
+        """OCR 推理线程预算（实现：pipeline/policy.ocr_num_threads；
+        codec/backend_label 为 open 后的活读值）。"""
+        return ocr_num_threads(self._rc, getattr(self, '_codec', ''),
+                               getattr(self, '_backend', ''))
 
     def _run_pipelined(self, _ocr_engines: list | None = None):
-        """入口分发（S3-3d）：SegmentEngine 唯一编排。
+        """入口分发（S3-3d → R1 注入式）：构建 EngineInputs → SegmentEngine。
 
-        _ocr_engines 两条路径都透传（B5）；None = 从进程级 OCR 引擎池取
-        （ocr_native.acquire_ocr_engine）。引擎按 GPU 门控选择后端
-        （gpu_backend / host_backend）；过渡开关 VOE_V2_ENGINE 已随
-        用户裁决（实验钩子不承重）删除。"""
-        return SegmentEngine(self).run(_ocr_engines)
-
-    def _run_pipelined_host(self, _ocr_engines: list | None = None,
-                            _preopened_vr=None):
-        """宿主管线门面（S3-3a）：构建显式 HostRunSpec → 调用
-        pipeline.host_backend.run_host_pipeline → 同步结果回实例。
-
-        驱动主体与三个协作函数已迁入 host_backend（算法代码只读 spec
-        声明字段，P0-1 的宿主侧私有属性穿透至此消除）。
+        _ocr_engines 两条 lane 都透传（B5）；None = 从进程级 OCR 引擎池取
+        （ocr_native.acquire_ocr_engine）。GPU 门控在此求值一次（输入全为
+        run 内常量）；GPU→宿主回退（C10）在引擎单处处理。lane 结果的状态
+        同步（B2 fps 缓存经盒读写；其余为本次 run 的输出）收口在此——
+        伪造 `_run_pipelined` 的测试（返回 RunOutcome）不受同步影响。
         """
-        self._gpu_pipeline_mode = False
-        spec = HostRunSpec(
+        inp = EngineInputs(
             frame_start=self._frame_start, frame_end=self._frame_end,
             sample_stride=self._sample_stride, roi=tuple(self._roi),
+            buffer_size=self._buffer_size,
             C=self._C, merge_similar=self._merge_similar,
+            merge_similar_threshold=self._merge_similar_threshold,
+            merge_max_changed_pixels=self._merge_max_changed_pixels,
+            merge_dense_gate=self._merge_dense_gate,
             keep_crops=self._keep_crops, yuv_output=self._yuv_output,
+            color_range=self._color_range, ocr_autocrop=self._ocr_autocrop,
+            gpu_pipeline=self._gpu_pipeline_enabled(),
             segments_similar=self._segments_similar,
             crop_luma=self._crop_luma, batch_luma=self._batch_luma,
             batch_luma_out=self._batch_luma_out,
             crop_is_expected=self._crop_is_expected,
+            content_range_to_crop=self._content_range_to_crop,
             open_vr=self._open_vr,
             start_ocr_session=self._start_ocr_session,
             backend_label=lambda: self._backend,
+            ocr_on_gpu=self._ocr_on_gpu,
+            merge_effective_mode=self._merge_effective_mode,
             progress=self._progress, cancel=self._cancel,
             prof_end=self._prof_end,
             on_bin_thresh=self._set_bin_thresh,
-            metrics=self._metrics,
-            fps_box=[self._fps])
-        if _preopened_vr is not None:
-            res = run_host_pipeline(spec, _ocr_engines,
-                                    preopened_vr=_preopened_vr)
-        else:
-            res = run_host_pipeline(spec, _ocr_engines)
-        # 同步回实例（B2：fps 缓存经 box 读写；其余为本次 run 的输出）
-        self._fps = spec.fps_box[0]
-        self._bin_thresh = res.bin_thresh
-        self.timing.update(res.timing)
-        self._n_segments = res.n_segments
-        self.crops = res.crops
-        self._fork_stats = getattr(res, "fork_stats", None)
-        self._ocr_texts = res.texts
-        self._ocr_confs = res.confs
-        return res.as_tuple()
+            bin_thresh_ref=[self._bin_thresh],
+            fps_box=[self._fps],
+            gpu_mode_box=self._gpu_mode_box,
+            degraded=self._degraded,
+            metrics=self._metrics)
+        outcome = SegmentEngine(inp).run(_ocr_engines)
+        # 状态同步（原 _run_pipelined_gpu/_host 尾部的双份收口至此单处）
+        self._fps = outcome.fps
+        self._bin_thresh = outcome.bin_thresh
+        self.timing.update(outcome.timing)
+        self._n_segments = outcome.n_segments
+        self.crops = outcome.crops
+        self._fork_stats = outcome.fork_stats
+        self._ocr_texts = outcome.texts
+        self._ocr_confs = outcome.confs
+        return outcome

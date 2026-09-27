@@ -30,6 +30,7 @@ dev = ["pytest>=8", "ruff", "mypy"]   # lint/type 与 CI lint job 同源
 packages = [
     "video_ocr_engine",
     "video_ocr_engine.config",
+    "video_ocr_engine.decode",
     "video_ocr_engine.domain",
     "video_ocr_engine.gpu",
     "video_ocr_engine.ocr",

@@ -155,31 +155,37 @@ def test_color_range_read_fail_defaults_limited(fake_decord):
 
 
 def test_gpu_shape_fallback_delegates_to_host(fake_decord, monkeypatch):
-    """C10 门面接线：run_gpu_pipeline 报形状不符 → fallback_vr/engines
-    移交 _run_pipelined_host，降级透出。"""
-    import video_ocr_engine.extractor as ext_mod
+    """C10 引擎接线（R1）：run_gpu_pipeline 报形状不符 → fallback_vr/
+    engines 移交宿主 lane，降级透出（patch 面随 R1 从门面方法改到
+    pipeline.engine 的 lane 入口；GPU 门控经门面 patch 强制通过）。"""
+    import video_ocr_engine.pipeline.engine as eng_mod
     from video_ocr_engine.pipeline.gpu_backend import GpuRunResult
+    from video_ocr_engine.pipeline.host_backend import HostRunResult
 
     class _Res(GpuRunResult):
         pass
 
     res = _Res(fell_back_to_host=True, fallback_engines=["eng"],
                fallback_vr=object(), fps=30.0)
-    monkeypatch.setattr(ext_mod, "run_gpu_pipeline",
+    monkeypatch.setattr(eng_mod, "run_gpu_pipeline",
                         lambda spec, engines: res)
     captured = {}
 
-    def fake_host(self, engines=None, _preopened_vr=None):
+    def fake_host(spec, engines, preopened_vr=None):
         captured["engines"] = engines
-        captured["vr"] = _preopened_vr
-        return ([], [], [], [], [])
+        captured["vr"] = preopened_vr
+        return HostRunResult(fps=30.0)
 
-    monkeypatch.setattr(FieldExtractor, "_run_pipelined_host", fake_host)
+    monkeypatch.setattr(eng_mod, "run_host_pipeline", fake_host)
+    monkeypatch.setattr(FieldExtractor, "_gpu_pipeline_enabled",
+                        lambda self: True)
     ex = _make(decode_backend="nvdec", ocr_backend="tensorrt")
-    ex._run_pipelined_gpu(None)
+    outcome = ex._run_pipelined(None)
     assert captured["engines"] == ["eng"]
     assert captured["vr"] is res.fallback_vr
     assert "GPU 管线形状不符" in _degraded(ex)
+    # 门面状态同步（R1 收口到 _run_pipelined 单处）：fps 经 outcome 回写
+    assert ex._fps == 30.0 and outcome.fps == 30.0
 
 
 # ═════════ C-57 谓词防线回归：晚起点 × 硬窗不设窗（fork 缺陷唯一防线）═════════
