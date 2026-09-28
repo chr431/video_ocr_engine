@@ -45,11 +45,12 @@
   hybrid TU 拆分（src/video/hybrid/ 四文件）+ 契约面
   （`decord.CONTRACT_VERSION`/`features()`，引擎 decode/contract.py
   协商，tests/decode/test_contract.py 对账）+ CMakePresets。
-  **⚠️ 本机现为 dev 部署态（2026-09-28 夜间轮）**：site-packages
-  DLL 为 dev 构建 `1cc75ae30e95`（= 上述全部改动，master 771d5e0；
-  fork 测试经 `DECORD_LIBRARY_PATH=build-081fix`）。python 面仍为
-  0.8.4 wheel（无 `features()`——引擎协商自动回退结构性探测，行为
-  不变；对账测试 skip 至 wheel 更新）。
+  **⚠️ 本机现为 dev 部署态（2026-09-28 根治轮更新）**：site-packages
+  DLL 为 dev 构建 `cdbdcc48909212ed`（= 夜间轮全部改动 + av1 停滞
+  根治三层修复，master f071146；fork 测试经
+  `DECORD_LIBRARY_PATH=build-081fix`）。python 面仍为 0.8.4 wheel
+  （无 `features()`——引擎协商自动回退结构性探测，行为不变；对账
+  测试 skip 至 wheel 更新）。
   回 wheel 态：`pip install --force-reinstall --no-deps
   <decord-0.8.5-cp313-cp313-win_amd64.whl>`（构建待审核后）。
 - **0.8.4（2026-09-19 已发布，tag v0.8.4，cp39–cp314 + win64-gpu.zip）**：
