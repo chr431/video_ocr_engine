@@ -9,16 +9,17 @@ from video_ocr_engine.ocr.native import OcrEngine
 
 @pytest.fixture(scope="module")
 def engine():
-    return OcrEngine("v6_small", "onnxruntime", fill_width=224, num_threads=2)
+    return OcrEngine("v6_small", "openvino", fill_width=224, num_threads=2)
 
 
 def test_backend_name_is_openvino(engine):
-    # onnxruntime 后端已移除（2026-09-14，log OpenVINO移除轮）：
+    # ORT 后端已移除（2026-09-14，log OpenVINO移除轮）；0.17.0 起 CPU
+    # 引擎标识为 'openvino'（MIGRATION §2）：
     # CPU 路径唯一引擎 = OpenVINO。
     assert engine.backend_name == "openvino"
 
 
-def test_onnx_backend_returns_one_result_per_input(engine):
+def test_openvino_backend_returns_one_result_per_input(engine):
     # 输入为 _preprocess_standard 输出风格 (48, w, 3) float32
     img = np.zeros((48, 96, 3), dtype=np.float32)
     res = engine([img, img.copy()])
@@ -30,7 +31,7 @@ def test_onnx_backend_returns_one_result_per_input(engine):
         assert 0.0 <= r.scores[0] <= 1.0
 
 
-def test_onnx_empty_input(engine):
+def test_openvino_empty_input(engine):
     assert engine([]) == []
 
 

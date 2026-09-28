@@ -323,16 +323,6 @@ class DecordFrameSource:
             self._degraded.append('color_range 读取失败，按 limited 处理')
 
     # ── 输出格式适配（luma 四件套，活读 yuv/color_range 状态）────────
-    def decord_format(self) -> str:
-        """当前管线请求的 decord output_format。
-
-        内部链永远只消费单通道（Y 平面 / decord gray，不再输出 RGB）：
-        - keep_crops 需要 YUV 代表帧 → 'yuv420'（packed NV12；内部取 Y 平面，
-          等价灰度，另保留 UV 供外部 nv12_to_rgb）
-        - 否则 'gray'
-        """
-        return 'yuv420' if self.yuv_output else 'gray'
-
     def crop_luma(self, crop: np.ndarray) -> np.ndarray:
         """crop → 分段/OCR 灰度：YUV 时取 Y 并按 range 展开，否则 _gray_seg。"""
         if self.yuv_output:

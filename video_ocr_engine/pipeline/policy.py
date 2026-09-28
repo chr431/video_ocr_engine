@@ -54,7 +54,7 @@ def ocr_engine_type(ocr_backend: str | None) -> str:
     """
     _b = (ocr_backend or 'auto').lower()
     if _b == 'cpu':
-        return 'onnxruntime'
+        return 'openvino'
     if _b == 'hybrid':
         return 'hybrid'
     return 'tensorrt'

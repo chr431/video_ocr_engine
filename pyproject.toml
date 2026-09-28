@@ -76,6 +76,9 @@ select = ["E4", "E7", "E9", "F"]
 # 边界：follow_imports=skip——被导入的其他包模块按 Any，不跟随检查
 # （试点成熟后再逐层放开）；无 stubs 的第三方按 Any 容忍。
 python_version = "3.11"
+# 0.17.0 审计轮试扩 gpu/_gpu_kernels.py 后回退：42 错全为惰性初始化
+# 字段未注解类（streams.py 23 + _gpu_kernels.py 19，None/int 候选查实
+# 非真 bug）——正确修法是带金标复验的注解轮，另立（无真 bug 急迫性）。
 files = ["video_ocr_engine/domain", "video_ocr_engine/pipeline",
          "video_ocr_engine/decode"]
 follow_imports = "skip"

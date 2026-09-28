@@ -3,7 +3,7 @@
 # 用途：S5（解码器内联）的**验收表**——每一条 current_guard: none 的假设，
 # 内联后必须变成显式校验（D-1 缓冲契约 / D-2 能力查询），否则 S5 不许过。
 
-fork_baseline: "0.8.2 (chr431, GitHub release wheel, 非 PyPI)"
+fork_baseline: "0.8.5 (chr431, GitHub release wheel, 非 PyPI)"
 
 assumptions:
   - id: DC-01

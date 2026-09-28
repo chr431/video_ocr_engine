@@ -36,8 +36,8 @@ REPORT_VERSION = 6
 #: 内部）不得重复列入，否则 _other 会被双重扣减。
 #: - host：consumer 线程墙钟内串行包含 decode.*（流生成器在 feed 循环内
 #:   被拉动）+ 状态机 feed（consume_feed；merge_pair/q_put_block 嵌套于
-#:   其中，不单列）。pipeline.decode ≡ pipeline.consumer（同区间双键，
-#:   遗留等价键，读表时知悉）。
+#:   其中，不单列）。0.17.0 起 host 只产 pipeline.consumer 单键（同区间
+#:   的 pipeline.decode 双键已删，MIGRATION §2）。
 #: - gpu：pipeline.consumer 不产出（生产者线程成本由 pipeline.decode 表达），
 #:   故无 consumer 关系；ocr 两对关系两路径同构。
 SPAN_RELATIONS: dict = {
@@ -205,8 +205,7 @@ def build_report(metrics, *, wall: float, config_digest: str = "",
             "path": span_path,
             "parent_children": dict(SPAN_RELATIONS.get(span_path, {})),
             "note": "_other = parent.sum − Σ在场子项 sum（缺席记 0；子项互"
-                    "不重叠；host 路径 pipeline.decode ≡ pipeline.consumer"
-                    "为遗留同值键）"},
+                    "不重叠）"},
     }
     # §8.6 r5 资源层（**report_version 2 的新增段，只加不改**）：
     # resources = L1 相位边界差分（std+ 即有）；hardware = L2 NVML 峰值因子
@@ -363,17 +362,19 @@ def finalized_report(metrics, spine, timing: dict, trace, diag,
         metrics.gauge(name, total)
     for name, mx in spine.maxes.items():
         metrics.gauge(name, mx)      # 单次最长（0 = 一次都没发生）
-    # 编排三段的显式计时段（res.timing 由两后端直写；此处转成正样本 span）
-    for _k, _name in (("decode", "pipeline.decode"),
-                      ("ocr", "pipeline.ocr"),
+    # 编排三段的显式计时段（res.timing 由两后端直写；此处转成正样本 span）。
+    # pipeline.decode 仅 GPU 路径产出（生产者线程成本的真实相位键）；
+    # host 的同区间由脊柱 pipeline.consumer 表达——双键同值稀释报告，
+    # 0.17.0 删除 host 侧发射（MIGRATION §2）。
+    _phases = (("decode", "pipeline.decode"),) if gpu_mode else ()
+    for _k, _name in (*_phases, ("ocr", "pipeline.ocr"),
                       ("ocr_tail", "pipeline.ocr_tail")):
         _v = timing.get(_k)
         if _v is not None:
             metrics.record_span(_name, float(_v))
     if trace is not None:
         _now = time.perf_counter()
-        for _k, _name in (("decode", "pipeline.decode"),
-                          ("ocr", "pipeline.ocr"),
+        for _k, _name in (*_phases, ("ocr", "pipeline.ocr"),
                           ("ocr_tail", "pipeline.ocr_tail")):
             _v = timing.get(_k)
             if _v is not None:

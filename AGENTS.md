@@ -133,7 +133,7 @@ python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.
 
 ## 纪律与自动化守卫
 
-**改完代码跑一次**（22 项 = 12 基础 + 10 扩展，退出码非 0 即违规；关键项另有单测守护）；mypy 面 = domain+pipeline+decode：
+**改完代码跑一次**（两批检查，项数以脚本输出为准，非 0 即违规）；mypy 面 = domain+pipeline+decode：
 
 ```bash
 python tools/_probe_discipline_audit.py          # 全量
@@ -159,7 +159,7 @@ python tools/_probe_index_audit.py               # tools/INDEX.md 数字一致�
 - **产品代码的 print 必须受 debug 开关保护**（`env_bool(DEBUG_BOUNDS_ENV)` /
   `self._probe`），否则走 `logging`。docstring 里的用法示例不算。
 - **未使用的 import**：有意 re-export 加 `# noqa: F401`，否则删掉。
-- **探针分层（L2）**：`tools/INDEX.md` 的「探针状态」小节是唯一权威——**只有 `live` 名单里的探针有修复义务**，其余默认 `frozen`（证据已产出、结论已封板 → 豁免活性检查，重构时不必修）。新增 live 须写理由。现状 live 14 / frozen 102 —— 这就是抑制「探针无限堆积 + 失效修复成本无限增高」的机制。
+- **探针分层（L2）**：`tools/INDEX.md` 的「探针状态」小节是唯一权威——**只有 `live` 名单里的探针有修复义务**，其余默认 `frozen`（证据已产出、结论已封板 → 豁免活性检查，重构时不必修）。新增 live 须写理由。**现状数字见 INDEX（不在此快照，防漂移）**——抑制「探针无限堆积 + 失效修复成本无限增高」的机制。
 - **六个根模块 shim 已于 0.14.1 删除**（`engine_config` / `gpu_setup` /
   `ocr_native` / `ocr_trt` / `segmentation` / `video_utils`）——旧路径不可
   导入，改用包内路径（`video_ocr_engine.config.constants` 等）。下游
@@ -170,8 +170,8 @@ python tools/_probe_index_audit.py               # tools/INDEX.md 数字一致�
 ## 环境与命令
 
 - Python：`c:/Users/eric chen/AppData/Local/Programs/Python/python313/python.exe`
-  （**PATH 上的 `python` 缺 numpy，不是项目环境**）。pytest / numpy / psutil /
-  cuda.bindings / decord 均可用。
+  （项目环境；PATH `python` 本机即它，换环境先自证 numpy）。pytest / numpy / psutil / cuda.bindings / decord
+  均可用。
 - 硬件：RTX 4060（**单 NVDEC 单元**）/ 16C32T / 2×16GB DDR5-6000（实测流式
   上限 **55.8 GB/s**；WMI `Speed`=5600 是 SPD 标称，`ConfiguredClockSpeed`
   =6000 才是实际值）。

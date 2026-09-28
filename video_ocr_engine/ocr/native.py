@@ -43,7 +43,7 @@ def cpu_physical_cores() -> int:  # noqa: F401  # re-export
 def auto_ocr_thread_count() -> int:
     """OCR 推理线程预算：全部物理核。
 
-    实测（16C32T，decord v0.7.9 + onnxruntime，test5 7223 帧）：
+    实测（16C32T，decord v0.7.9 + 旧 ORT 后端，test5 7223 帧）：
     解码走 NVDEC 卸载 / FFmpeg 帧线程 + filter auto（只占 SMT 份额），
     OCR 全物理核满负荷正收益；超物理核（超线程）不再提升。CPU 与 GPU
     解码后端统一使用同一预算。
@@ -133,7 +133,7 @@ class OcrEngine:
 
     Args:
         variant: "v6_small"（唯一模型，v2.13 起）
-        engine_type: "onnxruntime"(CPU 路径历史标识) | "tensorrt"
+        engine_type: "openvino"(CPU) | "tensorrt"
         progress_cb: 构建引擎等耗时阶段的进度消息回调 (str)。
         fill_width: OCR 输入 pad 宽度下限（px）。None = 模型下限；
             0 = 关闭填充（批内自适应）；>0 = 指定下限。速度窄图
@@ -144,7 +144,7 @@ class OcrEngine:
     """
 
     def __init__(self, variant: str = "v6_small",
-                 engine_type: str = "onnxruntime",
+                 engine_type: str = "openvino",
                  progress_cb: "callable | None" = None,
                  fill_width: int | None = None,
                  num_threads: int | None = None,
@@ -175,7 +175,7 @@ class OcrEngine:
         # ── 模型 ──
         self._trt: TrtEngine | None = None
         self._gpu_pre = None  # TRT GPU 预处理（懒加载）
-        self._ov = None       # OpenVINO CPU 编译模型（_init_onnx 按需创建）
+        self._ov = None       # OpenVINO CPU 编译模型（_init_ov 按需创建）
         # 显存全驻留 CTC：TRT 输出在 GPU 完成 vocab 维 argmax/max，输出
         # 不落 RAM。host 输入（`_call_trt_gpu`）与 NVDEC 直通
         # （`call_gpu_raw`）两条路径都生效，语义等价、结果逐位一致
@@ -195,9 +195,9 @@ class OcrEngine:
                 self._trt = TrtEngine(models, size, progress_cb=self._progress_cb)
             except Exception as e:
                 log.warning("TensorRT 引擎不可用 (%s)，回退 ONNX 后端。", e)
-                self._init_onnx(models, size)
+                self._init_ov(models, size)
         else:
-            self._init_onnx(models, size)
+            self._init_ov(models, size)
 
     @property
     def backend_name(self) -> str:
@@ -221,14 +221,14 @@ class OcrEngine:
                 pass
             self._trt = None
 
-    # ═══════════════ CPU 后端（OpenVINO 唯一，onnxruntime 已移除）═══════════════
+    # ═══════════════ CPU 后端（OpenVINO 唯一，ORT 已移除）═══════════════
 
-    def _init_onnx(self, models: Path, size: str) -> None:
-        # CPU 推理引擎 = OpenVINO（模型级 2.1× 于已移除的 onnxruntime，
+    def _init_ov(self, models: Path, size: str) -> None:
+        # CPU 推理引擎 = OpenVINO（模型级 2.1× 于已移除的 ORT 后端，
         # 真值门禁三内容族零差，见 log 2026-09-14-OpenVINO模型级A-B/集成
         # 轮/移除轮）。输入/输出同构（(B,3,48,W)→(B,S,C) float32），
-        # 预处理/CTC/批切沿用 ONNX 路径。engine_type 字符串 "onnxruntime"
-        # 保留为 CPU 路径标识（历史 API 值，MIGRATION §1）。
+        # 预处理/CTC/批切沿用 ONNX 路径。engine_type 字符串 0.17.0 起
+        # 为 "openvino"（旧 ORT 时代标识已于 0.17.0 退役，MIGRATION §2）。
         # 直接构造 OcrEngine（未传 num_threads）时默认物理核/2：避免推理
         # 占满全部逻辑核并与解码器抢核。生产管线 SegmentPipeline.
         # _ocr_num_threads 显式传 auto_ocr_thread_count()（全物理核），
@@ -247,7 +247,7 @@ class OcrEngine:
         except ImportError as e:
             raise RuntimeError(
                 "CPU OCR 需要 openvino（pip install openvino）；"
-                "onnxruntime 后端已移除（log 2026-09-14-OpenVINO移除轮）"
+                "ORT 后端已于 2026-09-14 移除（log 2026-09-14-OpenVINO移除轮）"
             ) from e
         model_path = models / f"PP-OCRv6_rec_{size}.onnx"
         self._ov = ov.Core().compile_model(
@@ -333,16 +333,16 @@ class OcrEngine:
         # CPU 动态 batch 无上限：超大输入会让中间激活内存爆炸
         # （MaxPool bad allocation，ORT 时代实测；OV 同理）。分片限制单批
         # 帧数，输出形状不变。16 为历史最优（小片更快、峰值更低）。
-        onnx_max = config.OCR_ONNX_CHUNK
+        ov_max = config.OCR_OV_CHUNK
         _ov = getattr(self, "_ov", None)
         if _ov is not None:
-            if len(batch_np) <= onnx_max:
+            if len(batch_np) <= ov_max:
                 return np.asarray(
                     _ov(batch_np)[self._ov_out], dtype=np.float32)
             outs = [
-                np.asarray(_ov(batch_np[i:i + onnx_max])[self._ov_out],
+                np.asarray(_ov(batch_np[i:i + ov_max])[self._ov_out],
                            dtype=np.float32)
-                for i in range(0, len(batch_np), onnx_max)]
+                for i in range(0, len(batch_np), ov_max)]
             return np.concatenate(outs, axis=0)
 
     # ═══════════════ 后处理（复刻 CTCLabelDecode）═══════════════
@@ -650,7 +650,7 @@ _POOL_MAX_TOTAL = 16             # 限制所有 key 的空闲引擎总数
 
 
 def acquire_ocr_engine(variant: str = "v6_small",
-                       engine_type: str = "onnxruntime", *,
+                       engine_type: str = "openvino", *,
                        fill_width: int | None = None,
                        num_threads: int | None = None,
                        pad_floor_env: "int | None" = None,

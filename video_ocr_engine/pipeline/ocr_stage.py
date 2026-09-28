@@ -122,7 +122,7 @@ def acquire_engines(spec: "SessionSpec") -> "tuple[list, str]":
                 pad_floor_env=spec.pad_floor_env,
                 gamma=spec.gamma, gpu_ctc=spec.gpu_ctc),
             acquire_ocr_engine(
-                spec.model, 'onnxruntime',
+                spec.model, 'openvino',
                 fill_width=spec.fill_width, num_threads=ot,
                 pad_floor_env=spec.pad_floor_env,
                 gamma=spec.gamma, gpu_ctc=spec.gpu_ctc),
@@ -130,7 +130,7 @@ def acquire_engines(spec: "SessionSpec") -> "tuple[list, str]":
         return engines, engine_type
     _inst = (spec.ocr_instances if spec.ocr_instances is not None
              else config.env_bool(config.OCR_INSTANCES_ENV, default=True))
-    ocr_instances = (engine_type == 'onnxruntime'
+    ocr_instances = (engine_type == 'openvino'
                      and ot >= config.OCR_INSTANCES_MIN_THREADS
                      and _inst)
     engines = []
@@ -139,7 +139,7 @@ def acquire_engines(spec: "SessionSpec") -> "tuple[list, str]":
             half = max(2, ot // 2)
             engines = [
                 acquire_ocr_engine(
-                    spec.model, 'onnxruntime',
+                    spec.model, 'openvino',
                     fill_width=spec.fill_width,
                     num_threads=half,
                     pad_floor_env=spec.pad_floor_env,
@@ -360,7 +360,7 @@ class OcrSession:
                     raise ValueError(
                         "注入引擎路径要求 _ocr_engines 非空（收到空列表）")
                 spec.on_backend_used(
-                    'tensorrt+onnxruntime'
+                    'tensorrt+openvino'
                     if len(engines) == 2 and
                     engines[0].backend_name != engines[1].backend_name
                     else engines[0].backend_name)

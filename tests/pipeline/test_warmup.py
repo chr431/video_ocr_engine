@@ -18,7 +18,7 @@ def _spec(**kw) -> SessionSpec:
     base = dict(buffer_size=128, model="v6_small", fill_width=None,
                 force_aspect=0.0, reorder_window=64, yuv_output=False,
                 color_range=0, gpu_pipeline_mode=False,
-                num_threads_fn=lambda: 2, engine_type_fn=lambda: "onnxruntime",
+                num_threads_fn=lambda: 2, engine_type_fn=lambda: "openvino",
                 crop_to_content=lambda c: c, crop_after_aspect=lambda p: p)
     base.update(kw)
     return SessionSpec(**base)
@@ -29,7 +29,7 @@ def test_acquire_and_warmup_share_one_key(monkeypatch):
     seen: list = []
 
     class _Eng:
-        backend_name = "onnxruntime"
+        backend_name = "openvino"
         _trt = None
 
         def release(self):
@@ -47,7 +47,7 @@ def test_acquire_and_warmup_share_one_key(monkeypatch):
                         lambda e: checked.append(e))
     spec = _spec()
     engines, etype = acquire_engines(spec)
-    assert etype == "onnxruntime" and len(engines) == 1
+    assert etype == "openvino" and len(engines) == 1
     assert warmup_engines(spec) == 1
     assert len(seen) == 2 and seen[0] == seen[1], \
         "预热与取引擎的参数必须逐项相同（池 key 稳定性）"

@@ -1,4 +1,4 @@
-# API 迁移指南（v0.11 → v0.16）
+# API 迁移指南（v0.11 → v0.17）
 
 > 面向 `RaceVideoToLog` / `video_subtitle_extractor` 及任何直接使用本引擎的
 > 下游。**未列出的部分 = 语义不变**；全部变更由金标向量（28 用例逐位一致）
@@ -152,3 +152,49 @@
 | 0.13.2 | S6：原生测量系统（RunReport + `meta['report']` + `bench`）、显式 `warmup()`、归约 D2H 异步化、keep_crops D2H 并批、分组窗口自适应（§4.1） |
 | **0.13.3** | S6 续：**资源层落地**（`report["resources"]` L1 相位差分、full 档 `report["hardware"]` NVML）→ **RunReport schema v1→v2（只加键）**；hybrid CPU 线程档位 12→**16**（h264 −6.5% / hevc −12.7%，取消版本号门控）；PI-15 门禁按本机 A/A 校准（§4.2）；修 off 档仍查注册表的缺陷 |
 | 0.14.0（计划） | 删除六根模块 shim、`VOE_ENV_WINS`；届时无新破坏 |
+
+## 6. 0.17.0：OCR 标识与报告键更名（破坏性，无兼容层）
+
+> 2026-09-28 审计轮：名实不符清理。下游若有命中，按本节改名即可；
+> 引擎不提供任何兼容别名。
+
+### 6.1 OCR 引擎标识 `'onnxruntime'` → `'openvino'`
+
+C-48（2026-09-14）移除 ORT 后，`'onnxruntime'` 字符串仍作为 CPU/OpenVINO
+路径的内部标识残留一轮。0.17.0 起统一为 `'openvino'`：
+
+| 面 | 旧 | 新 |
+|---|---|---|
+| `FieldExtractor._ocr_engine_type()`（`ocr_backend='cpu'` 时） | `'onnxruntime'` | `'openvino'` |
+| `acquire_ocr_engine(..., engine_type=)` 合法值 | `'onnxruntime'` | `'openvino'` |
+| `OcrEngine(..., engine_type=)` 默认值 | `'onnxruntime'` | `'openvino'` |
+| 引擎池 key 中的 type 分量 | `'onnxruntime'` | `'openvino'` |
+| `ocr_backend='hybrid'` 的 backend_used 回调值 | `'tensorrt+onnxruntime'` | `'tensorrt+openvino'` |
+| 常量 `OCR_ONNX_CHUNK` | — | `OCR_OV_CHUNK`（同值 16） |
+
+`OcrEngine.backend_name` **本就返回 `'openvino'`，无变化**。单测名
+`test_onnx_*` 同步更名 `test_openvino_*`。
+
+### 6.2 报告：host 路径停发 `pipeline.decode` span
+
+host 管线的 `pipeline.decode` 与 `pipeline.consumer` 为同区间双键
+（遗留等价键）。0.17.0 起 host 只发 `pipeline.consumer`；**GPU 管线的
+`pipeline.decode` 保留**（生产者线程成本的真实相位键，非等价键）。
+读 host 解码段耗时的下游改读 `pipeline.consumer`（两键数值本就相同，
+仅键名变化）。
+
+### 6.3 默认值接线（行为不变）
+
+`DEFAULT_OCR_BACKEND` / `DEFAULT_DECODE_BACKEND` / `DEFAULT_FORCE_ASPECT`
+自 0.17.0 起真正作为 `FieldExtractor` 构造签名默认值（此前被同值字面量
+绕过）。取值不变，仅语义收敛。
+
+### 6.4 删除（零引用死代码）
+
+`FieldExtractor._decord_format()` 与 `DecordFrameSource.decord_format()`
+（全仓零调用的委托链）；金标与全部单测不受影响。
+
+### 6.5 同轮 fork 侧（非引擎 API）
+
+fork dev 构建目录 `build-081fix` → `build-dev`（`DECORD_LIBRARY_PATH`
+指向需同步）；fork 根新增 `build_dev.bat`（只构建不部署）。

@@ -92,8 +92,10 @@ class FieldExtractor:
     """
 
     def __init__(self, video_path: str, roi: tuple, *, frame_start=None,
-                 frame_end=None, force_aspect: float = 0.0,
-                 decode_backend: str = "auto", ocr_backend: str = "auto",
+                 frame_end=None,
+                 force_aspect: float = config.DEFAULT_FORCE_ASPECT,
+                 decode_backend: str = config.DEFAULT_DECODE_BACKEND,
+                 ocr_backend: str = config.DEFAULT_OCR_BACKEND,
                  buffer_size: int | None = None, fill_width: int | None = None,
                  C: float | None = None,
                  sample_stride: int = config.DEFAULT_SAMPLE_STRIDE,
@@ -602,10 +604,6 @@ class FieldExtractor:
         self._color_range = src.color_range
         self._yuv_output = src.yuv_output
         return vr
-
-    def _decord_format(self) -> str:
-        """当前管线请求的 decord output_format（'yuv420' | 'gray'）。"""
-        return self._source.decord_format()
 
     def _ocr_on_gpu(self) -> bool:
         """OCR 推理是否卸载到 GPU（实现：pipeline/policy.ocr_on_gpu）。"""
