@@ -12,7 +12,7 @@
 
 用法：
   python tools/_probe_hybrid_gap.py --videos h264,hevc,av1 [--frames 3000]
-  # 换 fork dll：DECORD_LIBRARY_PATH=D:\\Repo\\decord\\build-081fix
+  # 换 fork dll：DECORD_LIBRARY_PATH=D:\\Repo\\decord\\build-dev
 """
 from __future__ import annotations
 

@@ -5,7 +5,7 @@
 用于回答「hybrid 增益随 CPU 线程档如何变化」。
 DLL 口径由外部 DECORD_LIBRARY_PATH 控制：
   不设            = pip wheel 0.8.2（用户现状，不含 fork 未发布修复）
-  build-081fix    = 本地 fork（含 73e5540/d94d92e/3b96c6f）
+  build-dev    = 本地 fork（含 73e5540/d94d92e/3b96c6f）
 pip wheel 下 av1 hybrid close 可能崩（析构 UAF，fork 73e5540 才修），
 故 rate 先打印再 close，close 异常单独记一行。
 

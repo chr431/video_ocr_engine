@@ -18,7 +18,7 @@
 
 用法：
   python tools/_probe_release_gate.py                     # 用已装 wheel
-  python tools/_probe_release_gate.py --fork D:/Repo/decord/build-081fix
+  python tools/_probe_release_gate.py --fork D:/Repo/decord/build-dev
   python tools/_probe_release_gate.py --only fast,slow    # 跑子集
   python tools/_probe_release_gate.py --keep-corrupt      # 保留损坏流产物
 

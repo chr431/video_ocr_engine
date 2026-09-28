@@ -58,11 +58,22 @@
   fork 侧为统计根治——真值生产中持续增长时按 fork tools/ 取证链
   续钻，log 2026-09-28 R3R5 夜间轮·续章）。
   ⚠️ **master 已领先 0.8.5（下一版候选，未发 wheel）**：dev dll
-  `build-081fix` 含两提交——①C-57 窗替补哨兵（`win_subs` 键 +
-  latched 告警；晚起点+seek_acc+窗缺陷形态实测 pos=5980/win_subs=20/
-  帧 md5 与 0.8.5 逐位一致=纯观察，start=0 健康窗零假阳性）②GPU 侧
-  EOF 恢复网对称扩展 v2（真·尾部判别门）。fork 测试经
-  `DECORD_LIBRARY_PATH=build-081fix`；引擎产品路径走 wheel 不受影响。
+  `build-dev`（原 build-081fix，0.8.1 时代遗留名已改）领先提交——
+  ①C-57 窗替补哨兵（`win_subs` 键 + latched 告警；晚起点+seek_acc+
+  窗缺陷形态实测 pos=5980/win_subs=20/帧 md5 与 0.8.5 逐位一致=纯
+  观察，start=0 健康窗零假阳性）②GPU 侧 EOF 恢复网对称扩展 v2
+  （真·尾部判别门）③Linux cstdio 修复 ④build-081fix→build-dev
+  改名 + 窗口空真加固（已派未闭合 GOP 须读到闭合 / flush 等闭合）。
+  fork 测试经 `DECORD_LIBRARY_PATH=build-dev`；引擎产品路径走 wheel
+  不受影响。
+  **C-57 根治进展（2026-09-28 专项调查轮，log 同日 C57根治专项
+  调查）**：真根因=GOP 粒度 × 锚点前缀预算算术（test5 GOP=299，
+  缺口=前缀 216+请求 1000−派工 1196=20 帧恰合）；前缀修复在分支
+  **p3-window-prefix**（矩阵 11/12 位级一致），被独立 kick 竞态
+  阻断（窗界 kick 债务双证伪：带外注入=静默换帧 6/8 / 等待清零=
+  死锁）——专项轮实施。master 矩阵基线 10/12（两格=C-57 缺陷格，
+  响亮形态 win_subs=20/79；`tools/_probe_window_matrix.py` 为专项
+  门禁：12/12 才许摘引擎谓词，C-57 维持 active）。
 - **0.8.4（2026-09-19 已发布，tag v0.8.4，cp39–cp314 + win64-gpu.zip）**：
   v0.8.4 = v0.8.3 + 冻结前清理（cuMemcpyPeerAsync 符号修复 / 死代码
   −14.6k 行 / nvml.h 手写替代 795KB→45 行）+ 性能参考纯解码口径
@@ -96,7 +107,7 @@
     死锁；`DECORD_HYBRID_KICK_BURST`：0 = 消融关（单包 kick），>0 = 护栏值。
   - 引擎 GPU 管线全片 e2e（配对 3 遍）：hevc −24%（且 hybrid 首次显著
     胜纯 NVDEC −23%）、h264 −4.7%、av1 持平；金标 28/28 逐位一致。
-  - 开发 dll md5 `2fd49ea5`（build-081fix，2026-09-12 replan 回滚后从
+  - 开发 dll md5 `2fd49ea5`（build-dev，2026-09-12 replan 回滚后从
     HEAD 281a738 重建——MSVC 非确定性构建产物，md5 每次重建会变，以
     行为判别为准：回滚后构建的 stats 行无 `replans=` 字段）。
 - **h264 NVDEC 是本机硬件天花板，非软件问题**（2026-09-10 实测）：同内容
@@ -106,7 +117,7 @@
   手工部署 DLL）：wheel 自带 `decord.dll` 与 FFmpeg 63 运行库（包根目录），
   `pip install decord-0.8.2-cp313-cp313-win_amd64.whl` 即用；0.8.2 已含
   cuMemcpy2D_v2 修复（fork 7ef70f5）。当前 dll md5 6597eea6。
-- **本地开发 dll（2026-09-10，含未发布修复）**：`build-081fix/decord.dll`
+- **本地开发 dll（2026-09-10，含未发布修复）**：`build-dev/decord.dll`
   含 VideoReader 析构顺序 UAF 修复（hybrid_gpu 帧 Deleter 摸已析构池 →
   av1 hybrid close 偶发/必现崩溃；fork 本地提交 73e5540，**未推送/未发
   wheel**）。
@@ -142,7 +153,7 @@
     包内 `decord/decord.dll` md5 **`27349408…`**；已 `pip install` 覆盖。
     **判据**：不设 `DECORD_LIBRARY_PATH` 跑 `DECORD_HYBRID_STATS=1`，
     `[hybrid-stats] plan` 行含 `horizon=4096 rebuilds=N`。
-  - dev dll：`build-081fix/decord.dll` = `bc7c27a1…`（同源 4cebeef 干净
+  - dev dll：`build-dev/decord.dll` = `bc7c27a1…`（同源 4cebeef 干净
     重建；MSVC 非确定性 → md5 与 wheel 内不同属正常）。
   - **✅ 2026-09-14：GOP 派工架构合入并发布（C-46）**：wheel 重建安装，
     包内 `decord/decord.dll` md5 **`6ec5b1ea…`**（判据：stats 行含
@@ -150,7 +161,7 @@
     −4.78%（6/6）/av1 平价；18/18 段数恒定；金标 28/28×2。回滚 =
     `dist/prepatch/` 旧 wheel 或 fork `4cebeef`。
   - **构建陷阱（本轮两事故）**：本机 ninja 对 `video_reader.cc.obj` 无头依赖
-    （`ninja -C build-081fix -t deps` 显示 `#deps 0`）——改
+    （`ninja -C build-dev -t deps` 显示 `#deps 0`）——改
     `hybrid_threaded_decoder.h`/`ffmpeg/threaded_decoder.h` 的**类布局**后
     增量构建不重编 video_reader：①成员移位→构造期访问崩溃；②尾加成员
     +回退源码→`NeedsPackets` 等内联函数按错布局读成员=**静默行为损坏**
@@ -162,7 +173,7 @@
     ＋ `FFMPEG_DIR`，再以**系统解释器绝对路径**跑
     `python -m pip wheel . --no-deps --no-build-isolation -w dist`。
     ⚠️ 坑：`PATH` 上的 `python` 是受管运行时（**未装 scikit-build-core**）→
-    必须显式用 `c:/Users/eric chen/AppData/Local/Programs/Python/python313/python.exe`。开发态用 `DECORD_LIBRARY_PATH=D:\Repo\decord\build-081fix`
+    必须显式用 `c:/Users/eric chen/AppData/Local/Programs/Python/python313/python.exe`。开发态用 `DECORD_LIBRARY_PATH=D:\Repo\decord\build-dev`
   切换；重建 `rebuild_dev.bat`（FFMPEG_DIR=D:/Software/ffmpeg-n9.0-...）。
   pip wheel 0.8.2 与引擎当前代码兼容（已验证 sha 逐位一致），仅缺该崩溃
   修复。诊断构建 `configure_asan.bat`（ASAN）。
@@ -225,7 +236,7 @@ pip list --outdated
    `lib /DEF:空.def` 造空 import lib 占位。
 2. **构建**：git-bash 直调 .bat 会因引号转义废掉 vcvars——**脚本落盘后
    `cmd //c` 跑**；MSVC 升级后旧 build 目录的 CMake 缓存指向已删编译器，
-   清 `CMakeCache.txt`+`CMakeFiles/` 重配：`cmake -B build-081fix -G Ninja
+   清 `CMakeCache.txt`+`CMakeFiles/` 重配：`cmake -B build-dev -G Ninja
    -DUSE_CUDA=ON -DFFMPEG_DIR=D:/Software/ffmpeg-9.0-sdk .`。
    零 Toolkit：驱动 API 动态加载，**导入表无 nvcuvid 属正常——验证看
    .obj（hybrid_threaded_decoder/improc）而非依赖表**。

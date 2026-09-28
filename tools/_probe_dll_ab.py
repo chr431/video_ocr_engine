@@ -16,7 +16,7 @@
 用法
 ----
 把两个候选 DLL 放到**同一个含 FFmpeg 运行库的目录**（如
-`D:\\Repo\\decord\\build-081fix`），命名任意（如 `decord.dll.varA`/`.varB`）：
+`D:\\Repo\\decord\\build-dev`），命名任意（如 `decord.dll.varA`/`.varB`）：
 
     python tools/_probe_dll_ab.py --dll-a <dir>\\decord.dll.varA \\
         --dll-b <dir>\\decord.dll.varB --config hevc-hybrid --window 3000 \\

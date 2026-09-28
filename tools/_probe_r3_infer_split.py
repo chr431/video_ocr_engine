@@ -6,7 +6,7 @@
   - call_gpu_raw vs eng(procs) 两条路径的批数分布（raw 直通是否生效）
 
 用法：
-  DECORD_LIBRARY_PATH=D:\\Repo\\decord\\build-081fix \
+  DECORD_LIBRARY_PATH=D:\\Repo\\decord\\build-dev \
   python tools/_probe_r3_infer_split.py
 """
 from __future__ import annotations
