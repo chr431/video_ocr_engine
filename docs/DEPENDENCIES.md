@@ -8,9 +8,9 @@
 | 包 | 当前版本 | 来源 | 说明 |
 | --- | --- | --- | --- |
 | numpy | 2.x | PyPI | 预处理/信号计算，纯 numpy 无 scipy |
-| openvino | 2026.3.1 | PyPI | **CPU OCR 默认后端**（2026-09-14 起）：模型级 2.1× 于 ORT + argmax 全一致（log 2026-09-14-OpenVINO模型级A-B/集成轮）；wheel ~76MB，仅 CPU 插件。**冻结分发可剪至 73MB**（删 NPU/GPU/异构前端等，配方与等价性实证见 log 2026-09-14-OpenVINO冻结瘦身） |
+| openvino | **2026.3.x（pyproject 上界 `<2026.4`）**；本机 2026.3.1 | PyPI | **CPU OCR 默认后端**（2026-09-14 起）：模型级 2.1× 于 ORT + argmax 全一致（log 2026-09-14-OpenVINO模型级A-B/集成轮）；wheel ~76MB，仅 CPU 插件。**冻结分发可剪至 73MB**（删 NPU/GPU/异构前端等，配方与等价性实证见 log 2026-09-14-OpenVINO冻结瘦身）。⚠️ **2026.4.0 发布当天（2026-09-28）在 windows runner `_infer` 原生崩溃**（同版本上午绿/下午红 = VM 异构或间歇崩溃；本机未评估）——上界钉 2026.3 系，换代评估按 C-48 复评触发另起一轮 |
 | psutil | 6+ | PyPI | 物理核数探测 / RSS 采样（缺失时降级） |
-| decord | **0.8.4（已发布 [v0.8.4](https://github.com/chr431/decord/releases/tag/v0.8.4)；本机现为 dev 部署态，见下节）** | chr431/decord release | NVDEC 硬解 + CPU 软解；**PyPI 官方版不支持** `next_roi` / ROI-first / GPU gray / YUV420 / `sample_stride` 等差步长快速路径；fork 自 0.8.2 起发布 cp39–cp314 全版本 wheel，`pip install <wheel>` 即用 |
+| decord | **0.8.5（已发布 [v0.8.5](https://github.com/chr431/decord/releases/tag/v0.8.5)；本机已装回 cp313 wheel，master 领先见下节）** | chr431/decord release | NVDEC 硬解 + CPU 软解；**PyPI 官方版不支持** `next_roi` / ROI-first / GPU gray / YUV420 / `sample_stride` 等差步长快速路径；fork 自 0.8.2 起发布 cp39–cp314 全版本 wheel，`pip install <wheel>` 即用 |
 | cuda-python | 13.x | PyPI | TRT 执行 + decord GPU DLL 注册 |
 | tensorrt_*_bindings | 11.x | PyPI | TensorRT thin binding（~1MB）；运行 DLL 从系统 PATH 加载 |
 
