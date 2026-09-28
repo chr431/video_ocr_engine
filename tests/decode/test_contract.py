@@ -160,7 +160,9 @@ def test_fork_features_match_contract_yaml():
     """decoder_contract.yaml 的 DC 假设 ↔ fork features() 一一对账。"""
     import yaml
 
-    import decord
+    # CI 测试环境不装 decord（CPU-only）：对账义务只在 decord 在场时生效
+    decord = pytest.importorskip(
+        'decord', reason='decord 未安装：对账义务未生效')
     if not hasattr(decord, 'features'):
         pytest.skip('decord 无契约面（上游原版/旧 fork）：对账义务未生效')
 

@@ -22,7 +22,8 @@ dependencies = [
 # 可选依赖（GPU 解码 / TRT OCR），不在 PyPI 依赖中（fork 仅 GitHub 分发）。
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff", "mypy"]   # lint/type 与 CI lint job 同源
+# pyyaml：tests/decode/test_contract.py 对账读 tests/golden/decoder_contract.yaml
+dev = ["pytest>=8", "ruff", "mypy", "pyyaml"]   # lint/type 与 CI lint job 同源
 
 [tool.setuptools]
 # S9-3：显式列入全部子包——此前仅列顶层包，S9-1 的 config/ domain/
