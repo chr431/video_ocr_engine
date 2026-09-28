@@ -76,6 +76,10 @@ select = ["E4", "E7", "E9", "F"]
 # 边界：follow_imports=skip——被导入的其他包模块按 Any，不跟随检查
 # （试点成熟后再逐层放开）；无 stubs 的第三方按 Any 容忍。
 python_version = "3.11"
+# 平台语义统一为 win32：产品主面是 Windows（winreg DLL 探测 /
+# os.add_dll_directory / TRT / win64 wheel），本地开发即 win32 语义；
+# 不设则 CI 的 Linux runner 会以 linux 语义误报 Windows-only API
+#（gpu/context.py 的 winreg 块即此例），且本地与 CI 判定分歧。
 # 0.17.1 注解轮：+ gpu 与 _gpu_kernels.py（裸指针算术文件的静态面）。
 # 修法：惰性设备指针/协作者字段显式 `int | None` 注解 + 恒真不变量
 # assert 收窄（零行为变更，金标 28/28 复验）；数组显式 `np.ndarray`。
