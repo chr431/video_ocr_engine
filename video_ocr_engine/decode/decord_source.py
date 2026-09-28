@@ -248,14 +248,17 @@ class DecordFrameSource:
                 vr = self._open_reader(_hctx, roi_kw, num_threads=_ct)
                 # 硬窗界（2026-09-17 越窗修复）：短窗时声明消费上限，fork
                 # 的 demux 与 GOP 派工在窗缘硬停——窗口外一个包都不读
-                # （实测 w3000 曾把全片 7761 包喂进两臂）。仅当窗口 < 全长
-                # 且 **start < 窗长** 才设：后者不是任意保守——fork 实测
-                # （2026-09-20 起点轮）晚起点（start=5000/win=1000）+
-                # seek_accurate + 硬窗交付的帧与 cpu/nvdec 基线**位级不
-                # 一致**（同请求无窗时三者一致）→ 晚起点硬窗存在 fork 级
-                # 缺陷，此谓词是唯一防线，修复前不得删。全片运行不设 =
-                # fork 深库存行为不变。需 fork ≥ 遥测穿透版（stock decord
-                # 无此方法，getattr 容忍）。
+                # （实测 w3000 曾把全片 7761 包喂进两臂）。设窗条件 = 窗口
+                # < 全长，且（start < 窗长 **或** fork 契约面带
+                # `window_seek_safe`）。
+                # 晚起点谓词（start < 窗长）是 C-57 的历史防线：fork 曾有两
+                # 个晚起点+seek_acc+硬窗缺陷——①GOP 粒度 × 锚点前缀预算
+                # 算术（尾帧截断）；②seek 首锚会话的僵尸 kick 跨 reset 存活
+                # （ResetRouting 漏清 pending_kicks_，单 GOP 首帧重复/末帧
+                # 被挤）。两者均已修复（fork p3-window-prefix 分支，夜间轮
+                # 2026-09-28 根因链与矩阵 12/12 证据见 log 同日叙事），
+                # 契约键 `window_seek_safe` = ②的机器宣告；旧 fork（含
+                # 0.8.5 wheel）无此键 → 谓词保留，行为不变。
                 _sdw = getattr(vr, 'set_decode_window', None)
                 if (_contract is not None and not _contract.has(
                         'hard_decode_window')):
@@ -266,8 +269,12 @@ class DecordFrameSource:
                         '短窗全片供料')
                     logger.info('decord 无 set_decode_window 能力，跳过硬窗')
                     _sdw = None
+                _seek_safe = (_contract is not None
+                              and _contract.has('window_seek_safe'))
                 if (_sdw is not None and self._frame_end is not None
-                        and self._frame_start < (self._frame_end - self._frame_start)
+                        and (_seek_safe
+                             or self._frame_start
+                             < (self._frame_end - self._frame_start))
                         and self._frame_end - self._frame_start < len(vr)):
                     _sdw(self._frame_end - self._frame_start)
                 self.backend_label = 'decord/hybrid'

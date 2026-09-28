@@ -199,13 +199,29 @@ def test_hard_window_set_when_start_before_window(fake_decord):
 
 
 def test_hard_window_skipped_for_late_start(fake_decord):
-    """晚起点（start ≥ 窗长）：谓词不成立 → **不设窗**。
+    """晚起点（start ≥ 窗长）且 fork 无 `window_seek_safe` 契约键 → 不设窗。
 
-    C-57：fork 的硬窗 × seek(start>0) 存在尾帧 EOF 静默替补缺陷（帧数
-    守恒但尾 ~20 帧像素错），引擎谓词 `start < 窗长` 是唯一防线——
-    本测试锚定该防线不被误删（2026-09-20 审计修复轮 §4）。
+    C-57 的历史防线（fork 两个晚起点硬窗缺陷：前缀预算算术 + 僵尸 kick，
+    均已修于 p3-window-prefix 分支）。键缺席 = 旧 fork（含 0.8.5 wheel）
+    → 谓词保留；本测试锚定该保守分支（2026-09-20 审计修复轮 §4）。
     """
     ex = _make(decode_backend="hybrid", frame_start=5000, frame_end=6000)
     vr = ex._open_vr()
     assert ex._backend == "decord/hybrid"
     assert vr.decode_window_calls == []
+
+
+def test_hard_window_late_start_with_seek_safe_contract(fake_decord):
+    """晚起点 + 契约键 `window_seek_safe`（fork 僵尸 kick 修复的机器宣告）
+    → 谓词解除，晚起点也设窗（夜间轮 2026-09-28，矩阵 12/12 证据）。
+    """
+    import decord as _d  # 夹具注入的假模块
+    _d.CONTRACT_VERSION = 1
+    _d.features = lambda: {
+        'roi_first': True, 'hybrid_ctx': True, 'hybrid_gpu_ctx': True,
+        'hard_decode_window': True, 'window_seek_safe': True,
+    }
+    ex = _make(decode_backend="hybrid", frame_start=5000, frame_end=6000)
+    vr = ex._open_vr()
+    assert ex._backend == "decord/hybrid"
+    assert vr.decode_window_calls == [1000]

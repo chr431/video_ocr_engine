@@ -38,10 +38,10 @@
 | C-53 | **hybrid 基线=目标码最快纯臂**：h264=CPU（+6.1% 慢；h264same −22% 反例=按文件分界）；hevc/av1=NVDEC，hybrid −23.9%/−31.4%→选 hybrid。批量=逐文件串行（28.61s vs pool 29.3~29.7；pool 0.15 废弃 0.16 删） | 4060/16C32T；fork ≥a6cdeb7 | 换卡 / fork 换代 | log 09-18-hybrid启动轮 |
 | C-54 | **启动+窗口尾轮（fork a6cdeb7）：熟前挂起+防饿死盲派+窗口尾 ETA**——盲派 13→2、hevc 交叉点 ~1200；h264 残余=冷税 ~95ms+尾 69ms；H2D 聚合修法机制成立（put_block −23%）无净收益→默认关 | 盲承诺下界=2 GOP | 换卡 / fork 换代 / infer 暴露复现日 | log 09-18-hybrid启动轮；bench/hybrid_startup.json |
 | C-55 | **池复用必须换壳**（复活对象二次死亡不触发 __del__）；旧 Y 池两层漏 +2.0 MiB/轮→修复后 +0.000 | CPython；4 钉子 | PyPy finalizer 语义 / 池契约重构 | log 2026-09-20-审计修复轮 §2 |
-| C-57 | **hybrid 硬窗 × seek(start>0) fork 缺陷：尾帧 EOF 容错静默替补**（帧数守恒、尾 ~20 帧像素错；start=0 干净）；防线=谓词 `start<窗长` | fork 0.8.4 与 dev 均在 | fork 迟包供给专项落地后解除谓词 | log 09-20 审计轮 §4 |
 | C-58 | **hybrid OCR 双车道（TRT+OV）v0.5：回归已消除（+48%→−1.8%）但本机无净收益**——容量理论 +54% 实测 +18%（OV 产能=TRT 1/3；争用 +20%；CPU 臂无余量）；触发条件实测见 C-60 | batch_test 字幕 stride=1；16C32T 三层占满 | NVDEC 纯解码部署 / 多 NVDEC 卡 / OCR 变重 | log 09-20 批量策略轮 §3-4 |
 | C-59 | 宽 ROI 字幕：裁切文本效应=临界字形宽度彩票（C639≡C 不翻、C781 纯 pad 翻 14 段；高恒 48 字形尺寸不变），随集波动（ep01 −7/ep02 +40）；性能真收益（墙钟 −6.6% 同窗口/−9.0% vs 旧默认；OCR 负担降→解码争用减；infer 对 pad 宽不敏感）。默认维持；L2 同属宽度扰动 | 新三国01/02 stride=1；dbe=cpu+TRT；真值视觉+抽帧复核 | 换模型 / PAD_SMALL×裁切联调 / NVDEC 纯解码 / dbe 变更 | log 2026-09-20-裁切复测轮 |
 | C-60 | hybrid OCR 奖金池负结果：CPU 空闲已兑现（hevc NVDEC 纯解码 7600fps=墙钟 15%）双车道仍只兑 −4.9%±0.1（TRT 劣化 ~28%[GPU 共享]+OV 1/3 短板），双双 hybrid >15× 病理超时；动态分配不立项——瓶颈不在可分配资源；文本 B≡A 0/48054 | hevc 转码集整集 3 轮交错；阈值 5% 预注册 | OV 产能>TRT 1/2 / GPU 分离部署（解码/OCR 异卡） | log 2026-09-20-hybridOCR奖金池裁决 |
+| C-61 | **C-57 双缺陷根治 + 谓词契约门控（2026-09-28 夜间轮）**：①前缀预算算术（seek_prefix_ 记账）②僵尸 kick（ResetRouting 补清 pending_kicks_——首锚会话残留 kick 撞新会话侧分配→GOP 关键帧双解码→首帧重复/末帧被挤）。窗口矩阵 12/12 位级一致（hevc late-3000 历史首次全绿）；引擎谓词在 fork 契约键 window_seek_safe 在场时对晚起点放行设窗，键缺席（含 0.8.5 wheel）保守保留 | fork 分支 p3-window-prefix（前缀修复+僵尸修复+契约键+TR2 探针）；矩阵 12/12 于 dev dll | fork 0.8.6 合并发布后装 wheel 复跑矩阵 12/12；僵尸 kick 若再现按 win_subs 哨兵与 TR2 取证链续钻 | log 2026-09-28 夜间kick竞态根治 |
 
 ## 已取代（指针）
 
@@ -56,5 +56,6 @@
 - C-41 → C-54
 - C-44 → C-45
 - C-45 → C-46
+- C-57 → C-61
 
 （dead 条目已整体降级 docs/log/，含复评触发，显式检索可达。）

@@ -261,11 +261,12 @@
   revisit: PyPy finalizer 语义 / 池契约重构
   evidence: log 2026-09-20-审计修复轮 §2
 - id: C-57
-  conclusion: **hybrid 硬窗 × seek(start>0) fork 缺陷：尾帧 EOF 容错静默替补**（帧数守恒、尾 ~20 帧像素错；start=0 干净）；防线=谓词 `start<窗长`
-  status: active
-  premises: fork 0.8.4 与 dev 均在
-  revisit: fork 迟包供给专项落地后解除谓词
-  evidence: log 09-20 审计轮 §4
+  conclusion: **hybrid 硬窗 × seek(start>0) 双缺陷已根治（fork p3-window-prefix 分支）**：①前缀预算算术（缺口=前缀+请求−派工，C57根治专项调查 §1）；②僵尸 kick（ResetRouting 漏清 pending_kicks_，首锚会话残留 kick 撞新会话侧分配→GOP 关键帧双解码）。窗口矩阵 12/12 位级一致。引擎谓词改契约门控（`window_seek_safe` 键在则晚起点也设窗；旧 fork/0.8.5 wheel 无键→谓词保留）
+  status: superseded
+  replaced_by: C-61
+  premises: fork ≥ 僵尸 kick 修复版（分支 p3-window-prefix，待发 0.8.6）；旧 fork 靠契约缺席保守
+  revisit: fork 0.8.6 发布后装 wheel 复跑矩阵；僵尸 kick 若再现查 win_subs 哨兵与 TR2 取证
+  evidence: log 2026-09-28 夜间kick竞态根治；2026-09-28 C57根治专项调查
 - id: C-58
   conclusion: **hybrid OCR 双车道（TRT+OV）v0.5：回归已消除（+48%→−1.8%）但本机无净收益**——容量理论 +54% 实测 +18%（OV 产能=TRT 1/3；争用 +20%；CPU 臂无余量）；触发条件实测见 C-60
   status: active
@@ -284,3 +285,10 @@
   premises: hevc 转码集整集 3 轮交错；阈值 5% 预注册
   revisit: OV 产能>TRT 1/2 / GPU 分离部署（解码/OCR 异卡）
   evidence: log 2026-09-20-hybridOCR奖金池裁决
+
+- id: C-61
+  conclusion: **C-57 双缺陷根治 + 谓词契约门控（2026-09-28 夜间轮）**：①前缀预算算术（seek_prefix_ 记账）②僵尸 kick（ResetRouting 补清 pending_kicks_——首锚会话残留 kick 撞新会话侧分配→GOP 关键帧双解码→首帧重复/末帧被挤）。窗口矩阵 12/12 位级一致（hevc late-3000 历史首次全绿）；引擎谓词在 fork 契约键 window_seek_safe 在场时对晚起点放行设窗，键缺席（含 0.8.5 wheel）保守保留
+  status: active
+  premises: fork 分支 p3-window-prefix（前缀修复+僵尸修复+契约键+TR2 探针）；矩阵 12/12 于 dev dll
+  revisit: fork 0.8.6 合并发布后装 wheel 复跑矩阵 12/12；僵尸 kick 若再现按 win_subs 哨兵与 TR2 取证链续钻
+  evidence: log 2026-09-28 夜间kick竞态根治
