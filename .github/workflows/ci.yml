@@ -16,7 +16,9 @@ jobs:
           python-version: '3.11'
       # 精选集 E4/E7/E9/F（2026-09-20 稳健性轮立的零违规基线）+
       # mypy domain/ 严格试点（S4 拆分轮落地）；配置都在 pyproject
-      - run: pip install ruff mypy
+      # numpy：R2 起 mypy 面含 import numpy 的文件——本地装了 numpy 而此
+      # job 没装，CI 自 0.16.0 起持续 import-not-found 假红
+      - run: pip install ruff mypy numpy
       - run: ruff check video_ocr_engine/
       - run: mypy
 
