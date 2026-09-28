@@ -38,21 +38,31 @@
 ## 已知问题与注意
 
 ### decord（自建 fork，pip wheel 安装）
-- **0.8.5（2026-09-28 版本号已 bump，三源一致；**tag/release 待审核，
-  wheel 未构建**）**：0.8.5 = 0.8.4 + 夜间重构轮五提交——EOF 预算在途
-  宽限（av1 顺序读停滞 FATAL 根治，见 log 2026-09-28）+ 三条静默路径
+- **0.8.5（2026-09-28 已发布：tag v0.8.5 + GitHub Release
+  cp39–cp314 wheel 矩阵 + win64-gpu.zip；本机 cp313 wheel 已装回）**：
+  0.8.5 = 0.8.4 + 夜间重构轮五提交 + 发布轮两提交——EOF 预算在途宽限
+  （av1 顺序读停滞 FATAL 根治，见 log 2026-09-28 R3R5 夜间轮·续章）+ 三条静默路径
   取证硬化 + GPU-only 解包（USE_CUDA 不可关，构建仍零 Toolkit）+
   hybrid TU 拆分（src/video/hybrid/ 四文件）+ 契约面
   （`decord.CONTRACT_VERSION`/`features()`，引擎 decode/contract.py
-  协商，tests/decode/test_contract.py 对账）+ CMakePresets。
-  **⚠️ 本机现为 dev 部署态（2026-09-28 根治轮更新）**：site-packages
-  DLL 为 dev 构建 `cdbdcc48909212ed`（= 夜间轮全部改动 + av1 停滞
-  根治三层修复，master f071146；fork 测试经
-  `DECORD_LIBRARY_PATH=build-081fix`）。python 面仍为 0.8.4 wheel
-  （无 `features()`——引擎协商自动回退结构性探测，行为不变；对账
-  测试 skip 至 wheel 更新）。
-  回 wheel 态：`pip install --force-reinstall --no-deps
-  <decord-0.8.5-cp313-cp313-win_amd64.whl>`（构建待审核后）。
+  协商，tests/decode/test_contract.py 对账）+ CMakePresets + 契约
+  键集补 `gpu_arm_stall`（f071146 冻结检测计数，晚于契约面提交
+  771d5e0 落地，发布轮补齐声明集）+ fork README 契约面文档化/
+  消费者中立化。
+  **验证（wheel 态，2026-09-28 发布轮）**：金标 28/28 逐位一致 +
+  引擎 276 测试（契约对账真跑，skip 消失）+ fork 六套件过 wheel DLL
+  （gpu/formats/md5/stream/stride/lockstep 全绿）。本地构建 wheel
+  md5 `a6b0ee44…`（63,947,411 B；发布产物以 Release 页为准）。
+  **gpu_arm_stall 监视哨已接线**：报告 `hybrid` 段全量穿透 + 引擎
+  `_driver` 对 >0 记 WARNING（CU 臂启动竞态冻结被自愈重掷的次数；
+  fork 侧为统计根治——真值生产中持续增长时按 fork tools/ 取证链
+  续钻，log 2026-09-28 R3R5 夜间轮·续章）。
+  ⚠️ **master 已领先 0.8.5（下一版候选，未发 wheel）**：dev dll
+  `build-081fix` 含两提交——①C-57 窗替补哨兵（`win_subs` 键 +
+  latched 告警；晚起点+seek_acc+窗缺陷形态实测 pos=5980/win_subs=20/
+  帧 md5 与 0.8.5 逐位一致=纯观察，start=0 健康窗零假阳性）②GPU 侧
+  EOF 恢复网对称扩展 v2（真·尾部判别门）。fork 测试经
+  `DECORD_LIBRARY_PATH=build-081fix`；引擎产品路径走 wheel 不受影响。
 - **0.8.4（2026-09-19 已发布，tag v0.8.4，cp39–cp314 + win64-gpu.zip）**：
   v0.8.4 = v0.8.3 + 冻结前清理（cuMemcpyPeerAsync 符号修复 / 死代码
   −14.6k 行 / nvml.h 手写替代 795KB→45 行）+ 性能参考纯解码口径

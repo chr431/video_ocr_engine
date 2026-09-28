@@ -155,6 +155,16 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None,
                 res.fork_stats = _fs() or None
             except Exception:
                 logger.debug("fork 遥测抓取失败忽略", exc_info=True)
+            # av1 停滞根治轮（fork f071146）监视哨：gpu_arm_stall > 0 =
+            # CU 臂启动竞态冻结发生过且已被自愈重掷（fork 侧为统计根治，
+            # 非消除竞态）。报告 hybrid 段全量穿透此值；真值生产中计数
+            # 持续增长时按 fork tools/ 取证链续钻（DEPENDENCIES decord 节）。
+            _stall = int((res.fork_stats or {}).get('gpu_arm_stall') or 0)
+            if _stall:
+                logger.warning(
+                    'decord hybrid GPU 臂冻结自愈触发 %d 次（gpu_arm_stall；'
+                    'nvcuvid 启动竞态已自愈，计数持续增长请按 fork 取证链'
+                    '续钻）', _stall)
         try:
             vr.close()   # hybrid 探针/资源释放：显式停止生产者线程
         except Exception:
