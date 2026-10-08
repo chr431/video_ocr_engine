@@ -110,7 +110,7 @@ python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.
 
 ## 已封板结论 → `docs/CONCLUSIONS.md`
 
-全部 26 条结论（20 条 active / 6 条 superseded 指针；dead 已整体降级
+全部 48 条结论（35 条 active / 13 条 superseded 指针；dead 已整体降级
 `docs/log/`）在 `docs/CONCLUSIONS.md`，这里只留最容易踩的六条：
 
 - 并发退化真因 = **NVDEC 会话数**；互补配对首选 NVDEC∥CPU，聚合 1.87×（PERF §21）
