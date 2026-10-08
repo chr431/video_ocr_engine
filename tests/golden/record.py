@@ -38,9 +38,9 @@ ROI = {"test5": (843, 993, 948, 1025), "test6": (841, 994, 949, 1026)}
 WIN = (0, 3000)
 
 # ── 覆盖矩阵（先做全：解码×管线×OCR 网格 + 编码族 + 格式/标志位）──────
-def _mk(cid, vid, *, env=None, **kw):
+def _mk(cid, vid, *, env=None, win=WIN, **kw):
     base = dict(video=vid, roi=ROI["test5" if vid == "test5" else "test6"],
-                frame_start=WIN[0], frame_end=WIN[1], keep_crops=False)
+                frame_start=win[0], frame_end=win[1], keep_crops=False)
     base.update(kw)
     return {"id": cid, "kwargs": base, "env": env or {}}
 
@@ -78,6 +78,29 @@ for vid in ("test6_av1", "test6_h264", "test6_hevc"):
         MATRIX.append(_mk("C-%s-%s" % (vid.split("_")[1], dec), vid,
                           decode_backend=dec, ocr_backend="tensorrt",
                           env={"GPU_PIPELINE": "1"}))
+# D：晚起点硬窗（2026-10-08 窗口架构重做补录；关闭金标盲区——09-19 缺陷
+# 正是从"金标只有 [0,3000) 早起点"的盲区穿透的，C-57 两缺陷形态同为
+# 晚起点）。hybrid + seek(5000) + 窗：引擎谓词在 window_seek_safe 键在
+# 场下设窗（0.8.5 wheel 无键走无窗路径，输出应逐位同——窗语义=供给
+# 边界，不是输出语义）。test5 尾格 (5000, 7761) 顺带覆盖片尾窗。
+# ⚠️ D-h264-w1000 曾录入后撤销：rep 帧像素逐位稳定但 seg[7] 置信度
+# 运行间翻动（0.99561↔0.99609，3 轮 1 翻；F-12，OCR 侧批形状效应），
+# 逐位门禁对它恒红——h264 晚起点由 w2761-tail 格覆盖。
+MATRIX.append(_mk("D-h264-w2761-tail", "test5", win=(5000, 7761),
+                  decode_backend="hybrid", ocr_backend="tensorrt",
+                  env={"GPU_PIPELINE": "1"}))
+MATRIX.append(_mk("D-hevc-w1000", "test6_hevc", win=(5000, 6000),
+                  decode_backend="hybrid", ocr_backend="tensorrt",
+                  env={"GPU_PIPELINE": "1"}))
+MATRIX.append(_mk("D-hevc-w3000", "test6_hevc", win=(5000, 8000),
+                  decode_backend="hybrid", ocr_backend="tensorrt",
+                  env={"GPU_PIPELINE": "1"}))
+MATRIX.append(_mk("D-av1-w1000", "test6_av1", win=(5000, 6000),
+                  decode_backend="hybrid", ocr_backend="tensorrt",
+                  env={"GPU_PIPELINE": "1"}))
+MATRIX.append(_mk("D-av1-w3000", "test6_av1", win=(5000, 8000),
+                  decode_backend="hybrid", ocr_backend="tensorrt",
+                  env={"GPU_PIPELINE": "1"}))
 
 TIMING_ONLY = ("timing",)  # verify 时跳过的字段（非确定性）
 
@@ -221,7 +244,8 @@ def write_manifest(env: dict, vids_sha: dict) -> None:
                 (d / f).read_bytes()).hexdigest()[:16])
         lines.append("  - id: %s" % c["id"])
         lines.append("    video: %s" % c["kwargs"]["video"])
-        lines.append("    window: [%d, %d]" % (WIN[0], WIN[1]))
+        lines.append("    window: [%d, %d]" % (c["kwargs"]["frame_start"],
+                                               c["kwargs"]["frame_end"]))
         lines.append("    env: %s" % json.dumps(c["env"]))
         lines.append("    kwargs: %s" % json.dumps(
             {k: v for k, v in c["kwargs"].items()

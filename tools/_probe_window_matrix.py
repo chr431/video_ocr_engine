@@ -11,6 +11,10 @@
 用法：
   python tools/_probe_window_matrix.py            # 全矩阵（3 码 × 4 格）
   python tools/_probe_window_matrix.py --quick    # 只跑 test5（h264）
+  python tools/_probe_window_matrix.py --repeat 5 # 连续 5 轮（发布门禁
+                                                  # 口径；单轮 12/12 在
+                                                  # 2026-10-08 被证明可被
+                                                  # 概率竞态 lucky-pass）
 环境：RACELOG_VIDEO_DIR（默认 D:/Videos/racelog_test）；
 DECORD_LIBRARY_PATH 指向待验 DLL（默认 D:/Repo/decord/build-dev）。
 """
@@ -55,7 +59,21 @@ def read_hash(path, roi, start, n, ctx, use_win):
 
 def main():
     quick = "--quick" in sys.argv
+    repeat = 1
+    if "--repeat" in sys.argv:
+        repeat = int(sys.argv[sys.argv.index("--repeat") + 1])
     vdir = video_dir()
+    fails = 0
+    for rep in range(repeat):
+        if repeat > 1:
+            print(f"── repeat {rep + 1}/{repeat} ──", flush=True)
+        fails += run_matrix(quick, vdir)
+    print(f"matrix: {'ALL PASS' if fails == 0 else f'{fails} 格失败'}"
+          f"{' × ' + str(repeat) if repeat > 1 else ''}")
+    return 1 if fails else 0
+
+
+def run_matrix(quick, vdir):
     fails = 0
     for name, codec, roi in VIDS:
         if quick and name != "test5":
@@ -85,8 +103,7 @@ def main():
                   f" win={n_eff:4d}  hybrid+win={h_win} hybrid={h_now}"
                   f" nvdec={h_nv} got={got_w}/{got_n}/{got_v}"
                   f" win_subs={subs}")
-    print(f"matrix: {'ALL PASS' if fails == 0 else f'{fails} 格失败'}")
-    return 1 if fails else 0
+    return fails
 
 
 if __name__ == "__main__":

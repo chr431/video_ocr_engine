@@ -1,10 +1,10 @@
 # S0 金标向量清单——录制基准与期望哈希（由 record.py 生成，人不得手改）
 environment:
-  commit: "49b352318d75c647580efba88ca728199289d5f6"
+  commit: "274f14af5d41e69a180055264949d786be7f8846"
   ocr_engine: "multi_PP-OCRv6_rec_small_sm89_fp32_tf32unset_b18.engine@1ef56e1af4ee6c41"
-  decord: "0.8.3"
+  decord: "0.8.5"
   gpu: "NVIDIA GeForce RTX 4060 Laptop GPU"
-  driver: "610.88"
+  driver: "617.14"
   python: "3.13.2"
 videos:
   test5: 44fd96af569f2c3a9eae239323353a5ef97037f0046885d18befc8a3851bdfad
@@ -180,3 +180,33 @@ cases:
     env: {"GPU_PIPELINE": "1"}
     kwargs: {"keep_crops": false, "decode_backend": "hybrid", "ocr_backend": "tensorrt"}
     sha: [f32b9ec1df292d7c, 84a7756fc0c844c3]
+  - id: D-h264-w2761-tail
+    video: test5
+    window: [5000, 7761]
+    env: {"GPU_PIPELINE": "1"}
+    kwargs: {"keep_crops": false, "decode_backend": "hybrid", "ocr_backend": "tensorrt"}
+    sha: [fd2053cf5f101dad, 129132e47b8dcad2]
+  - id: D-hevc-w1000
+    video: test6_hevc
+    window: [5000, 6000]
+    env: {"GPU_PIPELINE": "1"}
+    kwargs: {"keep_crops": false, "decode_backend": "hybrid", "ocr_backend": "tensorrt"}
+    sha: [0b9a9bd497d86b2a, c0ad33adf7f2ca7d]
+  - id: D-hevc-w3000
+    video: test6_hevc
+    window: [5000, 8000]
+    env: {"GPU_PIPELINE": "1"}
+    kwargs: {"keep_crops": false, "decode_backend": "hybrid", "ocr_backend": "tensorrt"}
+    sha: [0b9a9bd497d86b2a, 22e38d556cfd9654]
+  - id: D-av1-w1000
+    video: test6_av1
+    window: [5000, 6000]
+    env: {"GPU_PIPELINE": "1"}
+    kwargs: {"keep_crops": false, "decode_backend": "hybrid", "ocr_backend": "tensorrt"}
+    sha: [a84474565b57cd31, e38a4bb1b79853c0]
+  - id: D-av1-w3000
+    video: test6_av1
+    window: [5000, 8000]
+    env: {"GPU_PIPELINE": "1"}
+    kwargs: {"keep_crops": false, "decode_backend": "hybrid", "ocr_backend": "tensorrt"}
+    sha: [a84474565b57cd31, f6c01fc221f13a6f]

@@ -31,7 +31,7 @@ def _parse_manifest():
 
 def test_manifest_exists_and_complete():
     cases = _parse_manifest()
-    assert len(cases) == 28, "S0 基线应为 28 用例，实际 %d" % len(cases)
+    assert len(cases) == 33, "S0 基线应为 33 用例（28+D 组晚起点窗 5，2026-10-08），实际 %d" % len(cases)
     assert all("sha" in c for c in cases)
 
 

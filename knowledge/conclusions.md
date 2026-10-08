@@ -287,8 +287,16 @@
   evidence: log 2026-09-20-hybridOCR奖金池裁决
 
 - id: C-61
-  conclusion: **C-57 双缺陷根治 + 谓词契约门控（2026-09-28 夜间轮）**：①前缀预算算术（seek_prefix_ 记账）②僵尸 kick（ResetRouting 补清 pending_kicks_——首锚会话残留 kick 撞新会话侧分配→GOP 关键帧双解码→首帧重复/末帧被挤）。窗口矩阵 12/12 位级一致（hevc late-3000 历史首次全绿）；引擎谓词在 fork 契约键 window_seek_safe 在场时对晚起点放行设窗，键缺席（含 0.8.5 wheel）保守保留
+  conclusion: 已被 C-62 取代——修复本身有效（晚起点格全绿），但「矩阵 12/12」证据不可复现（同 dev dll 2026-10-08 健康格 2/12 轮静默替补，单轮通过不能作门禁）；引擎谓词契约门控仍现行
+  status: superseded
+  replaced_by: C-62
+  premises: dev dll 51d1e646；归因未定论（四臂对照见叙事）
+  revisit: —
+  evidence: log 2026-10-08 收口与窗口架构重做
+
+- id: C-62
+  conclusion: **硬窗架构重做（fork 0.9.0）：绝对帧区间 + marker 语义分离（0=EOF/1=WINDOW_END）+ 会话对象化（SessionState 整体重建）+ 窗模式禁替补（win_subs 结构性恒 0，缺帧响亮 FATAL）**——结构性根除 C-57 一族四根源（eof_pushed_ 语义过载/跨类计数算术/手写重置清单/替补放大器）。矩阵 12/12 × 5 轮 + 哈希与旧架构逐位一致 + fork 七套件（新增 window 套件）
   status: active
-  premises: fork 分支 p3-window-prefix（前缀修复+僵尸修复+契约键+TR2 探针）；矩阵 12/12 于 dev dll
-  revisit: fork 0.8.6 合并发布后装 wheel 复跑矩阵 12/12；僵尸 kick 若再现按 win_subs 哨兵与 TR2 取证链续钻
-  evidence: log 2026-09-28 夜间kick竞态根治
+  premises: fork 0.9.0 dev（52597677）；金标 D 组晚起点 5 用例
+  revisit: fork 换代/窗口路径改动（matrix --repeat 5 + window 套件）/换卡/竞态再现（轮盘续钻）
+  evidence: log 2026-10-08 收口与窗口架构重做

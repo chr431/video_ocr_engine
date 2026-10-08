@@ -38,6 +38,29 @@
 ## 已知问题与注意
 
 ### decord（自建 fork，pip wheel 安装）
+- **0.9.0（2026-10-08 已发布：tag v0.9.0 + GitHub Release cp39–cp314
+  wheel 矩阵 + win64-gpu.zip；本机 cp313 wheel 已装）= 0.8.5 + p3
+  合并 + 硬窗架构重做**（收口轮，log 2026-10-08 收口与窗口架构重做；
+  C-62）：0.8.6 候选（p3 双缺陷修复）在发布门禁复跑中暴露健康格
+  hevc(0,3000) 单帧静默替补（同 dev dll 2/12 轮、失败内容确定、
+  观测即消失——五轮窗口修复史的结构性复发），裁决**重做窗口架构**
+  而非继续打补丁：①窗=绝对帧区间 [T,T+n)（pump 按 GOP 判交，
+  删 reader seek_prefix_ 跨类算术）②drain marker 载荷分离
+  （0=EOF/1=WINDOW_END，`range_end_pushed_` 与 `eof_pushed_` 分家）
+  ③SessionState 会话对象化（ResetRouting=整体重建，僵尸 kick 类
+  缺陷结构性不可达）④窗模式禁替补（FetchCachedFrame 窗激活恒
+  false——静默换帧不可达，win_subs 结构性恒 0，缺帧 rewind 后
+  DumpState+FATAL）。契约面不变（`window_seek_safe`/
+  `hard_decode_window` 语义维持，新 stats 键 window_lo/hi=兼容新增，
+  无 CONTRACT_VERSION bump；15 键）。fork 侧窗口覆盖从零到一：
+  run_fast 第七套件 window + smoke 窗格 + `_kick_roulette` 参数化；
+  引擎矩阵探针升级 `--repeat`（单轮 12/12 被 flake 证明可 lucky-pass，
+  发布门禁=连续 5 轮）。
+  **验证（wheel 态，发布工件）**：窗口矩阵 12/12×5 全绿 + 金标
+  33/33（D 组晚起点窗用例走真窗路径）+ smoke 含窗格；dev 态另过
+  七套件/stream×10/发布门禁 19/19（段数锚 8340）/dll_ab
+  （redo 较 0.8.5 wheel +1.57%，<5% 门禁，构建配置混杂留档）/
+  布局轮盘 11 布局 0 命中（含旧架构必坏位 shift=48）。
 - **0.8.5（2026-09-28 已发布：tag v0.8.5 + GitHub Release
   cp39–cp314 wheel 矩阵 + win64-gpu.zip；本机 cp313 wheel 已装回）**：
   0.8.5 = 0.8.4 + 夜间重构轮五提交 + 发布轮两提交——EOF 预算在途宽限
@@ -57,25 +80,12 @@
   `_driver` 对 >0 记 WARNING（CU 臂启动竞态冻结被自愈重掷的次数；
   fork 侧为统计根治——真值生产中持续增长时按 fork tools/ 取证链
   续钻，log 2026-09-28 R3R5 夜间轮·续章）。
-  ⚠️ **master 已领先 0.8.5（下一版候选，未发 wheel）**：dev dll
-  `build-dev`（原 build-081fix，0.8.1 时代遗留名已改）领先提交——
-  ①C-57 窗替补哨兵（`win_subs` 键 + latched 告警；晚起点+seek_acc+
-  窗缺陷形态实测 pos=5980/win_subs=20/帧 md5 与 0.8.5 逐位一致=纯
-  观察，start=0 健康窗零假阳性）②GPU 侧 EOF 恢复网对称扩展 v2
-  （真·尾部判别门）③Linux cstdio 修复 ④build-081fix→build-dev
-  改名 + 窗口空真加固（已派未闭合 GOP 须读到闭合 / flush 等闭合）。
-  fork 测试经 `DECORD_LIBRARY_PATH=build-dev`；引擎产品路径走 wheel
-  不受影响。
-  **C-57 已根治（2026-09-28 夜间轮，log 同日 夜间kick竞态根治）**：
-  双缺陷——①前缀预算算术 ②**僵尸 kick**（ResetRouting 漏清
-  pending_kicks_，seek 首锚会话残留 kick 撞新会话侧分配 → GOP
-  关键帧双解码 → 首帧重复/末帧被挤，221 帧签名实证；此前"带外注入
-  =损坏 / 等待清零=死锁"双证伪针对的是错误问题）。修复=一行
-  （ResetRouting 补清）。**分支 p3-window-prefix = 前缀修复 + 僵尸
-  修复 + `window_seek_safe` 契约键 + TR2 取证探针，窗口矩阵 12/12
-  位级一致**（hevc late-3000 历史首次全绿）。引擎谓词已改契约门控
-  （键在→晚起点设窗；旧 fork 无键→谓词保留）——**待 fork 0.8.6
-  发布后装 wheel 复跑矩阵**。
+  **C-57 saga 存档**：哨兵（win_subs）/空真加固/EOF 网 v2（0.8.5 后
+  四提交，已入 0.9.0）→ 前缀+僵尸 kick 修复（p3 分支，2026-09-28
+  夜间轮根治，已合 0.9.0）→ 2026-10-08 复发 flake → 重做（C-62）。
+  归因未定论：post-p3 构建 2/12 失败、pre-p3/no-prefix/0.8.5 对照
+  臂干净，但每臂不同二进制布局（本仓已知布局翻转此类竞态）且未
+  交错——指向性证据而非定论（叙事留档）。
 - **0.8.4（2026-09-19 已发布，tag v0.8.4，cp39–cp314 + win64-gpu.zip）**：
   v0.8.4 = v0.8.3 + 冻结前清理（cuMemcpyPeerAsync 符号修复 / 死代码
   −14.6k 行 / nvml.h 手写替代 795KB→45 行）+ 性能参考纯解码口径

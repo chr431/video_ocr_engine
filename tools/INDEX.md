@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **140 个 `.py`**（24,230 行），其中 127 个是探针
+`tools/` 现有 **140 个 `.py`**（24,247 行），其中 127 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -42,7 +42,7 @@
 | `_probe_unify_decode.py` | 148 | decode 统一设想测量：forced-hybrid vs 纯臂（输出位级等价/速率平价/ctor 冷税；av1×force_cpu 退化 GPU 实证；子进程自调用协议）| docs/log/2026-09-20-批量策略与hybridOCR轮.md §1.1 |
 | `_probe_hybrid_ocr.py` | 89 | hybrid OCR（双车道 TRT+OV）A/B 与文本对照（batch_test 字幕 stride=1 OCR-bound 口径——v0 +51% 回归与 3/26461 文本差的证据）| docs/log/2026-09-20-批量策略与hybridOCR轮.md §3 |
 | `_probe_window_repro.py` | 45 | hard-window 回归复现器（CPU-out 窗口口径，got==n 判少交付 + hybrid_stats；可选 start 参数=晚起点复现（窗×seek 尾帧替补缺陷的取证口径，2026-09-20））| docs/log/2026-09-19-hybrid窗口缺陷轮.md；2026-09-20-审计修复轮.md §4 |
-| `_probe_window_matrix.py` | 94 | hard-window 位级对照矩阵（C-57 专项门禁，2026-09-28）：三码 × start×win 网格 × {hybrid+窗, hybrid 无窗, nvdec} 三读法帧 md5 逐位断言 + win_subs==0；当前基线 10/12（h264 late-1000 win_subs=20 / hevc late-3000 win_subs=79 为 C-57 缺陷格）| docs/log/2026-09-28-C57根治专项调查.md |
+| `_probe_window_matrix.py` | 111 | hard-window 位级对照矩阵（C-57/C-62 门禁）：三码 × start×win 网格 × {hybrid+窗, hybrid 无窗, nvdec} 三读法帧 md5 逐位断言 + win_subs==0；`--repeat N` 重复协议（2026-10-08：单轮 12/12 被证明可被概率竞态 lucky-pass，发布门禁口径 = 连续 5 轮全绿）| docs/log/2026-10-08-收口与窗口架构重做.md |
 | `_probe_worktree_ab.py` | 166 | 跨代码版本的同会话交错 A/B（A=HEAD 临时 worktree / B=当前工作树；bench run 子进程自带时钟门禁，臂序轮转 + 同轮配对差分 + 段数旁证；重构中性验证专用件——硬件漂移禁止新码 vs 注册表过往条目直接比对）| docs/log/2026-09-20-宿主GPU驱动合一轮.md |
 | `_probe_autocrop_retest.py` | 181 | 裁切复测探针（5 臂 accuracy：A1/A64/C/C639/C781——拆 reorder 混变量 + OCR_PAD_SMALL 纯张量宽扰动；perf 模式交错配对 wall/infer/q_get_wait）| docs/log/2026-09-20-裁切复测轮.md |
 | `_probe_hybridocr_prize.py` | 183 | hybrid OCR 奖金池裁决探针（A nvdec+TRT / B nvdec+双车道 / C hybrid+hybrid / D 纯解码上限参考；整集交错配对 + 文本旁证；预注册判据 5%/10%）| docs/log/2026-09-20-hybridOCR奖金池裁决.md |
@@ -257,7 +257,7 @@ frozen——C-52/C-53 证据已封板，探针为存档证据，不再可直跑�
 | `_probe_h264_hybrid.py` | C-46 达成率定稿口径的载体：fork 换代/换卡复评直跑（同会话三臂交错协议） |
 | `_probe_ocr_phase_split.py` | 本轮新工具：OCR 批延迟拆相（TRT_DEFER_SYNC 复评时直跑） |
 | `_probe_ov_cpu_ab.py` | 本轮新工具：OpenVINO vs ORT 模型级 A/B（OV 立项复评直跑） |
-| `_probe_window_matrix.py` | C-57 专项门禁：fork 迟包供给专项落地时直跑（当前为缺陷基线 10/12，两格=C-57 缺陷形态） |
+| `_probe_window_matrix.py` | 窗口架构门禁（fork 换代/窗口路径改动必跑）：`--repeat 5` 重复协议 + win_subs==0；单轮通过不作数（2026-10-08 flake 教训） |
 | `_probe_content_det.py` | 本轮新工具：hybrid 输出内容确定性对照（帧级 hash，C-46 kick 落位根因的取证入口） |
 | `_probe_quant_static.py` | 本轮新工具：静态 QDQ 量化评测（已判死；OpenVINO 复评时直跑） |
 | `_probe_run_setup_cost.py` | tests/ |

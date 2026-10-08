@@ -17,7 +17,7 @@
 | `bench_baseline.json` | 四配置 × 3 轮性能基线 + 噪声底（D10 阈值校准依据） |
 | `FINDINGS.md` | 录制期发现的 v1 行为缺陷（F-1 force_aspect 越界报错路径崩溃等） |
 
-## 覆盖矩阵（28 用例，窗口 [0,3000)）
+## 覆盖矩阵（33 用例；A/B/C 窗口 [0,3000)，D 组晚起点窗）
 
 - **A（12）**：test5 h264 × decode{cpu,nvdec,hybrid} × pipeline{host,GPU} × OCR{onnx,TRT}
   —— 全部 1083 段：D1 修复后 host=GPU 跨配置等价的基线成立
@@ -25,6 +25,12 @@
   关闭 merge_similar（1090 段）
 - **C（9）**：test6 同内容三编码（av1/h264/hevc）× decode{cpu,nvdec,hybrid}
   —— 全部 1109 段：跨编码等价成立
+- **D（5，2026-10-08 窗口架构重做补录）**：三码 × hybrid × 晚起点
+  seek(5000) × 窗（test5 尾格 2761 顺带覆盖片尾窗；h264-w1000 因
+  F-12 置信度翻动撤出）——关闭
+  09-19 窗口缺陷穿透的金标盲区（彼时金标只有早起点窗）；hevc/av1
+  段数 337/1155 跨编码相等。录制口径 = fork 0.9.0 dev（窗路径）；
+  0.8.5 wheel（无 window_seek_safe 键→引擎谓词不设窗）输出应逐位同
 
 ## 门禁
 
