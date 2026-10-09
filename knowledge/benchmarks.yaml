@@ -638,3 +638,12 @@
             （b3 vs b7 ±1.7%，b3 略快——并行度假说否决）
   implication: h264 选型分界的第一驱动是编码工具集；批量按实测速率
             分派（勿按格式/码率猜）
+# ── 周期账本轮（2026-10-09，C-63/C-64；h264-cpu 600 帧 n=6 热轮配对）──
+- metric: cycle_ledger_aa_band
+  cyc_e2e_mean_pct: 0.333
+  cyc_e2e_se_pct: 0.414
+  cyc_e2e_resolvable_floor_pct: 1.58
+  wall_mean_pct: 0.284
+  wall_se_pct: 0.851
+  wall_resolvable_floor_pct: 2.85
+  note: 安静态周期判读比墙钟分辨力高 ~1.8x；满载差距见 C-63

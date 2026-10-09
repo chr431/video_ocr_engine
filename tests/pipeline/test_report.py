@@ -49,8 +49,9 @@ def _std_metrics():
 def test_report_version_is_pinned():
     # v1→v2：+resources/+hardware；v2→v3：+diagnostics；v3→v4：+span_relations
     # 与 `<parent>_other` 派生 span；v4→v5：+histograms/histograms_meta
-    # （full 档专属）；v5→v6：+hybrid（fork 遥测直通，均为只加键）
-    assert REPORT_VERSION == 6
+    # （full 档专属）；v5→v6：+hybrid（fork 遥测直通）；v6→v7：resources
+    # per_phase 行 +cycles 原始差分与 cycles_e2e（C-63 判据用；均只加键）
+    assert REPORT_VERSION == 7
 
 
 def test_report_schema_snapshot():
@@ -208,6 +209,10 @@ def test_per_phase_deltas_are_sane():
     # 量测含主线程以外的极小开销，放宽到 (0, 2)。
     if sys.platform == "win32":  # QueryProcessCycleTime 仅 Windows
         assert 0.0 < row.get("cores_avg_cycles", 0.0) < 2.0
+        # v7 周期账本（C-63）：原始 cycles 差分与全程账本必须在场
+        assert isinstance(row["cycles"], int) and row["cycles"] > 0
+        e2e = r["cycles_e2e"]
+        assert e2e["total"] == row["cycles"] and e2e["span"] == "open..decode"
     assert row["threads"] >= 1
     if "rss_delta_mib" in row:
         assert isinstance(row["rss_delta_mib"], float)

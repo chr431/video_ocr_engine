@@ -346,6 +346,15 @@ def _flatten(report: dict) -> dict:
         flat["counter:" + k] = v
     for k, v in (report.get("gauges") or {}).items():
         flat["gauge:" + k] = v
+    # v7 周期账本（C-63）：resources.per_phase 的原始 cycles 差分 → 配对
+    # 差分口径（与 span/gauge 同款进归因表；非 Windows/来源缺席时无键）。
+    per_phase = (report.get("resources") or {}).get("per_phase") or {}
+    for ph, row in per_phase.items():
+        if isinstance(row, dict) and row.get("cycles") is not None:
+            flat["cyc:" + ph] = row["cycles"]
+    e2e = per_phase.get("cycles_e2e")
+    if isinstance(e2e, dict) and e2e.get("total") is not None:
+        flat["cyc:e2e"] = e2e["total"]
     return flat
 
 
@@ -786,6 +795,38 @@ def _attr_report(name: str, ra: dict, rb: dict, pairs: list,
           % nz)
 
 
+def _cycle_verdict(name: str, ra: dict, rb: dict) -> None:
+    """周期账本判据（C-63，2026-10-09 产品化）：cycles 配对差分的判读输出。
+
+    与 wall 判定同款统计纪律（CI 排零 ∧ 符号多数 ≥70%），但**只判读不改
+    退出码**——wall 仍是唯一失败判据；cycles 的角色是墙钟分辨率不够时的
+    第二意见（配对差分自带配对消噪，SMT 争用均值带见 C-63 前提）。
+    只看 cyc:e2e / cyc:decode / cyc:ocr / cyc:calibrate 四键。
+    """
+    diffs = _paired_metric_diffs(ra.get(name, []), rb.get(name, []),
+                                 mode="hot")
+    keys = [k for k in ("cyc:e2e", "cyc:decode", "cyc:ocr", "cyc:calibrate")
+            if k in diffs]
+    if not keys:
+        return
+    print("周期账本判据（C-63；同款纪律：|均值|>3×SE ∧ 符号多数≥70%；"
+          "只判读不改退出码；正号=B 周期多=B 更费 CPU）：")
+    for k in keys:
+        v = diffs[k]
+        need = max(2, int(round(v["n"] * PI15_LIMITS["sign_majority"] + 0.5)))
+        sig = abs(v["mean"]) > max(3 * v["se"], 0.05)
+        pos, n = v["pos"], v["n"]
+        if sig and pos >= need:
+            verdict = "B 周期显著多"
+        elif sig and (n - pos) >= need:
+            verdict = "B 周期显著少"
+        else:
+            verdict = "不可判定"
+        print("  %-9s A(中位)%8.3fG  Δ均值 %+7.2f%%  SE %5.2f%%  "
+              "符号 %d/%d  → %s"
+              % (k[4:], v["base"] / 1e9, v["mean"], v["se"], pos, n, verdict))
+
+
 def cmd_ab(args) -> int:
     """交错 A/B（S6 口径 → P1 加固：臂序轮转 + 时钟门禁 + 自动判定）。
 
@@ -1001,6 +1042,8 @@ def cmd_ab(args) -> int:
         # W5 逐指标归因（只归因不判失败；C-42：归因≠可回收量）
         if args.telemetry != "off":
             _attr_report(name, ra_all, rb_all, pairs, args.hard)
+            # v7 周期账本判据（C-63）：cycles 第二意见（不改退出码）
+            _cycle_verdict(name, ra_all, rb_all)
     if not aa:
         print("\n判读补充：符号一致=可信；符号混乱=落在漂移内。A=%s B=%s"
               % (args.a, args.b))

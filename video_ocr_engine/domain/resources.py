@@ -300,9 +300,14 @@ class ResourceProbe:
             dcpu = float(sb["cpu"] - sa["cpu"])
             row["cores_avg"] = round(max(0.0, dcpu) / dt, 2)
             ca, cb = sa.get("cycles"), sb.get("cycles")
-            if f_run > 0 and ca is not None and cb is not None:
-                row["cores_avg_cycles"] = round(
-                    max(0, cb - ca) / dt / f_run, 2)
+            if ca is not None and cb is not None:
+                # v7 周期账本（C-63）：原始 cycles 差分本体——A/B 判据用。
+                # 与 cores_avg_cycles 不同，不除墙钟、不乘频率换算，跨臂
+                # 配对可比；SMT 争用带 ±16% 均值漂移（C-63 前提：交错仍需）。
+                row["cycles"] = max(0, cb - ca)
+                if f_run > 0:
+                    row["cores_avg_cycles"] = round(
+                        max(0, cb - ca) / dt / f_run, 2)
             # W3：相位**终点**的 SM 时钟（GPU 路径相位差分才有；起点读数
             # 用于人工对齐——时钟爬坡期一个相位内前后差上千 MHz 是常态）
             if sb.get("sm_mhz") is not None:
@@ -328,6 +333,13 @@ class ResourceProbe:
             if first["vram"] is not None:
                 base["vram_used_mib"] = round(first["vram"][0] / 1048576.0, 1)
             out["_at_first_checkpoint"] = base
+            # v7：全程周期账本 = 末边界 − 首边界（覆盖 calibrate+decode+ocr；
+            # 首边界在 open 相位结束处）。两臂同代码路径下配对可比。
+            fa_c, fb_c = rows[0][1].get("cycles"), rows[-1][1].get("cycles")
+            if fa_c is not None and fb_c is not None:
+                out["cycles_e2e"] = {
+                    "total": max(0, fb_c - fa_c),
+                    "span": "%s..%s" % (rows[0][0], rows[-1][0])}
         out["checkpoints"] = [r[0] for r in rows]
         return out
 
