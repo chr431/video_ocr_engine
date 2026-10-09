@@ -658,3 +658,12 @@
   gpu_arm_sm_util_p50: 16
   gpu_arm_nvdec_util_p50: 99
   note: sleep 注入绑定实验；GPU 臂为 NVML/占空推导（SM ~5x 余量）
+# ── 遥测两档化（2026-10-09，D30；h264-gpu 3000 帧 n=25 同进程交替）──
+- metric: telemetry_two_tier
+  aa_full_mean_pct: 0.002
+  aa_full_se_pct: 0.067
+  aa_suggested_limit_pct: 0.25
+  gate_full_vs_off_mean_pct: 0.079
+  gate_full_vs_off_se_pct: 0.064
+  gate_limit_pct: 1.20
+  verdict: 通过（std 退役：0.115% vs 0.038% 同在噪声内）
