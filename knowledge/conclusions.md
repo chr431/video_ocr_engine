@@ -261,12 +261,10 @@
   revisit: PyPy finalizer 语义 / 池契约重构
   evidence: log 2026-09-20-审计修复轮 §2
 - id: C-57
-  conclusion: **hybrid 硬窗 × seek(start>0) 双缺陷已根治（fork p3-window-prefix 分支）**：①前缀预算算术（缺口=前缀+请求−派工，C57根治专项调查 §1）；②僵尸 kick（ResetRouting 漏清 pending_kicks_，首锚会话残留 kick 撞新会话侧分配→GOP 关键帧双解码）。窗口矩阵 12/12 位级一致。引擎谓词改契约门控（`window_seek_safe` 键在则晚起点也设窗；旧 fork/0.8.5 wheel 无键→谓词保留）
+  conclusion: 已被 C-61（→C-62）取代——硬窗×晚起点双缺陷根治中间结论（前缀算术+僵尸 kick；契约键 `window_seek_safe` 门控现行）
   status: superseded
   replaced_by: C-61
-  premises: fork ≥ 僵尸 kick 修复版（分支 p3-window-prefix，待发 0.8.6）；旧 fork 靠契约缺席保守
-  revisit: fork 0.8.6 发布后装 wheel 复跑矩阵；僵尸 kick 若再现查 win_subs 哨兵与 TR2 取证
-  evidence: log 2026-09-28 夜间kick竞态根治；2026-09-28 C57根治专项调查
+  evidence: log 2026-09-28 夜间kick竞态根治
 - id: C-58
   conclusion: **hybrid OCR 双车道（TRT+OV）v0.5：回归已消除（+48%→−1.8%）但本机无净收益**——容量理论 +54% 实测 +18%（OV 产能=TRT 1/3；争用 +20%；CPU 臂无余量）；触发条件实测见 C-60
   status: active
@@ -274,7 +272,7 @@
   revisit: NVDEC 纯解码部署 / 多 NVDEC 卡 / OCR 变重
   evidence: log 09-20 批量策略轮 §3-4
 - id: C-59
-  conclusion: 宽 ROI 字幕：裁切文本效应=临界字形宽度彩票（C639≡C 不翻、C781 纯 pad 翻 14 段；高恒 48 字形尺寸不变），随集波动（ep01 −7/ep02 +40）；性能真收益（墙钟 −6.6% 同窗口/−9.0% vs 旧默认；OCR 负担降→解码争用减；infer 对 pad 宽不敏感）。默认维持；L2 同属宽度扰动
+  conclusion: 宽 ROI 字幕：裁切文本效应=临界字形宽度彩票（C639≡C 不翻、C781 纯 pad 翻 14 段），随集波动（ep01 −7/ep02 +40）；性能真收益（墙钟 −6.6% 同窗口/−9.0% vs 旧默认）。默认维持；L2 同属宽度扰动
   status: active
   premises: 新三国01/02 stride=1；dbe=cpu+TRT；真值视觉+抽帧复核
   revisit: 换模型 / PAD_SMALL×裁切联调 / NVDEC 纯解码 / dbe 变更
@@ -287,11 +285,9 @@
   evidence: log 2026-09-20-hybridOCR奖金池裁决
 
 - id: C-61
-  conclusion: 已被 C-62 取代——修复本身有效（晚起点格全绿），但「矩阵 12/12」证据不可复现（同 dev dll 2026-10-08 健康格 2/12 轮静默替补，单轮通过不能作门禁）；引擎谓词契约门控仍现行
+  conclusion: 已被 C-62 取代——修复有效但「矩阵 12/12」不可复现（单轮通过不作门禁）；谓词契约门控仍现行
   status: superseded
   replaced_by: C-62
-  premises: dev dll 51d1e646；归因未定论（四臂对照见叙事）
-  revisit: —
   evidence: log 2026-10-08 收口与窗口架构重做
 
 - id: C-62
@@ -300,3 +296,10 @@
   premises: fork 0.9.0 dev（52597677）；金标 D 组晚起点 5 用例
   revisit: fork 换代/窗口路径改动（matrix --repeat 5 + window 套件）/换卡/竞态再现（轮盘续钻）
   evidence: log 2026-10-08 收口与窗口架构重做
+
+- id: C-63
+  conclusion: **周期/指令账本可作 A/B 判据**：引擎负载下 QueryProcessCycleTime 同条件 CV≤2.3%（满载墙钟 CV 30-36% 对照）、nvdec 臂跨负载守恒 0.965；ncu sm__inst_executed 24 次 launch 散布 2.7e-6——GPU 代码变更 n=1 采集即可分辨 0.01% 级。边界：SMT 争用均值带 ±16%→交错仍需；BLAS/自旋库满载 +139% 不可用；ncu 需管理员+重放扰动=离线专用
+  status: active
+  premises: 本机 4060/16C32T/Win32；ncu 2026.2.0；引擎栈 decord+OpenVINO 无自旋放大
+  revisit: 换机/换 CPU；BLAS/OV 线程模型换代；bench 判据集成前先实战一轮 A/B
+  evidence: log 2026-10-09-周期计数测量首轮
