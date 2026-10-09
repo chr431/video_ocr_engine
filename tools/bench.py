@@ -355,6 +355,9 @@ def _flatten(report: dict) -> dict:
     e2e = per_phase.get("cycles_e2e")
     if isinstance(e2e, dict) and e2e.get("total") is not None:
         flat["cyc:e2e"] = e2e["total"]
+        # v8 线程级全程账本（full 档；bench ab 需 --telemetry full）
+        for name, c in (e2e.get("threads") or {}).items():
+            flat["cyct:" + name] = c
     return flat
 
 
@@ -801,12 +804,14 @@ def _cycle_verdict(name: str, ra: dict, rb: dict) -> None:
     与 wall 判定同款统计纪律（CI 排零 ∧ 符号多数 ≥70%），但**只判读不改
     退出码**——wall 仍是唯一失败判据；cycles 的角色是墙钟分辨率不够时的
     第二意见（配对差分自带配对消噪，SMT 争用均值带见 C-63 前提）。
-    只看 cyc:e2e / cyc:decode / cyc:ocr / cyc:calibrate 四键。
+    只看 cyc:e2e / cyc:decode / cyc:ocr / cyc:calibrate 四键 + 全部
+    cyct:*（线程级，full 档才有）。
     """
     diffs = _paired_metric_diffs(ra.get(name, []), rb.get(name, []),
                                  mode="hot")
     keys = [k for k in ("cyc:e2e", "cyc:decode", "cyc:ocr", "cyc:calibrate")
             if k in diffs]
+    keys += sorted(k for k in diffs if k.startswith("cyct:"))
     if not keys:
         return
     print("周期账本判据（C-63；同款纪律：|均值|>3×SE ∧ 符号多数≥70%；"
@@ -822,9 +827,10 @@ def _cycle_verdict(name: str, ra: dict, rb: dict) -> None:
             verdict = "B 周期显著少"
         else:
             verdict = "不可判定"
-        print("  %-9s A(中位)%8.3fG  Δ均值 %+7.2f%%  SE %5.2f%%  "
+        print("  %-14s A(中位)%8.3fG  Δ均值 %+7.2f%%  SE %5.2f%%  "
               "符号 %d/%d  → %s"
-              % (k[4:], v["base"] / 1e9, v["mean"], v["se"], pos, n, verdict))
+              % (k.split(":", 1)[1], v["base"] / 1e9, v["mean"], v["se"],
+                 pos, n, verdict))
 
 
 def cmd_ab(args) -> int:
