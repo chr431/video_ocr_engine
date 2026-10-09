@@ -136,6 +136,7 @@
 
 | 面 | 说明 |
 |---|---|
+| RunReport **schema v9** | `report_version` 8→9。**删键语义**：Windows 报告的 `resources.per_phase` 行不再发 `cores_avg`（tick 口径）——cycles 在场时它是与 `cores_avg_cycles` 并存的重复口径；消费者改读 `cores_avg_cycles`。非 Windows（cycles 缺席）仍发 `cores_avg` 作回退 |
 | RunReport **schema v2** | `report_version` 1→2，**只加键**：`resources`（std+：每相位平均并行核数/线程数/RSS·VRAM 增量/磁盘读写速率 + 每来源真出处或 `unavailable:原因`）、`hardware`（仅 full 档采样过才出现：GPU%/NVDEC%/显存 min·p50·p99·max）。按 v1 解析的旧读者不受影响；金标只记 `meta` 键名，故无需重录（28/28 逐位一致已验） |
 | `hybrid` CPU 线程档位 | 默认 12→**16**（核数//2 钳 [8,16]），并取消按 decord 版本号的门控（对 `DECORD_LIBRARY_PATH` 换 dll 的情形判错）。交错 A/B：h264-hybrid −6.5%、hevc-hybrid −12.7%；`HYBRID_CPU_THREADS` 显式覆盖仍有效 |
 | PI-15 门禁校准 | 判据改"同进程交替 + 档位轮转 + 同轮配对差分**均值** + 符号多数一致"，阈值按本机 A/A 标定（**2026-09-13 重标：std +0.30% / full +1.20%**；规则 `\|偏差\|+3×SE`）。§13.2 设计目标 +0.1%/+1% 仍打印。**换机器后需 `bench.py telemetry-check --aa` 重标**。µs 级严格性移至 `tests/config/test_telemetry_cost.py`（插桩路径重放 ≤2ms/run） |

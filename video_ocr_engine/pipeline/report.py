@@ -36,7 +36,11 @@ from pathlib import Path
 # 周期差分）与 `thr_duty`（占空比 = Δcycles/(f_run×Δwall)，等待不计——
 # C-63 盲区的引擎侧补全；外来线程群仍不可分，见 resources 模块注）；
 # `cycles_e2e.threads` 线程级全程账本。std 档无这些键。
-REPORT_VERSION = 8
+# v9（2026-10-09 监测精简轮）：`cores_avg` 收敛为回退键——cycles 来源
+# 在场（Windows）时**不再发**，仅非 Windows 回退（两个"平均核数"并存
+# 打架，读者分不清权威）。这是**删键语义**（Windows 报告里消失），
+# 消费者改读 `cores_avg_cycles`（MIGRATION §4）。
+REPORT_VERSION = 9
 
 #: v4：span 嵌套关系（代码级核对，2026-09-17 勘察）。**子项互不重叠**是
 #: 硬约束——嵌套更深的键（如宿主 merge_pair/q_put_block 在 consume_feed
@@ -223,8 +227,9 @@ def build_report(metrics, *, wall: float, config_digest: str = "",
             res = dict(res)
             res["notes"] = ("L1 为进程级差分，OCR 与解码并发时核数互相计入"
                             "（相位平均并行核数的本意）；cores_avg_cycles 为"
-                            "cycle 口径（无 process_time 15.625ms tick 量化，"
-                            "短相位可信；按全程平均频率换算，变频相位有偏）；"
+                            "cycle 口径权威读数（无 15.625ms tick 量化；按全程"
+                            "平均频率换算，变频相位有偏）；cores_avg 仅 cycles"
+                            "来源缺席（非 Windows）时的回退；"
                             "cycles/cycles_e2e 为原始周期账本（C-63：A/B 配对"
                             "判据，跨频稳定但 SMT 争用带 ±16% 均值漂移，交错"
                             "仍需）；thr/thr_duty 为引擎自有线程的逐线程账本"

@@ -42,9 +42,11 @@ def render_conclusions_md(entries: list[dict]) -> str:
     lines = ["# 现役结论索引（L1，唯一规范性结论地）",
              "",
              "> 本文件由 knowledge/render.py 从 knowledge/conclusions.md 渲染",
-             "> （人不得手写；--check 校验一致性）。状态取值：active / superseded",
-             "> （被取代，只留指针）/ dead（已降级 docs/log 历史）。规则与完整",
-             "> 说明见 conclusions.md 头部注释。",
+             "> （人不得手写；--check 校验一致性）。状态取值：active /",
+             "> superseded（被取代）/ dead。superseded 与 dead 全文在",
+             "> docs/log/2026-09-10-conclusions-history.md（append-only，显式",
+             "> 检索可达；2026-10-09 起 superseded 不再留源内指针）。规则与",
+             "> 完整说明见 conclusions.md 头部注释。",
              "",
              "| ID | 结论 | 前提/边界 | 复评触发 | 证据 |",
              "|----|------|-----------|----------|------|"]
@@ -56,7 +58,8 @@ def render_conclusions_md(entries: list[dict]) -> str:
         lines += ["", "## 已取代（指针）", ""]
         for e in sup:
             lines.append("- %s → %s" % (e["id"], e.get("replaced_by", "?")))
-    lines += ["", "（dead 条目已整体降级 docs/log/，含复评触发，显式检索可达。）", ""]
+    lines += ["", "（superseded/dead 条目全文在 docs/log/2026-09-10-"
+             "conclusions-history.md，含复评触发，显式检索可达。）", ""]
     return "\n".join(lines)
 
 

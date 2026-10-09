@@ -1162,3 +1162,36 @@ tactic/TF32 取值不同"的机制自洽。故本次重录**不触碰正确性�
 但意味着"金标 28/28"只在**同一引擎产物**下成立。可选方向：把引擎产物指纹
 （或引擎文件本身）纳入版本化管理 / 在 manifest 里记录并**在 verify 时校验**
 引擎指纹不符即显式失败（而不是静默按数值比对）。
+
+
+## 29. 监测层级精简 + conclusions 清扫（2026-10-09，用户裁决）
+
+用户观察：「监测机制层级有些混乱」「conclusions 被推翻的可以移走了」。
+
+**清点结论**（先量后做——各层消费者逐一 grep）：
+- 层级本身有纪律（off/std/full × L1/L2 × 相位键集，PI-15 成本守卫、
+  test_phase_key_registry 键集守护），不是混乱源。
+- 真混乱源三处：①`cores_avg`（tick 口径）与 `cores_avg_cycles`（cycle
+  口径）两个"平均核数"并存，读者分不清权威（P2a 引入后者即为取代前者，
+  但前者从未退场）；②监测栈的组成关系（ProfSpine/Metrics/L1/L2/线程
+  账本/消费面）没有任何单点地图；③conclusions 源里 13 条 superseded
+  指针占据 ~1KB 预算（源连日饱和，每轮被迫修剪 20+ 条措辞）。
+- 查证后**不是**混乱、不动的：ENGINE_PROFILE 13 相位字典（R2 定的
+  独立调试读面，单消费者有文档）；ResourceProbe 惰性三态（成本纪律）；
+  bench 四层判读输出（各层语义不同：判失败/归因/第二意见）。
+
+**处置**：
+1. `cores_avg` 收敛为回退键（report v9，删键语义）：cycles 在场
+   （Windows）不再发，非 Windows 仍发作唯一回退。MIGRATION §4 登记。
+2. metrics.py 模块头立「监测层级单点地图」（ProfSpine/Metrics 三个
+   入口/L1/L2/消费面/档位）；AGENTS 监测行同步（v2 旧标刷 v9）。
+3. conclusions 清扫：13 条 superseded 全文（或指针说明）入
+   docs/log/2026-09-10-conclusions-history.md（append-only 死档），
+   源只剩 active（14325→13306B，释放 ~1KB）；render 空节处理 + 头部
+   规则改写「被取代/废止即移出本源」；指针解析门禁（
+   test_superseded_pointers_resolve）迁到死档口径（首跳须落 active
+   或死档 id）。
+4. INDEX live 名单精简：`_probe_cycle_ledger`/`_probe_gpu_inst` 降
+   frozen（证据封板 C-63，判据已产品化）——live 修复义务面收缩。
+
+版本 0.21.0。叙事：docs/log/2026-10-09-监测精简与结论清扫.md。

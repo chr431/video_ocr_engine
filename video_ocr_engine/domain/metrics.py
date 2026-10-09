@@ -1,5 +1,20 @@
 """指标注册表与记录器（v2 §8.6 N-1/N-2，S1 骨架 → S6-0 接线）。
 
+监测层级单点地图（2026-10-09 精简轮立，各层纪律见各自模块头）：
+
+    ProfSpine (domain/prof.py)  相位计时脊柱：同一 t0 喂本注册表/trace/diag
+    Metrics    (本模块)         指标注册表 + 资源挂载点（仅有的三个入口）：
+        checkpoint(phase)   → ResourceProbe（L1，resources.py）相位边界差分
+                              （cycles/rss/io/vram/threads；full 档另采
+                              ThreadLedger 逐线程 thr/thr_duty）
+        start_hardware()    → NvmlSampler（L2，resources.py，仅 full 档）
+        snapshot()          → report.py 组装 RunReport（schema 只增不改；
+                              fork hybrid_stats 经 report.hybrid 直通）
+    消费面 = tools/bench.py（ab 判定/归因/周期判读）与 JSON sidecar。
+    档位：off（零成本）/ std（L1 无线程账本）/ full（+L2+线程账本+直方图）。
+    ENGINE_PROFILE=1 的 13 相位原始字典（extractor.profile）是独立调试读
+    面，非遥测轨道（R2 定）：别往这里加新观测。
+
 规则（§8.6）：未注册的名字不得上报；注册表上限 64；粗档 span（相位级）
 随 std 档恒开；counter 恒开；telemetry=off 时一切空调用（NullMetrics，
 PI-15 由 bench 三档互比门禁背书）。线程口径：**每线程局部累积、drain 时

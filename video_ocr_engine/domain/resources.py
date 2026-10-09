@@ -409,7 +409,6 @@ class ResourceProbe:
                 continue
             row: dict = {"wall": round(dt, 4), "threads": sb["threads"]}
             dcpu = float(sb["cpu"] - sa["cpu"])
-            row["cores_avg"] = round(max(0.0, dcpu) / dt, 2)
             ca, cb = sa.get("cycles"), sb.get("cycles")
             if ca is not None and cb is not None:
                 # v7 周期账本（C-63）：原始 cycles 差分本体——A/B 判据用。
@@ -419,6 +418,13 @@ class ResourceProbe:
                 if f_run > 0:
                     row["cores_avg_cycles"] = round(
                         max(0, cb - ca) / dt / f_run, 2)
+            else:
+                # v9 精简（2026-10-09 监测层级轮）：cores_avg（process_time
+                # tick 口径，15.6ms 量化伪影）只在 cycles 来源缺席（非
+                # Windows）时作为**唯一回退**发出；在场时不再发——与
+                # cores_avg_cycles 并存=两个"平均核数"打架，读者分不清
+                # 权威（P2a 引入 cycle 口径即为取代它）。
+                row["cores_avg"] = round(max(0.0, dcpu) / dt, 2)
             # v8 线程账本：逐线程周期差分 + 占空比（duty = Δcycles/
             # (f_run×Δwall)，被换下等待的线程不积累周期——即忙碌份额）。
             ta, tb = sa.get("thr"), sb.get("thr")

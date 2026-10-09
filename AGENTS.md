@@ -72,7 +72,7 @@ python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.
 | OCR 调度 / 引擎池 | `video_ocr_engine/ocr/native.py` |
 | TRT | `video_ocr_engine/ocr/trt.py` + `video_ocr_engine/_gpu_kernels.py` |
 | 配置常量 | `video_ocr_engine/config/constants.py`；旋钮注册表 `video_ocr_engine/config/` |
-| 运行报告 | `video_ocr_engine/pipeline/report.py`（RunReport schema **v2** → `meta['report']`；v2 加 `resources`/`hardware`）；指标注册表 `video_ocr_engine/domain/metrics.py`；资源层 `video_ocr_engine/domain/resources.py`（L1 边界差分 / L2 NVML） |
+| 运行报告 | `video_ocr_engine/pipeline/report.py`（RunReport schema **v9** → `meta['report']`；层级图=metrics.py 模块头）；指标注册表 `video_ocr_engine/domain/metrics.py`；资源层 `video_ocr_engine/domain/resources.py`（L1 边界差分 / L2 NVML） |
 | 分相打桩 | `video_ocr_engine/domain/prof.py` 的 `ProfSpine`（**单一计时脊柱**：同一 t0 喂 profile 与指标；门面 `_prof_end` 薄委托） |
 | 性能 A/B | `tools/bench.py`（`run`/`diff`/`show`/`ab`/`telemetry-check`；报告落 `bench/registry.jsonl`） |
 

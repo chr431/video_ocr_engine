@@ -1,9 +1,11 @@
 # 现役结论索引（L1，唯一规范性结论地）
 
 > 本文件由 knowledge/render.py 从 knowledge/conclusions.md 渲染
-> （人不得手写；--check 校验一致性）。状态取值：active / superseded
-> （被取代，只留指针）/ dead（已降级 docs/log 历史）。规则与完整
-> 说明见 conclusions.md 头部注释。
+> （人不得手写；--check 校验一致性）。状态取值：active /
+> superseded（被取代）/ dead。superseded 与 dead 全文在
+> docs/log/2026-09-10-conclusions-history.md（append-only，显式
+> 检索可达；2026-10-09 起 superseded 不再留源内指针）。规则与
+> 完整说明见 conclusions.md 头部注释。
 
 | ID | 结论 | 前提/边界 | 复评触发 | 证据 |
 |----|------|-----------|----------|------|
@@ -46,20 +48,4 @@
 | C-64 | **周期账本产品化（report v7 + bench ab 周期判读，2026-10-09）**：resources.per_phase 行含原始 cycles 差分 + cycles_e2e；`bench ab` 自动输出周期判读（同款 CI∧符号纪律，不改退出码）。A/A：cyc:e2e 下限 1.58% vs 墙钟 2.85%。用法：墙钟不可判定时的第二意见 | Windows；交错仍需（SMT 带）；C-63 边界全部继承 | 换机/换 CPU；周期 A/A 带漂移超 1×SE 重标；BLAS/OV 线程模型换代 | log 2026-10-09-账本产品化与不可判定复测 |
 | C-65 | **跨线程账本（v8）+ 预处理容量**：full 档逐线程占空（宿主臂 ocr 0.20/infer 0.61；GPU 臂宿主≤0.11、NVDEC 99%、SM 16%）。预处理重算法预算（绑定实验）：宿主臂膝点=额外 0.5-1ms/crop（当前 0.30→2.5-3×），之后 1:1 传导；GPU 臂 SM 余量 ~5× 不动 NVDEC。duty 的 4× 被膝点修正（C-42 再证）；更重≠更准（C-15） | 本机 4060/16C32T；test5 600 帧；sleep 注入；ALL_ACCESS 句柄怪癖见 resources 注 | 换机/换卡；OCR 提速（余量收窄）；真上重算法前复核膝点 | log 2026-10-09-跨线程账本与预处理容量 |
 
-## 已取代（指针）
-
-- C-06 → C-05
-- C-11 → C-38
-- C-26 → C-05
-- C-27 → C-36
-- C-29 → C-05
-- C-33 → C-08
-- C-34 → C-52
-- C-52 → C-53
-- C-41 → C-54
-- C-44 → C-45
-- C-45 → C-46
-- C-57 → C-61
-- C-61 → C-62
-
-（dead 条目已整体降级 docs/log/，含复评触发，显式检索可达。）
+（superseded/dead 条目全文在 docs/log/2026-09-10-conclusions-history.md，含复评触发，显式检索可达。）

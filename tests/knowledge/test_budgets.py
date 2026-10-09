@@ -36,29 +36,21 @@ def test_agents_budget():
 
 
 def test_superseded_pointers_resolve():
-    """`superseded →` 的指针必须落在现存结论 id 上。
+    """死档（conclusions-history）里 `superseded → X` 指针必须可解析。
 
-    防「C-27 → ?」式悬空：本轮实测曾有一条 2026-09 起就挂着 `?` 的记录，
-    因为 replaced_by 只在渲染时拼成一行、没有任何门禁看它是否解析得到。
+    2026-10-09 清扫起 superseded 不再住 knowledge 源（仅 active），
+    指针解析义务随全文迁到死档：第一跳必须落在 active 源或死档自身的
+    id 上。防「C-27 → ?」式悬空（历史上 replaced_by 无门禁真实出现过）。
     """
     import re
-    text = (ROOT / "knowledge" / "conclusions.md").read_text(encoding="utf-8")
-    ids: set[str] = set()
-    sup: dict[str, str] = {}
-    cur: str | None = None
-    for line in text.split("\n"):
-        m = re.match(r"- id: (\S+)", line)
-        if m:
-            cur = m.group(1)
-            ids.add(cur)
-            continue
-        m = re.match(r"  status: (\S+)", line)
-        if m and cur and m.group(1) == "superseded":
-            sup[cur] = "?"
-            continue
-        m = re.match(r"  replaced_by: (.*)", line)
-        if m and cur in sup:
-            sup[cur] = m.group(1).strip()
-    assert sup, "未解析到 superseded 条目——解析逻辑与源文件格式已脱节"
-    bad = {k: v for k, v in sup.items() if v == "?" or v not in ids}
-    assert not bad, "悬空 replaced_by（应为现存 id）：%s" % bad
+    src = (ROOT / "knowledge/conclusions.md").read_text(encoding="utf-8")
+    active = set(re.findall(r"- id: (\S+)", src))
+    hist = (ROOT / "docs/log/2026-09-10-conclusions-history.md"
+            ).read_text(encoding="utf-8")
+    hist_ids = set(re.findall(r"^## (C-\d+)", hist, re.M))
+    bad = []
+    for m in re.finditer(r"^## (C-\d+)（superseded → ([^）]+)）", hist, re.M):
+        first = m.group(2).split("→")[0].strip()
+        if first not in active and first not in hist_ids:
+            bad.append((m.group(1), first))
+    assert not bad, "死档悬空指针：%s" % bad

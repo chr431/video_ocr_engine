@@ -154,7 +154,7 @@ def test_report_gains_diagnostics_key_only_when_armed():
     m = make_metrics("std")
     m.record_span("pipeline.run", 1.0)
     plain = build_report(m, wall=1.0)
-    assert REPORT_VERSION == 8   # v7 +cycles；v8 +thr/thr_duty
+    assert REPORT_VERSION == 9   # v7 +cycles；v8 +thr；v9 cores_avg 回退
     assert "diagnostics" not in plain
     armed = build_report(m, wall=1.0, diagnostics={"armed": True, "stalls": 0})
     assert armed["diagnostics"]["armed"] is True

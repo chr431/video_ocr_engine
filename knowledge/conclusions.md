@@ -1,5 +1,7 @@
 # 活动结论（事实源，非 YAML；docs/CONCLUSIONS.md 为渲染产物）
-# 规则（Q7）：每条以 `- id:` 起含 status/premises/revisit/evidence；superseded 只留指针；dead 降级 docs/log/。
+# 规则（Q7）：每条以 `- id:` 起含 status/premises/revisit/evidence。
+# 被取代/废止即移出本源：全文档 docs/log/2026-09-10-conclusions-history.md
+# （append-only；2026-10-09 起 superseded 不再留源内指针，仅 active 住此）。
 # 超预算压缩顺序（2026-09-20 起）：evidence 字段（机械可压）→ premises → conclusion 正文最后动。
 
 - id: C-01
@@ -37,10 +39,6 @@
   revisit: >32 核 / 残余=每臂混跑干扰
   evidence: log 09-11-hybrid差距分解；09-13 可见性
 
-- id: C-06
-  status: superseded
-  replaced_by: C-05
-
 - id: C-07
   conclusion: auto 一例试 NVDEC；批量互补须显式 `cpu` 并核验 `_backend`
   status: active
@@ -68,10 +66,6 @@
   premises: 解码仍是瓶颈（消费不反超供给）
   revisit: 消费反超解码供给
   evidence: 提交 9b83cba；09-09 复确认
-
-- id: C-11
-  status: superseded
-  replaced_by: C-38
 
 - id: C-13
   conclusion: 真跳帧（丢 nal_ref_idc==0 整包）安全，收益仅 1.03–1.48×
@@ -101,18 +95,6 @@
   revisit: ROI 形态 / 分辨率大变
   evidence: DECISIONS 第四轮
 
-- id: C-26
-  status: superseded
-  replaced_by: C-05
-
-- id: C-27
-  status: superseded
-  replaced_by: C-36
-
-- id: C-29
-  status: superseded
-  replaced_by: C-05
-
 - id: C-31
   conclusion: decord 0.8.1：seek 未变慢；av1 慢系 NT=4 假象；修=钳[8,24]：CPU −50%、e2e −45%
   status: active
@@ -126,16 +108,6 @@
   premises: 0.11.0；两侧行为由真值用例逐位守护
   revisit: 真实 GPU 侧插件需求出现
   evidence: log 2026-09-09 引擎四方向
-
-- id: C-33
-  status: superseded
-  replaced_by: C-08
-- id: C-34
-  status: superseded
-  replaced_by: C-52
-- id: C-52
-  status: superseded
-  replaced_by: C-53
 
 - id: C-36
   conclusion: 冷启动=cuda.core 0.22+NVRTC 0.09+TRT 0.4s；warmup 移出首 extract −33%
@@ -172,10 +144,6 @@
   revisit: 换卡 / GOP 尺寸极端小 / <500 帧短片
   evidence: log 09-18-hybrid启动轮 §4
 
-- id: C-41
-  status: superseded
-  replaced_by: C-54
-
 - id: C-42
   conclusion: 相似判定 232µs、全片≈21% 但**不在关键路径**（短路实验无改善）
   status: active
@@ -189,14 +157,6 @@
   premises: 六片真值
   revisit: 换片源 / 模型换代 / 默认 force_aspect 变更
   evidence: log 2026-09-13-填充宽度重测
-
-- id: C-44
-  status: superseded
-  replaced_by: C-45
-
-- id: C-45
-  status: superseded
-  replaced_by: C-46
 
 - id: C-46
   conclusion: **hybrid=包缓存+供料期 GOP 派工（fork fef3c4b）**：Push 只入 512MB 缓存，泵按速率贪心派工；**kick 必须经泵按流序注入**（错位=段数漂移）；机制 A/B −5~6%
@@ -260,11 +220,6 @@
   premises: CPython；4 钉子
   revisit: PyPy finalizer 语义 / 池契约重构
   evidence: log 2026-09-20-审计修复轮 §2
-- id: C-57
-  conclusion: 已被 C-61（→C-62）取代——硬窗双缺陷根治中间结论（前缀算术+僵尸 kick）
-  status: superseded
-  replaced_by: C-61
-  evidence: log 2026-09-28 夜间kick竞态根治
 - id: C-58
   conclusion: **hybrid OCR 双车道（TRT+OV）v0.5：回归已消除（+48%→−1.8%）但本机无净收益**（OV 产能=TRT 1/3；争用 +20%）；触发条件实测见 C-60
   status: active
@@ -283,12 +238,6 @@
   premises: hevc 转码集整集 3 轮交错；阈值 5% 预注册
   revisit: OV 产能>TRT 1/2 / GPU 分离部署（解码/OCR 异卡）
   evidence: log 2026-09-20-hybridOCR奖金池裁决
-
-- id: C-61
-  conclusion: 已被 C-62 取代——修复有效但单轮「矩阵 12/12」不可复现；契约门控仍现行
-  status: superseded
-  replaced_by: C-62
-  evidence: log 2026-10-08 收口与窗口架构重做
 
 - id: C-62
   conclusion: **硬窗架构重做（fork 0.9.0）：绝对帧区间 + marker 语义分离（0=EOF/1=WINDOW_END）+ 会话对象化（SessionState 整体重建）+ 窗模式禁替补（win_subs 结构性恒 0，缺帧响亮 FATAL）**——根除 C-57 族四根源。矩阵 12/12 × 5 轮 + 哈希逐位一致 + fork 七套件

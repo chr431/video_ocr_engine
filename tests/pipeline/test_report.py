@@ -51,7 +51,7 @@ def test_report_version_is_pinned():
     # 与 `<parent>_other` 派生 span；v4→v5：+histograms/histograms_meta
     # （full 档专属）；v5→v6：+hybrid（fork 遥测直通）；v6→v7：resources
     # per_phase 行 +cycles 原始差分与 cycles_e2e（C-63 判据用；均只加键）
-    assert REPORT_VERSION == 8   # v8：+thr/thr_duty（full 档线程账本）
+    assert REPORT_VERSION == 9   # v8 +thr；v9 cores_avg 收敛回退键
 
 
 def test_report_schema_snapshot():
@@ -204,7 +204,12 @@ def test_per_phase_deltas_are_sane():
     assert r["checkpoints"] == ["open", "decode"]
     row = r["decode"]
     assert row["wall"] > 0
-    assert row["cores_avg"] >= 0.0               # Δcpu/Δwall：本机应 ≈1
+    # v9：cores_avg（tick 口径）是 cycles 缺席时的回退键——Windows 上
+    # cycles 在场故 cores_avg 不发（权威=cores_avg_cycles）
+    if sys.platform == "win32":
+        assert "cores_avg" not in row
+    else:
+        assert row["cores_avg"] >= 0.0
     # P2a：cycle 口径的核数（无 15.625ms tick 量化）；单线程忙等相位 ≈1 核，
     # 量测含主线程以外的极小开销，放宽到 (0, 2)。
     if sys.platform == "win32":  # QueryProcessCycleTime 仅 Windows
