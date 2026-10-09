@@ -279,6 +279,15 @@ def main() -> int:
         print("✗ 发现 %d 处不一致：" % len(problems))
         for p in problems:
             print("   -", p)
+        # 松绑轮（2026-10-09）：计数类不符是最大摩擦源（改一个探针要
+        # 手工对账三轮）——直接指路 --fix，机器可查的事不靠人算。
+        only_counts = (all("行数不符" in p or "头部" in p or "合计" in p
+                           or "KB 不符" in p for p in problems)
+                       and problems)
+        if only_counts:
+            print("\n→ 全部为计数类漂移，直接跑 "
+                  "`python tools/_probe_index_audit.py --fix` 自动校准"
+                  "（只改数字，不动分类；结构问题仍需人工）。")
         if args.fix_hint:
             print("\n可直接粘贴回 INDEX.md 的修正值：")
             print("  头部    : **%d 个 `.py`**（%s 行 / ~%d KB）"

@@ -151,6 +151,8 @@ def check_docs_budget() -> str | None:
     conclusions ≤ 14 KB（2026-09-20 稳健性轮由 12KB 上调：按需读取非
     注入，饱和后每条新结论都要修剪旧规范性文本——实测审查负担大于
     读取成本；与 tests/knowledge/test_budgets.py 同步）。
+    超限时顺带给压缩建议（松绑轮 2026-10-09：此前超限只报字节数，
+    定位最长条目要手工翻文件——把 10 分钟定位压到 1 分钟）。
     """
     limits = (("knowledge/conclusions.md", 14 * 1024),
               ("knowledge/knobs.yaml", 24 * 1024),
@@ -158,11 +160,33 @@ def check_docs_budget() -> str | None:
     for rel, cap in limits:
         p = ROOT / rel
         if p.exists() and p.stat().st_size > cap:
+            if rel == "knowledge/conclusions.md":
+                _suggest_conclusion_cuts()
             return "%s %dB 超 %dB 预算" % (rel, p.stat().st_size, cap)
     total = sum(p.stat().st_size for p in (ROOT / "docs").glob("*.md"))
     if total > 60 * 1024:
         return "docs/*.md（历史除外）合计 %dB 超 60KB" % total
     return None
+
+
+def _suggest_conclusion_cuts() -> None:
+    """超预算时打印压缩建议：最长条目 × 可压字段（压缩顺序的证据链）。
+
+    顺序即 knowledge/conclusions.md 头注的规则：evidence（机械可压）→
+    premises → conclusion 正文最后动；superseded 条目只留指针。
+    """
+    import re as _re
+    text = (ROOT / "knowledge" / "conclusions.md").read_text(encoding="utf-8")
+    entries = []
+    for chunk in text.split("\n- id: ")[1:]:
+        cid = chunk.split("\n", 1)[0].strip()
+        entries.append((len(chunk.encode("utf-8")), cid, chunk))
+    entries.sort(reverse=True)
+    print("    压缩建议（按条目字节排序，顺序：evidence → premises → 正文；")
+    print("            superseded 只留指针）：")
+    for size, cid, chunk in entries[:3]:
+        sup = "  [superseded→可只留指针]" if "status: superseded" in chunk else ""
+        print("      %-6s %5dB%s" % (cid, size, sup))
 
 
 def check_metrics_coverage() -> str | None:

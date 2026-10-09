@@ -19,15 +19,13 @@
 | `docs/log/README.md` | `docs/log/` 自己的写作规则（叙事不放规范性语句） | 往 log 写东西前 |
 | `docs/architecture.svg` | README 配图（用户向架构图，**手绘，改架构时同步刷新版本号**） | 改架构 / 发版时 |
 
-⚠️ **现役规则以本文件为准**；`docs/log/DECISIONS.md` 是迁出的原文存档，冲突时
-以本文件为真相（避免"两套真相"，设计审查 D6）。结论的**当前状态**
-（active / superseded / dead）以 `docs/CONCLUSIONS.md` 为准。
+⚠️ 现役规则以本文件为准（DECISIONS 是迁出存档，避免两套真相，D6）；
+结论当前状态（active/superseded/dead）以 `docs/CONCLUSIONS.md` 为准。
 
 ### ⛔ 查文档前先定位，不要整文件读
 
 大文档实测（cl100k）：PERFORMANCE ≈ **30k**、ARCHIVE ≈ **28k**、
-DECISIONS ≈ **17k** tokens，而本文件注入才 **~2.4k** —— **误读一次 ≈ 12 倍
-注入成本**，本项目最大的 token 浪费点。
+DECISIONS ≈ **17k** tokens，本文件才 **~2.4k**——误读一次≈12 倍注入成本。
 
 ```bash
 python tools/_doc_section.py --find <关键词>   # 跨文档按标题定位（≈357 tok）
@@ -110,8 +108,8 @@ python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.
 
 ## 已封板结论 → `docs/CONCLUSIONS.md`
 
-全部 48 条结论（35 条 active / 13 条 superseded 指针；dead 已整体降级
-`docs/log/`）在 `docs/CONCLUSIONS.md`，这里只留最容易踩的六条：
+结论全表在 `docs/CONCLUSIONS.md`（计数快照不维护，防漂移），只留
+最易踩的六条：
 
 - 并发退化真因 = **NVDEC 会话数**；互补配对首选 NVDEC∥CPU，聚合 1.87×（PERF §21）
 - `auto` **恒为 NVDEC 优先**（刻意决策，2026-09-10 重申）：本机 h264 CPU 软解虽快
@@ -138,8 +136,12 @@ python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.
 ```bash
 python tools/_probe_discipline_audit.py          # 全量
 python tools/_probe_discipline_audit.py --only 1,3,7
-python tools/_probe_index_audit.py               # tools/INDEX.md 数字一致性
+python tools/_probe_index_audit.py               # 数字漂移直接 --fix 自动校准
 ```
+
+松绑速记：INDEX 计数不符→`--fix`；版本 bump 未推送=warn（推送即须
+同名 tag）；金标 `--tier smoke` 迭代/全量发布；CI 红自动开 issue
+（ci-watchdog）。
 
 几条容易踩、且已自动化的：
 

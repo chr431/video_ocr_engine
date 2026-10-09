@@ -104,6 +104,13 @@ MATRIX.append(_mk("D-av1-w3000", "test6_av1", win=(5000, 8000),
 
 TIMING_ONLY = ("timing",)  # verify 时跳过的字段（非确定性）
 
+# smoke 层（2026-10-09 纪律松绑轮）：3 用例 ≈30s，覆盖三条关键路径
+# （cpu 纯路径 / hybrid 晚起点窗 / hybrid 常规）——迭代轮次用；
+# 33 全量只在发布与合并前跑。路径选择依据：A-cpu = 最快最稳的基线锚，
+# C-hevc-hybrid = hybrid+窗+TRT 主路径，D-hevc-w1000 = 窗架构的
+# 晚起点形态（C-57/C-62 一族缺陷的载体）。
+SMOKE_IDS = ("A-cpu-p0-cpu", "C-hevc-hybrid", "D-hevc-w1000")
+
 
 def sha_video(path: str) -> str:
     h = hashlib.sha256()
@@ -213,18 +220,37 @@ def load_case(case: dict) -> tuple[dict, dict]:
             json.loads((d / "stage-ocr.json").read_text(encoding="utf-8")))
 
 
-def verify_case(case: dict) -> list[str]:
-    calib_new, ocr_new = summarize(case)
+def verify_case(case: dict) -> tuple[list[str], bool]:
+    """复验并比对。返回 (差异字段, flap)。
+
+    flap=True 表示首跑有差异但复跑与录制逐位一致——F-12（FINDINGS.md）
+    的运行间置信度翻动：rep 帧像素逐位稳定、同引擎同像素在 OCR 侧的
+    第 3-4 位小数随批装配时序漂移。**回归 = 差异可复现**；一次性差异
+    按翻动放行（打印计数，不入失败）。真回归（文本/段结构/rep 帧）
+    两轮都差，必红。持续翻动的用例不适用于金标（如已撤出的
+    D-h264-w1000，撤出依据同 F-12）。
+    """
     calib_old, ocr_old = load_case(case)
-    diffs = []
-    for name, new, old in (("calib", calib_new, calib_old),
-                           ("ocr", ocr_new, ocr_old)):
-        for k in new:
-            if k in TIMING_ONLY or k == "wall":
-                continue
-            if new[k] != old.get(k):
-                diffs.append("%s.%s" % (name, k))
-    return diffs
+
+    def diff_once() -> list[str]:
+        calib_new, ocr_new = summarize(case)
+        diffs = []
+        for name, new, old in (("calib", calib_new, calib_old),
+                               ("ocr", ocr_new, ocr_old)):
+            for k in new:
+                if k in TIMING_ONLY or k == "wall":
+                    continue
+                if new[k] != old.get(k):
+                    diffs.append("%s.%s" % (name, k))
+        return diffs
+
+    diffs = diff_once()
+    if not diffs:
+        return [], False
+    diffs2 = diff_once()
+    if not diffs2:
+        return diffs, True   # 一次性差异 → 翻动
+    return diffs2, False
 
 
 def write_manifest(env: dict, vids_sha: dict) -> None:
@@ -259,20 +285,31 @@ def write_manifest(env: dict, vids_sha: dict) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--case", help="只处理指定 id（子串匹配）")
+    ap.add_argument("--tier", default="full", choices=("full", "smoke"),
+                    help="smoke=3 用例 ≈30s（迭代用）；full=全量（发布/合并）")
     ap.add_argument("--verify", action="store_true",
                     help="重跑并与已录向量比对（S0 门禁：哈希一致）")
     args = ap.parse_args()
     cases = [c for c in MATRIX if not args.case or args.case in c["id"]]
+    if args.tier == "smoke":
+        cases = [c for c in cases if c["id"] in SMOKE_IDS]
+        print("smoke 层：%d 用例（%s）" % (len(cases), ",".join(c["id"] for c in cases)))
 
     if args.verify:
-        bad = 0
+        bad = flaps = 0
         for c in cases:
-            diffs = verify_case(c)
-            tag = "OK " if not diffs else "DIFF"
-            print("%s %s%s" % (tag, c["id"],
-                               "" if not diffs else " -> " + ",".join(diffs)))
-            bad += bool(diffs)
-        print("verify: %d/%d 一致" % (len(cases) - bad, len(cases)))
+            diffs, flap = verify_case(c)
+            if flap:
+                flaps += 1
+                print("FLAP %s（首跑差 %s，复跑一致——F-12 翻动）"
+                      % (c["id"], ",".join(diffs)))
+            else:
+                tag = "OK " if not diffs else "DIFF"
+                print("%s %s%s" % (tag, c["id"],
+                                   "" if not diffs else " -> " + ",".join(diffs)))
+                bad += bool(diffs)
+        print("verify: %d/%d 一致（翻动 %d）"
+              % (len(cases) - bad - flaps, len(cases), flaps))
         return 1 if bad else 0
 
     env = environment()

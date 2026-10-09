@@ -35,5 +35,7 @@
 ## 门禁
 
 - 本机（须 GPU + 真值视频）：`python tests/golden/record.py --verify`
+  （`--tier smoke` = 3 用例 ≈30s 迭代用；verify 为复现式判定——差异须
+  复跑复现才算回归，一次性差异按 F-12 翻动放行并计数）
 - CI（无 GPU）：`tests/golden/test_golden_manifest.py` 校验 manifest 哈希与盘上一致
 - 性能：`bench_baseline.json`（热轮中位；噪声底 1.3% → D10 PR 硬失败 5% 初值成立）

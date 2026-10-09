@@ -457,8 +457,22 @@ def check_version() -> None:
     if latest is None:
         warn("仓库还没有任何 git tag")
     elif ver != latest:
-        fail("版本号不一致：engine_config=%s，最新 tag=%s（铁律：改版本必须打同名 tag）"
-             % (ver, latest))
+        # 松绑（2026-10-09）：bump→commit→打 tag→推送之间存在合法中间态，
+        # 此前一律 fail 让提交期必红一轮。分级：bump 尚未推送 = 本地
+        # 工作区（warn，推送前打同名 tag 即可）；已推送仍无同名 tag =
+        # 公开状态不可解释（fail，铁律主体）。
+        pushed_src = subprocess.run(
+            ["git", "show", "origin/main:video_ocr_engine/config/constants.py"],
+            cwd=ROOT, capture_output=True, text=True).stdout
+        m2 = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']',
+                       pushed_src, re.M)
+        pushed_ver = m2.group(1) if m2 else None
+        if pushed_ver == ver:
+            fail("版本号不一致且已推送：engine_config=%s，最新 tag=%s"
+                 "（铁律：改版本必须打同名 tag）" % (ver, latest))
+        else:
+            warn("版本 bump 未推送（%s，tag=%s）——推送前打同名 tag 即可"
+                 % (ver, latest))
 
 
 def check_doc_refs() -> None:
