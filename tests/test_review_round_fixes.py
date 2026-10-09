@@ -277,7 +277,7 @@ def test_put_raises_when_worker_died_without_err():
 
 def test_snapshot_drain_false_is_readonly():
     """只读快照回归钉子：看门狗取快照不得排干指标桶。"""
-    m = Metrics(tier="std")
+    m = Metrics(tier="full")
     m.counter("pipeline.consume_feed_n")
     peek = m.snapshot(drain=False)
     assert peek["counters"].get("pipeline.consume_feed_n") == 1
@@ -288,7 +288,7 @@ def test_snapshot_drain_false_is_readonly():
 
 
 def test_snapshot_drain_true_still_drains():
-    m = Metrics(tier="std")
+    m = Metrics(tier="full")
     m.counter("pipeline.consume_feed_n")
     assert m.snapshot()["counters"].get("pipeline.consume_feed_n") == 1
     assert not m.snapshot()["counters"].get("pipeline.consume_feed_n")
@@ -298,7 +298,18 @@ def test_metrics_invalid_tier_raises_valueerror():
     """非法档位：显式 ValueError（原 assert 无消息、-O 下消失）。"""
     with pytest.raises(ValueError) as ei:
         Metrics(tier="FULL")
-    assert "off/std/full" in str(ei.value)
+    assert "off/full" in str(ei.value)
+
+
+def test_resolve_std_alias_maps_to_full_with_warning():
+    """两档化（0.22.0）：VOE_TELEMETRY=std 是 full 的受谴责别名。"""
+    import warnings as _w
+    from video_ocr_engine.config.resolve import resolve
+    with _w.catch_warnings(record=True) as rec:
+        _w.simplefilter("always")
+        rc = resolve(env={"VOE_TELEMETRY": "std"})
+    assert rc.diag_telemetry == "full"
+    assert any(issubclass(r.category, DeprecationWarning) for r in rec)
 
 
 def test_resolve_normalizes_enum_str_case_and_space():

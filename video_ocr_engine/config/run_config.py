@@ -39,7 +39,7 @@ class RunConfig:
     diag_profile: bool = False
     diag_subprobe: bool = False
     diag_bounds_debug: bool = False
-    diag_telemetry: str = "std"            # off/std/full（§8.6 r5）
+    diag_telemetry: str = "off"            # off/full 两档（0.22.0 起；std=受谴责别名经 resolve 映射 full）
     diag_report_file: str = ""             # RunReport sidecar 路径（§8.6 N-3）
     diag_trace_file: str = ""              # P4 实验性时间线路径（默认关）
     # ── 指纹 ──

@@ -32,7 +32,7 @@ RESOURCE_KEYS = {"sources", "per_phase", "notes"}
 
 
 def _std_metrics():
-    m = Metrics("std")
+    m = Metrics("full")
     with m.span("pipeline.run"):
         m.record_span("pipeline.decode", 0.12)
         m.record_span("pipeline.ocr", 0.05)
@@ -60,7 +60,7 @@ def test_report_schema_snapshot():
                        ocr_backend="tensorrt")
     assert set(rep) == REPORT_KEYS | {"resources", "span_relations"}
     assert rep["report_version"] == REPORT_VERSION
-    assert rep["tier"] == "std"
+    assert rep["tier"] == "full"
     assert rep["wall_s"] == pytest.approx(0.5)
     assert rep["spans"]["pipeline.decode"]["sum"] == pytest.approx(0.12)
     assert rep["spans"]["pipeline.run"]["n"] == 1
@@ -92,7 +92,7 @@ def test_runreport_view_and_result_report():
                        ocr_backend="tensorrt")
     view = RunReport(rep)
     assert view.report_version == REPORT_VERSION
-    assert view.tier == "std"
+    assert view.tier == "full"
     assert view.wall_s == pytest.approx(0.5)
     assert view.spans["pipeline.decode"]["sum"] == pytest.approx(0.12)
     assert view.counters["ocr.chunks"] == 3
@@ -109,7 +109,7 @@ def test_runreport_view_and_result_report():
 
     r = ExtractionResult(meta={"report": rep})
     assert r.report is not None
-    assert r.report.tier == "std"
+    assert r.report.tier == "full"
     # off 档（meta 无 report 键）：None，不冒充空值
     assert ExtractionResult(meta={}).report is None
     assert ExtractionResult().report is None
@@ -185,7 +185,7 @@ def test_hardware_section_only_when_sampled():
 def test_checkpoint_is_noop_off_and_lazy_std():
     assert NULL_METRICS.resource_report() is None
     NULL_METRICS.checkpoint("decode")            # 不得抛
-    fresh = Metrics("std")
+    fresh = Metrics("full")
     # 惰性：没采过边界就不建探针（宿主/短路径零成本）
     assert fresh._resources is False
     assert fresh.resource_report() is None
@@ -355,8 +355,9 @@ def test_nvml_sampler_stops_thread():
 
 
 def test_full_tier_only_starts_sampler():
-    m = Metrics("std")
-    m.start_hardware()                            # std 档不得建线程
+    # 两档化后：off 不得建采样线程；full 允许（L2 语义）
+    m = Metrics("off")
+    m.start_hardware()
     assert m._hw is None
     assert m.hardware_report() is None
 

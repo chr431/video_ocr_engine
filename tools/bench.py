@@ -1,8 +1,8 @@
 """bench —— 性能报告矩阵、run registry 与 `bench diff`（v2 §8.6 N-4）。
 
 把"每次 A/B 重写一段对照脚本"变成一条命令：
-  python tools/bench.py run --label s6a-before --telemetry std
-  python tools/bench.py run --label s6a-after  --telemetry std
+  python tools/bench.py run --label s6a-before --telemetry full
+  python tools/bench.py run --label s6a-after  --telemetry full
   python tools/bench.py diff s6a-before s6a-after      # D10 双档判定
 
 报告落地 `bench/registry.jsonl`（gitignored、append-only）；A/B 的数字一律
@@ -27,12 +27,12 @@ from pathlib import Path
 # 阈值由本机 A/A 标定得出（同档两槽、同进程交替、每槽 3 次均值、25 对：
 # 均值偏差 −0.179%、sd 1.053%、SE 0.211% → 0.179+3×0.211 ≈ 0.81 → 0.85）。
 # 出处：knowledge/benchmarks.yaml:pi15_gate_calibration。
-#   - std 与 full 用**同一条**可分辨下限（测量地板对两档一样；设计目标
-#     +0.1%/+1% 仍然打印，µs 级严格性由 `tests/config/test_telemetry_cost.py`
+#   - 两档化（2026-10-09）后只剩一条 full 可分辨下限（std 档已退役，
+#     DECISIONS §30；µs 级严格性由 `tests/config/test_telemetry_cost.py`
 #     的确定性成本守卫承担——那里有 10⁴ 倍于墙钟的分辨力）。
 #   - 判失败还需**符号多数一致**（70%），落在噪声带里的差值不再误报。
 #   - 换机器/换窗口/改配对数 n 后必须 `telemetry-check --aa` 重标（SE∝1/√n）。
-PI15_LIMITS = {"std_pct": 0.30, "full_pct": 1.20, "sign_majority": 0.70}
+PI15_LIMITS = {"full_pct": 1.20, "sign_majority": 0.70}
 #: 阈值下限（P1 抽成常量）：0.30 → 0.20（2026-09-17 续，四轮标定证据：
 #: |均值|+3SE = 0.291/0.209/0.274/0.198%，n=50 时 0.198 已触 0.20——
 #: 旧地板开始 Masking 真实分辨率）。低于 0.30 的建议值只在 n≥50 标定
@@ -435,7 +435,7 @@ def _inproc_rounds(cfg: str, window: int, tiers: list, rounds: int,
         order = list(tiers)
         order = order[k % len(order):] + order[:k % len(order)]   # 位置轮转
         for tier in order:
-            os.environ["VOE_TELEMETRY"] = "std" if tier == "std2" else tier
+            os.environ["VOE_TELEMETRY"] = "full" if tier == "full2" else tier
             walls = []
             for _ in range(max(1, inner)):
                 ex = FieldExtractor(
@@ -469,7 +469,7 @@ def _subproc_rounds(args, tiers: list) -> dict:
         order = list(tiers)
         order = order[i % len(order):] + order[:i % len(order)]
         for tier in order:
-            real = "std" if tier == "std2" else tier
+            real = "full" if tier == "full2" else tier
             env = dict(os.environ)
             env["VOE_TELEMETRY"] = real
             r = subprocess.run(
@@ -500,7 +500,7 @@ def _subproc_rounds(args, tiers: list) -> dict:
 
 
 def cmd_telemetry_check(args) -> int:
-    """PI-15：三档互比（**同进程交替 + 同轮配对差分** + 符号一致性判失败）。
+    """PI-15：两档互比（**同进程交替 + 同轮配对差分** + 符号一致性判失败）。
 
     方法学演进（每一步都是被数据逼出来的，全部留档）：
     1. 原实现"三档各自连跑 N 轮"把机器漂移记进档位差——同码两次可差 7.7%，
@@ -513,10 +513,13 @@ def cmd_telemetry_check(args) -> int:
        被测量 → 改为**同进程交替**（共享热池与 OS 缓存，唯一差别是插桩本身）。
     5. 阈值按 A/A 现测校准（`--aa`），并要求**符号多数一致**才判失败——
        落在噪声带里的差值判"不可判定"，不再误报（r11 用户裁决）。
+    6. 两档化（2026-10-09，DECISIONS §30）：std 实测开销与 full 同在
+       噪声内（0.115% vs 0.038%），中间档退役——互比收敛为 off vs full
+       单一成本限（full_pct），std_pct 退役；A/A 槽位改 full/full2。
     """
-    tiers = ["off", "std", "full"]
+    tiers = ["off", "full"]
     if args.aa:
-        tiers = ["std", "std2"]        # A/A：两槽同档 → 差分即纯噪声
+        tiers = ["full", "full2"]      # A/A：两槽同档 → 差分即纯噪声
     if args.subproc:
         per = _subproc_rounds(args, tiers)
     else:
@@ -584,7 +587,7 @@ def _limit_from_band(b: dict) -> float:
 
 def _report_aa(per: dict, med: dict, args) -> int:
     """A/A 标定：两槽同档 → 差分分布即纯机器噪声带。"""
-    d = _paired(per, args.rounds, "std", "std2")
+    d = _paired(per, args.rounds, "full", "full2")
     if not d:
         print("A/A 无有效配对轮次")
         return 1
@@ -597,9 +600,9 @@ def _report_aa(per: dict, med: dict, args) -> int:
           % (b["mean"], b["median"], b["p50abs"], b["p95abs"], b["maxabs"],
              b["sd"], b["se"]))
     rec = _limit_from_band(b)
-    print("  → 本机在 %d 对下可分辨 std 阈值 = +%.2f%%、full = +%.2f%%"
-          "（规则 |均值偏差|+3×SE 上取整 0.05%%，下限 0.30%%；"
-          "判失败另需符号多数一致）" % (b["n"], rec, 4 * rec))
+    print("  → 本机在 %d 对下可分辨 full 阈值 = +%.2f%%"
+          "（规则 |均值偏差|+3×SE 上取整 0.05%%，下限 0.20%%；"
+          "判失败另需符号多数一致）" % (b["n"], rec))
     print("  提示：阈值随配对数收紧（SE∝1/√n），标定 n 必须与门禁 n 一致；"
           "换机器/换窗口后必须重标。")
     return 0
@@ -607,12 +610,10 @@ def _report_aa(per: dict, med: dict, args) -> int:
 
 def _report_pi15(per: dict, med: dict, args) -> int:
     base = med["off"]
-    d_std = _paired(per, args.rounds, "off", "std")
     d_full = _paired(per, args.rounds, "off", "full")
-    lim_std = args.std_limit or PI15_LIMITS["std_pct"]
     lim_full = args.full_limit or PI15_LIMITS["full_pct"]
-    need = max(2, int(round(len(d_std) * PI15_LIMITS["sign_majority"] + 0.5))) \
-        if d_std else 2
+    need = max(2, int(round(len(d_full) * PI15_LIMITS["sign_majority"] + 0.5))) \
+        if d_full else 2
 
     def judge(d, lim):
         if not d:
@@ -626,17 +627,15 @@ def _report_pi15(per: dict, med: dict, args) -> int:
                     % (m, b["se"], lim, b["pos"], len(d),
                        "一致" if signs else "不一致=噪声内", note,
                        "通过" if ok else "失败"))
-    ok_s, txt_s = judge(d_std, lim_std)
     ok_f, txt_f = judge(d_full, lim_full)
-    print("\nPI-15（%s，同轮**配对差分** %d 对；off 中位 %.4fs / std %.4fs /"
+    print("\nPI-15（%s，同轮**配对差分** %d 对；off 中位 %.4fs /"
           " full %.4fs）" % ("子进程" if args.subproc else "同进程交替",
-                             len(d_std), base, med["std"], med["full"]))
-    print("  std  vs off ：%s" % txt_s)
+                             len(d_full), base, med["full"]))
     print("  full vs off ：%s" % txt_f)
-    print("  设计目标（§13.2）std ≤ +0.1%%、full ≤ +1%%；本机可分辨下限见 "
-          "`bench.py telemetry-check --aa`（阈值=校准值 %s/%s，r11 用户裁决"
-          "放松过严阈值以消除误报）" % (lim_std, lim_full))
-    ok = bool(ok_s) and bool(ok_f)
+    print("  两档化后唯一成本限 full ≤ +%.2f%%；本机可分辨下限见 "
+          "`bench.py telemetry-check --aa`（阈值=校准值 %s，r11 用户裁决"
+          "放松过严阈值以消除误报）" % (lim_full, lim_full))
+    ok = bool(ok_f)
     print("判定：%s" % ("通过" if ok else "失败（插桩密度或 off 档实现退化）"))
     return 0 if ok else 1
 
@@ -1077,7 +1076,7 @@ def main() -> int:
     r.add_argument("--config", default="", help="逗号分隔；默认四配置")
     r.add_argument("--rounds", type=int, default=3)
     r.add_argument("--window", type=int, default=3000)
-    r.add_argument("--telemetry", default="std", choices=("off", "std", "full"))
+    r.add_argument("--telemetry", default="full", choices=("off", "full"))
     r.add_argument("--ocr-backend", default="tensorrt")
     r.add_argument("--keep-crops", action="store_true")
     r.add_argument("--rep-format", default="", help="yuv|gray（默认按引擎规则）")
@@ -1122,8 +1121,6 @@ def main() -> int:
                    help="用独立子进程测（含冷启成本，噪声大；默认同进程交替）")
     t.add_argument("--inner", type=int, default=3,
                    help="同进程模式下每槽连跑次数（取均值压噪，默认 3）")
-    t.add_argument("--std-limit", type=float, default=0.0,
-                   help="覆盖 std 阈值（%%），0=用 PI15_LIMITS 校准值")
     t.add_argument("--full-limit", type=float, default=0.0,
                    help="覆盖 full 阈值（%%），0=用 PI15_LIMITS 校准值")
     t.set_defaults(func=cmd_telemetry_check)
@@ -1143,7 +1140,7 @@ def main() -> int:
     ab.add_argument("--repeat", type=int, default=3)
     ab.add_argument("--rounds", type=int, default=2)
     ab.add_argument("--window", type=int, default=3000)
-    ab.add_argument("--telemetry", default="std")
+    ab.add_argument("--telemetry", default="full")
     ab.add_argument("--ocr-backend", default="tensorrt")
     ab.add_argument("--keep-crops", action="store_true")
     ab.add_argument("--args-a", default="", help="A 变体附加 CLI 参数（空格分隔）")

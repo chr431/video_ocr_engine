@@ -194,7 +194,7 @@
   evidence: log 2026-09-17-重设计 §5-§11；2026-10-09-账本产品化
 
 - id: C-51
-  conclusion: **监测系统新基线（2026-09-17）**：时钟门禁+ab 轮转/判定/--aa；report v6（含 fork 穿透）；子相位闭合（infer_other 92%→16%）；std 地板 0.30%（n=50 后 0.20）
+  conclusion: **监测系统新基线（2026-09-17）**：时钟门禁+ab 轮转/判定/--aa；report（含 fork 穿透）；子相位闭合（infer_other 92%→16%）；地板 0.30%（n=50 后 0.20）；0.22.0 两档化后 telemetry-check=off vs full 单限（D30）
   status: active
   premises: 4060；共享桌面
   revisit: 换卡/机器 / 协议改即 --aa 重标 / trace 转正需锁频

@@ -231,8 +231,10 @@ ex.extract()         # 首个 extract 的 ocr.engine_init → ~0.0001s，首视�
 多个视频 / 需要稳定首帧延迟"的场景。批量循环前对**任意一个**实例调一次
 即可（引擎池按"模型/引擎类型/pad 下限/线程数"共享）。
 
-**运行报告**：`extract()` 返回的 `result.meta["report"]` 里带一份 RunReport
-（schema 版本化，当前 **v6**；`result.report` 是它的类型化只读视图——
+**运行报告**（0.22.0 起**默认关闭**——遥测两档化：发布=off 全关、调试=
+full 全开；`VOE_TELEMETRY=full` 开启后 `extract()` 返回的
+`result.meta["report"]` 里带一份 RunReport
+（schema 版本化，当前 **v9**；`result.report` 是它的类型化只读视图——
 `result.report.spans / .health / .pipeline` 等直接导航，序列化形态仍是
 dict）：相位 span、全部计数器、PI 健康判定（热池
 `engine_init` <0.1s、`syncs/chunk` ≤3）、环境指纹（commit 之外的
@@ -240,8 +242,8 @@ GPU/driver/TRT/decord 版本）、**资源段**、**自诊断段**：
 
 | 段 | 档位 | 内容 |
 |---|---|---|
-| `resources.per_phase` | std+ | 每个粗相位边界的**差分**：墙钟、**平均并行核数**、活跃线程数、RSS 增量、磁盘读写 MB/s、显存占用 |
-| `resources.sources` | std+ | 每个读数的**真实来源**或 `unavailable:原因`（不用 None/0 冒充真值） |
+| `resources.per_phase` | full | 每个粗相位边界的**差分**：墙钟、**平均并行核数**（cycle 口径）、活跃线程数、RSS 增量、磁盘读写 MB/s、显存占用；**周期账本**（`cycles`/`cycles_e2e`，C-63）与**线程占空**（`thr`/`thr_duty`，逐引擎线程） |
+| `resources.sources` | full | 每个读数的**真实来源**或 `unavailable:原因`（不用 None/0 冒充真值） |
 | `hardware` | full | NVML 低优先级采样（~200ms、上限 600 点、关停丢半帧）：GPU% / **NVDEC%** / 显存 / **SM·MEM·VIDEO 时钟** / **热降原因位**（`throttle.ticks_throttled` 只计热/功率/硬件类原因）的 min/p50/p99/max + 采样失败计数。⚠️ 实测（4060 Laptop）**NVDEC% 是"在用"指示器而非占空比**——解码器仅 35% 占空时仍读 98%；忙闲判别用 fork 侧 `[hybrid-stats] busy`（每臂忙时，fork ≥ 6da2957） |
 | `diagnostics` | 仅 opt-in | 自诊断（v3）：`armed`/停顿次数/落盘路径。**只在设了 `VOE_REPORT_FILE` 时出现**，不写空值冒充 |
 
@@ -252,8 +254,10 @@ PI-15 预算，故有测试禁止产品代码调用它。**本机自测口径、
 本机不可直读，报告不产该字段（只能由 counter 字节 ÷ 相位墙钟推算）。
 读数工具：`python tools/_probe_phase_cores.py --configs h264-cpu,h264-hybrid`。
 
-默认档 `std` 开销在噪声内（PI-15 复测见 `docs/log/`）；`VOE_TELEMETRY=off`
-一行关掉（`meta` 无 `report` 键、不组装报告、不建探针）；
+两档（2026-10-09 起）：`off`=发布默认（零成本，`meta` 无 `report` 键、
+不组装报告、不建探针）/ `full`=调试（开销实测在噪声内：off vs full
++0.079%±0.064%，两档门禁见 `bench telemetry-check`）；`VOE_TELEMETRY=std`
+是 `full` 的**受谴责别名**（自动映射并告警，0.24.0 起拒收）；
 `VOE_REPORT_FILE=<path>` 可把细档 JSON 落盘，并**同时开启自诊断**——
 同前缀的 `.journal.jsonl`（里程碑崩溃日志：相位+本次耗时，环形缓冲，
 硬崩溃后文件尾部即"最后到达点"）与 `.diag.stall-<N>` 后缀的 JSON（停顿现场：

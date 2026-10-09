@@ -87,8 +87,8 @@ python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.
 \|偏差\|+3×SE，判据 = 同轮配对差分**均值** + 符号多数一致；归因表带
 显著性（** = CI 排零 ∧ 符号多数，只归因不判失败，C-42）；µs 级严格性见
 `tests/config/test_telemetry_cost.py`。执行体在脚本（`knowledge/rules.yaml`）。
-⚠️ **遥测档位只在 full 档新增**（直方图/TRT 子相位——第 7 节 W1/W2 的
-预算决策）：std 档面保持 2ms/run 内，改动 std 档必跑成本守卫 + 重标。
+⚠️ **遥测两档**（0.22.0，D30）：off=发布默认；full=调试/bench 默认
+（成本限 ≤1.2%，改遥测跑成本守卫+`--aa` 重标）；std=别名→full（0.24.0 拒收）。
 
 **现役并行维度只有一个**：`decode_backend="hybrid"` 的 CPU+NVDEC 双解码，
 **已由 decord fork 原生实现**（v0.7.15+ 的 `hybrid`/`hybrid_gpu` ctx，引擎只

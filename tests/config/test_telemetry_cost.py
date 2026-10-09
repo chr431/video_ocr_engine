@@ -1,22 +1,23 @@
 """PI-15 的**确定性**成本守卫（µs 级分辨力）。
 
-为什么要有这个文件：墙钟口径的三档互比（`bench.py telemetry-check`）在本机
-A/A 实测只能分辨到 ~0.85%（同一段代码两槽差可达 4%），而 std 档插桩的**真实
+为什么要有这个文件：墙钟口径的两档互比（`bench.py telemetry-check`）在本机
+A/A 实测只能分辨到 ~0.85%（同一段代码两槽差可达 4%），而遥测插桩的**真实
 成本**是 0.1% 量级——用分辨力不够的量去当硬门禁，只会产生误报（r11 用户裁决
 放松了那条门禁）。所以严格性搬到这里：**直接量插桩路径本身的执行时间**，
 分辨力比墙钟高约 10⁴ 倍，且不受 GPU 热降/后台负载影响。
+（0.22.0 两档化：口径从"std 档预算"改为"full 基础面预算"——直方图仍
+单列 8ms 宽上限，两者合计 = full 档确定性成本下界，对应 full_pct 限。）
 
-口径与真实 run 对齐（实测 3000 帧 std run，2026-09-17 重设计 + 续轮）：
+口径与真实 run 对齐（实测 3000 帧 run，2026-09-17 重设计 + 续轮）：
 9 个 span 键 / **138 个 span 样本** / 14 个 counter 键 / 10 个 gauge /
 **6270 个 TOTALS 逐事件计数**（P2b/P2c/W1：consume_feed 3000 +
 q_put_block 1090 + q_get_wait 1091 + merge_pair 1089）/ **4 个 L1 资源
 边界** + 一次 `snapshot()` + 一次 `build_report()`。
 断言的是"这样一整套跑完"的成本上限。
 
-W1 直方图**不进 std 重放**：它只在 full 档插桩（调用方 `if m.detailed`
-守卫），std 档一次都不会走到 `histogram()`——真实事件量 × （0.165µs
-frexp + 桶加）≈ 1.0ms 会吃掉 std 预算的一大块。full 档成本由
-`test_full_tier_histogram_cost_is_bounded` 单独量（宽松上限）。
+W1 直方图**不进基础重放**：它按事件量计费（0.165µs/事件，真实事件量
+≈ 1.0ms），单列在 `test_full_tier_histogram_cost_is_bounded`（8ms 宽
+上限）——不与基础面 2ms 预算混算，各自的回退各自抓。
 """
 from __future__ import annotations
 
@@ -45,7 +46,7 @@ _GAUGES = [n for n in METRICS.names()
 
 
 def _one_run(m: Metrics) -> None:
-    """重放一个 3000 帧 std run 的全部遥测动作（含收尾快照）。"""
+    """重放一个 3000 帧 run 的全部基础遥测动作（含收尾快照）。"""
     for i in range(SPAN_SAMPLES):
         m.record_span(_SPANS[i % len(_SPANS)], 0.001)
     for _ in range(TOTALS_EVENTS):
@@ -60,12 +61,12 @@ def _one_run(m: Metrics) -> None:
                  backend="decord/CPU", ocr_backend="tensorrt")
 
 
-def _median_cost(fn, repeats: int, tier: str = "std") -> float:
+def _median_cost(fn, repeats: int, tier: str = "full") -> float:
     _warm_env_fingerprint()
     fn(Metrics(tier))                        # 预热（首次含集合/字典建立）
     out = []
     for _ in range(repeats):
-        m = Metrics("std")
+        m = Metrics("full")
         t = time.perf_counter()
         fn(m)
         out.append((time.perf_counter() - t) * 1000.0)
@@ -78,7 +79,7 @@ def _warm_env_fingerprint() -> None:
     这笔钱只付**一次**、且在报告组装路径上，与"每 run 插桩成本"是两件事，
     分开量（见 `test_environment_fingerprint_is_cached`）。
     """
-    build_report(Metrics("std"), wall=0.0)
+    build_report(Metrics("full"), wall=0.0)
 
 
 def test_environment_fingerprint_is_cached():
@@ -96,20 +97,20 @@ def test_environment_fingerprint_is_cached():
     assert first < 0.30, "指纹首调 %.3fs（应 <300ms：NVML 或 nvidia-smi）" % first
 
 
-def test_std_recording_path_cost_per_run():
-    """整套 std 遥测（138 span + 计数器 + 4 资源边界 + 报告）≤ 2ms/run。
+def test_full_recording_path_cost_per_run():
+    """full 基础面（138 span + 计数器 + 4 资源边界 + 报告）≤ 2ms/run。
 
-    3000 帧 run 墙钟 ~1.0s → 2ms = 0.2%，比 §13.2 的 +0.1% 设计目标宽 2 倍、
-    比墙钟门禁的 0.85% 严 400 倍：真正的插桩膨胀（例如误在 per-frame 路径
-    加记录）会在这里亮红灯，而机器噪声不会。
+    3000 帧 run 墙钟 ~1.0s → 2ms = 0.2%；比墙钟门禁分辨力严 ~400 倍：
+    真正的插桩膨胀（例如误在 per-frame 路径加记录）会在这里亮红灯，
+    而机器噪声不会。（直方图成本单列在 8ms 宽上限那条。）
     """
     # 增量口径（2026-09-18 CI 清红）：绝对预算在慢 CPU runner 上必超
-    # （GitHub 实测 2.3-2.6ms）。插桩膨胀的判据=std 相对 off 的增量
-    # ——同一重放循环，off 档 record 调用全走 no-op，差值即纯 std
-    # 插桩成本，机器速度基本对消。
+    # （GitHub 实测 2.3-2.6ms）。插桩膨胀的判据=full 相对 off 的增量
+    # ——同一重放循环，off 档 record 调用全走 no-op，差值即纯插桩
+    # 成本，机器速度基本对消。
     base = _median_cost(_one_run, REPLAYS, tier="off")
     ms = _median_cost(_one_run, REPLAYS) - base
-    assert ms <= 2.0, "std 档遥测增量成本 %.3fms/run，超预算 2ms" % ms
+    assert ms <= 2.0, "full 基础面遥测增量成本 %.3fms/run，超预算 2ms" % ms
 
 
 def test_off_tier_records_nothing():
@@ -132,8 +133,8 @@ def test_full_tier_histogram_cost_is_bounded():
 
     口径：6270 个 TOTALS 事件全部落桶（host 路径实测事件量）+ 收尾快照。
     实测 ~1.0ms（0.165µs/事件 + snapshot 合并 7 键）；上限 8ms 是实测的
-    ~8 倍，只抓"把昂贵调用塞进热路径"这类回退。std 档一次都不走这里
-    （调用方 `if m.detailed` 守卫），故它不进 2ms/run 的 std 预算。
+    ~8 倍，只抓"把昂贵调用塞进热路径"这类回退。不进基础面 2ms 预算
+    （两者合计 = full 档确定性成本下界，对应 full_pct 1.2% 限）。
     """
     _warm_env_fingerprint()
     keys = [n for n in METRICS.names()
@@ -162,7 +163,7 @@ def test_l1_checkpoint_is_microsecond_scale():
     阈值放到 200µs，仍比 0.1% 预算（1.0s run 的 1ms）宽 5 倍——也就是说，
     真把昂贵调用塞进边界会立刻被这里抓到。
     """
-    m = Metrics("std")
+    m = Metrics("full")
     for i in range(32):                     # 先把探针建出来（惰性）
         m.checkpoint("warm%d" % i)
     probes = m._resources
@@ -174,16 +175,14 @@ def test_l1_checkpoint_is_microsecond_scale():
     assert us < 200.0, "单次资源采样 %.1fµs，远超 µs 级假设" % us
 
 
-@pytest.mark.parametrize("tier", ["std", "full"])
-def test_snapshot_and_report_scale_with_records(tier):
+def test_snapshot_and_report_scale_with_records():
     """收尾快照/报告组装随**记录键数**而非样本数增长（drain 一次合并）。"""
     _warm_env_fingerprint()
-    m = Metrics(tier)
+    m = Metrics("full")
     for i in range(SPAN_SAMPLES * 4):       # 4× 真实样本量
         m.record_span(_SPANS[i % len(_SPANS)], 0.001)
     t = time.perf_counter()
     rep = build_report(m, wall=1.0)
     cost_ms = (time.perf_counter() - t) * 1000
     assert rep["report_version"] >= 2
-    assert cost_ms < 8.0, "%s 档收尾组装 %.2fms（细档样本翻 4 倍仍须 <8ms）" % (
-        tier, cost_ms)
+    assert cost_ms < 8.0, "full 档收尾组装 %.2fms（样本翻 4 倍仍须 <8ms）" % cost_ms

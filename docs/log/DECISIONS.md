@@ -1195,3 +1195,22 @@ tactic/TF32 取值不同"的机制自洽。故本次重录**不触碰正确性�
    frozen（证据封板 C-63，判据已产品化）——live 修复义务面收缩。
 
 版本 0.21.0。叙事：docs/log/2026-10-09-监测精简与结论清扫.md。
+
+
+## 30. 遥测两档化（2026-10-09，用户拍板"只留全关/全开"）
+
+前置分析（本轮先量后做）：std 实测开销 0.115% vs full 0.038%（同在
+噪声内，PI-15 三档互比的既有 verdict 即"std≈full"）——中间档的存在
+理由（省开销）已被数据掏空。用户确认**下游不消费 report**后一步到位：
+
+- 产品默认 std→**off**（发布=全关；README/MIGRATION 迁移表登记）。
+- **std 退役**：resolve 把 `VOE_TELEMETRY=std` 映射 full + Deprecation
+  Warning（0.24.0 拒收）；`Metrics` 构造器只收 off/full（别名在构造层
+  静默通过会让"std 已死"永远查不出来）。
+- 门禁两档化：`telemetry-check` off vs full 单一成本限（full_pct 1.20，
+  std_pct 删）；`--aa` 槽位 full/full2 重标（25 对：均值 +0.002%、
+  SE 0.067%、建议阈 0.25%——full_pct 1.20 保持宽松合理）。
+- 两档门禁实测通过：full vs off **+0.079%±0.064%**（19/25）。
+- 成本守卫改口径：2ms/run 基础面 + 8ms 直方图宽限（合计=full 确定性
+  下界，对应 full_pct）。
+- 版本 0.22.0。叙事：docs/log/2026-10-09-遥测两档化.md。

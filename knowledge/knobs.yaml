@@ -157,9 +157,9 @@
 - name: diag.telemetry
   env: VOE_TELEMETRY
   type: str
-  default: 'std'
-  rationale: v2:8.6-r5
-  note: off/std/full；off=NullMetrics 一键关闭（PI-15）
+  default: 'off'
+  rationale: log:2026-10-09-遥测两档化
+  note: off/full 两档（0.22.0；发布=off 全关，调试=full）；std=受谴责别名→full，0.24.0 起拒收
 
 - name: diag.report_file
   env: VOE_REPORT_FILE

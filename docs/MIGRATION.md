@@ -101,6 +101,15 @@
 | GPU 管线 autocropper/y_pool | 会话启动后赋值 | 构造期装配（B4/B5）；`__del__` 不再执行 CUDA 释放（B6） |
 | `meta` 键 | 9 键 | 9 键不变（v2 文档原写 10 为勘误） |
 
+## 2b. 遥测两档化（0.22.0，破坏性之一：默认行为变更）
+
+| 变更 | 迁移 |
+|---|---|
+| **产品默认档 std→off** | `extract()` 默认不再产出 `meta['report']`（发布=全关）。需要报告的调用方显式 `VOE_TELEMETRY=full`（调试档：直方图+NVML+线程账本全开） |
+| **std 档退役** | `VOE_TELEMETRY=std` 按受谴责别名映射为 full 并告警；**0.24.0 起拒收**。直接构造 `Metrics("std")` 已抛 ValueError（写 off/full） |
+| `PI15_LIMITS.std_pct` 删除 | bench 遥测门禁只剩 full_pct=1.20；`telemetry-check` 两档互比（off vs full），`--std-limit` 参数删除 |
+| bench `--telemetry` 默认翻 full | run/ab 默认带全套遥测（开销实测 +0.079%±0.064%，噪声内） |
+
 ## 3. 内部结构（仅当你的代码伸进了私有面）
 
 | v1 私有面 | v0.13 去向 |

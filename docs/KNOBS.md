@@ -24,7 +24,7 @@
 | `diag.profile` | `ENGINE_PROFILE` | bool | `False` | ec:84 |
 | `diag.subprobe` | `TRT_SUBPROBE` | bool | `False` | ec:85 |
 | `diag.bounds_debug` | `DEBUG_BOUNDS` | bool | `False` | ec:86 |
-| `diag.telemetry` | `VOE_TELEMETRY` | str | `std` | v2:8.6-r5 |
+| `diag.telemetry` | `VOE_TELEMETRY` | str | `off` | log:2026-10-09-遥测两档化 |
 | `diag.report_file` | `VOE_REPORT_FILE` | str | `` | v2:8.6-N3 |
 | `diag.trace_file` | `VOE_TRACE_FILE` | str | `` | log:2026-09-17-性能监测系统重设计 |
 

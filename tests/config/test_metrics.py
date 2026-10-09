@@ -23,7 +23,7 @@ def test_registry_covers_v1_keys():
 
 
 def test_unregistered_name_fails_hard():
-    m = Metrics()
+    m = Metrics("full")
     with pytest.raises(KeyError):
         with m.span("nope.span"):
             pass
@@ -41,7 +41,7 @@ def test_null_metrics_all_noop():
 
 
 def test_counter_accumulates_and_merges():
-    m = Metrics()
+    m = Metrics("full")
 
     def bump(n):
         for _ in range(n):
@@ -54,7 +54,7 @@ def test_counter_accumulates_and_merges():
 
 
 def test_span_records_duration():
-    m = Metrics()
+    m = Metrics("full")
     with m.span("pipeline.decode"):
         pass
     agg = m.snapshot()["spans"]["pipeline.decode"]
@@ -63,7 +63,7 @@ def test_span_records_duration():
 
 def test_snapshot_aggregates_spans():
     """S6-0：drain 语义——多线程样本在 snapshot 合并为 n/sum/p50/p99。"""
-    m = Metrics()
+    m = Metrics("full")
     m.record_span("decode.batch", 0.1)
     m.record_span("decode.batch", 0.3)
 
@@ -90,7 +90,7 @@ def test_off_tier_is_silent_singleton():
 
 
 def test_detailed_only_in_full_tier():
-    assert Metrics("full").detailed and not Metrics("std").detailed
+    assert Metrics("full").detailed and not Metrics("off").detailed
 
 
 def test_profile_mapping_targets_are_registered():

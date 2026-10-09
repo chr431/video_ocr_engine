@@ -11,7 +11,9 @@
         snapshot()          → report.py 组装 RunReport（schema 只增不改；
                               fork hybrid_stats 经 report.hybrid 直通）
     消费面 = tools/bench.py（ab 判定/归因/周期判读）与 JSON sidecar。
-    档位：off（零成本）/ std（L1 无线程账本）/ full（+L2+线程账本+直方图）。
+    档位（0.22.0 两档化，DECISIONS §30）：off（发布默认，零成本）/
+    full（调试与 bench 默认：L1+线程账本+L2+直方图全开）。
+    VOE_TELEMETRY=std 是 full 的受谴责别名（resolve 映射+告警）。
     ENGINE_PROFILE=1 的 13 相位原始字典（extractor.profile）是独立调试读
     面，非遥测轨道（R2 定）：别往这里加新观测。
 
@@ -267,24 +269,28 @@ def _empty_bucket() -> dict:
 class Metrics:
     """线程安全的指标记录器（局部累积 + drain 合并）。
 
-    tier：off/std/full（§8.6 r5 分层）。std = 相位级粗档 span + 全部
-    counter/gauge；full 另含细档 span（per-batch/per-chunk 由调用方按
-    tier 判定是否插桩，见 `detailed`）。
+    tier：off/full **两档**（2026-10-09 两档化，DECISIONS §30：std 实测
+    开销与 full 同在噪声内，中间档失去存在理由；`VOE_TELEMETRY=std`
+    经 resolve 映射为 full + 受谴责告警）。off = NullMetrics 全关；
+    full = 相位 span + counter/gauge + 细档（per-batch/per-chunk，见
+    `detailed`）+ L2 NVML + 线程账本 + 直方图。
     """
 
     __slots__ = ("_tier", "_registry", "_clock", "_lock", "_local",
                  "_buckets", "_master", "_checked", "_resources", "_hw")
 
-    def __init__(self, tier: str = "std", registry: MetricRegistry = METRICS,
+    def __init__(self, tier: str = "off", registry: MetricRegistry = METRICS,
                  clock=time.perf_counter) -> None:
         # 显式校验而非 assert（2026-09-19 审查轮）：assert 在 python -O
         # 下消失，非法档位会静默变成"enabled 但非 detailed"的混合态
         # （full 档专属直方图静默不产）；且此前无消息的 AssertionError
         # 对 VOE_TELEMETRY=FULL 这类大小写输入毫无提示。
-        if tier not in ("off", "std", "full"):
+        # "std" 由 resolve 层映射，不在此收——直接构造方必须写两档之一
+        # （别名在这里静默通过会让"std 已死"永远查不出来）。
+        if tier not in ("off", "full"):
             raise ValueError(
-                "遥测档位必须为 off/std/full，收到 %r（env VOE_TELEMETRY）"
-                % (tier,))
+                "遥测档位必须为 off/full，收到 %r（env VOE_TELEMETRY；"
+                "std 已是 full 的受谴责别名，经 resolve 映射）" % (tier,))
         self._tier = tier
         self._registry = registry
         self._clock = clock

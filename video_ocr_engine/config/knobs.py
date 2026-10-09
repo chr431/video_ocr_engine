@@ -87,8 +87,10 @@ KNOBS = Registry(knobs=(
          env_live_only=True),   # env-live-only（2026-09-19）：消费者调用期直读 env，RunConfig 字段不决定行为 → 已从 config_digest 排除
     Knob("diag.bounds_debug", "DEBUG_BOUNDS_ENV", "DEBUG_BOUNDS", "bool", False,
          "diag", _ALL, "ec:86", env_live_only=True),   # env-live-only（2026-09-19）：消费者调用期直读 env，RunConfig 字段不决定行为 → 已从 config_digest 排除
-    Knob("diag.telemetry", "VOE_TELEMETRY", "VOE_TELEMETRY", "str", "std",
-         "diag", _ALL, "v2:8.6-r5", note="off/std/full；off=NullMetrics 一键关闭（PI-15）"),
+    Knob("diag.telemetry", "VOE_TELEMETRY", "VOE_TELEMETRY", "str", "off",
+         "diag", _ALL, "log:2026-10-09-遥测两档化",
+         note="off/full 两档（0.22.0；发布=off 全关，调试=full）；"
+              "std=受谴责别名→full，0.24.0 起拒收"),
     Knob("diag.report_file", "VOE_REPORT_FILE", "VOE_REPORT_FILE", "str", "",
          "diag", _ALL, "v2:8.6-N3",
          note="RunReport 细档 JSON sidecar 输出路径；空=不写（写文件是副作用，须显式 opt-in）"),

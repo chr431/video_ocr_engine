@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import warnings
 from typing import Any, Mapping
 
 from .knobs import KNOBS
@@ -25,6 +26,7 @@ _FALSY = ("0", "false", "no", "off")
 # 「忽略大小写后命中」归一，避免 VOE_TELEMETRY=FULL 这类输入被当成
 # 非法档位（此前撞无消息 assert；-O 下静默降级）。
 _STR_CHOICES = {
+    # std 仅为兼容保留的受谴责别名（resolve 映射为 full + 告警）
     "diag.telemetry": ("off", "std", "full"),
     "segment.text_sep_merge": ("binary", "off"),
 }
@@ -96,6 +98,16 @@ def resolve(*, env: Mapping[str, str] | None = None,
                 values[k.name] = parsed
                 continue
         values[k.name] = ov if ov is not None else k.default
+
+    # 遥测两档化（2026-10-09，DECISIONS §30）：std 是 full 的受谴责
+    # 别名——env/overrides 给 std 一律映射为 full 并告警（两个版本后
+    # 从 _STR_CHOICES 删除即彻底拒收）。默认值已是 off（产品=发布全关）。
+    if values.get("diag.telemetry") == "std":
+        warnings.warn(
+            "VOE_TELEMETRY=std 已于 0.22.0 两档化弃用（std 实测开销与 "
+            "full 同在噪声内）——已按 full 处理；0.24.0 起将拒绝该值",
+            DeprecationWarning, stacklevel=2)
+        values["diag.telemetry"] = "full"
 
     # digest 只覆盖**生效值**（2026-09-19）：env_live_only 旋钮的实际
     # 行为由调用期 env 决定，把解析结果计入 digest 会让 A/B 指纹撒谎。

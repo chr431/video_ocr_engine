@@ -151,7 +151,7 @@ def test_report_gains_diagnostics_key_only_when_armed():
     """schema 演进只加键、且未 arming 时不写空值冒充。"""
     from video_ocr_engine.domain.metrics import make_metrics
     from video_ocr_engine.pipeline.report import REPORT_VERSION, build_report
-    m = make_metrics("std")
+    m = make_metrics("full")
     m.record_span("pipeline.run", 1.0)
     plain = build_report(m, wall=1.0)
     assert REPORT_VERSION == 9   # v7 +cycles；v8 +thr；v9 cores_avg 回退
