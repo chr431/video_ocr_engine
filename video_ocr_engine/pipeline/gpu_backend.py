@@ -270,6 +270,9 @@ class _GpuLane:
         self._producer = threading.Thread(target=self._producer_loop,
                                           daemon=True)
         self._producer.start()
+        # v8 线程账本登记：GPU 生产者线程（解码供料）
+        from video_ocr_engine.domain.resources import register_thread
+        register_thread('producer', self._producer)
         while True:
             try:
                 item = self._producer_q.get(timeout=0.2)

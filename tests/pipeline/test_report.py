@@ -51,7 +51,7 @@ def test_report_version_is_pinned():
     # 与 `<parent>_other` 派生 span；v4→v5：+histograms/histograms_meta
     # （full 档专属）；v5→v6：+hybrid（fork 遥测直通）；v6→v7：resources
     # per_phase 行 +cycles 原始差分与 cycles_e2e（C-63 判据用；均只加键）
-    assert REPORT_VERSION == 7
+    assert REPORT_VERSION == 8   # v8：+thr/thr_duty（full 档线程账本）
 
 
 def test_report_schema_snapshot():
@@ -216,6 +216,78 @@ def test_per_phase_deltas_are_sane():
     assert row["threads"] >= 1
     if "rss_delta_mib" in row:
         assert isinstance(row["rss_delta_mib"], float)
+
+
+class _StubCountersThr:
+    """per_phase 线程差分的台架：thr 样本按调用序给定。"""
+
+    def __init__(self, steps):
+        self._steps = list(steps)
+        self._i = 0
+
+    def sample(self):
+        t = {"t": float(self._i), "cpu": 1.0 * self._i,
+             "threads": 1, "thr": dict(self._steps[self._i]),
+             "cycles": 1_000_000 * self._i,
+             "rss": None, "rb": None, "wb": None, "vram": None,
+             "sm_mhz": None}
+        self._i += 1
+        return t
+
+
+def test_per_phase_thread_deltas_and_duty():
+    # 进程级账本单例会被同进程先前跑过引擎的测试注册污染（consumer/ocr
+    # 等名字残留）→ 换上隔离空账本，让 stub 的 thr 样本不被真实采样覆盖。
+    # （仅 win32：非 Windows 无账本，thread_ledger() 恒 None 本就不覆盖。）
+    import video_ocr_engine.domain.resources as _res
+    _saved = _res._THREAD_LEDGER
+    if sys.platform == "win32":
+        _res._THREAD_LEDGER = _res.ThreadLedger()
+    try:
+        p = ResourceProbe()
+        p._counters = _StubCountersThr(
+            [{"ocr": 100_000, "consumer": 500_000},
+             {"ocr": 300_000, "consumer": 900_000}])
+        p.checkpoint("open", threads=True)
+        p.checkpoint("decode", threads=True)
+        r = p.per_phase()
+    finally:
+        if sys.platform == "win32":
+            _res._THREAD_LEDGER = _saved
+    row = r["decode"]
+    assert row["thr"] == {"ocr": 200_000, "consumer": 400_000}
+    # f_run = Δcycles/Δcpu = 1_000_000 → duty = Δthr/(f_run×Δwall)
+    assert row["thr_duty"] == {"ocr": 0.2, "consumer": 0.4}
+    assert r["cycles_e2e"]["threads"] == {"ocr": 200_000,
+                                          "consumer": 400_000}
+
+
+def test_thread_ledger_roundtrip_win32():
+    if sys.platform != "win32":
+        import video_ocr_engine.domain.resources as _res
+        _res.register_thread("x")            # 非 Windows：静默 no-op
+        return
+    import threading
+    import time as _time
+    import video_ocr_engine.domain.resources as _res
+    led = _res.thread_ledger()
+    assert led is not None
+    stop = threading.Event()
+    t = threading.Thread(target=stop.wait)
+    t.start()
+    try:
+        # 句柄须在存活期打开（死线程 TID 不可再 OpenThread）——懒开设计
+        # 依赖"采样发生在 run 边界、线程存活"这一生命周期事实。
+        _res.register_thread("probe-tmp", t)
+        s0 = led.sample()
+        _time.sleep(0.02)
+        s1 = led.sample()
+        assert s1["probe-tmp"] >= s0["probe-tmp"] >= 0
+    finally:
+        stop.set()
+        t.join()
+    led.register("probe-tmp", 0)          # 换 ident → 缓存句柄作废 → 打不开除名
+    assert "probe-tmp" not in led.sample()
 
 
 def test_phase_cap_is_honored():

@@ -321,6 +321,9 @@ def _gpu_frame_stream_nvdec(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list
         _dt = _threading.Thread(target=_drain, daemon=True,
                                 name='voe-decode-drainer')
         _dt.start()
+        # v8 线程账本登记：设备侧排放排空线程
+        from video_ocr_engine.domain.resources import register_thread
+        register_thread('drain', _dt)
         while True:
             item = _q.get()
             if item is None:

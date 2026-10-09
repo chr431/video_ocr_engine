@@ -28,7 +28,8 @@ import sys
 import threading
 import time
 
-__all__ = ["ResourceProbe", "NvmlSampler", "nvml_handle", "gpu_identity"]
+__all__ = ["ResourceProbe", "NvmlSampler", "nvml_handle", "gpu_identity",
+           "register_thread", "thread_ledger"]
 
 _WIN = sys.platform == "win32"
 
@@ -84,6 +85,108 @@ def gpu_identity():
                 drv.value.decode("utf-8", "replace"))
     except Exception:  # noqa: BLE001 老驱动缺入口 → 让调用方回退 nvidia-smi
         return None
+
+
+# ── v8 线程周期账本（full 档）：引擎自有线程的占空归因 ────────────────
+#
+# QueryProcessCycleTime 是全进程无标签求和（C-63 的结构性盲区：并发环节
+# 不可分）。引擎自有线程（consumer/ocr/infer*/producer/drain）经
+# OpenThread 按 TID 打开句柄后可逐线程 QueryThreadCycleTime——被换下
+# 等待的线程不积累周期，单线程 duty = Δcycles/(f_run×Δwall) 即占空比。
+# 外来线程群（decord 解码池/OpenVINO TBB）无自报面，残差=进程总量−
+# Σ已注册线程（跨线程归因的下界，进一步细分须 fork 侧报数或 ETW）。
+_THREAD_LEDGER: "ThreadLedger | None" = None
+_THREAD_LEDGER_TRIED = False
+
+
+class ThreadLedger:
+    """进程级「名字→线程句柄」表 + 周期采样。
+
+    注册发生在创建点（只记 ident，零系统调用）；句柄**惰性打开**——
+    首次采样（full 档 run 的相位边界）才 OpenThread，std/off 档零成本
+    （AGENTS：遥测新增只进 full 档）。线程已死时 OpenThread/查询失败
+    → 该名字从表里除名（缺席≠0）。TID 复用风险：引擎线程生命周期=run
+    生命周期且每 run 重新 register（同名覆盖 ident+句柄），风险窗只在于
+    不重新 register 的持久线程——现役集合无此形态。
+    """
+
+    def __init__(self) -> None:
+        import ctypes
+        # 私有 WinDLL 实例 + 显式原型：windll 是进程级共享缓存，函数对象
+        # 上的 argtypes 会被各使用方互相覆盖；句柄原型必须显式（与本文件
+        # GetCurrentProcess 伪句柄截断坑同族——HANDLE 走 c_void_p）。
+        self._k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        self._k32.OpenThread.restype = ctypes.c_void_p
+        self._k32.OpenThread.argtypes = (ctypes.c_uint32, ctypes.c_int,
+                                         ctypes.c_uint32)
+        self._k32.QueryThreadCycleTime.restype = ctypes.c_int
+        self._k32.QueryThreadCycleTime.argtypes = (ctypes.c_void_p,
+                                                   ctypes.c_void_p)
+        self._idents: dict = {}
+        self._handles: dict = {}
+        self._lock = threading.Lock()
+
+    def register(self, name: str, ident: int) -> None:
+        """线程创建点登记/刷新（同名覆盖——跨 run 换代线程）。"""
+        with self._lock:
+            if self._idents.get(name) != ident:
+                self._idents[name] = ident
+                self._handles.pop(name, None)   # 旧句柄作废
+
+    def sample(self) -> dict:
+        """名字 → 周期数；打不开/查不到的名字静默除名（返回里缺席）。"""
+        out: dict = {}
+        import ctypes
+        with self._lock:
+            items = list(self._idents.items())
+            handles = self._handles
+        for name, ident in items:
+            h = handles.get(name)
+            if h is None:
+                # 权限怪癖（2026-10-09 本机 Win11 实证矩阵）：按 0x0400/
+                # 0x1000 打开成功但 QueryThreadCycleTime 报 ACCESS_DENIED=5，
+                # 唯 THREAD_ALL_ACCESS=0x1FFFFF 句柄可查（自家进程线程恒可
+                # 全权打开）；受限环境全权失败时回退试 0x0400，再失败即缺席。
+                h = (self._k32.OpenThread(0x1FFFFF, False, ident)
+                     or self._k32.OpenThread(0x0400, False, ident))
+                if not h:
+                    continue   # 线程已死/权限不足：缺席（≠0）
+                with self._lock:
+                    handles[name] = h
+            cyc = ctypes.c_ulonglong()
+            if self._k32.QueryThreadCycleTime(h, ctypes.byref(cyc)):
+                out[name] = int(cyc.value)
+            else:
+                with self._lock:
+                    handles.pop(name, None)
+        return out
+
+
+def thread_ledger() -> "ThreadLedger | None":
+    """进程级单例；非 Windows 恒 None（register_thread 同步降级为 no-op）。"""
+    global _THREAD_LEDGER, _THREAD_LEDGER_TRIED
+    if not _WIN:
+        return None
+    if _THREAD_LEDGER is None and not _THREAD_LEDGER_TRIED:
+        _THREAD_LEDGER_TRIED = True
+        _THREAD_LEDGER = ThreadLedger()
+    return _THREAD_LEDGER
+
+
+def register_thread(name: str, t=None) -> None:
+    """线程登记的统一入口（非 Windows/无 ident 静默 no-op）。
+
+    t=None 时登记当前线程（consumer=调用方线程用这种）。
+    """
+    led = thread_ledger()
+    if led is None:
+        return
+    try:
+        ident = t.ident if t is not None else threading.current_thread().ident
+    except Exception:  # noqa: BLE001 线程对象尚未 start：无从登记
+        return
+    if ident:
+        led.register(name, int(ident))
 
 
 class _HostCounters:
@@ -183,7 +286,7 @@ class _HostCounters:
         """
         s = {"t": time.perf_counter(), "cpu": time.process_time(),
              "rss": None, "rb": None, "wb": None, "vram": None,
-             "cycles": None, "sm_mhz": None,
+             "cycles": None, "sm_mhz": None, "thr": None,
              "threads": threading.active_count()}
         if _NVML["state"]:                     # 已初始化才读（无则零成本）
             try:
@@ -264,9 +367,17 @@ class ResourceProbe:
                        "（GPU 路径）——宿主纯 CPU 路径为 None，不主动初始化")
         return s
 
-    def checkpoint(self, phase: str) -> None:
+    def checkpoint(self, phase: str, threads: bool = False) -> None:
         try:
             sample = self._counters.sample()
+            # v8 线程账本（full 档专属：threads 门由 Metrics.detailed 控制）；
+            # 空采样不覆盖（无注册线程的 run 保持缺席语义，≠空账本冒充）
+            if threads:
+                led = thread_ledger()
+                if led is not None:
+                    _ts = led.sample()
+                    if _ts:
+                        sample["thr"] = _ts
         except Exception:  # noqa: BLE001 遥测绝不让 run 失败
             return
         with self._lock:
@@ -308,6 +419,17 @@ class ResourceProbe:
                 if f_run > 0:
                     row["cores_avg_cycles"] = round(
                         max(0, cb - ca) / dt / f_run, 2)
+            # v8 线程账本：逐线程周期差分 + 占空比（duty = Δcycles/
+            # (f_run×Δwall)，被换下等待的线程不积累周期——即忙碌份额）。
+            ta, tb = sa.get("thr"), sb.get("thr")
+            if isinstance(ta, dict) and isinstance(tb, dict):
+                thr = {k: max(0, tb[k] - ta[k])
+                       for k in set(ta) & set(tb)}
+                if thr:
+                    row["thr"] = thr
+                    if f_run > 0:
+                        row["thr_duty"] = {k: round(v / (f_run * dt), 3)
+                                           for k, v in thr.items()}
             # W3：相位**终点**的 SM 时钟（GPU 路径相位差分才有；起点读数
             # 用于人工对齐——时钟爬坡期一个相位内前后差上千 MHz 是常态）
             if sb.get("sm_mhz") is not None:
@@ -340,6 +462,18 @@ class ResourceProbe:
                 out["cycles_e2e"] = {
                     "total": max(0, fb_c - fa_c),
                     "span": "%s..%s" % (rows[0][0], rows[-1][0])}
+                # v8：线程级全程账本 = 逐相位差分求和。不能直接用首末两次
+                # 采样相减——进程级账本跨 run 存活，首采样可能持有上一轮
+                # 已死线程的陈旧句柄（同名不同线程），差值无意义（实测
+                # 'ocr':0 伪影，2026-10-09）。
+                thr_sum: dict = {}
+                for row in out.values():
+                    if isinstance(row, dict) and isinstance(row.get("thr"),
+                                                            dict):
+                        for k, v in row["thr"].items():
+                            thr_sum[k] = thr_sum.get(k, 0) + v
+                if thr_sum:
+                    out["cycles_e2e"]["threads"] = thr_sum
         out["checkpoints"] = [r[0] for r in rows]
         return out
 

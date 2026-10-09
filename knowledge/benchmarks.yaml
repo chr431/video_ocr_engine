@@ -647,3 +647,14 @@
   wall_se_pct: 0.851
   wall_resolvable_floor_pct: 2.85
   note: 安静态周期判读比墙钟分辨力高 ~1.8x；满载差距见 C-63
+# ── 跨线程账本轮（2026-10-09，C-65；test5 600 帧 221 crops 宿主臂）──
+- metric: prep_headroom_knee
+  current_ms_per_crop: 0.30
+  free_extra_ms_per_crop: 0.5
+  knee_extra_ms_per_crop: [0.5, 1.0]
+  passthrough_ms_per_crop: 2.0
+  duty_ocr_worker: 0.20
+  duty_infer: 0.61
+  gpu_arm_sm_util_p50: 16
+  gpu_arm_nvdec_util_p50: 99
+  note: sleep 注入绑定实验；GPU 臂为 NVML/占空推导（SM ~5x 余量）

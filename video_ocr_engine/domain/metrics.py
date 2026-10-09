@@ -326,14 +326,18 @@ class Metrics:
             self.record_span(name, self._clock() - t0)
 
     def checkpoint(self, phase: str) -> None:
-        """L1 相位边界资源采样（std+；off 一行不执行）。"""
+        """L1 相位边界资源采样（std+；off 一行不执行）。
+
+        v8：full 档（detailed）另采线程级周期（ThreadLedger）；
+        std 档不采（AGENTS：遥测新增只进 full 档）。
+        """
         r = self._resources
         if r is None:
             return
         if r is False:
             r = self._resources = ResourceProbe()
         assert isinstance(r, ResourceProbe)   # 三态契约收口（见 __init__ 注）
-        r.checkpoint(phase)
+        r.checkpoint(phase, threads=self.detailed)
 
     def resource_report(self) -> dict | None:
         """`{"sources":…, "per_phase":…}`；off 档 / 未建探针 → None。"""

@@ -272,6 +272,9 @@ class OcrSession:
         self._engines: list = list(_ocr_engines) if _ocr_engines else []
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
+        # v8 线程账本登记：OCR worker（宿主预处理+分批的执行者）
+        from video_ocr_engine.domain.resources import register_thread
+        register_thread('ocr', self._thread)
 
     # ── 生产者接口 ──────────────────────────────────────────
 
@@ -569,6 +572,10 @@ class OcrSession:
                 for eng in engines]
             for t in infer_threads:
                 t.start()
+            # v8 线程账本登记：推理线程（每引擎一条）
+            from video_ocr_engine.domain.resources import register_thread
+            for _i, _t in enumerate(infer_threads):
+                register_thread('infer%d' % _i, _t)
             b_idx: list = []        # flush 批簿记：段索引/代表帧号/crop/dev/frac
             b_reps: list = []
             b_crops: list = []

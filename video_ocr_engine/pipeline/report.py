@@ -32,7 +32,11 @@ from pathlib import Path
 # v7（2026-10-09 周期账本轮，C-63）：`resources.per_phase` 行新增原始
 # `cycles` 差分与 `cycles_e2e`（A/B 判据用；复用既有边界采样零新增成本，
 # std 档即有；cycles 来源缺席（非 Windows）时无键——缺席≠空值）。
-REPORT_VERSION = 7
+# v8（2026-10-09 跨线程轮）：full 档新增 `thr`（引擎自有线程的逐线程
+# 周期差分）与 `thr_duty`（占空比 = Δcycles/(f_run×Δwall)，等待不计——
+# C-63 盲区的引擎侧补全；外来线程群仍不可分，见 resources 模块注）；
+# `cycles_e2e.threads` 线程级全程账本。std 档无这些键。
+REPORT_VERSION = 8
 
 #: v4：span 嵌套关系（代码级核对，2026-09-17 勘察）。**子项互不重叠**是
 #: 硬约束——嵌套更深的键（如宿主 merge_pair/q_put_block 在 consume_feed
@@ -223,7 +227,9 @@ def build_report(metrics, *, wall: float, config_digest: str = "",
                             "短相位可信；按全程平均频率换算，变频相位有偏）；"
                             "cycles/cycles_e2e 为原始周期账本（C-63：A/B 配对"
                             "判据，跨频稳定但 SMT 争用带 ±16% 均值漂移，交错"
-                            "仍需）；本机自测口径，跨机不可比；PCIe 本机不可"
+                            "仍需）；thr/thr_duty 为引擎自有线程的逐线程账本"
+                            "（full 档；duty=忙碌份额，等待不计；外来线程群"
+                            "不可分）；本机自测口径，跨机不可比；PCIe 本机不可"
                             "直读，只能由 counter 字节 ÷ 相位墙钟推算（L3 "
                             "推导区，本表不产该字段）")
             rep["resources"] = res

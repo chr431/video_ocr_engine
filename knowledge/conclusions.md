@@ -17,7 +17,7 @@
   evidence: PERF §19
 
 - id: C-03
-  conclusion: 内存带宽不是并发变量（B_max 实测 55.8 GB/s；互补设计仅 7.8 GB/s 退化 1.02×）
+  conclusion: 内存带宽不是并发变量（B_max 55.8 GB/s；互补退化 1.02×）
   status: active
   premises: 2×16GB DDR5-6000
   revisit: 集成显存平台 / 内存减半
@@ -26,12 +26,12 @@
 - id: C-04
   conclusion: 解码后端按编码选：h264 CPU 快 ~2.9×，av1 慢 ~2.6×
   status: active
-  premises: fork 0.7.x；av1 经济性已变（C-31）；并行已重测（C-52）
+  premises: fork 0.7.x；av1 见 C-31
   revisit: 并行场景重测（C-31 策略修复后）
   evidence: PERF §21 §22.1；log 2026-09-08
 
 - id: C-05
-  conclusion: hybrid=fork 原生（TRT→hybrid_gpu、CPU→宿主帧）；收益面=TRT；ONNX 不反超→选 nvdec；可见性 2.45×；e2e 见 C-53
+  conclusion: hybrid=fork 原生（TRT→hybrid_gpu）；收益面=TRT；ONNX 不反超→选 nvdec；可见性 2.45×；e2e 见 C-53
   status: active
   premises: 4060/16C32T；0.8.3；fork ≥6da2957
   revisit: >32 核 / 残余=每臂混跑干扰
@@ -49,7 +49,7 @@
   evidence: README 批量章；PERF §19
 
 - id: C-08
-  conclusion: h264 上 CPU 快 1.7~2.8× 但**恒 NVDEC 优先是刻意决策**（稳妥>峰值）；峰值走显式 cpu
+  conclusion: h264 CPU 快 1.7~2.8× 但**恒 NVDEC 优先=刻意决策**；峰值走显式 cpu
   status: active
   premises: 稳妥性>峰值吞吐（用户拍板）
   revisit: 「NVDEC 不可用」级前提变化
@@ -63,10 +63,10 @@
   evidence: PERF §9
 
 - id: C-10
-  conclusion: GPU_PIPELINE_STREAM 默认关：流水发射零实测收益，decord 侧 API 保留 opt-in
+  conclusion: GPU_PIPELINE_STREAM 默认关（流水发射零收益；decord API 保留）
   status: active
   premises: 解码仍是瓶颈（消费不反超供给）
-  revisit: OCR 提速使消费反超解码供给
+  revisit: 消费反超解码供给
   evidence: 提交 9b83cba；09-09 复确认
 
 - id: C-11
@@ -77,7 +77,7 @@
   conclusion: 真跳帧（丢 nal_ref_idc==0 整包）安全，收益仅 1.03–1.48×
   status: active
   premises: h264、fork 0.7.x
-  revisit: 新编码 / 更激进的过滤方案
+  revisit: 新编码/更激进过滤
   evidence: DECISIONS 三目标轮
 
 - id: C-14
@@ -114,14 +114,14 @@
   replaced_by: C-05
 
 - id: C-31
-  conclusion: decord 0.8.1+FFmpeg9：seek 未变慢；av1 慢系 NT=4 假象；修=av1 钳 [8,24]，CPU −50%、e2e −45%
+  conclusion: decord 0.8.1：seek 未变慢；av1 慢系 NT=4 假象；修=钳[8,24]：CPU −50%、e2e −45%
   status: active
   premises: wheel 0.8.2
   revisit: fork/驱动/FFmpeg 换代
   evidence: log 2026-09-08 decord-0.8.1；DEPENDENCIES decord 节
 
 - id: C-32
-  conclusion: 实现唯一出处=segmentation.py：宿主直调，GPU kernel 逐位镜像、判据同文件；不做插件抽象面（已回退）
+  conclusion: 实现唯一出处=segmentation.py：宿主直调，GPU kernel 逐位镜像、判据同文件；不做插件抽象面
   status: active
   premises: 0.11.0；两侧行为由真值用例逐位守护
   revisit: 真实 GPU 侧插件需求出现
@@ -138,14 +138,14 @@
   replaced_by: C-53
 
 - id: C-36
-  conclusion: 冷启动=cuda.core 0.22+NVRTC 0.09+TRT 0.39–0.44s；`warmup()` 移出首 extract（−33%）
+  conclusion: 冷启动=cuda.core 0.22+NVRTC 0.09+TRT 0.4s；warmup 移出首 extract −33%
   status: active
-  premises: 引擎已缓存；首个 extract
+  premises: 热池；首 extract
   revisit: 换后端/引擎格式
   evidence: log §3；test_warmup
 
 - id: C-37
-  conclusion: 消费端提交可批量化：归约 D2H 异步+本流同步（−5.19%）、keep_crops 并批窗 16（−2.45%）；按宽分组无收益
+  conclusion: 消费端提交可批量化：D2H 异步+本流同步 −5.19%、keep_crops 并批窗 16 −2.45%；按宽分组无收益
   status: active
   premises: 本机 4060；交错 A/B
   revisit: 段密度翻倍 / ROI 形态翻转
@@ -159,7 +159,7 @@
   evidence: log 09-12-准确项 §3
 
 - id: C-39
-  conclusion: **NVML NVDEC%=在用指示器非占空比**（35% 忙仍读 98%）；忙闲用 fork busy 计数，NVML 只管时钟/热
+  conclusion: **NVML NVDEC%=在用指示器非占空比**（35% 忙仍读 98%）；忙闲用 fork busy 计数
   status: active
   premises: full 档 + fork ≥6da2957；本机单卡
   revisit: 换卡（NVDEC% 语义随卡变）/ fork 换代
@@ -177,7 +177,7 @@
   replaced_by: C-54
 
 - id: C-42
-  conclusion: 相似判定 232µs、全片≈21% 但**不在关键路径**（短路实验无改善）；按占比推算收益是错的
+  conclusion: 相似判定 232µs、全片≈21% 但**不在关键路径**（短路实验无改善）
   status: active
   premises: GPU 管线；hevc 6000 帧；merges=0
   revisit: 消费者不再空等 / 段边界密度大增 / 换卡
@@ -199,14 +199,14 @@
   replaced_by: C-46
 
 - id: C-46
-  conclusion: **hybrid=包缓存+供料期 GOP 派工（fork fef3c4b）**：Push 只入 512MB 缓存，泵按速率贪心派工；**kick 必须经泵按流序注入**（错位=段数漂移）；机制 A/B hevc −6.29%/h264 −4.78%
+  conclusion: **hybrid=包缓存+供料期 GOP 派工（fork fef3c4b）**：Push 只入 512MB 缓存，泵按速率贪心派工；**kick 必须经泵按流序注入**（错位=段数漂移）；机制 A/B −5~6%
   status: active
   premises: 达成率=同会话三臂
   revisit: 换卡 / fork 换代 / 截断流·bf16 重跑
   evidence: log 2026-09-13-hybrid重设计分支；2026-09-14 达成率定稿
 
 - id: C-47
-  conclusion: **OCR 批延迟残差=GPU 链争用主导**：DEFER_SYNC 机制成立、逐位一致但 e2e 平价；提速只能减 GPU 争用。2026-10-09 复测：平价复确认（+0.33%±0.32%）但周期账本显代价 e2e +4.6%/decode +5.5%（16/16）——争用缓解时该开销可能浮出为墙钟
+  conclusion: **OCR 批延迟残差=GPU 链争用主导**：DEFER_SYNC 机制成立、逐位一致但 e2e 平价；提速只能减 GPU 争用。复测：平价复确认（+0.33%±0.32%）但 e2e 周期 +4.6%（16/16）——争用缓解时可能浮出
   status: active
   premises: trt_call 13.9ms/批占 87%
   revisit: 换卡 / TRT 换代 / 解码下 GPU
@@ -220,14 +220,14 @@
   evidence: log 2026-09-14-OpenVINO模型级A-B
 
 - id: C-49
-  conclusion: **换依赖无剩余性能空间**：GPU 三码/h264-cpu 解码绑定；fork 超外部参考（989>901fps）；PyNv 493fps+DLL 冲突；cv2 −0.26%
+  conclusion: **换依赖无剩余性能空间**：GPU 三码/h264-cpu 解码绑定；fork 超外部参考 989fps；PyNv 493fps+DLL 冲突；cv2 −0.26%
   status: active
   premises: 4060/16C32T/Zen4；fork 0.8.3
   revisit: 换卡 / 带 ROI-first 的解码绑定 / 预处理升为关键路径
   evidence: log 2026-09-15-依赖替换
 
 - id: C-50
-  conclusion: **DECODE_THREADS（CPU-OCR 口径）维持 auto=10**：周期账本复测——d32 墙钟 −1.86%±0.38%（14/16；旧 +0.97%±2.23% 不可判定）但 e2e 周期 +13.4%（decode −16.4%/ocr +273%）=争用税，−2% 墙钟换 +13% CPU 在共享桌面不值。「GIL 对冲」机制由此量化。GPU-OCR 口径 auto=32 已最优（压到 10 = 墙钟 +37%）
+  conclusion: **DECODE_THREADS（CPU-OCR 口径）维持 auto=10**：复测：d32 墙钟 −1.86%±0.38%（14/16）但 e2e 周期 +13.4%（decode −16.4%）=争用税，−2% 墙钟换 +13% CPU 在共享桌面不值。GPU-OCR 口径 auto=32 已最优（压到 10 墙钟 +37%）
   status: active
   premises: 16C32T；CPU OCR；h264 n=16 配对
   revisit: 独占部署（CPU 空闲换墙钟可接受）/ 核数格局变 / OCR 再提速 / decord 预取变
@@ -255,7 +255,7 @@
   evidence: log 09-18-hybrid启动轮；bench/hybrid_startup.json
 
 - id: C-55
-  conclusion: **池复用必须换壳**（复活对象二次死亡不触发 __del__）；旧 Y 池两层漏 +2.0 MiB/轮→修复后 +0.000
+  conclusion: **池复用必须换壳**（复活对象二次死亡不触发 __del__）；旧 Y 池漏 +2.0 MiB/轮→修复 +0.000
   status: active
   premises: CPython；4 钉子
   revisit: PyPy finalizer 语义 / 池契约重构
@@ -272,9 +272,9 @@
   revisit: NVDEC 纯解码部署 / 多 NVDEC 卡 / OCR 变重
   evidence: log 09-20 批量策略轮 §3-4
 - id: C-59
-  conclusion: 宽 ROI 字幕：裁切文本效应=临界字形宽度彩票（C639 不翻、C781 翻 14 段），随集波动（ep01 −7/ep02 +40）；性能真收益（−6.6% 同窗口/−9.0% vs 旧默认）。默认维持
+  conclusion: 宽 ROI 字幕：裁切文本效应=临界字形宽度彩票（C639 不翻/C781 翻），随集波动（ep01 −7/ep02 +40）；性能真收益（−6.6% 同窗口/−9.0% vs 旧默认）。默认维持
   status: active
-  premises: 新三国01/02 stride=1；dbe=cpu+TRT；真值视觉+抽帧复核
+  premises: 新三国01/02；dbe=cpu+TRT；视觉+抽帧复核
   revisit: 换模型 / PAD_SMALL×裁切联调 / NVDEC 纯解码 / dbe 变更
   evidence: log 2026-09-20-裁切复测轮
 - id: C-60
@@ -291,22 +291,28 @@
   evidence: log 2026-10-08 收口与窗口架构重做
 
 - id: C-62
-  conclusion: **硬窗架构重做（fork 0.9.0）：绝对帧区间 + marker 语义分离（0=EOF/1=WINDOW_END）+ 会话对象化（SessionState 整体重建）+ 窗模式禁替补（win_subs 结构性恒 0，缺帧响亮 FATAL）**——结构性根除 C-57 一族四根源（eof_pushed_ 语义过载/跨类计数算术/手写重置清单/替补放大器）。矩阵 12/12 × 5 轮 + 哈希逐位一致 + fork 七套件
+  conclusion: **硬窗架构重做（fork 0.9.0）：绝对帧区间 + marker 语义分离（0=EOF/1=WINDOW_END）+ 会话对象化（SessionState 整体重建）+ 窗模式禁替补（win_subs 结构性恒 0，缺帧响亮 FATAL）**——根除 C-57 族四根源。矩阵 12/12 × 5 轮 + 哈希逐位一致 + fork 七套件
   status: active
   premises: fork 0.9.0 dev（52597677）；金标 D 组晚起点 5 用例
   revisit: fork 换代/窗口路径改动（matrix --repeat 5 + window 套件）/换卡/竞态再现（轮盘续钻）
   evidence: log 2026-10-08 收口与窗口架构重做
 
 - id: C-63
-  conclusion: **周期/指令账本可作 A/B 判据**：引擎负载下 QueryProcessCycleTime 同条件 CV≤2.3%（满载墙钟 CV 30-36%）、nvdec 臂跨负载守恒 0.965；ncu 指令数散布 2.7e-6（GPU 变更 n=1 可分辨 0.01% 级）。边界：SMT ±16%→交错仍需；BLAS 自旋库满载 +139% 不可用；ncu 需管理员=离线专用
+  conclusion: **周期/指令账本可作 A/B 判据**：引擎负载下 QueryProcessCycleTime 同条件 CV≤2.3%（满载墙钟 30-36%）、nvdec 臂守恒 0.965；ncu 指令散布 2.7e-6（n=1 分辨 0.01%）。边界：SMT ±16%→交错仍需；BLAS 自旋库满载 +139% 不可用；ncu 需管理员=离线专用
   status: active
   premises: 本机 4060/16C32T/Win32；ncu 2026.2.0；引擎栈无自旋放大
   revisit: 换机/换 CPU；BLAS/OV 线程模型换代
   evidence: log 2026-10-09-周期计数测量首轮
 
 - id: C-64
-  conclusion: **周期账本产品化（report v7 + bench ab 周期判读，2026-10-09）**：resources.per_phase 行含原始 cycles 差分 + cycles_e2e；`bench ab` 自动输出周期判读（同款 CI∧符号纪律，不改退出码）。A/A：cyc:e2e 下限 1.58% vs 墙钟 2.85%（n=16 配对 SE 0.4-0.5%）。用法：墙钟不可判定时给第二意见（CPU 工作量维）
+  conclusion: **周期账本产品化（report v7 + bench ab 周期判读，2026-10-09）**：resources.per_phase 行含原始 cycles 差分 + cycles_e2e；`bench ab` 自动输出周期判读（同款 CI∧符号纪律，不改退出码）。A/A：cyc:e2e 下限 1.58% vs 墙钟 2.85%。用法：墙钟不可判定时的第二意见
   status: active
   premises: Windows；交错仍需（SMT 带）；C-63 边界全部继承
   revisit: 换机/换 CPU；周期 A/A 带漂移超 1×SE 重标；BLAS/OV 线程模型换代
   evidence: log 2026-10-09-账本产品化与不可判定复测
+- id: C-65
+  conclusion: **跨线程账本（v8）+ 预处理容量**：full 档逐线程占空（宿主臂 ocr 0.20/infer 0.61；GPU 臂宿主≤0.11、NVDEC 99%、SM 16%）。预处理重算法预算（绑定实验）：宿主臂膝点=额外 0.5-1ms/crop（当前 0.30→2.5-3×），之后 1:1 传导；GPU 臂 SM 余量 ~5× 不动 NVDEC。duty 的 4× 被膝点修正（C-42 再证）；更重≠更准（C-15）
+  status: active
+  premises: 本机 4060/16C32T；test5 600 帧；sleep 注入；ALL_ACCESS 句柄怪癖见 resources 注
+  revisit: 换机/换卡；OCR 提速（余量收窄）；真上重算法前复核膝点
+  evidence: log 2026-10-09-跨线程账本与预处理容量

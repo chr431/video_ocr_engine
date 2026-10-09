@@ -36,6 +36,11 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None,
     """
     from ._run_common import begin_reading, compute_frames, ensure_fps
     _MET = spec.metrics
+    # v8 线程账本登记：consumer=本（调用方）线程——宿主路径直接拉动解码
+    # 生成器，GPU 路径从生产者队列消费（两路径同名同义，键集一致由
+    # test_phase_key_registry 守护）。
+    from ..domain.resources import register_thread
+    register_thread('consumer')
     _t_open = time.perf_counter()
     vr = preopened_vr if preopened_vr is not None else spec.open_vr()
     lane.after_open(vr)
