@@ -240,7 +240,7 @@
   evidence: log 2026-09-20-hybridOCR奖金池裁决
 
 - id: C-62
-  conclusion: **硬窗架构重做（fork 0.9.0）：绝对帧区间 + marker 语义分离（0=EOF/1=WINDOW_END）+ 会话对象化（SessionState 整体重建）+ 窗模式禁替补（win_subs 结构性恒 0，缺帧响亮 FATAL）**——根除 C-57 族四根源。矩阵 12/12 × 5 轮 + 哈希逐位一致 + fork 七套件
+  conclusion: **硬窗架构重做（fork 0.9.0）：绝对帧区间 + marker 语义分离（0=EOF/1=WINDOW_END）+ 会话对象化（SessionState 整体重建）+ 窗模式禁替补（win_subs 结构性恒 0，缺帧响亮 FATAL）**——根除 C-57 族四根源。矩阵 12/12×5 + 哈希逐位一致 + 七套件
   status: active
   premises: fork 0.9.0 dev（52597677）；金标 D 组晚起点 5 用例
   revisit: fork 换代/窗口路径改动（matrix --repeat 5 + window 套件）/换卡/竞态再现（轮盘续钻）
@@ -254,7 +254,7 @@
   evidence: log 2026-10-09-周期计数测量首轮
 
 - id: C-64
-  conclusion: **周期账本产品化（report v7 + bench ab 周期判读，2026-10-09）**：resources.per_phase 行含原始 cycles 差分 + cycles_e2e；`bench ab` 自动周期判读（同款纪律，不改退出码）。A/A：cyc:e2e 下限 1.58% vs 墙钟 2.85%；墙钟不可判定时的第二意见
+  conclusion: **周期账本产品化（report v7 + bench 周期判读）**：per_phase 行含原始 cycles + cycles_e2e；`bench ab` 自动周期判读（同款纪律，不改退出码）。A/A：cyc:e2e 下限 1.58% vs 墙钟 2.85%；墙钟不可判定时的第二意见
   status: active
   premises: Windows；交错仍需（SMT 带）；C-63 边界全部继承
   revisit: 换机/换 CPU；周期 A/A 带漂移超 1×SE 重标；BLAS/OV 线程模型换代
@@ -267,8 +267,9 @@
   evidence: log 2026-10-09-跨线程账本与预处理容量
 
 - id: C-66
-  conclusion: **hybrid<双臂理论缺口三码 −5.6/−33/−34%（hevc/h264/av1），全在 CPU 臂欠配**：GPU 臂三码无损（−1~+3%）；assigned_c==frames_c 全等+rc_now≈纯臂速率→分到多少解多少——非供给饥饿（up_nobuf=0、cache 峰 36-81/512MB；decode-only 3118>理论和）、非计算争用（每帧周期不变+自旋实验无退化）、非引擎耦合（decode-only≈in-engine）——**泵 GOP 粒度贪心近视**：粗 GOP（240/300 帧）+EWMA 冷启动锁死早期分配（av1 EWMA≈纯臂 90% 仅分 1/10 GOP；h264 6:4 vs 最优 8:2，CPU 臂闲置 0.56s）。修法=速率比例预留/再平衡（kick 机制已有未触发）
+  conclusion: **hybrid 缺口三码 −5.6/−33/−34%（3000 帧）＝CPU 臂欠配**：GPU 臂无损；assigned==delivered+rc_now≈纯臂→非供给/计算/引擎耦合——泵 GOP 贪心近视（粗 GOP+EWMA 冷启动锁死早期分配，av1 仅分 1/10 GOP）。修法=速率比例预留/再平衡（kick 已有未触发）；短窗次要（用户裁决），未做
   status: active
-  premises: 4060/16C32T；fork 0.9.0；test6 三码 3000 帧 TRT；v8/v10 账本（thr_foreign 出生删失已修 v10.1）
-  revisit: fork 泵派工改动后复跑三码矩阵（_probe_contention_map --video）；换卡
+  premises: 4060/16C32T；fork 0.9.1；test6 三码；v8/v10 账本
+  长片段层（23970 帧）：分配自愈（av1→41-50%）、臂速≈纯臂（SM 争用否证：SM 65% 空闲）、剩余 −9~19%=引擎耦合（下轮题）；fork 0.9.1=ROI 预算字节化（nobuf 间歇病态 44888→0，最差跑 +18%）
+  revisit: 引擎耦合归因（nsys/ETW）；fork 泵派工改动后复跑（_probe_contention_map --video）；换卡
   evidence: log 2026-10-09-争用定位与hybrid缺口；2026-10-10-三码缺口矩阵与机制更正

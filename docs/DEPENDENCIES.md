@@ -38,7 +38,7 @@
 ## 已知问题与注意
 
 ### decord（自建 fork，pip wheel 安装）
-- **0.9.0（2026-10-08 已发布：tag v0.9.0 + GitHub Release cp39–cp314
+- **0.9.1（2026-10-08 已发布：tag v0.9.1 + GitHub Release cp39–cp314
   wheel 矩阵 + win64-gpu.zip；本机 cp313 wheel 已装）= 0.8.5 + p3
   合并 + 硬窗架构重做**（收口轮，log 2026-10-08 收口与窗口架构重做；
   C-62）：0.8.6 候选（p3 双缺陷修复）在发布门禁复跑中暴露健康格
@@ -81,8 +81,8 @@
   fork 侧为统计根治——真值生产中持续增长时按 fork tools/ 取证链
   续钻，log 2026-09-28 R3R5 夜间轮·续章）。
   **C-57 saga 存档**：哨兵（win_subs）/空真加固/EOF 网 v2（0.8.5 后
-  四提交，已入 0.9.0）→ 前缀+僵尸 kick 修复（p3 分支，2026-09-28
-  夜间轮根治，已合 0.9.0）→ 2026-10-08 复发 flake → 重做（C-62）。
+  四提交，已入 0.9.1）→ 前缀+僵尸 kick 修复（p3 分支，2026-09-28
+  夜间轮根治，已合 0.9.1）→ 2026-10-08 复发 flake → 重做（C-62）。
   归因未定论：post-p3 构建 2/12 失败、pre-p3/no-prefix/0.8.5 对照
   臂干净，但每臂不同二进制布局（本仓已知布局翻转此类竞态）且未
   交错——指向性证据而非定论（叙事留档）。
@@ -198,7 +198,7 @@
   大幅改善**（NT16 797fps → NT24 1164fps），引擎 av1 线程策略已随之
   调整（见 `extractor._decode_num_threads`，C-31）。
 - 无 NVIDIA GPU 时自动回退 CPU 软解；强制 CPU 用 `decode_backend="cpu"`
-  构造参数（`DECORD_FORCE_CPU` env 已于 0.9.0 删除）。
+  构造参数（`DECORD_FORCE_CPU` env 已于 0.9.1 删除）。
 - `sample_stride>1` 的等差步长快速路径需要 fork ≥v0.7.12；旧版退化为逐索引
   seek，仍正确但更慢。
 - `DECORD_SKIP_LOOP_FILTER` 透传（关去块滤波，可选的速度/准确率取舍旋钮）

@@ -33,8 +33,10 @@ sys.path.insert(0, str(ROOT))
 
 def _extract(vid: str, roi, backend: str, frames: int):
     from video_ocr_engine import FieldExtractor
+    import os as _os
     ex = FieldExtractor(vid, roi, frame_start=0, frame_end=frames,
-                        decode_backend=backend, ocr_backend="tensorrt")
+                        decode_backend=backend,
+                        ocr_backend=_os.environ.get("PROBE_OCR", "tensorrt"))
     t0 = time.perf_counter()
     r = ex.extract()
     wall = time.perf_counter() - t0
