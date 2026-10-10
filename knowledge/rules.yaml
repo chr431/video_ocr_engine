@@ -5,8 +5,10 @@
   why: 算法意图无法机器执行；其守卫是金标 --verify（ci 层），本条只留方向性提醒
 - rule: 金标漂移即回退——tests/golden --verify 失败的提交不许合入
   mechanism: ci
-- rule: 改动后跑三个门禁——pytest 全绿 + 双审计 0 + 金标 --verify 28/28
-  mechanism: hook
+- rule: 改动后跑两级测试链（tools/check.py）——daily=pytest+快检+金标 smoke（迭代默认，≈47s）；release=全量审计+金标 full+发版清扫（发版/合并）
+  mechanism: script
+  # 执行体 = tools/check.py --tier daily|release（每步计时汇总；无视频环境自动跳过金标步）。
+  # 分级依据实测：pytest 29.3s、金标 smoke 6.7s / full 71.9s（33 用例，2026-10-10 测试减负轮）。
 - rule: 录金标/跑 A/B 用既有脚本（record.py / bench.py），不自写对照探针
   mechanism: script
 - rule: 性能 A/B 必须交错测量——同码连跑两次可差 7.7%（GPU 热降），顺序 A/B 会把漂移记到 B 头上

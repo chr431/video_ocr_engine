@@ -121,6 +121,9 @@ class ThreadLedger:
     def __init__(self) -> None:
         import ctypes
 
+        self._ntdll = None           # NtQuerySystemInformation 快路径（惰性）
+        self._nt_trusted = None      # None=未对账 / True=NT 快路径转正 / False=永久回退
+
         # 私有 WinDLL 实例 + 显式原型：windll 是进程级共享缓存，函数对象
         # 上的 argtypes 会被各使用方互相覆盖；句柄原型必须显式（与本文件
         # GetCurrentProcess 伪句柄截断坑同族——HANDLE 走 c_void_p）。
@@ -173,11 +176,115 @@ class ThreadLedger:
     def sample_all(self) -> dict:
         """TID → 周期数：进程**全部**线程（含外来池：decord/OMP/TBB）。
 
-        Toolhelp32 线程快照枚举 + 逐线程开句柄查询后即关（不缓存——
-        外来线程生命周期不由我们管，TID 复用风险靠"只在差分里用个体、
-        结论只下在簇级"消化）。成本 ≈ 快照 ~1ms + 每线程 ~µs（full 档
-        每相位边界一次）。命名线程的值与 `sample()` 同源可互校。
+        枚举走 **NtGetNextThread 快路径**（沿进程线程链迭代，无全系统
+        快照）；首次成功与 Toolhelp 全量快照的 TID 集合对账，任何疑点
+        永久回退 Toolhelp 慢路径（fail-open，语义不变）。逐线程查询后
+        即关（不缓存——外来线程生命周期不由我们管，TID 复用风险靠
+        "只在差分里用个体、结论只下在簇级"消化）。
+
+        成本（2026-10-10/11 测试减负轮实测，本机 6047 系统线程）：
+        Toolhelp 路径 = 快照 3.6ms + Thread32Next 逐条系统调用 ~32ms
+        ≈ **39ms/次**（空闲与负载下同量级）；NtGetNextThread ≈
+        **0.11ms/次**（空闲）——**负载下的差异曾达 350×**：信任门一票
+        否决（首跑对账遇线程生灭，TID 集合瞬态不一致 → 永久回退）时
+        每个 checkpoint 39ms × 4 = 158ms/run，PI-15 墙钟门禁实测
+        full−off +4.4%（限 1.2%）——对账改为集合相似度（≥90% 交集）
+        + 3 次重试后恢复 +0.098%。语义（TID 集合、逐次开/关句柄）
+        不变。命名线程的值与 `sample()` 同源可互校。
         """
+        if self._nt_trusted is not False:
+            try:
+                out = self._sample_all_nt()
+            except Exception:               # noqa: BLE001 — 遥测绝不让 run 失败
+                out = None
+            if out:
+                if self._nt_trusted is None:
+                    # 首次成功：与 Toolhelp 全量快照对账（相似度判据，见
+                    # _crosscheck）；连续 3 次不过才永久回退——负载下线程
+                    # 生灭造成的瞬态集合差不该一次判死（2026-10-11 教训：
+                    # 一次不一致 → 永久 Toolhelp 慢路径 39ms/次 → full 档
+                    # 多付 ~158ms/run，PI-15 门禁 4.4% 超预算实测复现）。
+                    if self._crosscheck(out):
+                        self._nt_trusted = True
+                    else:
+                        self._nt_fails = getattr(self, "_nt_fails", 0) + 1
+                        if self._nt_fails >= 3:
+                            self._nt_trusted = False
+                return out
+            # NT 失败：本次走 Toolhelp，信任位不动（下次再试 NT）
+            return self._sample_all_toolhelp()
+        return self._sample_all_toolhelp()
+
+    def _crosscheck(self, out: dict) -> bool:
+        """NT 快路径 vs Toolhelp 全量快照的对账（相似度判据）。
+
+        两次枚举之间允许线程生灭：交集 ≥ 90% × min(两者数) 即通过。
+        不校验 cycle 数值——两个路径的值都来自对正确 TID 的
+        QueryThreadCycleTime 内核真查询，TID 集合对 = 值必对；
+        NT 的 TID 集合错误会被 _sample_all_nt 的值域/可查比例自检
+        与此处的集合相似度双重拦住。
+        """
+        ref = self._sample_all_toolhelp()
+        if not ref:
+            return True                     # 快照空（极端时点）：无从对账，放行
+        common = set(out) & set(ref)
+        return len(common) >= 0.9 * min(len(out), len(ref))
+
+    def _sample_all_nt(self) -> dict | None:
+        """NtGetNextThread 逐线程枚举本进程（Win8+；无全系统快照）。
+
+        相比 Toolhelp（全系统 6047 线程快照 + 逐条 Thread32Next 系统调用，
+        ~35ms）与 NtQuerySystemInformation（需解析带版本偏移的结构体）：
+        直接沿进程的线程链迭代（~4 系统调用/线程 × 本进程 ~27 线程），
+        **无结构偏移、无全系统扫描**。自检：句柄数合理带 + TID 值域
+        （32-bit）+ 可查比例，任一不过返回 None → 调用方回退 Toolhelp。
+        首次成功仍与 Toolhelp 对账（sample_all 内），语义随 Windows
+        换代漂移时只会变慢，不会错。
+        """
+        import ctypes
+
+        ntdll = getattr(self, "_ntdll", None)
+        if ntdll is None:
+            ntdll = self._ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+            ntdll.NtGetNextThread.restype = ctypes.c_long
+            ntdll.NtGetNextThread.argtypes = (
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32,
+                ctypes.c_uint32, ctypes.c_uint32, ctypes.POINTER(ctypes.c_void_p))
+        k32 = self._k32
+        k32.GetThreadId.restype = ctypes.c_uint32
+        k32.GetThreadId.argtypes = (ctypes.c_void_p,)
+        THREAD_ALL_ACCESS = 0x1FFFFF
+        h_proc = ctypes.c_void_p(-1)               # GetCurrentProcess() 伪句柄
+        cyc = ctypes.c_ulonglong()
+        out: dict = {}
+        prev: int | None = None
+        okq = 0
+        for _ in range(8192):                      # 合理带上限，防协议异常死循环
+            h = ctypes.c_void_p()
+            rc = ntdll.NtGetNextThread(h_proc, prev, THREAD_ALL_ACCESS, 0, 0,
+                                       ctypes.byref(h))
+            if prev is not None:
+                k32.CloseHandle(prev)
+                prev = None
+            if rc != 0:                            # 非 0 = 链尾/错误
+                break
+            if not h.value:
+                break
+            prev = h.value
+            tid = k32.GetThreadId(h)
+            if not tid or tid >= 1 << 32:          # TID 是 32-bit；超域=协议错
+                continue
+            if k32.QueryThreadCycleTime(h, ctypes.byref(cyc)):
+                out[int(tid)] = int(cyc.value)
+                okq += 1
+        if prev is not None:
+            k32.CloseHandle(prev)
+        if not out or okq < max(1, len(out) // 2):
+            return None
+        return out
+
+    def _sample_all_toolhelp(self) -> dict:
+        """原 Toolhelp32 路径（快照 + Thread32Next 逐条系统调用，~35ms）。"""
         import ctypes
         from ctypes import wintypes as _wt
 

@@ -135,13 +135,14 @@ ab 子进程协议另有 `ab --aa` 标定。**标定值、判定判据、hybrid 
 
 ## 纪律与自动化守卫
 
-**两级合规**（2026-10-10 治理改革轮定形）：日常改动跑 `--since` 快检；
-**发版 / 依赖迁移 / 隔周**跑全量。入口两个（项数以脚本输出为准，非 0
-即违规；渲染一致性/结论路径活性已折入审计，不再单跑第三条命令）：
+**两级合规**（2026-10-10 定形）：**标准入口 = `tools/check.py`**——
+daily（pytest+快检+金标 smoke ≈47s，迭代默认）/ release（全量审计+金标
+full+发版清扫 ≈2min），每步计时；细粒度入口（非 0 即违规；渲染一致性/
+结论路径活性已折入审计）：
 
 ```bash
+python tools/check.py                  # 两级链（默认 daily；--tier release 发版）
 python tools/_probe_discipline_audit.py --since HEAD   # 日常快检（变更 .py）
-python tools/_probe_discipline_audit.py                # 全量
 python tools/_probe_index_audit.py                     # INDEX 数字漂移 --fix 自动校准
 ```
 

@@ -13,11 +13,26 @@ A/A 实测只能分辨到 ~0.85%（同一段代码两槽差可达 4%），而遥
 **6270 个 TOTALS 逐事件计数**（P2b/P2c/W1：consume_feed 3000 +
 q_put_block 1090 + q_get_wait 1091 + merge_pair 1089）/ **4 个 L1 资源
 边界** + 一次 `snapshot()` + 一次 `build_report()`。
-断言的是"这样一整套跑完"的成本上限。
+
+预算结构（2026-10-10 测试减负轮重推导，三项合计 = D30 墙钟预算 1.2%）：
+  · 记录面增量（spans+totals+counters+gauges+report，full−off）≤ 2.0ms；
+  · 相位采样面（4×checkpoint，v10 含线程账本全线程快照）≤ 2.0ms；
+  · W1 直方图按事件计费 ≤ 8.0ms（单列，见下）。
+⚠️ 本文件的重放口径在**GPU 空闲**进程里跑，测不到负载上下文的停顿
+（实例：v10 的全线程快照在 Toolhelp 回退下每次 39ms 只在真实 GPU 负载
+出现——空闲重放 0.1ms。该类回归由 PI-15 墙钟门禁兜底：
+`bench.py telemetry-check --inner 1`，2026-10-11 实配对 +0.098%，
+此前 +4.4% 即此病灶）。重放抓"恒定病理"，墙钟抓"负载病理"，两层互补。
+
+v10 曾把 39ms/次的全系统线程快照挂进每个 checkpoint（回退态 154ms/run，
+超 D30 预算一个数量级），而本文件的增量口径因 `_median_cost` 循环硬编码
+档位**自诞生起形同虚设**（full-vs-full 自比）——两个 bug 互相掩护，
+2026-10-10/11 一并修复（快路径 NtGetNextThread + 信任门容差 + tier
+参数恢复生效）。
 
 W1 直方图**不进基础重放**：它按事件量计费（0.165µs/事件，真实事件量
 ≈ 1.0ms），单列在 `test_full_tier_histogram_cost_is_bounded`（8ms 宽
-上限）——不与基础面 2ms 预算混算，各自的回退各自抓。
+上限）——不与基础面预算混算，各自的回退各自抓。
 """
 from __future__ import annotations
 
@@ -47,6 +62,13 @@ _GAUGES = [n for n in METRICS.names()
 
 def _one_run(m: Metrics) -> None:
     """重放一个 3000 帧 run 的全部基础遥测动作（含收尾快照）。"""
+    _one_run_base(m)
+    for ph in ("open", "calibrate", "decode", "ocr"):
+        m.checkpoint(ph)
+
+
+def _one_run_base(m: Metrics) -> None:
+    """记录面：spans + TOTALS + counter/gauge + 收尾报告（不含 checkpoint）。"""
     for i in range(SPAN_SAMPLES):
         m.record_span(_SPANS[i % len(_SPANS)], 0.001)
     for _ in range(TOTALS_EVENTS):
@@ -55,18 +77,22 @@ def _one_run(m: Metrics) -> None:
         m.counter(name, 3)
     for i, name in enumerate(_GAUGES):
         m.gauge(name, float(i))
-    for ph in ("open", "calibrate", "decode", "ocr"):
-        m.checkpoint(ph)
     build_report(m, wall=1.0, config_digest="x" * 8, n_segments=1083,
                  backend="decord/CPU", ocr_backend="tensorrt")
 
 
 def _median_cost(fn, repeats: int, tier: str = "full") -> float:
+    """每 run 中位成本；**每轮新建实例**（产品语义：每 run 一个 Metrics）。
+
+    2026-10-10 修复：循环此前硬编码 `Metrics("full")`，tier 参数只影响
+    预热——"增量口径"实际是 full-vs-full 自比，永远测不出插桩膨胀
+    （正是本文件存在的目的）。恢复 `Metrics(tier)` 后增量才真实。
+    """
     _warm_env_fingerprint()
     fn(Metrics(tier))                        # 预热（首次含集合/字典建立）
     out = []
     for _ in range(repeats):
-        m = Metrics("full")
+        m = Metrics(tier)
         t = time.perf_counter()
         fn(m)
         out.append((time.perf_counter() - t) * 1000.0)
@@ -98,19 +124,52 @@ def test_environment_fingerprint_is_cached():
 
 
 def test_full_recording_path_cost_per_run():
-    """full 基础面（138 span + 计数器 + 4 资源边界 + 报告）≤ 2ms/run。
+    """full 记录面（138 span + 计数器 + 报告）相对 off 的增量 ≤ 2ms/run。
 
     3000 帧 run 墙钟 ~1.0s → 2ms = 0.2%；比墙钟门禁分辨力严 ~400 倍：
     真正的插桩膨胀（例如误在 per-frame 路径加记录）会在这里亮红灯，
-    而机器噪声不会。（直方图成本单列在 8ms 宽上限那条。）
+    而机器噪声不会。（直方图成本单列在 8ms 宽上限那条；相位采样面
+    （checkpoint）单列在下一条。）
     """
     # 增量口径（2026-09-18 CI 清红）：绝对预算在慢 CPU runner 上必超
     # （GitHub 实测 2.3-2.6ms）。插桩膨胀的判据=full 相对 off 的增量
     # ——同一重放循环，off 档 record 调用全走 no-op，差值即纯插桩
     # 成本，机器速度基本对消。
-    base = _median_cost(_one_run, REPLAYS, tier="off")
-    ms = _median_cost(_one_run, REPLAYS) - base
-    assert ms <= 2.0, "full 基础面遥测增量成本 %.3fms/run，超预算 2ms" % ms
+    # 2026-10-10：增量口径此前形同虚设（_median_cost 循环硬编码 full，
+    # 实际 full-vs-full 自比）——修复后本测试才真正测增量；预算维持
+    # 2.0ms（实测增量 0.93ms，余量 53%；bootstrap n=30 时 P(误报)已为 0，
+    # REPLAYS=300 纯属白拿的稳定性，见 bench/replay_cost_samples.json）。
+    base = _median_cost(_one_run_base, REPLAYS, tier="off")
+    ms = _median_cost(_one_run_base, REPLAYS) - base
+    assert ms <= 2.0, "full 记录面遥测增量成本 %.3fms/run，超预算 2ms" % ms
+
+
+def test_full_tier_checkpoint_sampling_cost_is_bounded():
+    """full 相位采样面（4×checkpoint，含 v10 线程账本全线程快照）≤ 2ms/run。
+
+    off 档 checkpoint 全 no-op（=0），绝对值即增量。v10（2026-10-09）把
+    全系统线程快照挂进每个 checkpoint：Toolhelp 枚举实测 39ms/次 →
+    154ms/run，超 D30 预算（1.2%≈12ms）一个数量级——彼时本文件增量
+    口径恰好失效（见 _median_cost 注），两个 bug 互相掩护未被抓住。
+    2026-10-10/11 三修复：枚举改 NtGetNextThread（空闲实测 0.11ms/次）+
+    信任门对账改集合相似度（负载下首跑线程生灭曾致一票否决 → 永久
+    Toolhelp 回退 158ms/run，PI-15 +4.4% 复现后修复）+ 本测试 tier
+    参数恢复生效。采样面预算 2.0ms（空闲重放实测 ~0.5ms，余量 ~74%；
+    负载上下文成本由 PI-15 墙钟门禁兜底，见模块 docstring）。
+    """
+    m = Metrics("full")
+    for ph in ("open", "calibrate", "decode", "ocr"):
+        m.checkpoint(ph)                      # 预热：NVML 单例/psutil 首调
+    out = []
+    for _ in range(REPLAYS):
+        m = Metrics("full")
+        t = time.perf_counter()
+        for ph in ("open", "calibrate", "decode", "ocr"):
+            m.checkpoint(ph)
+        out.append((time.perf_counter() - t) * 1000.0)
+    ms = statistics.median(out)
+    assert ms <= 2.0, "full 相位采样面 %.3fms/run（4×checkpoint，含线程" \
+        "账本快照），超预算 2ms——checkpoint 路径被塞入昂贵调用了" % ms
 
 
 def test_off_tier_records_nothing():

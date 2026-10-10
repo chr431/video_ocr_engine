@@ -32,6 +32,9 @@ from pathlib import Path
 #     的确定性成本守卫承担——那里有 10⁴ 倍于墙钟的分辨力）。
 #   - 判失败还需**符号多数一致**（70%），落在噪声带里的差值不再误报。
 #   - 换机器/换窗口/改配对数 n 后必须 `telemetry-check --aa` 重标（SE∝1/√n）。
+#   - 2026-10-11：full 档成本回归修复（资源采样信任门容差）后 PI-15 实配对
+#     full−off = +0.098%（限 1.20%）；成本门禁配方 = --inner 1（A/A floor
+#     0.50% ≪ 1.20%，3× 便宜，bench/aa_floor_curve.json）。
 PI15_LIMITS = {"full_pct": 1.20, "sign_majority": 0.70}
 #: 阈值下限（P1 抽成常量）：0.30 → 0.20（2026-09-17 续，四轮标定证据：
 #: |均值|+3SE = 0.291/0.209/0.274/0.198%，n=50 时 0.198 已触 0.20——
@@ -1120,7 +1123,11 @@ def main() -> int:
     t.add_argument("--subproc", action="store_true",
                    help="用独立子进程测（含冷启成本，噪声大；默认同进程交替）")
     t.add_argument("--inner", type=int, default=3,
-                   help="同进程模式下每槽连跑次数（取均值压噪，默认 3）")
+                   help="同进程模式下每槽连跑次数（取均值压噪，默认 3）。"
+                        "成本门禁配方（2026-10-10 实测，aa_floor_curve.json）："
+                        "判 full 成本 ≤1.2%% 用 --inner 1（floor 0.50%% ≪ 1.20%%，"
+                        "3× 便宜 178s vs ~500s）；µs 级 micro 对比（--full-limit "
+                        "0.2~0.3）仍用默认 inner=3 + n=50")
     t.add_argument("--full-limit", type=float, default=0.0,
                    help="覆盖 full 阈值（%%），0=用 PI15_LIMITS 校准值")
     t.set_defaults(func=cmd_telemetry_check)
