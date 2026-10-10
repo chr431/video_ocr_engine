@@ -82,7 +82,7 @@
   evidence: DECISIONS P0-6 翻案
 
 - id: C-15
-  conclusion: **OCR 输入侧参数都不是杠杆**。pad 下限 224 保持（160/320 证伪）；预处理六变体仅一非负；翻转系实例级判决
+  conclusion: **OCR 输入侧参数都不是杠杆**。pad 下限 224 保持；预处理六变体仅一非负；翻转系实例级判决
   status: active
   premises: v6_small+racelog
   revisit: pad/预处理架构变更；换模型或字体/ROI 形态
@@ -187,7 +187,7 @@
   evidence: log 2026-09-15-依赖替换
 
 - id: C-50
-  conclusion: **DECODE_THREADS（CPU-OCR 口径）维持 auto=10**：复测：d32 墙钟 −1.86%±0.38%（14/16）但 e2e 周期 +13.4%（decode −16.4%）=争用税——共享桌面不值。GPU-OCR 口径 auto=32 已最优
+  conclusion: **DECODE_THREADS（CPU-OCR 口径）维持 auto=10**：d32 墙钟 −1.86% 但 e2e 周期 +13.4%=争用税。GPU-OCR 口径 auto=32 已最优
   status: active
   premises: 16C32T；CPU OCR；h264 n=16 配对
   revisit: 独占部署（CPU 空闲换墙钟可接受）/ 核数格局变 / OCR 再提速 / decord 预取变
@@ -250,8 +250,8 @@
   conclusion: **周期/指令账本可作 A/B 判据**：引擎负载下 QueryProcessCycleTime 同条件 CV≤2.3%（满载墙钟 30-36%）、nvdec 臂守恒 0.965；ncu 指令散布 2.7e-6（n=1 分辨 0.01%）。边界：SMT ±16%→交错仍需；BLAS 自旋库满载 +139% 不可用；ncu 需管理员=离线专用
   status: active
   premises: 本机 4060/16C32T/Win32；ncu 2026.2.0；引擎栈无自旋放大
-  revisit: 换机/换 CPU；BLAS/OV 线程模型换代
-  evidence: log 2026-10-09-周期计数测量首轮
+  revisit: 换机/CPU；线程模型换代
+  evidence: log 2026-10-09-周期计数首轮
 
 - id: C-64
   conclusion: **周期账本产品化（report v7 + bench 周期判读）**：per_phase 行含原始 cycles + cycles_e2e；`bench ab` 自动周期判读（同款纪律，不改退出码）。A/A：cyc:e2e 下限 1.58% vs 墙钟 2.85%；墙钟不可判定时的第二意见
@@ -272,6 +272,6 @@
   premises: 4060/16C32T；fork 0.9.2；v8/v10 账本
   长片段（23970 帧）：分配自愈、臂速≈纯臂（SM 65% 空闲）；剩余 −9~19%=**TRT×解码链同卡争用**（TRT 批延 +54%；CPU-OCR 判别臂 hybrid 反 +6%）；hol/idle/背压=排队影子（三修全反已回滚）；0.9.1=ROI 预算字节化（nobuf 44888→0）
   稳定层（0.9.2）：尾窗 4→10——av1 CV 3.5→2.9%、均值 +3.6%；hevc/h264 无回归。忙窗 chunk 速率估计已回滚（自激）；残余=环境态臂速 ±7%
-  TRT 争用轮：四杠杆全证伪（批加大线性/流优先级有先例/DEFER_SYNC 不减占用）；**TRT 口径达成率已 92%**（hybrid vs 理论 2937）——同卡无免费解，剩余需 MPS/异卡（C-60 触发）；CPU-OCR 口径 63%=OV 争核（C-50 域）
+  TRT 争用轮：四杠杆全证伪；**达成率三码 92/82/92%**（hevc/h264/av1，vs 双臂和）且 hybrid 全部快于最快纯臂 +12~32%——C-53 在全长片三码转正。h264 的 18%：CPU 臂 −26%（H2D 上载×解码争核；线程降档证伪——16/12 档反降）；同卡无免费解，剩余需 MPS/异卡（C-60 触发）；CPU-OCR 口径 63%=OV 争核（C-50 域）
   revisit: 引擎耦合归因（nsys/ETW）；fork 泵改动后复跑；换卡
   evidence: log 2026-10-09/10 争用定位与三码矩阵
