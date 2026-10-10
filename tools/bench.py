@@ -804,8 +804,9 @@ def _cycle_verdict(name: str, ra: dict, rb: dict) -> None:
     与 wall 判定同款统计纪律（CI 排零 ∧ 符号多数 ≥70%），但**只判读不改
     退出码**——wall 仍是唯一失败判据；cycles 的角色是墙钟分辨率不够时的
     第二意见（配对差分自带配对消噪，SMT 争用均值带见 C-63 前提）。
-    只看 cyc:e2e / cyc:decode / cyc:ocr / cyc:calibrate 四键 + 全部
-    cyct:*（线程级，full 档才有）。
+    主判据 = cyc:e2e / cyc:decode 两键；cyc:ocr / cyc:calibrate 与
+    cyct:*（线程级，full 档才有）为信息性展示——小相位样本少，A/A 带宽
+    达 27%/8.6%（C-64 遗留注），不作结论。
     """
     diffs = _paired_metric_diffs(ra.get(name, []), rb.get(name, []),
                                  mode="hot")
@@ -1006,6 +1007,22 @@ def cmd_ab(args) -> int:
                          cb["pos"], cb["n"] - cb["pos"]))
                 print("  → 建议 --hard-cold 阈值 = +%.2f%%（同规则；%d/%d 符号多数）"
                       % (crec, cneed, cb["n"]))
+            # C-64 遗留补口（2026-10-11）：A/A 周期带直接打印——此前 aa
+            # 分支在周期判读前 continue，周期带要事后从 registry 手工算。
+            # 只列主判据两键（cyc:ocr/cyc:calibrate 的 A/A 带 27%/8.6%，
+            # 小相位样本少，见 _cycle_verdict 注）。A/A=两臂同码，故这里
+            # 的"可分辨下限"即噪声带估计（只标定不判定）。
+            if args.telemetry != "off":
+                cyd = _paired_metric_diffs(ra_all.get(name, []),
+                                           rb_all.get(name, []), mode="hot")
+                for key in ("cyc:e2e", "cyc:decode"):
+                    v = cyd.get(key)
+                    if v:
+                        print("  周期 A/A（%s，%d 对）：Δ均值 %+.3f%%  "
+                              "SE %.3f%%  → 可分辨下限 +%.2f%%（|μ|+3SE "
+                              "上取整 0.05%%；只标定不判定）"
+                              % (key, v["n"], v["mean"], v["se"],
+                                 _limit_from_band(v)))
             continue
         if args.no_verdict:
             print("\n判定关闭（--no-verdict）：均值 %+.3f%%（SE %.3f%%）符号 %d/%d"

@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **151 个 `.py`**（25,792 行），其中 133 个是探针
+`tools/` 现有 **151 个 `.py`**（25,809 行），其中 133 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -70,7 +70,7 @@
 | `_probe_roadmap_ocr.py` | 191 | 路线图轮 OCR rec 微基准：ONNX/TRT × 批大小扫描 + `_resize_norm` 单帧成本 + FP32/FP16×max_b 实验引擎构建（TRT 11 无 FP16 builder flag 的实证） | 本轮路线图（2026-09-10） |
 | `_probe_roadmap_profile.py` | 62 | 路线图轮 ENGINE_PROFILE 分相打印驱动（单配置一次 extract，输出 producer.*/ocr.* 全分相） | 本轮路线图（2026-09-10） |
 | `_probe_r3_infer_split.py` | 58 | R3 调查：hybrid vs nvdec 的 OCR worker infer 差异分解（ENGINE_PROFILE + TRT SUBPROBE 双跑） | 路线图执行轮（2026-09-10） |
-| `bench.py` | 1179 | **S6 性能轮的原生度量入口**（§8.6 N-4）：`run` 跑配置矩阵并落 `bench/registry.jsonl`、`diff` 按 D10 双档逐指标对比、`ab` 交错 A/B（对抗 GPU 热降漂移——同码两次实测可差 7.7%）、`telemetry-check` = PI-15 门禁（**同进程交替 + 档位轮转 + 同轮配对差分均值 + 符号多数一致**，`--aa` 标定本机噪声带、阈值 = \|偏差\|+3×SE）、`show` 打印报告细目 | AGENTS.md 性能节 / v2 §8.6 / log 2026-09-11-资源层与门控校准 §4 |
+| `bench.py` | 1196 | **S6 性能轮的原生度量入口**（§8.6 N-4）：`run` 跑配置矩阵并落 `bench/registry.jsonl`、`diff` 按 D10 双档逐指标对比、`ab` 交错 A/B（对抗 GPU 热降漂移——同码两次实测可差 7.7%）、`telemetry-check` = PI-15 门禁（**同进程交替 + 档位轮转 + 同轮配对差分均值 + 符号多数一致**，`--aa` 标定本机噪声带、阈值 = \|偏差\|+3×SE）、`show` 打印报告细目 | AGENTS.md 性能节 / v2 §8.6 / log 2026-09-11-资源层与门控校准 §4 |
 | `_probe_golden_diff.py` | 50 | 金标分歧定位：同进程连跑两次（冷/热池）逐段对比，区分"结构漂移"与"置信度浮点敏感"（F-8 的工具） | tests/golden/FINDINGS.md F-8 |
 | `_probe_trt_maxbatch.py` | 101 | **否定/定量**：同一份 ONNX 构建 batch 6 与 18 两个 profile，同批 1116 张走同一提交路径 → 0.663s vs 0.557s（**−16%**）；支撑 `TRT_PROFILE_BATCH=18`（S6） | log 2026-09-10-S6性能轮 §7；FINDINGS F-10 |
 | `_probe_engine_ab.py` | 121 | 引擎产物端到端交错 A/B（worker 子进程 monkeypatch `_engine_candidates`，产品代码零开关）：h264-cpu 热轮 −5.85%、`ocr.infer` −33% | log §7；FINDINGS F-10 |
@@ -82,7 +82,7 @@
 | `_probe_hol_stats.py` | 245 | 走 fork **非打印** `DECORD_HYBRID_STATS`（零打印扰动）实测队头阻塞时长/episode/搁置峰值 + BuildPlan 冻结速率/CPU 折数/时刻；decode-only 每格独立子进程+硬超时，`--set KEY=VAL` 做单变量 A/B；`--nts 16,24,32` 展开 CPU 臂线程档位（§14：hybrid_gpu 传 num_threads=0 在 decord 内隐式落 16，同口径比较必须显式给 nt） | log 2026-09-11-hybrid差距分解 §8/§14；knowledge `hybrid_cpu_rate_ratchet` |
 | `_probe_stress_harness.py` | 109 | hybrid 死锁/性能**压测 harness 通用规格**：每 trial 独立子进程 + 硬超时 + 进度逐行落文件（慢消费者 = get_batch+asnumpy 保留；"无超时压测烧千秒"三踩后的纪律固化，rules.yaml 同名规则）。kick 突发修复 24/24 证据；`--nt` 覆盖 CPU 臂线程（§14 起引擎新档 24/32 同须压测） | log 2026-09-11-hybrid差距分解 §8.2/§9.1/§14.5；knowledge `hybrid_sustained_default` |
 | `_probe_e2e_mode.py` | 34 | 单视频引擎 e2e + 管线模式取证（`_gpu_pipeline_mode` + `DECORD_HYBRID_STATS` 汇总）；全片配对 A/B 用它做 sustained 转默认测量 | log 2026-09-11-hybrid差距分解 §9.2；knowledge `hybrid_sustained_default` |
-| `_probe_release_gate.py` | 263 | **hybrid 发布门禁**（§18 硬化）：六步 19 项一键跑——金标 28/28 / 三码×双路径 e2e（段数对表+零 stall 误报）/ 压测 / 损坏码流（现场生成 faststart 截断+坏字节，完成或干净报错）/ KICK_BURST=0 消融判别（期望挂死=机制承重）。损坏流段数不查表；⚠️ 段数期望表是内容锚点，引擎分段语义变更需同步 | log 2026-09-11-hybrid差距分解 §18；knowledge `hybrid_release_gate` |
+| `_probe_release_gate.py` | 263 | **hybrid 发布门禁**（§18 硬化）：六步 19 项一键跑——金标全量用例 / 三码×双路径 e2e（段数对表+零 stall 误报）/ 压测 / 损坏码流（现场生成 faststart 截断+坏字节，完成或干净报错）/ KICK_BURST=0 消融判别（期望挂死=机制承重）。损坏流段数不查表；⚠️ 段数期望表是内容锚点，引擎分段语义变更需同步 | log 2026-09-11-hybrid差距分解 §18；knowledge `hybrid_release_gate` |
 | `_probe_hybrid_threads_e2e.py` | 137 | hybrid CPU 臂线程档位的**引擎 e2e 配对 A/B**（独立子进程槽位 + 交错 + 段数/唯一文本集 sha 门禁）：§14 定档证据链——16→24/24→32/32→48 三码矩阵，h264→32 / hevc→32 / av1→24 恰为 `_decode_num_threads` 现行策略 | log 2026-09-11-hybrid差距分解 §14；knowledge `hybrid_cpu_threads_tier` |
 
 ## B. 库型 / worker 型（**被其他探针依赖，动不得**）
