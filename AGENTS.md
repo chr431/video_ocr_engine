@@ -56,7 +56,8 @@ python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.
 7. **探针放 `tools/_probe_*.py`**（下划线前缀 = 调查工具，不随产品发布）。
 8. **结论分离**：结论一行进 `docs/CONCLUSIONS.md`（必须带状态/前提/复评
    触发），实验叙事进 `docs/log/`（PERFORMANCE.md 已冻结增长）；历史章节
-   不回溯重写。版本号改动必须打同名 git tag。
+   不回溯重写。版本号改动必须打同名 git tag；用户不可见的优化/修复一律
+   bump patch（minor=行为/API 变化）。
 9. **迁移清扫**：依赖升级 / 大迁移落地时，逐条复核结论的"前提/触发"
    并翻状态（active / superseded / dead）——执行体
    `python tools/conclusions_sweep.py`（列钉版落后与触发命中的清单，
@@ -151,7 +152,7 @@ python tools/_probe_index_audit.py                     # INDEX 数字漂移 --fi
 两处常量迟早分叉）。**mypy 面**：以 pyproject `[tool.mypy] files` 为唯一描述源。**代码风格**：
 pyproject `[tool.ruff]` 成文（formatter=双引号/行宽 100 单一执行面，
 CI `ruff format --check` 挡增量；lint 精选集不扩）。**发版清扫**=
-`conclusions_sweep.py`（铁律 9 执行体）；**测量原语**=tools/_measure_lib.py（视频注册表/指纹/配对 A/B——新实验先复用）。
+`conclusions_sweep.py`（铁律 9 执行体）；**测量原语**=tools/_measure_lib.py（注册表/指纹/配对 A/B，先复用）。
 
 松绑速记：INDEX 计数不符→`--fix`；L2 live 外一律 frozen（名单由
 index 审计【6】守护）；版本 bump 未推送=warn；金标 smoke 迭代/full 发布；
@@ -192,7 +193,7 @@ CI 红自动开 issue（ci-watchdog）。
   （项目环境；PATH `python` 本机即它，换环境先自证 numpy）。pytest / numpy / psutil / cuda.bindings / decord
   均可用。
 - 硬件：RTX 4060（**单 NVDEC 单元**）/ 16C32T / 2×16GB DDR5-6000
-  （实测流式上限 **55.8 GB/s**；WMI `Speed`=5600 是 SPD 标称）。
+  （流式实测 **55.8 GB/s**）。
 - 测试视频 `D:\Videos\racelog_test\`，真值在 `ground_truth_csv/`
   （头是 `# roi=...`，**必须用正则取四个整数**，按逗号切只能拿到第一个）。
   ⚠️ **该目录全部视频一律 `sample_stride=1`**（2026-09-10 重申，防漏信息）；

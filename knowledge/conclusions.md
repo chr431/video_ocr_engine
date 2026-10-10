@@ -267,7 +267,7 @@
   evidence: log 2026-10-09-跨线程账本与预处理容量
 
 - id: C-66
-  conclusion: **hybrid 缺口 −5.6/−33/−34%（3000 帧）=CPU 臂欠配**：assigned==delivered→泵 GOP 贪心近视（EWMA 冷启动锁死分配）。修法=比例预留/再平衡（kick 已有）；短窗次要未做
+  conclusion: **hybrid 缺口 −5.6/−33/−34%（3000 帧）=CPU 臂欠配**：assigned==delivered→泵 GOP 贪心近视（EWMA 冷启动锁死分配）。修法候选=比例预留/再平衡——已 C-68 证伪（切换税≈收益）；剩余=亚 GOP 派工（未立项）/同卡争用归 C-60
   status: active
   premises: 4060/16C32T；fork 0.9.2；v8/v10 账本
   长片段：分配自愈、臂速≈纯臂；剩余 −9~19%=**TRT×解码链同卡争用**（批延 +54%；CPU-OCR 判别臂 hybrid 反 +6%）；hol/idle/背压=排队影子（三修全反已回滚）；0.9.1=ROI 预算字节化
@@ -282,3 +282,10 @@
   premises: 16C32T；纯 CPU+OV；test6 全长；峰 24×16=1904（h264 6000 帧 +34%）
   revisit: 换 CPU（3/2 公式重验）；OV 换代；stride>1 域另验
   evidence: log 2026-10-10-纯CPU争用配平
+- id: C-68
+  conclusion: **比例预留/再平衡在 GOP 粒度 300 帧×窗 3000 下结构性不可行**：切换税（IDR 冲刷+重排窗重填）≈ 分配收益——两变体（逐遍配额 / 空转再平衡）三码全劣于基线（-19/-71/-41% vs 基线 -5.6/-32.5/-33.9%），分配比例本身可达标（c=2100/g=900=70%）但 kicks=5 次换侧使供给串行化（双臂 busy 各 0.83/0.56s / 墙钟 1.79s）；缺口属粒度×kick 成本结构性，收益需亚 GOP 派工或无 kick 双臂管线（fork 重设计级）。CPU 解码每帧周期成本 hybrid 内不变（10-09 已证）；h264 在臂 −26% 税的宿主侧修法（pinned/亲和）未测，GPU 侧同卡争用归 C-60（MPS/异卡）
+  status: active
+  premises: 4060/16C32T；fork 0.9.2+format（md5 30ca4d37）；窗 3000；TRT OCR
+  revisit: 亚 GOP 派工实现 / MPS/异卡落地 / kick 成本降至 <10ms
+  evidence: log 2026-10-11-争用微观定位轮
+
