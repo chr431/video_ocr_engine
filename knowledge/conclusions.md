@@ -5,7 +5,7 @@
 # 超预算压缩顺序（2026-09-20 起）：evidence 字段（机械可压）→ premises → conclusion 正文最后动。
 
 - id: C-01
-  conclusion: 并发退化真因=NVDEC 会话数；NVDEC∥CPU 互补聚合 1.83–1.87×，双 NVDEC 仅 1.01–1.20×
+  conclusion: 并发退化真因=NVDEC 会话数；NVDEC∥CPU 聚合 1.83–1.87×，双 NVDEC 1.01–1.20×
   status: active
   premises: 本机单 NVDEC 单元；同视频同负载
   revisit: 多 NVDEC 单元 GPU / 驱动调度变更
@@ -166,7 +166,7 @@
   evidence: log 2026-09-13-hybrid重设计分支；2026-09-14 达成率定稿
 
 - id: C-47
-  conclusion: **OCR 批延迟残差=GPU 链争用主导**：DEFER_SYNC 机制成立、逐位一致但 e2e 平价；提速只能减 GPU 争用。复测：平价复确认（+0.33%±0.32%）但 e2e 周期 +4.6%（16/16）——争用缓解时可能浮出
+  conclusion: **OCR 批延迟残差=GPU 链争用主导**：DEFER_SYNC 一致但 e2e 平价。复测：平价确认但 e2e 周期 +4.6%（16/16）
   status: active
   premises: trt_call 13.9ms/批占 87%
   revisit: 换卡 / TRT 换代 / 解码下 GPU
@@ -215,13 +215,13 @@
   evidence: log 09-18-hybrid启动轮；bench/hybrid_startup.json
 
 - id: C-55
-  conclusion: **池复用必须换壳**（复活对象二次死亡不触发 __del__）；旧 Y 池漏 +2.0 MiB/轮→修复 +0.000
+  conclusion: **池复用必须换壳**（复活对象二次死亡不触发 __del__）；旧 Y 池漏 +2.0 MiB/轮
   status: active
   premises: CPython；4 钉子
   revisit: PyPy finalizer 语义 / 池契约重构
   evidence: log 2026-09-20-审计修复轮 §2
 - id: C-58
-  conclusion: **hybrid OCR 双车道（TRT+OV）v0.5：回归已消除（+48%→−1.8%）但本机无净收益**（OV 产能=TRT 1/3；争用 +20%）；触发条件实测见 C-60
+  conclusion: **hybrid OCR 双车道（TRT+OV）：回归已消除但本机无净收益**（OV 产能=TRT 1/3）；触发条件见 C-60
   status: active
   premises: batch_test 字幕 stride=1；16C32T 三层占满
   revisit: NVDEC 纯解码部署 / 多 NVDEC 卡 / OCR 变重
@@ -267,10 +267,11 @@
   evidence: log 2026-10-09-跨线程账本与预处理容量
 
 - id: C-66
-  conclusion: **hybrid 缺口 −5.6/−33/−34%（3000 帧）=CPU 臂欠配**：GPU 臂无损；assigned==delivered→非供给/计算/引擎耦合——泵 GOP 贪心近视（EWMA 冷启动锁死早期分配，av1 仅 1/10）。修法=速率比例预留/再平衡（kick 已有未触发）；短窗次要未做
+  conclusion: **hybrid 缺口 −5.6/−33/−34%（3000 帧）=CPU 臂欠配**：GPU 臂无损；assigned==delivered→泵 GOP 贪心近视（EWMA 冷启动锁死分配，av1 仅 1/10）。修法=比例预留/再平衡（kick 已有）；短窗次要未做
   status: active
-  premises: 4060/16C32T；fork 0.9.2；test6；v8/v10 账本
-  长片段（23970 帧）：分配自愈（av1→41-50%）、臂速≈纯臂（SM 65% 空闲）；剩余 −9~19%=**TRT×GPU 解码链同卡争用**（TRT 批延 +54%：13.2 vs 8.6ms；CPU-OCR 判别臂 hybrid 反 +6%——解码混跑无损耗）；hol/idle/背压=排队影子（三修全反效果已回滚）；0.9.1=ROI 预算字节化（nobuf 44888→0）
+  premises: 4060/16C32T；fork 0.9.2；v8/v10 账本
+  长片段（23970 帧）：分配自愈、臂速≈纯臂（SM 65% 空闲）；剩余 −9~19%=**TRT×解码链同卡争用**（TRT 批延 +54%；CPU-OCR 判别臂 hybrid 反 +6%）；hol/idle/背压=排队影子（三修全反已回滚）；0.9.1=ROI 预算字节化（nobuf 44888→0）
   稳定层（0.9.2）：尾窗 4→10——av1 CV 3.5→2.9%、均值 +3.6%；hevc/h264 无回归。忙窗 chunk 速率估计已回滚（自激）；残余=环境态臂速 ±7%
+  TRT 争用轮：四杠杆全证伪（批加大线性/流优先级有先例/DEFER_SYNC 不减占用）；**TRT 口径达成率已 92%**（hybrid vs 理论 2937）——同卡无免费解，剩余需 MPS/异卡（C-60 触发）；CPU-OCR 口径 63%=OV 争核（C-50 域）
   revisit: 引擎耦合归因（nsys/ETW）；fork 泵改动后复跑；换卡
   evidence: log 2026-10-09/10 争用定位与三码矩阵
