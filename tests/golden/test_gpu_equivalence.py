@@ -11,8 +11,11 @@ import pytest
 
 from _paths import ROOT
 
-VID = r"D:\Videos\racelog_test\test5.mp4"
-ROI = (843, 993, 948, 1025)
+# 视频注册表单一事实源 = tools/_measure_lib.py（2026-10-11 收敛硬编码 ROI）
+from _measure_lib import ROI, VIDS  # noqa: E402
+
+VID = VIDS["test5"]
+ROI = ROI["test5"]
 WIN = (0, 2000)
 
 

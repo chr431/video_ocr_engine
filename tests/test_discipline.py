@@ -10,8 +10,8 @@
 3. tools/INDEX.md 手写的数字不到一天就漂了。
 
 共同点是**没有自动化检查**。所以这里把 `tools/_probe_discipline_audit.py`
-（12 项）和 `tools/_probe_index_audit.py`（索引数字一致性）接成测试，
-退出码非 0 即失败。
+（项数以脚本输出为准）和 `tools/_probe_index_audit.py`（索引数字一致性）
+接成测试，退出码非 0 即失败。
 
 设计取舍
 --------
@@ -30,7 +30,8 @@ import sys
 from _paths import ROOT
 
 AUDITS = [
-    ("tools/_probe_discipline_audit.py", "项目纪律审计（12 项）"),
+    # title 不写项数（防漂移——计数以脚本输出为准，2026-10-11 审计轮）
+    ("tools/_probe_discipline_audit.py", "项目纪律审计"),
     ("tools/_probe_index_audit.py", "tools/INDEX.md 数字一致性"),
 ]
 

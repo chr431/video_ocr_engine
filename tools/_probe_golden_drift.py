@@ -5,7 +5,7 @@
 之前必须先量这一项：新向量若丢文本（新集 ⊄ 旧集 ∪ 新增合理值）就是真
 退化，不得重录。
 
-用法：python tools/_probe_golden_drift.py            # 全 28 用例
+用法：python tools/_probe_golden_drift.py            # 全量用例（数以 record.MATRIX 为准）
       python tools/_probe_golden_drift.py --case A-  # 子串过滤
 """
 from __future__ import annotations

@@ -59,4 +59,7 @@
 - rule: 两仓版本口径一致——DEPENDENCIES.md 的 decord 行必须含本机实际安装的 decord 版本
   mechanism: ci
   # 执行体 = tools/_audit_ext.py decord_pin（import decord 取 __version__；CI 无 decord 时按环境事实跳过）
+- rule: 测量原语复用——新实验先 import tools/_measure_lib.py（视频注册表 VIDS/ROI、结果指纹 capture_shas、配对交错 paired_ab）与 bench ab 的既有参数化（--env/--args）；同一原语出现第 3 份实现必须下沉入库
+  mechanism: prose
+  why: 重复实现的漂移无门禁可抓（上轮 5 处视频注册表各写一份）；纪律审计与 INDEX 只能查文件级一致，查不出"又抄了一份"
 

@@ -148,15 +148,14 @@ python tools/_probe_index_audit.py                     # INDEX 数字漂移 --fi
 
 **单一实现**：裸 CR / 注入预算 / 各文档预算的判据与常量只在
 `tools/_doc_guards.py`——审计与 pytest 都从它取数（此前三处各写一遍，
-两处常量迟早分叉）。**mypy 面**：以 pyproject `[tool.mypy] files` 为唯一
-描述源（domain+pipeline+decode+gpu+`_gpu_kernels.py`）。**代码风格**：
+两处常量迟早分叉）。**mypy 面**：以 pyproject `[tool.mypy] files` 为唯一描述源。**代码风格**：
 pyproject `[tool.ruff]` 成文（formatter=双引号/行宽 100 单一执行面，
-CI `ruff format --check` 挡增量；lint 精选集不扩）。**发版清扫**：
-`tools/conclusions_sweep.py`（铁律 9 的执行体）。
+CI `ruff format --check` 挡增量；lint 精选集不扩）。**发版清扫**=
+`conclusions_sweep.py`（铁律 9 执行体）；**测量原语**=tools/_measure_lib.py（视频注册表/指纹/配对 A/B——新实验先复用）。
 
-松绑速记：INDEX 计数不符→`--fix`；L2 live 名单外一律 frozen（计数不写死，
-名单由 index 审计【6】守护）；版本 bump 未推送=warn（推送即须同名 tag）；
-金标 `--tier smoke` 迭代/全量发布；CI 红自动开 issue（ci-watchdog）。
+松绑速记：INDEX 计数不符→`--fix`；L2 live 外一律 frozen（名单由
+index 审计【6】守护）；版本 bump 未推送=warn；金标 smoke 迭代/full 发布；
+CI 红自动开 issue（ci-watchdog）。
 
 几条容易踩、且已自动化的：
 

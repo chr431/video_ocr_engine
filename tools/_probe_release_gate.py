@@ -4,7 +4,7 @@
 零散手跑守不住，必须矩阵化重复。门禁分六步（全部子进程 + 硬超时，
 退出码非 0 = 有 FAIL）：
 
-  1 gold      金标 28 用例（tests/golden/record.py --verify）
+  1 gold      金标全量用例（tests/golden/record.py --verify）
   2 fast      三码 × hybrid+TRT（hybrid_gpu 设备路径）×2：完成 + 段数对表
   3 slow      三码 + bf16 酷刑流 × hybrid+ONNX（宿主路径）：完成 + 段数对表
   4 stress    压测 harness 三码 hybrid_gpu 全片 ×2 trials：bad=0

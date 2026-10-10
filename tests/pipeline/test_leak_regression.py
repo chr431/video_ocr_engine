@@ -23,9 +23,11 @@ import pytest
 
 from _paths import ROOT
 
-VID = os.path.join(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"),
-                   "test5.mp4")
-ROI = (843, 993, 948, 1025)
+# 视频注册表单一事实源 = tools/_measure_lib.py（2026-10-11 收敛硬编码 ROI）
+from _measure_lib import ROI as _ROI_LIB, VIDS as _VIDS_LIB  # noqa: E402
+
+VID = _VIDS_LIB["test5"]
+ROI = _ROI_LIB["test5"]
 WARMUP = 3
 MEASURE = 10
 SLOPE_CAP_MB = 1.5      # C-55 修复前是 +2.0 MiB/轮；留噪声余量

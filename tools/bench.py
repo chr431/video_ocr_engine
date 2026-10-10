@@ -45,14 +45,12 @@ PI15_FLOOR_PCT = 0.20
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tools"))
 REGISTRY = ROOT / "bench" / "registry.jsonl"
 
-VIDS = {"test5": r"D:\Videos\racelog_test\test5.mp4",
-        "test6_av1": r"D:\Videos\racelog_test\test6.mp4",
-        "test6_hevc": r"D:\Videos\racelog_test\test6_hevc.mp4",
-        # 与 test6_av1/test6_hevc **同内容**重编码 → 编码对照必须用它
-        "test6_h264": r"D:\Videos\racelog_test\test6_h264.mp4"}
-ROI = {"test5": (843, 993, 948, 1025), "test6": (841, 994, 949, 1026)}
+# 视频注册表单一事实源 = tools/_measure_lib.py（2026-10-11 收敛：此前与
+# record.py 各一份相同拷贝、两个测试再硬编码 ROI）。经 RACELOG_VIDEO_DIR 解析。
+from _measure_lib import ROI, VIDS  # noqa: E402
 #: §12 三配置展开为 4（与 tests/golden/bench_baseline.py 同口径，可比）
 CONFIGS = {
     "h264-gpu": dict(video="test5", decode_backend="nvdec"),

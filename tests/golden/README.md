@@ -9,9 +9,9 @@
 
 | 文件 | 作用 |
 |---|---|
-| `record.py` | 录制 / 复核（`--verify` 为 S0 可复现门禁，28/28 一致，2026-09-10） |
+| `record.py` | 录制 / 复核（`--verify` 为 S0 可复现门禁；用例数以 test_golden_manifest 为准） |
 | `manifest.yaml` | 录制基准（commit / GPU / driver / decord / 视频指纹）+ 每用例期望哈希 |
-| `case-*/stage-{calib,ocr}.json` | 28 用例的摘要向量（timing 仅供参考，不参与比对） |
+| `case-*/stage-{calib,ocr}.json` | 逐用例摘要向量（timing 仅供参考，不参与比对） |
 | `decoder_contract.yaml` | 引擎对 decord fork 的 10 项隐式假设（S5 验收表） |
 | `probe_triage.yaml` | 69 探针三分法底账（§8.6 根治验收依据） |
 | `bench_baseline.json` | 四配置 × 3 轮性能基线 + 噪声底（D10 阈值校准依据） |

@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **150 个 `.py`**（25,679 行），其中 133 个是探针
+`tools/` 现有 **151 个 `.py`**（25,792 行），其中 133 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -55,10 +55,11 @@
 | `_audit_ext.py` | 367 | 纪律审计扩展项（14..26，含 render_consistency / decord_pin）；被 `_probe_discipline_audit.py` 并入同一入口 | `_probe_discipline_audit.py` |
 | `_doc_guards.py` | 114 | **文档守卫单一实现**（2026-10-10 治理改革轮）：裸 CR / 注入预算 / 各文档预算的判据与常量唯一事实源 + 大文档可分章检查；审计与 pytest 同源取数 | AGENTS.md；tests/test_docs_hygiene.py；tests/knowledge/test_budgets.py |
 | `conclusions_sweep.py` | 135 | **发版清扫**（铁律 9 执行体）：列结论钉版落后/触发命中清单；`--strict` 供发版钩子 | AGENTS.md 铁律 9；rules.yaml |
+| `_measure_lib.py` | 105 | **测量原语复用层**（2026-10-11）：视频注册表 VIDS/ROI 单一事实源（bench/record/测试共 5 处收敛至此）+ 结果指纹 capture_shas + 配对交错 paired_ab + 视频守卫 | AGENTS.md 纪律段；rules.yaml「测量原语复用」 |
 | `_hook_guard_read.py` | 60 | **PreToolUse(Read) 大文档整读守卫**（.zcode/config.json 挂载）：>16KB md 无 offset 整读即拦并指路 `_doc_section.py`；守卫自身故障一律放行 | rules.yaml「大文档禁止整读」 |
 | `_probe_replay_cost_samples.py` | 102 | 测试减负实验采样（REPLAYS vs 中位数稳定性 bootstrap；遥测成本守卫重推导的证据链） | docs/log/2026-10-10-测试减负实验轮.md |
 | `_probe_aa_floor_curve.py` | 103 | A/A 噪声带 floor(n) 曲线采样（inner 3 vs 1 的地板对比；标定/重标实验的证据链） | docs/log/2026-10-10-测试减负实验轮.md |
-| `check.py` | 103 | **两级标准化测试入口**：daily（pytest+快检+金标smoke ≈47s）/ release（全量审计+金标full+清扫）；每步计时汇总 | AGENTS.md「纪律与自动化守卫」 |
+| `check.py` | 113 | **两级标准化测试入口**：daily（pytest+快检+金标smoke ≈47s）/ release（全量审计+金标full+清扫）；每步计时汇总 | AGENTS.md「纪律与自动化守卫」 |
 | `_doc_section.py` | 230 | **文档章节级检索**：`--toc` 看目录 / `--find` 按标题定位 / 读单章。避免整文件读，实测省 84~96% tokens；2026-10-10 起覆盖全部治理文档+log 单篇（含 §A~§E 字母节键） | AGENTS.md「查文档前先定位」 |
 | `_probe_roi_decode.py` | 105 | **否定结果**：量化「打开时 SetRoi」vs「每次 get_batch 传 roi」对 CPU 软解速率的影响。实测两者无差异（1841 vs 1849 fps），但**不传 ROI = 520 fps**（3.6× 慢）→ ROI 本身是巨大优化，两种传法等价 | PERF §22.5 |
 | `_probe_nvdec_interference.py` | 141 | **推翻前一轮归因**：隔离测 NVDEC 对 CPU 软解的干扰，A 单跑 / B ∥NVDEC / C ∥忙等线程（对照）。实测 NVDEC 只造成 **−3.3%**，而等量纯抢核 **−41.9%** → 元凶是分段/OCR 流水线，不是 NVDEC | PERF §22.6 |
@@ -69,7 +70,7 @@
 | `_probe_roadmap_ocr.py` | 191 | 路线图轮 OCR rec 微基准：ONNX/TRT × 批大小扫描 + `_resize_norm` 单帧成本 + FP32/FP16×max_b 实验引擎构建（TRT 11 无 FP16 builder flag 的实证） | 本轮路线图（2026-09-10） |
 | `_probe_roadmap_profile.py` | 62 | 路线图轮 ENGINE_PROFILE 分相打印驱动（单配置一次 extract，输出 producer.*/ocr.* 全分相） | 本轮路线图（2026-09-10） |
 | `_probe_r3_infer_split.py` | 58 | R3 调查：hybrid vs nvdec 的 OCR worker infer 差异分解（ENGINE_PROFILE + TRT SUBPROBE 双跑） | 路线图执行轮（2026-09-10） |
-| `bench.py` | 1181 | **S6 性能轮的原生度量入口**（§8.6 N-4）：`run` 跑配置矩阵并落 `bench/registry.jsonl`、`diff` 按 D10 双档逐指标对比、`ab` 交错 A/B（对抗 GPU 热降漂移——同码两次实测可差 7.7%）、`telemetry-check` = PI-15 门禁（**同进程交替 + 档位轮转 + 同轮配对差分均值 + 符号多数一致**，`--aa` 标定本机噪声带、阈值 = \|偏差\|+3×SE）、`show` 打印报告细目 | AGENTS.md 性能节 / v2 §8.6 / log 2026-09-11-资源层与门控校准 §4 |
+| `bench.py` | 1179 | **S6 性能轮的原生度量入口**（§8.6 N-4）：`run` 跑配置矩阵并落 `bench/registry.jsonl`、`diff` 按 D10 双档逐指标对比、`ab` 交错 A/B（对抗 GPU 热降漂移——同码两次实测可差 7.7%）、`telemetry-check` = PI-15 门禁（**同进程交替 + 档位轮转 + 同轮配对差分均值 + 符号多数一致**，`--aa` 标定本机噪声带、阈值 = \|偏差\|+3×SE）、`show` 打印报告细目 | AGENTS.md 性能节 / v2 §8.6 / log 2026-09-11-资源层与门控校准 §4 |
 | `_probe_golden_diff.py` | 50 | 金标分歧定位：同进程连跑两次（冷/热池）逐段对比，区分"结构漂移"与"置信度浮点敏感"（F-8 的工具） | tests/golden/FINDINGS.md F-8 |
 | `_probe_trt_maxbatch.py` | 101 | **否定/定量**：同一份 ONNX 构建 batch 6 与 18 两个 profile，同批 1116 张走同一提交路径 → 0.663s vs 0.557s（**−16%**）；支撑 `TRT_PROFILE_BATCH=18`（S6） | log 2026-09-10-S6性能轮 §7；FINDINGS F-10 |
 | `_probe_engine_ab.py` | 121 | 引擎产物端到端交错 A/B（worker 子进程 monkeypatch `_engine_candidates`，产品代码零开关）：h264-cpu 热轮 −5.85%、`ocr.infer` −33% | log §7；FINDINGS F-10 |

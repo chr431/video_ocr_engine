@@ -39,13 +39,23 @@ def _has_videos() -> bool:
         return False
 
 
+def _golden_case_count() -> str:
+    """金标用例数动态取（防标签自漂移——用例增删不用改本文件）。"""
+    try:
+        import glob as _glob
+        n = len(_glob.glob(os.path.join(ROOT, "tests", "golden", "case-*")))
+        return str(n) if n else "?"
+    except OSError:
+        return "?"
+
+
 STEPS = {
     "pytest": ("pytest -q（全量单测）", [sys.executable, "-m", "pytest", "tests/", "-q"]),
     "audit": ("纪律审计", [sys.executable, "tools/_probe_discipline_audit.py"]),
     "index": ("INDEX 一致性审计", [sys.executable, "tools/_probe_index_audit.py"]),
     "golden_smoke": ("金标 smoke（3 用例）",
                      [sys.executable, "tests/golden/record.py", "--verify", "--tier", "smoke"]),
-    "golden_full": ("金标 full（33 用例）",
+    "golden_full": ("金标 full（%s 用例）" % _golden_case_count(),
                     [sys.executable, "tests/golden/record.py", "--verify"]),
     "sweep": ("发版清扫（结论钉版清单）",
               [sys.executable, "tools/conclusions_sweep.py"]),

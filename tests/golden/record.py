@@ -27,14 +27,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 GOLDEN = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tools"))
 
-VIDS = {
-    "test5": r"D:\Videos\racelog_test\test5.mp4",        # h264, 7761 帧
-    "test6_av1": r"D:\Videos\racelog_test\test6.mp4",    # av1, 23970 帧
-    "test6_h264": r"D:\Videos\racelog_test\test6_h264.mp4",
-    "test6_hevc": r"D:\Videos\racelog_test\test6_hevc.mp4",
-}
-ROI = {"test5": (843, 993, 948, 1025), "test6": (841, 994, 949, 1026)}
+# 视频注册表单一事实源 = tools/_measure_lib.py（2026-10-11 收敛，与 bench 同源）
+from _measure_lib import ROI, VIDS  # noqa: E402
 WIN = (0, 3000)
 
 # ── 覆盖矩阵（先做全：解码×管线×OCR 网格 + 编码族 + 格式/标志位）──────
@@ -187,9 +183,11 @@ def summarize(case: dict) -> tuple[dict, dict]:
             (s.rep_crop.tobytes() if s.rep_crop is not None else b"")
         ).hexdigest()[:16] for s in r.segments]
 
-    struct = hashlib.sha256(
-        json.dumps([[s[0], s[1], s[2]] for s in segs]).encode()).hexdigest()
-    text = hashlib.sha256("".join(s[3] for s in segs).encode()).hexdigest()
+    # 指纹摘要单一实现 = tools/_measure_lib.capture_shas（2026-10-11 收敛）
+    from _measure_lib import capture_shas
+    fp = capture_shas(r, keep_crops=bool(case["kwargs"].get("keep_crops")))
+    struct = fp["seg_struct_sha"]
+    text = fp["text_sha"]
 
     calib = {"bin_thresh": getattr(ex, "_bin_thresh", None),
              "degraded_reason": r.meta.get("degraded_reason"),
