@@ -463,6 +463,11 @@ class ResourceProbe:
                     and fb.get("cycles") is not None:
                 f_run = (fb["cycles"] - fa["cycles"]) / dcpu_all
         out: dict = {}
+        # v10.1 出生删失修复：解码池线程常在相位中段才出生（hybrid 的
+        # CPU 臂池取决于校准走了哪条路），边界交集会把它们整体剔除
+        # （h264 hybrid 外来簇 0.3M/帧=删失假象 vs 纯臂 13.6M）。改为
+        # 携带 seen 表：本区间新出生（此前从未见过）的 TID 基线记 0。
+        seen_tids: set = set()
         for (a, sa), (_b, sb) in zip(rows, rows[1:]):
             name = _b if _b not in out else "%s→%s" % (a, _b)
             dt = float(sb["t"] - sa["t"])
@@ -510,12 +515,18 @@ class ResourceProbe:
                         name2tid = dict(led._idents)
                 tids_named = set(name2tid.values())
                 foreign = {}
-                for k in set(aa_) & set(ab_):
+                for k in set(ab_):
                     if k in tids_named:
                         continue
-                    d = ab_[k] - aa_[k]
+                    base = aa_.get(k)
+                    if base is None:
+                        if k in seen_tids:
+                            continue   # 早前存在但区间起点缺席（重生/漏采）
+                        base = 0      # 本区间新出生：基线 0
+                    d = ab_[k] - base
                     if d > 0:
                         foreign[str(k)] = d
+                seen_tids |= set(ab_)
                 if foreign:
                     row["thr_foreign"] = foreign
                     row["thr_foreign_n"] = len(foreign)

@@ -667,3 +667,13 @@
   gate_full_vs_off_se_pct: 0.064
   gate_limit_pct: 1.20
   verdict: 通过（std 退役：0.115% vs 0.038% 同在噪声内）
+# ── hybrid 三码缺口矩阵（2026-10-10，C-66 更正；test6 同内容 3000 帧 TRT）──
+- metric: hybrid_gap_matrix
+  hevc: {nvdec: 2052, cpu: 837, theory: 2889, hybrid: 2727, gap_pct: -5.6,
+         frames_c: 720, assigned_c: 720, cpu_realized_fps: 654, rc_now: 760}
+  h264: {nvdec: 951, cpu: 2550, theory: 3500, hybrid: 2364, gap_pct: -32.5,
+         frames_c: 1800, assigned_c: 1800, cpu_realized_fps: 1419, rc_now: 2440}
+  av1:  {nvdec: 1727, cpu: 1273, theory: 3000, hybrid: 1984, gap_pct: -33.9,
+         frames_c: 300, assigned_c: 300, cpu_realized_fps: 198, rc_now: 1160}
+  gpu_arm_delta_pct: [-1, +3]      # 三码全部无损
+  note: 机制=泵 GOP 粒度贪心欠配 CPU 臂（assigned==delivered；供给/计算/引擎耦合三否证）
