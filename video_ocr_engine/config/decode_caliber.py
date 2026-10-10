@@ -91,5 +91,12 @@ def decode_num_threads(codec: str | None = None, *,
     if sample_stride > 1:
         return max(8, min(config.DECODE_THREADS_CPU_OCR_MAX,
                           logical * 3 // 4))
+    # h264 纯 CPU 路径独档（2026-10-10 争用配平轮，C-67）：h264 解码
+    # 算力轻（CPU 解码最快码，C-04）而并行度收益陡——10 档下解码饿
+    # （全长实测 1379fps），24 档 +17%；hevc/av1 解码重保持低档
+    # （24/12 反降，同轮实测）。与 av1 独档同构：编码感知分档。
+    if codec == 'h264':
+        return max(8, min(config.DECODE_THREADS_CPU_OCR_H264_MAX,
+                          logical * 3 // 2))
     return max(8, min(config.DECODE_THREADS_CPU_OCR_STRIDE1_MAX,
                       logical // 3))

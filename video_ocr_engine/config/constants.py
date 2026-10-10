@@ -17,7 +17,7 @@ from pathlib import Path
 # 版本单一事实源：wheel 版本号（`pyproject.toml` 用 `dynamic` + `attr` 从此处
 # 读取）与运行时 `video_ocr_engine.__version__` 同源，且必须与 git tag 一致
 # —— 否则"装的到底是哪个版本"无法判断。改动本值后记得同步打 tag。
-__version__ = "0.23.2"
+__version__ = "0.23.3"
 
 # ═══════════════════ 环境变量助手与名称常量 ═══════════════════
 # 引擎全部 env 开关/覆写在此收敛（单一事实源）。布尔开关统一走 env_bool：
@@ -123,6 +123,10 @@ DECODE_THREADS_GPU_OCR_MAX: int = 32
 # stride1 最优 12（8 差 2.8%）—— 取下面公式后误差 ≤5%，两端都不劣化。
 DECODE_THREADS_CPU_OCR_MAX: int = 24          # stride>1：逻辑核 3/4，上限 24
 DECODE_THREADS_CPU_OCR_STRIDE1_MAX: int = 12  # stride==1：逻辑核 1/3，上限 12
+# h264 纯 CPU 路径独档（2026-10-10 争用配平轮 C-67）：解码轻码吃满
+# 超线程（逻辑核 3/2 钳 24）——10 档下解码饿、全长 +17%；hevc/av1
+# 解码重保持 12 档（24/12 反降，同轮实测）
+DECODE_THREADS_CPU_OCR_H264_MAX: int = 24
 # 并行双 ONNX 实例的启动门限（OCR 线程数 ≥ 此值才默认拆两个实例）
 OCR_INSTANCES_MIN_THREADS: int = 8
 

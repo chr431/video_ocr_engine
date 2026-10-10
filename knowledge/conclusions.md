@@ -96,7 +96,7 @@
   evidence: DECISIONS 第四轮
 
 - id: C-31
-  conclusion: decord 0.8.1：seek 未变慢；av1 慢系 NT=4 假象；修=钳[8,24]：CPU −50%、e2e −45%
+  conclusion: decord 0.8.1：av1 慢系 NT=4 假象；修=钳[8,24]：CPU −50%、e2e −45%
   status: active
   premises: wheel 0.8.2
   revisit: fork/驱动/FFmpeg 换代
@@ -159,7 +159,7 @@
   evidence: log 2026-09-13-填充宽度重测
 
 - id: C-46
-  conclusion: **hybrid=包缓存+供料期 GOP 派工（fork fef3c4b）**：Push 只入缓存，泵按速率贪心派工；kick 必须经泵按流序注入（错位=段数漂移）；机制 A/B −5~6%
+  conclusion: **hybrid=包缓存+供料期 GOP 派工（fork fef3c4b）**：Push 只入缓存，泵按速率贪心派工；kick 必须经泵按流序注入；机制 A/B −5~6%
   status: active
   premises: 达成率=同会话三臂
   revisit: 换卡 / fork 换代 / 截断流·bf16 重跑
@@ -180,7 +180,7 @@
   evidence: log 2026-09-14-OpenVINO模型级A-B
 
 - id: C-49
-  conclusion: **换依赖无剩余性能空间**：GPU 三码/h264-cpu 解码绑定；fork 超外部参考 989fps；PyNv 493fps+DLL 冲突；cv2 −0.26%
+  conclusion: **换依赖无剩余性能空间**：解码绑定；fork 超外部参考 989fps；PyNv+DLL 冲突；cv2 −0.26%
   status: active
   premises: 4060/16C32T/Zen4；fork 0.8.3
   revisit: 换卡 / 带 ROI-first 的解码绑定 / 预处理升为关键路径
@@ -194,7 +194,7 @@
   evidence: log 2026-09-17-重设计 §5-§11；2026-10-09-账本产品化
 
 - id: C-51
-  conclusion: **监测系统新基线（2026-09-17）**：时钟门禁+ab 轮转/判定/--aa；report（含 fork 穿透）；子相位闭合（infer_other 92%→16%）；地板 0.30%（n=50 后 0.20）；0.22.0 两档化后 telemetry-check=off vs full 单限（D30）
+  conclusion: **监测系统新基线**：时钟门禁+ab 轮转/--aa；report（含 fork 穿透）；子相位闭合；地板 0.30%（n=50 后 0.20）；0.22.0 两档化（D30）
   status: active
   premises: 4060；共享桌面
   revisit: 换卡/机器 / 协议改即 --aa 重标 / trace 转正需锁频
@@ -233,7 +233,7 @@
   revisit: 换模型 / PAD_SMALL×裁切联调 / NVDEC 纯解码 / dbe 变更
   evidence: log 2026-09-20-裁切复测轮
 - id: C-60
-  conclusion: hybrid OCR 奖金池负结果：CPU 空闲已兑现（hevc NVDEC 纯解码 7600fps）双车道仍只兑 −4.9%±0.1（TRT 劣化 ~28%+OV 1/3 短板）；动态分配不立项——瓶颈不在可分配资源
+  conclusion: hybrid OCR 奖金池负结果：双车道只兑 −4.9%（TRT 劣化 ~28%+OV 1/3 短板）；动态分配不立项
   status: active
   premises: hevc 转码集整集 3 轮交错；阈值 5% 预注册
   revisit: OV 产能>TRT 1/2 / GPU 分离部署（解码/OCR 异卡）
@@ -254,7 +254,7 @@
   evidence: log 2026-10-09-周期计数首轮
 
 - id: C-64
-  conclusion: **周期账本产品化（report v7 + bench 周期判读）**：per_phase 行含原始 cycles + cycles_e2e；`bench ab` 自动周期判读（同款纪律，不改退出码）。A/A：cyc:e2e 下限 1.58% vs 墙钟 2.85%；墙钟不可判定时的第二意见
+  conclusion: **周期账本产品化（report v7 + bench 判读）**：per_phase 含 cycles + cycles_e2e；ab 自动周期判读（不改退出码）。A/A：cyc:e2e 下限 1.58% vs 墙钟 2.85%
   status: active
   premises: Windows；交错仍需（SMT 带）；C-63 边界全部继承
   revisit: 换机/换 CPU；周期 A/A 带漂移超 1×SE 重标；BLAS/OV 线程模型换代
@@ -267,11 +267,18 @@
   evidence: log 2026-10-09-跨线程账本与预处理容量
 
 - id: C-66
-  conclusion: **hybrid 缺口 −5.6/−33/−34%（3000 帧）=CPU 臂欠配**：GPU 臂无损；assigned==delivered→泵 GOP 贪心近视（EWMA 冷启动锁死分配，av1 仅 1/10）。修法=比例预留/再平衡（kick 已有）；短窗次要未做
+  conclusion: **hybrid 缺口 −5.6/−33/−34%（3000 帧）=CPU 臂欠配**：assigned==delivered→泵 GOP 贪心近视（EWMA 冷启动锁死分配）。修法=比例预留/再平衡（kick 已有）；短窗次要未做
   status: active
   premises: 4060/16C32T；fork 0.9.2；v8/v10 账本
-  长片段（23970 帧）：分配自愈、臂速≈纯臂（SM 65% 空闲）；剩余 −9~19%=**TRT×解码链同卡争用**（TRT 批延 +54%；CPU-OCR 判别臂 hybrid 反 +6%）；hol/idle/背压=排队影子（三修全反已回滚）；0.9.1=ROI 预算字节化（nobuf 44888→0）
-  稳定层（0.9.2）：尾窗 4→10——av1 CV 3.5→2.9%、均值 +3.6%；hevc/h264 无回归。忙窗 chunk 速率估计已回滚（自激）；残余=环境态臂速 ±7%
-  TRT 争用轮：四杠杆全证伪；**达成率三码 92/82/92%**（hevc/h264/av1，vs 双臂和）且 hybrid 全部快于最快纯臂 +12~32%——C-53 在全长片三码转正。h264 的 18%：CPU 臂 −26%（H2D 上载×解码争核；线程降档证伪——16/12 档反降）；同卡无免费解，剩余需 MPS/异卡（C-60 触发）；CPU-OCR 口径 63%=OV 争核（C-50 域）
-  revisit: 引擎耦合归因（nsys/ETW）；fork 泵改动后复跑；换卡
+  长片段：分配自愈、臂速≈纯臂；剩余 −9~19%=**TRT×解码链同卡争用**（批延 +54%；CPU-OCR 判别臂 hybrid 反 +6%）；hol/idle/背压=排队影子（三修全反已回滚）；0.9.1=ROI 预算字节化
+  稳定层（0.9.2）：尾窗 4→10——av1 CV 2.9%、均值 +3.6%；忙窗估计器已回滚（自激）；残余=环境态臂速 ±7%
+  达成率三码 **92/82/92%**（vs 双臂和）且全部快于最快纯臂 +12~32%——C-53 全长片转正。h264 的 18%=CPU 臂 −26%（H2D 上载×解码争核，线程降档证伪）；同卡无免费解，剩余需 MPS/异卡（C-60 触发）
+  revisit: fork 泵改动后复跑；换卡
   evidence: log 2026-10-09/10 争用定位与三码矩阵
+
+- id: C-67
+  conclusion: **纯 CPU 争用配平：本质=静态预算失衡非需动态**——h264 解码轻码 10 档下饿，24 档全长 +27%；hevc/av1 auto 已在峰（24/12 反降）。动态不可行（OV 线程数构建期定死）且无必要（各码最优搭配是常量）→ 编码分档：h264 独档 24（逻辑核 3/2），hevc/av1 维持
+  status: active
+  premises: 16C32T；纯 CPU+OV；test6 全长；峰 24×16=1904（h264 6000 帧 +34%）
+  revisit: 换 CPU（3/2 公式重验）；OV 换代；stride>1 域另验
+  evidence: log 2026-10-10-纯CPU争用配平

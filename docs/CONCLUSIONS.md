@@ -22,7 +22,7 @@
 | C-14 | skip_loop_filter 1.11–1.36× 但改变像素；默认 opt-in | — | 下游证实对像素不敏感且需提速率 | DECISIONS P0-6 翻案 |
 | C-15 | **OCR 输入侧参数都不是杠杆**。pad 下限 224 保持；预处理六变体仅一非负；翻转系实例级判决 | v6_small+racelog | pad/预处理架构变更；换模型或字体/ROI 形态 | log 09-12-准确项 §4.1 |
 | C-16 | OCR 裁切余量 10% 优于 0%；裁切提准确率（旧"守卫"前提错） | — | ROI 形态 / 分辨率大变 | DECISIONS 第四轮 |
-| C-31 | decord 0.8.1：seek 未变慢；av1 慢系 NT=4 假象；修=钳[8,24]：CPU −50%、e2e −45% | wheel 0.8.2 | fork/驱动/FFmpeg 换代 | log 2026-09-08 decord-0.8.1；DEPENDENCIES decord 节 |
+| C-31 | decord 0.8.1：av1 慢系 NT=4 假象；修=钳[8,24]：CPU −50%、e2e −45% | wheel 0.8.2 | fork/驱动/FFmpeg 换代 | log 2026-09-08 decord-0.8.1；DEPENDENCIES decord 节 |
 | C-32 | 实现唯一出处=segmentation.py：宿主直调，GPU kernel 逐位镜像、判据同文件；不做插件抽象面 | 0.11.0；两侧行为由真值用例逐位守护 | 真实 GPU 侧插件需求出现 | log 2026-09-09 引擎四方向 |
 | C-36 | 冷启动=cuda.core 0.22+NVRTC 0.09+TRT 0.4s；warmup 移出首 extract −33% | 热池；首 extract | 换后端/引擎格式 | log §3；test_warmup |
 | C-37 | 消费端提交可批量化：D2H 异步+本流同步 −5.19%、keep_crops 并批窗 16 −2.45%；按宽分组无收益 | 本机 4060；交错 A/B | 段密度翻倍 / ROI 形态翻转 | log §4-§6 |
@@ -31,22 +31,23 @@
 | C-40 | **hybrid 收益与片长相关**：h264 短窗即胜 nvdec；hevc 交叉点 ~1200；av1 <3000（−16.7%）；纯 CPU 臂三码全片均胜 | 4060/16C32T；fork ≥a6cdeb7 | 换卡 / GOP 尺寸极端小 / <500 帧短片 | log 09-18-hybrid启动轮 §4 |
 | C-42 | 相似判定 232µs、全片≈21% 但**不在关键路径**（短路实验无改善） | GPU 管线；hevc 6000 帧；merges=0 | 消费者不再空等 / 段边界密度大增 / 换卡 | log 2026-09-13-merge判定代价与短路实验 |
 | C-43 | **fill_width×force_aspect 强交互**（224 保持）：fa=1.5 下 224 零误读；仅 fa=0 关填充更准 | 六片真值 | 换片源 / 模型换代 / 默认 force_aspect 变更 | log 2026-09-13-填充宽度重测 |
-| C-46 | **hybrid=包缓存+供料期 GOP 派工（fork fef3c4b）**：Push 只入缓存，泵按速率贪心派工；kick 必须经泵按流序注入（错位=段数漂移）；机制 A/B −5~6% | 达成率=同会话三臂 | 换卡 / fork 换代 / 截断流·bf16 重跑 | log 2026-09-13-hybrid重设计分支；2026-09-14 达成率定稿 |
+| C-46 | **hybrid=包缓存+供料期 GOP 派工（fork fef3c4b）**：Push 只入缓存，泵按速率贪心派工；kick 必须经泵按流序注入；机制 A/B −5~6% | 达成率=同会话三臂 | 换卡 / fork 换代 / 截断流·bf16 重跑 | log 2026-09-13-hybrid重设计分支；2026-09-14 达成率定稿 |
 | C-47 | **OCR 批延迟残差=GPU 链争用主导**：DEFER_SYNC 一致但 e2e 平价。复测：平价确认但 e2e 周期 +4.6%（16/16） | trt_call 13.9ms/批占 87% | 换卡 / TRT 换代 / 解码下 GPU | log 2026-09-14-TRT延迟收集流水；2026-10-09-账本产品化 |
 | C-48 | **CPU OCR=OpenVINO 唯一**：模型级 2.1×；真值零差；热池 −27.96%；冻结包 73MB | 4060/Zen4；openvino 2026.3.1 | 换 CPU（非 x86）/ openvino 换代 / 内容族大变 | log 2026-09-14-OpenVINO模型级A-B |
-| C-49 | **换依赖无剩余性能空间**：GPU 三码/h264-cpu 解码绑定；fork 超外部参考 989fps；PyNv 493fps+DLL 冲突；cv2 −0.26% | 4060/16C32T/Zen4；fork 0.8.3 | 换卡 / 带 ROI-first 的解码绑定 / 预处理升为关键路径 | log 2026-09-15-依赖替换 |
+| C-49 | **换依赖无剩余性能空间**：解码绑定；fork 超外部参考 989fps；PyNv+DLL 冲突；cv2 −0.26% | 4060/16C32T/Zen4；fork 0.8.3 | 换卡 / 带 ROI-first 的解码绑定 / 预处理升为关键路径 | log 2026-09-15-依赖替换 |
 | C-50 | **DECODE_THREADS（CPU-OCR 口径）维持 auto=10**：d32 墙钟 −1.86% 但 e2e 周期 +13.4%=争用税。GPU-OCR 口径 auto=32 已最优 | 16C32T；CPU OCR；h264 n=16 配对 | 独占部署（CPU 空闲换墙钟可接受）/ 核数格局变 / OCR 再提速 / decord 预取变 | log 2026-09-17-重设计 §5-§11；2026-10-09-账本产品化 |
-| C-51 | **监测系统新基线（2026-09-17）**：时钟门禁+ab 轮转/判定/--aa；report（含 fork 穿透）；子相位闭合（infer_other 92%→16%）；地板 0.30%（n=50 后 0.20）；0.22.0 两档化后 telemetry-check=off vs full 单限（D30） | 4060；共享桌面 | 换卡/机器 / 协议改即 --aa 重标 / trace 转正需锁频 | log 2026-09-17-重设计 §7 |
+| C-51 | **监测系统新基线**：时钟门禁+ab 轮转/--aa；report（含 fork 穿透）；子相位闭合；地板 0.30%（n=50 后 0.20）；0.22.0 两档化（D30） | 4060；共享桌面 | 换卡/机器 / 协议改即 --aa 重标 / trace 转正需锁频 | log 2026-09-17-重设计 §7 |
 | C-53 | **hybrid 基线=目标码最快纯臂**：h264=CPU（+6.1% 慢）；hevc/av1=NVDEC，hybrid −23.9%/−31.4%→选 hybrid。批量=逐文件串行（28.61 vs 29.3s；pool 已删） | 4060/16C32T；fork ≥a6cdeb7 | 换卡 / fork 换代 | log 09-18-hybrid启动轮 |
 | C-54 | **启动+窗口尾轮（fork a6cdeb7）：熟前挂起+防饿死盲派+窗口尾 ETA**——盲派 13→2、hevc 交叉点 ~1200；H2D 聚合机制成立无净收益→默认关 | 盲承诺下界=2 GOP | 换卡 / fork 换代 / infer 暴露复现日 | log 09-18-hybrid启动轮；bench/hybrid_startup.json |
 | C-55 | **池复用必须换壳**（复活对象二次死亡不触发 __del__）；旧 Y 池漏 +2.0 MiB/轮 | CPython；4 钉子 | PyPy finalizer 语义 / 池契约重构 | log 2026-09-20-审计修复轮 §2 |
 | C-58 | **hybrid OCR 双车道（TRT+OV）：回归已消除但本机无净收益**（OV 产能=TRT 1/3）；触发条件见 C-60 | batch_test 字幕 stride=1；16C32T 三层占满 | NVDEC 纯解码部署 / 多 NVDEC 卡 / OCR 变重 | log 09-20 批量策略轮 §3-4 |
 | C-59 | 宽 ROI 字幕：裁切文本效应=临界字形宽度彩票（C639 不翻/C781 翻），随集波动（ep01 −7/ep02 +40）；性能真收益 −6.6~−9.0%。默认维持 | 新三国01/02；dbe=cpu+TRT；视觉+抽帧复核 | 换模型 / PAD_SMALL×裁切联调 / NVDEC 纯解码 / dbe 变更 | log 2026-09-20-裁切复测轮 |
-| C-60 | hybrid OCR 奖金池负结果：CPU 空闲已兑现（hevc NVDEC 纯解码 7600fps）双车道仍只兑 −4.9%±0.1（TRT 劣化 ~28%+OV 1/3 短板）；动态分配不立项——瓶颈不在可分配资源 | hevc 转码集整集 3 轮交错；阈值 5% 预注册 | OV 产能>TRT 1/2 / GPU 分离部署（解码/OCR 异卡） | log 2026-09-20-hybridOCR奖金池裁决 |
+| C-60 | hybrid OCR 奖金池负结果：双车道只兑 −4.9%（TRT 劣化 ~28%+OV 1/3 短板）；动态分配不立项 | hevc 转码集整集 3 轮交错；阈值 5% 预注册 | OV 产能>TRT 1/2 / GPU 分离部署（解码/OCR 异卡） | log 2026-09-20-hybridOCR奖金池裁决 |
 | C-62 | **硬窗架构重做（fork 0.9.0）：绝对帧区间 + marker 语义分离（0=EOF/1=WINDOW_END）+ 会话对象化（SessionState 整体重建）+ 窗模式禁替补（win_subs 结构性恒 0，缺帧响亮 FATAL）**——根除 C-57 族四根源。矩阵 12/12×5 + 哈希逐位一致 + 七套件 | fork 0.9.0 dev（52597677）；金标 D 组晚起点 5 用例 | fork 换代/窗口路径改动（matrix --repeat 5 + window 套件）/换卡/竞态再现（轮盘续钻） | log 2026-10-08 收口与窗口架构重做 |
 | C-63 | **周期/指令账本可作 A/B 判据**：引擎负载下 QueryProcessCycleTime 同条件 CV≤2.3%（满载墙钟 30-36%）、nvdec 臂守恒 0.965；ncu 指令散布 2.7e-6（n=1 分辨 0.01%）。边界：SMT ±16%→交错仍需；BLAS 自旋库满载 +139% 不可用；ncu 需管理员=离线专用 | 本机 4060/16C32T/Win32；ncu 2026.2.0；引擎栈无自旋放大 | 换机/CPU；线程模型换代 | log 2026-10-09-周期计数首轮 |
-| C-64 | **周期账本产品化（report v7 + bench 周期判读）**：per_phase 行含原始 cycles + cycles_e2e；`bench ab` 自动周期判读（同款纪律，不改退出码）。A/A：cyc:e2e 下限 1.58% vs 墙钟 2.85%；墙钟不可判定时的第二意见 | Windows；交错仍需（SMT 带）；C-63 边界全部继承 | 换机/换 CPU；周期 A/A 带漂移超 1×SE 重标；BLAS/OV 线程模型换代 | log 2026-10-09-账本产品化与不可判定复测 |
+| C-64 | **周期账本产品化（report v7 + bench 判读）**：per_phase 含 cycles + cycles_e2e；ab 自动周期判读（不改退出码）。A/A：cyc:e2e 下限 1.58% vs 墙钟 2.85% | Windows；交错仍需（SMT 带）；C-63 边界全部继承 | 换机/换 CPU；周期 A/A 带漂移超 1×SE 重标；BLAS/OV 线程模型换代 | log 2026-10-09-账本产品化与不可判定复测 |
 | C-65 | **跨线程账本（v8）+ 预处理容量**：full 档逐线程占空（宿主 ocr 0.20/infer 0.61；GPU 臂宿主≤0.11、NVDEC 99%、SM 16%）。预处理重算法预算（绑定实验）：宿主臂膝点=额外 0.5-1ms/crop（当前 0.30→2.5-3×）后 1:1 传导；GPU 臂 SM 余量 ~5×。duty 的 4× 被膝点修正（C-42）；更重≠更准（C-15） | 本机 4060/16C32T；test5 600 帧；sleep 注入；ALL_ACCESS 句柄怪癖见 resources 注 | 换机/换卡；OCR 提速（余量收窄）；真上重算法前复核膝点 | log 2026-10-09-跨线程账本与预处理容量 |
-| C-66 | **hybrid 缺口 −5.6/−33/−34%（3000 帧）=CPU 臂欠配**：GPU 臂无损；assigned==delivered→泵 GOP 贪心近视（EWMA 冷启动锁死分配，av1 仅 1/10）。修法=比例预留/再平衡（kick 已有）；短窗次要未做 | 4060/16C32T；fork 0.9.2；v8/v10 账本 | 引擎耦合归因（nsys/ETW）；fork 泵改动后复跑；换卡 | log 2026-10-09/10 争用定位与三码矩阵 |
+| C-66 | **hybrid 缺口 −5.6/−33/−34%（3000 帧）=CPU 臂欠配**：assigned==delivered→泵 GOP 贪心近视（EWMA 冷启动锁死分配）。修法=比例预留/再平衡（kick 已有）；短窗次要未做 | 4060/16C32T；fork 0.9.2；v8/v10 账本 | fork 泵改动后复跑；换卡 | log 2026-10-09/10 争用定位与三码矩阵 |
+| C-67 | **纯 CPU 争用配平：本质=静态预算失衡非需动态**——h264 解码轻码 10 档下饿，24 档全长 +27%；hevc/av1 auto 已在峰（24/12 反降）。动态不可行（OV 线程数构建期定死）且无必要（各码最优搭配是常量）→ 编码分档：h264 独档 24（逻辑核 3/2），hevc/av1 维持 | 16C32T；纯 CPU+OV；test6 全长；峰 24×16=1904（h264 6000 帧 +34%） | 换 CPU（3/2 公式重验）；OV 换代；stride>1 域另验 | log 2026-10-10-纯CPU争用配平 |
 
 （superseded/dead 条目全文在 docs/log/2026-09-10-conclusions-history.md，含复评触发，显式检索可达。）
