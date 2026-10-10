@@ -19,6 +19,7 @@ import 这里，永远与 ``FieldExtractor`` 同口径。
   口径）；keep_crops+yuv 时才是 'yuv420'——fork 级探针缺省应对齐 gray。
 - 窗口运行（frame_end < 全长）时 fork ≥硬窗界版应 ``set_decode_window``。
 """
+
 from __future__ import annotations
 
 import os
@@ -33,6 +34,7 @@ def cpu_physical_cores() -> int:
     """
     try:
         import psutil  # type: ignore[import-not-found]
+
         physical = psutil.cpu_count(logical=False)
     except ImportError:
         physical = None
@@ -50,12 +52,15 @@ def roi_for_decord(roi) -> tuple:
     return (roi[0], roi[1], roi[2] + 1, roi[3] + 1)
 
 
-def decode_num_threads(codec: str | None = None, *,
-                       sample_stride: int = 1,
-                       ocr_on_gpu: bool = True,
-                       override: int = 0,
-                       cores: int | None = None,
-                       logical: int | None = None) -> int | None:
+def decode_num_threads(
+    codec: str | None = None,
+    *,
+    sample_stride: int = 1,
+    ocr_on_gpu: bool = True,
+    override: int = 0,
+    cores: int | None = None,
+    logical: int | None = None,
+) -> int | None:
     """CPU 软解（cpu 后端 / hybrid CPU 臂）的 decord FFmpeg 帧线程数。
 
     完整分档依据与实测表见 ``FieldExtractor._decode_num_threads``
@@ -71,32 +76,31 @@ def decode_num_threads(codec: str | None = None, *,
     if override > 0:
         return override
     from video_ocr_engine.config import constants as config
+
     if cores is None:
         cores = cpu_physical_cores()
     if logical is None:
         logical = os.cpu_count() or cores
-    if codec == 'av1':
+    if codec == "av1":
         if sample_stride > 1:
             return max(8, min(48, logical))
         return max(8, min(24, logical * 3 // 4))
-    if codec == 'hevc':
+    if codec == "hevc":
         if sample_stride > 1:
             return max(8, min(48, logical))
         return max(8, min(32, logical))
     if ocr_on_gpu:
-        return max(config.DECODE_THREADS_GPU_OCR_MIN,
-                   min(config.DECODE_THREADS_GPU_OCR_MAX, logical))
+        return max(
+            config.DECODE_THREADS_GPU_OCR_MIN, min(config.DECODE_THREADS_GPU_OCR_MAX, logical)
+        )
     if cores <= config.CPU_CORES_SPLIT_THRESHOLD:
         return max(2, cores // 2)
     if sample_stride > 1:
-        return max(8, min(config.DECODE_THREADS_CPU_OCR_MAX,
-                          logical * 3 // 4))
+        return max(8, min(config.DECODE_THREADS_CPU_OCR_MAX, logical * 3 // 4))
     # h264 纯 CPU 路径独档（2026-10-10 争用配平轮，C-67）：h264 解码
     # 算力轻（CPU 解码最快码，C-04）而并行度收益陡——10 档下解码饿
     # （全长实测 1379fps），24 档 +17%；hevc/av1 解码重保持低档
     # （24/12 反降，同轮实测）。与 av1 独档同构：编码感知分档。
-    if codec == 'h264':
-        return max(8, min(config.DECODE_THREADS_CPU_OCR_H264_MAX,
-                          logical * 3 // 2))
-    return max(8, min(config.DECODE_THREADS_CPU_OCR_STRIDE1_MAX,
-                      logical // 3))
+    if codec == "h264":
+        return max(8, min(config.DECODE_THREADS_CPU_OCR_H264_MAX, logical * 3 // 2))
+    return max(8, min(config.DECODE_THREADS_CPU_OCR_STRIDE1_MAX, logical // 3))

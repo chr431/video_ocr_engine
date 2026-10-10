@@ -1,13 +1,17 @@
-"""S8 审计扩展（v2 §8.2 目标审计的扩展项，13..22）。
+"""S8 审计扩展（v2 §8.2 目标审计的扩展项，14..26）。
 
 由 _probe_discipline_audit.py 经 CHECKS_EXT 并入同一入口（钩子/CI 共用）。
 每项失败即违规；历史豁免沿用既有机制（--since 快检兼容）。
+2026-10-10 治理改革轮：编号由 13..23 改为 14 起连续（原 13 与主检查 13
+双占用）；主入口启动期自证编号无冲突/无空洞。文档引用检查项一律**按名**
+（no_deprecated_shim_usage 等），不按号——编号会重排，名字不会。
 """
 from __future__ import annotations
 
 import ast
 import io
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -40,7 +44,7 @@ _SHIM_WHITELIST = {
 
 
 def check_layering() -> str | None:
-    """[13] 模块级导入图无环（P0-1b：v1 本就是 DAG，测试守住）。"""
+    """[14] 模块级导入图无环（P0-1b：v1 本就是 DAG，测试守住）。"""
     import importlib.util
     names = {p.stem: p for p in _product_files()}
     graph = {}
@@ -80,7 +84,7 @@ def check_layering() -> str | None:
 
 
 def check_no_shim_duplication() -> str | None:
-    """[14] 转发壳/重复符号回归守卫（S2 已清除的名字不得复活）。"""
+    """[15] 转发壳/重复符号回归守卫（S2 已清除的名字不得复活）。"""
     banned = ("_otsu_from_hist", "_otsu_median_threshold",
               "_preprocess_standard", "_text_sep_gray", "_gray_mean_abs_diff",
               "similar_binary")
@@ -95,7 +99,7 @@ def check_no_shim_duplication() -> str | None:
 
 
 def check_dead_code_regression() -> str | None:
-    """[15] 已删死代码不得复活（TrtEngine.execute*/四个键集常量）。"""
+    """[16] 已删死代码不得复活（TrtEngine.execute*/四个键集常量）。"""
     trt = ROOT / "ocr_trt.py"
     if trt.exists():
         t = io.open(trt, encoding="utf-8").read()
@@ -113,7 +117,7 @@ def check_dead_code_regression() -> str | None:
 
 
 def check_knob_coverage() -> str | None:
-    """[16] 每个旋钮有依据锚点；注册表不超上限。"""
+    """[17] 每个旋钮有依据锚点；注册表不超上限。"""
     from video_ocr_engine.config import KNOBS
     from video_ocr_engine.config.registry import _REGISTRY_CAP
     if len(KNOBS.knobs) > _REGISTRY_CAP:
@@ -125,7 +129,7 @@ def check_knob_coverage() -> str | None:
 
 
 def check_no_import_side_effects() -> str | None:
-    """[17] 产品模块 import 期不得改写 os.environ（D7）。"""
+    """[18] 产品模块 import 期不得改写 os.environ（D7）。"""
     for p in _product_files():
         try:
             tree = ast.parse(io.open(p, encoding="utf-8").read())
@@ -146,26 +150,22 @@ def check_no_import_side_effects() -> str | None:
 
 
 def check_docs_budget() -> str | None:
-    """[18] 知识库与活文档预算（§14.2）。
+    """[19] 知识库与活文档预算（§14.2；薄委托 tools/_doc_guards.py）。
 
-    conclusions ≤ 14 KB（2026-09-20 稳健性轮由 12KB 上调：按需读取非
-    注入，饱和后每条新结论都要修剪旧规范性文本——实测审查负担大于
-    读取成本；与 tests/knowledge/test_budgets.py 同步）。
-    超限时顺带给压缩建议（松绑轮 2026-10-09：此前超限只报字节数，
-    定位最长条目要手工翻文件——把 10 分钟定位压到 1 分钟）。
+    常量唯一事实源在 _doc_guards.py（2026-10-10 治理改革轮收敛：此前
+    本处与 tests 两处各写一遍上限，迟早分叉）。conclusions 源上限
+    2026-10-10 由 14 KB 上调 16 KB（14,241/14,336 只剩 95 B，饱和即逼
+    仓促归档）。超限时顺带给压缩建议（松绑轮 2026-10-09）。
     """
-    limits = (("knowledge/conclusions.md", 14 * 1024),
-              ("knowledge/knobs.yaml", 24 * 1024),
-              ("AGENTS.md", 14 * 1024))
-    for rel, cap in limits:
-        p = ROOT / rel
-        if p.exists() and p.stat().st_size > cap:
-            if rel == "knowledge/conclusions.md":
-                _suggest_conclusion_cuts()
-            return "%s %dB 超 %dB 预算" % (rel, p.stat().st_size, cap)
-    total = sum(p.stat().st_size for p in (ROOT / "docs").glob("*.md"))
-    if total > 60 * 1024:
-        return "docs/*.md（历史除外）合计 %dB 超 60KB" % total
+    sys.path.insert(0, str(HERE))
+    from _doc_guards import budget_violations
+    bad = budget_violations()
+    for rel, size, cap in bad:
+        if rel == "knowledge/conclusions.md":
+            _suggest_conclusion_cuts()
+        print("      %s %dB 超 %dB" % (rel, size, cap))
+    if bad:
+        return "文档预算超限 %d 项（上限见 tools/_doc_guards.py）" % len(bad)
     return None
 
 
@@ -190,7 +190,7 @@ def _suggest_conclusion_cuts() -> None:
 
 
 def check_metrics_coverage() -> str | None:
-    """[19] 指标注册表：上限 + v1 现役键不丢。
+    """[20] 指标注册表：上限 + v1 现役键不丢。
 
     v1 清单更新（2026-09-17）：pipeline.producer 已出清（全仓零产出点，
     死键只稀释报告），以同代现役键 pipeline.consumer 顶替守卫位。
@@ -206,7 +206,7 @@ def check_metrics_coverage() -> str | None:
 
 
 def check_rules_ladder() -> str | None:
-    """[20] 注入核规则：每条有 mechanism；prose 须附 why。"""
+    """[21] 注入核规则：每条有 mechanism；prose 须附 why。"""
     p = ROOT / "knowledge" / "rules.yaml"
     if not p.exists():
         return "knowledge/rules.yaml 缺失"
@@ -225,7 +225,7 @@ def check_rules_ladder() -> str | None:
 
 
 def check_baseline_liveness() -> str | None:
-    """[21] 豁免账本活性：baseline 里的文件必须仍存在（幽灵豁免回收）。"""
+    """[22] 豁免账本活性：baseline 里的文件必须仍存在（幽灵豁免回收）。"""
     p = ROOT / "tools" / "_discipline_baseline.json"
     if not p.exists():
         return None
@@ -242,7 +242,7 @@ def check_baseline_liveness() -> str | None:
 
 
 def check_no_deprecated_shim_usage() -> str | None:
-    """[22] 六个废弃根模块 shim 不得新增引用（存量已迁清，防回归）。
+    """[23] 六个废弃根模块 shim 不得新增引用（存量已迁清，防回归）。
 
     shim 是 0.13.0 弃用、0.14.0 删除的过渡面（docs/MIGRATION.md §1）。
     仓库内 45 处引用已迁至包内路径；本项只留两个**有意**冻结 shim 的
@@ -271,7 +271,7 @@ def check_no_deprecated_shim_usage() -> str | None:
 
 
 def check_probe_hooks_resolve() -> str | None:
-    """[23] 探针打桩点表全部可解析（L1）。
+    """[24] 探针打桩点表全部可解析（L1）。
 
     探针靠 monkeypatch 私有符号取数，重构会让点位失效。L1 把全部点位收敛到
     `tools/_probe_hooks.py:POINTS` —— 于是"哪些点位坏了"只需在本项报出来，
@@ -290,18 +290,67 @@ def check_probe_hooks_resolve() -> str | None:
     return None
 
 
+def check_render_consistency() -> str | None:
+    """[25] 渲染产物一致性 + 结论路径活性（折入统一审计入口，2026-10-10）。
+
+    此前 render --check 是独立第三条命令，容易被忘（纪律段只列了两个
+    审计入口）；折进来后全量审计一次跑齐。render 顺带校验结论字段里的
+    仓库内全路径存在性（C-32 教训：包化后旧路径标签静默存活两周+）。
+    """
+    r = subprocess.run([sys.executable, str(ROOT / "knowledge" / "render.py")],
+                       capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", cwd=str(ROOT), timeout=180)
+    out = (r.stdout or "") + (r.stderr or "")
+    if r.returncode != 0:
+        tail = [ln for ln in out.splitlines() if ln.strip()][-1:] or ["（无输出）"]
+        return ("render --check 未过（重渲染：python knowledge/render.py "
+                "--write）：%s" % tail[0][:110])
+    return None
+
+
+def check_decord_pin() -> str | None:
+    """[26] 两仓版本口径：DEPENDENCIES.md 的 decord 行须含实际安装版本。
+
+    2026-10-10 治理改革轮新增：该行曾写 0.8.5 而本机已装 0.9.2——跨仓
+    版本引用是纯人肉同步点（C-66 提交信息里 0.9.1/0.9.2 口径也曾含糊）。
+    CI 不装 decord：import 失败按环境事实跳过（与 env_provenance 同语义，
+    "装了但不一致"才是缺陷）。发版时的全量清扫见 tools/conclusions_sweep.py。
+    """
+    try:
+        import decord  # type: ignore[import-not-found]
+    except Exception:                                  # noqa: BLE001 — 环境事实
+        return None
+    ver = decord.__version__
+    dep = ROOT / "docs" / "DEPENDENCIES.md"
+    if not dep.exists():
+        return None
+    row = ""
+    for line in io.open(dep, encoding="utf-8").read().splitlines():
+        if line.startswith("| decord"):
+            row = line
+            break
+    if not row:
+        return "docs/DEPENDENCIES.md 缺 decord 表行"
+    if ver not in row:
+        return ("DEPENDENCIES.md 的 decord 行未含本机安装版本 %s——"
+                "fork 升级当轮须同步该行（发版清扫：tools/conclusions_sweep.py）" % ver)
+    return None
+
+
 CHECKS_EXT = {
-    13: ("layering 分层无环", check_layering),
-    14: ("no_shim_duplication 转发壳", check_no_shim_duplication),
-    15: ("dead_code 死代码回归", check_dead_code_regression),
-    16: ("knob_coverage 旋钮依据", check_knob_coverage),
-    17: ("no_import_side_effects", check_no_import_side_effects),
-    18: ("docs_budget 文档预算", check_docs_budget),
-    19: ("metrics_coverage 指标注册表", check_metrics_coverage),
-    20: ("rules_ladder 规则执行梯", check_rules_ladder),
-    21: ("baseline_liveness 豁免活性", check_baseline_liveness),
-    22: ("no_deprecated_shim_usage 废弃 shim", check_no_deprecated_shim_usage),
-    23: ("probe_hooks_resolve 打桩点表", check_probe_hooks_resolve),
+    14: ("layering 分层无环", check_layering),
+    15: ("no_shim_duplication 转发壳", check_no_shim_duplication),
+    16: ("dead_code 死代码回归", check_dead_code_regression),
+    17: ("knob_coverage 旋钮依据", check_knob_coverage),
+    18: ("no_import_side_effects", check_no_import_side_effects),
+    19: ("docs_budget 文档预算", check_docs_budget),
+    20: ("metrics_coverage 指标注册表", check_metrics_coverage),
+    21: ("rules_ladder 规则执行梯", check_rules_ladder),
+    22: ("baseline_liveness 豁免活性", check_baseline_liveness),
+    23: ("no_deprecated_shim_usage 废弃 shim", check_no_deprecated_shim_usage),
+    24: ("probe_hooks_resolve 打桩点表", check_probe_hooks_resolve),
+    25: ("render_consistency 渲染一致", check_render_consistency),
+    26: ("decord_pin 两仓版本口径", check_decord_pin),
 }
 
 if __name__ == "__main__":

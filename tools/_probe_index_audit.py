@@ -14,6 +14,9 @@
 4. 依赖关系复核：谁 import / 子进程调用谁（实测，不信任索引）
 5. 孤儿集合复核：既无文档引用、也无代码引用的探针
 6. 索引表格里每个 (文件, 行数) 对是否与磁盘一致
+7. L2 探针状态自洽性：live 名单必须真实存在且带理由；不得再写手写计数
+   或 frozen 枚举行（2026-10-10 治理改革轮——此前头部"live 14/frozen 103"
+   漂到 16/105 无人察觉）
 
 用法
 ----
@@ -272,6 +275,41 @@ def main() -> int:
         problems.append("表格内有 %d 行行数不符" % len(bad_rows))
     else:
         print("    全部一致 ✓")
+
+    # ---------- [6] L2 live 名单自洽性（2026-10-10 治理改革轮） ----------
+    # 此前 L2 头部写死"live 14 / frozen 103（共 117）"，实测漂到 16/105、
+    # 10 个探针两份名单都不在——本审计却不核这组数。改革：计数一律不写
+    # （不在 live 表 = frozen，规则兜底），本节只守护名单本身的自洽。
+    print("\n【6】L2 探针状态自洽性")
+    l2_sec = re.search(r"## 探针状态.*?(?=\n## )", idx, re.S)
+    live_rows = []
+    if not l2_sec:
+        problems.append("INDEX 缺「## 探针状态」小节")
+        print("    ✗ 未找到 L2 小节")
+    else:
+        l2_txt = l2_sec.group(0)
+        # 6a. 计数复活守卫：标题/枚举行不得再写数字
+        for line in l2_txt.split("\n"):
+            if re.match(r"## 探针状态.*?(live|frozen)\s*\d+", line):
+                problems.append("L2 标题带手写计数（%r）——计数必漂，删掉"
+                                "（不在 live 表 = frozen）" % line[:40])
+            if re.match(r"frozen \d+ 个", line.strip()):
+                problems.append("L2 有 frozen 枚举行（%r…）——删掉，规则=不在 live 表即 frozen"
+                                % line[:30])
+        # 6b. live 表名字必须真实存在、理由列非空
+        for line in l2_txt.split("\n"):
+            m = re.match(r"\|\s*`(_probe_[\w.]+\.py)`\s*\|\s*(\S.*)\s*\|", line)
+            if not m or m.group(2).strip() in ("为何在用", "---", ":--"):
+                continue
+            name, why = m.group(1), m.group(2).strip()
+            live_rows.append(name)
+            if name not in files:
+                problems.append("L2 live 名单里的 %s 不存在于 tools/（拼错或已删）" % name)
+            if not why:
+                problems.append("L2 live 条目 %s 缺「为何在用」理由" % name)
+        print("    live 名单 %d 个，全部存在且带理由 %s"
+              % (len(live_rows), "✓" if live_rows and not any(
+                  "L2" in p for p in problems) else "（见问题清单）"))
 
     # ---------- 结论 ----------
     print("\n" + "=" * 68)

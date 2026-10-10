@@ -3,6 +3,7 @@
 字段与默认值由 knobs.py 声明；paths 单一实现仍在 engine_config
 （S2 迁移），此处仅 re-export，避免两份路径逻辑。
 """
+
 from __future__ import annotations
 
 from video_ocr_engine.config.constants import app_data_dir, app_logs_dir, models_dir  # noqa: F401
@@ -12,5 +13,13 @@ from .registry import Knob, Registry
 from .resolve import resolve
 from .run_config import RunConfig
 
-__all__ = ["KNOBS", "Knob", "Registry", "resolve", "RunConfig",
-           "app_data_dir", "app_logs_dir", "models_dir"]
+__all__ = [
+    "KNOBS",
+    "Knob",
+    "Registry",
+    "resolve",
+    "RunConfig",
+    "app_data_dir",
+    "app_logs_dir",
+    "models_dir",
+]

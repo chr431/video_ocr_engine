@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **144 个 `.py`**（24,946 行），其中 131 个是探针
+`tools/` 现有 **147 个 `.py`**（25,364 行），其中 131 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -50,9 +50,13 @@
 | `_probe_hybrid_bitwise.py` | 72 | hybrid vs NVDEC 输出逐帧字节比对（深 prefetch 安全性 + fork 改动的正确性门禁） | docs/log/2026-09-10-hybrid联调深挖.md |
 | `_probe_onnx_dcd_sweep.py` | 80 | ONNX OCR 场景解码线程数 sweep（DECODE_THREADS；h264/hevc/av1 × stride），产出 2026-09-10 新档位表 | docs/log/2026-09-10-ONNX解码线程档位.md |
 | `_probe_perf_sweep.py` | 118 | 解码参数 sweep（batch/stream/threads/hybthreads），monkey-patch 模块常量；用于 C-10 复确认与 batch=32 越界 bug 的暴露 | docs/log/2026-09-09-深度性能优化.md |
-| `_probe_index_audit.py` | 306 | 核对本索引的每个数字是否与磁盘一致 | 本文件（自检） |
-| `_probe_discipline_audit.py` | 687 | **项目纪律审计**（12 项：硬编码路径 / 异常吞噬 / 未用 import / 未门控 print / 版本号 / 文档引用 / 注入预算…） | AGENTS.md「纪律与自动化守卫」 |
-| `_doc_section.py` | 214 | **文档章节级检索**：`--toc` 看目录 / `--find` 按标题定位 / 读单章。避免整文件读，实测省 84~96% tokens | AGENTS.md「查文档前先定位」 |
+| `_probe_index_audit.py` | 344 | 核对本索引的每个数字是否与磁盘一致 + L2 live 名单自洽（【6】） | 本文件（自检） |
+| `_probe_discipline_audit.py` | 693 | **项目纪律审计**（13 项主检查：硬编码路径 / 异常吞噬 / 未用 import / 未门控 print / 版本号 / 文档引用 / 注入预算…；扩展项见 `_audit_ext.py`，编号注册表自证无冲突） | AGENTS.md「纪律与自动化守卫」 |
+| `_audit_ext.py` | 367 | 纪律审计扩展项（14..26，含 render_consistency / decord_pin）；被 `_probe_discipline_audit.py` 并入同一入口 | `_probe_discipline_audit.py` |
+| `_doc_guards.py` | 114 | **文档守卫单一实现**（2026-10-10 治理改革轮）：裸 CR / 注入预算 / 各文档预算的判据与常量唯一事实源 + 大文档可分章检查；审计与 pytest 同源取数 | AGENTS.md；tests/test_docs_hygiene.py；tests/knowledge/test_budgets.py |
+| `conclusions_sweep.py` | 135 | **发版清扫**（铁律 9 执行体）：列结论钉版落后/触发命中清单；`--strict` 供发版钩子 | AGENTS.md 铁律 9；rules.yaml |
+| `_hook_guard_read.py` | 60 | **PreToolUse(Read) 大文档整读守卫**（.zcode/config.json 挂载）：>16KB md 无 offset 整读即拦并指路 `_doc_section.py`；守卫自身故障一律放行 | rules.yaml「大文档禁止整读」 |
+| `_doc_section.py` | 230 | **文档章节级检索**：`--toc` 看目录 / `--find` 按标题定位 / 读单章。避免整文件读，实测省 84~96% tokens；2026-10-10 起覆盖全部治理文档+log 单篇（含 §A~§E 字母节键） | AGENTS.md「查文档前先定位」 |
 | `_probe_roi_decode.py` | 105 | **否定结果**：量化「打开时 SetRoi」vs「每次 get_batch 传 roi」对 CPU 软解速率的影响。实测两者无差异（1841 vs 1849 fps），但**不传 ROI = 520 fps**（3.6× 慢）→ ROI 本身是巨大优化，两种传法等价 | PERF §22.5 |
 | `_probe_nvdec_interference.py` | 141 | **推翻前一轮归因**：隔离测 NVDEC 对 CPU 软解的干扰，A 单跑 / B ∥NVDEC / C ∥忙等线程（对照）。实测 NVDEC 只造成 **−3.3%**，而等量纯抢核 **−41.9%** → 元凶是分段/OCR 流水线，不是 NVDEC | PERF §22.6 |
 | `_probe_decode_contention.py` | 195 | **五组完整对照**把拖慢源分层：A 单跑 / B ∥第二路 CPU 解码 / C ∥NVDEC / D ∥忙等 / E ∥带宽 hog。B(−42%)≈D(−40%)，而 C 仅 −4.2%、E 仅 −13.8% → 第二路 CPU 解码代价远大于 NVDEC（**注**：§22.9 已用 CPU profile 推翻"host CPU 算力饱和"这一解释，本探针的 A~F 组数据仍有效）
@@ -145,7 +149,7 @@
 | `_probe_round4_bw.py` | 102 | 2026-08-31 | §21 带宽矩阵 |
 | `_probe_cr_roundtrip.py` | 182 | 2026-08-31 | 裸 CR 保真性（AGENTS.md 编辑护栏） |
 
-| `tools/_audit_ext.py` | 318 | 2026-09-10 | S8 审计扩展 13..22（与纪律审计同一入口） |
+| `tools/_audit_ext.py` | 367 | 2026-09-10 | S8 审计扩展 13..22（与纪律审计同一入口） |
 
 ### 2026-09-12 准确项（分段合并稠密簇门 · 预处理 gamma 复核）
 
@@ -238,12 +242,18 @@
 | `_split_perf_md.py` | 194 | 2026-08-31 按「活/归档」把 PERFORMANCE.md 切出 `docs/log/ARCHIVE.md`。**已完成，可删** |
 | `_fix_probe_paths.py` | 416 | 2026-08-31 把探针里写死的路径改成 `__file__` 推导 / 环境变量。**已完成，可删** |
 
-## 探针状态（L2）：live 14 / frozen 103（共 117）
+## 探针状态（L2）
 
 **默认 frozen**——不在下表 `live` 名单里的探针一律视为历史证据，豁免活性检查、不做修复义务。
 一个探针进 `live` 必须写清理由（被在用载体引用 / 本轮在用）；重构时的修复义务**只覆盖 live 集合**。
 （0.16.0：`_probe_pool_pairing` / `_probe_pool_vs_serial` 随 pool.py 删除降级
 frozen——C-52/C-53 证据已封板，探针为存档证据，不再可直跑。）
+
+⚠️ 本节**不写计数**（live/frozen 多少个）——2026-10-10 前头部写过
+"live 14 / frozen 103"，实测漂到 16/105 且有 10 个探针两份名单都不在，
+审计器却不核这组数（与 CONCLUSIONS「计数不维护，防漂移」同哲学）。
+live 名单的正确性由 `_probe_index_audit.py`【6】守护：表内名字必须
+真实存在、理由列非空、头部不得再出现手写计数。
 
 | live 探针 | 为何在用 |
 |---|---|
@@ -264,7 +274,10 @@ frozen——C-52/C-53 证据已封板，探针为存档证据，不再可直跑�
 | `_probe_prep_headroom.py` | 本轮新工具：预处理容量膝点绑定实验（sleep 注入），换重预处理算法前复跑（C-65） |
 | `_probe_contention_map.py` | 本轮新工具：争用定位差分归因（v8/v10 线程账本消费面），C-66 复评直跑（--hybrid-gap） |
 
-frozen 103 个（按 §A–§D 各节原样保留）：`_probe_acc_ab.py`、`_probe_acc_baseline.py`、`_probe_arm_verify.py`、`_probe_autocrop_ab.py`、`_probe_autocrop_truth.py`、`_probe_batch_coldstart.py`、`_probe_binding.py`、`_probe_busy_overhead.py`、`_probe_ceiling.py`、`_probe_clock_gate.py`、`_probe_cluster_dtype.py`、`_probe_cr_roundtrip.py`、`_probe_critical_path.py`、`_probe_crop_miscut.py`、`_probe_crop_stats.py`、`_probe_cycle_quant.py`、`_probe_d1_prim_diff.py`、`_probe_d1_trace.py`、`_probe_d1_trace2.py`、`_probe_decode_batch_ab.py`、`_probe_decode_ceiling.py`、`_probe_decode_contention.py`、`_probe_drop_nonref.py`、`_probe_e2e_ab.py`、`_probe_e2e_mode.py`、`_probe_engine_ab.py`、`_probe_feed_cost.py`、`_probe_ffmpeg.py`、`_probe_final.py`、`_probe_gamma_sweep.py`、`_probe_gil_check.py`、`_probe_golden_diff.py`、`_probe_golden_drift.py`、`_probe_gpu_ctc.py`、`_probe_guard_clean.py`、`_probe_hol_stats.py`、`_probe_hybrid_ab.py`、`_probe_hybrid_axis.py`、`_probe_hybrid_bitwise.py`、`_probe_hybrid_cpu_profile.py`、`_probe_hybrid_engine_loss.py`、`_probe_hybrid_gap.py`、`_probe_hybrid_reeval.py`、`_probe_hybrid_startup.py`、`_probe_hybrid_sum_gap.py`、`_probe_hybrid_threads_e2e.py`、`_probe_hybrid_trace.py`、`_probe_lifecycle_repeat.py`、`_probe_mem_bw.py`、`_probe_merge_log.py`、`_probe_mp_scale.py`、`_probe_numpy_all_kernels.py`、`_probe_numpy_cost_split.py`、`_probe_numpy_kernels.py`、`_probe_numpy_replace_ab.py`、`_probe_nvdec_interference.py`、`_probe_onnx_dcd_sweep.py`、`_probe_pad_width.py`、`_probe_patch_verify.py`、`_probe_perf_baseline.py`、`_probe_perf_sweep.py`、`_probe_perframe.py`、`_probe_phase_cores.py`、`_probe_prep_ab.py`、`_probe_preproc_ab.py`、`_probe_preproc_dep.py`、`_probe_producer_binding2.py`、`_probe_producer_gap.py`、`_probe_producer_profile.py`、`_probe_pynv_isolated.py`、`_probe_pynv_vs_decord.py`、`_probe_python_cost.py`、`_probe_r3_infer_split.py`、`_probe_release_gate.py`、`_probe_roadmap_decode.py`、`_probe_roadmap_ocr.py`、`_probe_roadmap_profile.py`、`_probe_roi_decode.py`、`_probe_roi_dump.py`、`_probe_roi_segcost.py`、`_probe_roi_whitespace.py`、`_probe_roi_width.py`、`_probe_round4_bw.py`、`_probe_round4_wall.py`、`_probe_seg_share.py`、`_probe_skip_frame.py`、`_probe_slf_adjudicate.py`、`_probe_slf_diff.py`、`_probe_slf_vis.py`、`_probe_span_dump.py`、`_probe_stress_harness.py`、`_probe_text_ab.py`、`_probe_threads.py`、`_probe_trace_view.py`、`_probe_trt_maxbatch.py`、`_probe_truth_env.py`、`_probe_pool_pairing.py`、`_probe_pool_vs_serial.py`、`env_probe.py`、`env_doctor.py`、`_probe_leak_longrun.py`、`_probe_window_repro.py`、`_probe_upload_chain.py`、`_probe_wide_roi_binding.py`、`_probe_yuv_tax.py`、`_probe_cycle_ledger.py`（证据封板 C-63；判据已产品化，复评走 bench 周期判读）、`_probe_gpu_inst.py`（证据封板 C-63；ncu recipe 见 2026-10-09 叙事）
+（frozen 探针不再逐一列举——不在此表 = frozen，按 §A–§D 各节原样保留；
+2026-10-10 治理改革轮删去 107 名单的手工清单，此前已漂移且审计不覆盖。
+代表性注记：`_probe_cycle_ledger.py` / `_probe_gpu_inst.py` 证据封板 C-63，
+复评走 bench 周期判读 / ncu recipe（2026-10-09 叙事）。）
 ## 清理判据（想删探针时按这个顺序）
 
 1. `grep -rn "<文件名>" README.md AGENTS.md docs/ tools/` —— 有命中就不删。

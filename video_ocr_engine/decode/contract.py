@@ -17,6 +17,7 @@ decord fork 自 0.8.5 起暴露契约面（`decord.CONTRACT_VERSION` +
 decoder_contract.yaml 为规范侧，fork features() 为实现侧，两侧漂移
 即红。键→DC 映射见该测试的 `DC_KEYS`。
 """
+
 from __future__ import annotations
 
 import logging
@@ -35,7 +36,7 @@ class DecoderContractError(RuntimeError):
 class FeatureView:
     """契约面快照（真子集语义：未知键忽略，已知键强校验）。"""
 
-    __slots__ = ('contract_version', '_features')
+    __slots__ = ("contract_version", "_features")
 
     def __init__(self, contract_version: int, features: Mapping[str, Any]):
         self.contract_version = int(contract_version)
@@ -51,13 +52,13 @@ class FeatureView:
         """能力缺失即抛 DecoderContractError（带 DC 编号与后果说明）。"""
         if not self.has(key):
             raise DecoderContractError(
-                f'decord fork 契约面缺失能力 {key!r}（{dc}，{usage}）；'
-                f'当前 CONTRACT_VERSION={self.contract_version}，'
-                '请升级 chr431/decord fork 或更换 decode_backend')
+                f"decord fork 契约面缺失能力 {key!r}（{dc}，{usage}）；"
+                f"当前 CONTRACT_VERSION={self.contract_version}，"
+                "请升级 chr431/decord fork 或更换 decode_backend"
+            )
 
     def __repr__(self) -> str:  # pragma: no cover - 诊断用
-        return (f'FeatureView(v{self.contract_version}, '
-                f'{len(self._features)} keys)')
+        return f"FeatureView(v{self.contract_version}, {len(self._features)} keys)"
 
 
 def probe_contract() -> FeatureView | None:
@@ -66,20 +67,22 @@ def probe_contract() -> FeatureView | None:
     版本新于引擎已知时告警（新 fork + 旧引擎组合，不拒绝）。
     """
     import decord  # 延迟导入：构造期不依赖 decord 的约定保持不变
-    version = getattr(decord, 'CONTRACT_VERSION', None)
-    features_fn = getattr(decord, 'features', None)
+
+    version = getattr(decord, "CONTRACT_VERSION", None)
+    features_fn = getattr(decord, "features", None)
     if version is None or not callable(features_fn):
         return None
     try:
         feats = features_fn()
     except Exception:  # noqa: BLE001 - 契约面自身故障按无契约处理
-        logger.warning('decord.features() 调用失败，按无契约面处理',
-                       exc_info=True)
+        logger.warning("decord.features() 调用失败，按无契约面处理", exc_info=True)
         return None
     view = FeatureView(version, feats if isinstance(feats, Mapping) else {})
     if view.contract_version > KNOWN_CONTRACT_VERSION:
         logger.warning(
-            'decord 契约面版本 %d 新于引擎已知 %d：新 fork 配旧引擎，'
-            '行为以结构性探测为准；升级引擎后本告警消失',
-            view.contract_version, KNOWN_CONTRACT_VERSION)
+            "decord 契约面版本 %d 新于引擎已知 %d：新 fork 配旧引擎，"
+            "行为以结构性探测为准；升级引擎后本告警消失",
+            view.contract_version,
+            KNOWN_CONTRACT_VERSION,
+        )
     return view

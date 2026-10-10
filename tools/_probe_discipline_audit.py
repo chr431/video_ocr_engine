@@ -27,6 +27,10 @@
     [11] 未跟踪的产物文件（该进 .gitignore 或该提交）
     [12] 测试纪律：依赖真实视频/真值的测试必须有 skip 保护
 
+另：[9]/[10] 的判据与常量在 tools/_doc_guards.py 单一实现（本文件薄委托，
+tests/test_docs_hygiene.py 同源取数）；扩展项在 tools/_audit_ext.py（14 起连续
+编号，注册表自证无冲突/无空洞）。项数以脚本输出为准。
+
 用法
 ----
     python tools/_probe_discipline_audit.py            # 全量检查
@@ -73,8 +77,6 @@ for _dir, _subs, _files in os.walk(os.path.join(ROOT, "tests")):
 
 DOCS = ["README.md", "AGENTS.md", "docs/log/PERFORMANCE.md", "docs/log/ARCHIVE.md",
         "docs/log/DECISIONS.md", "docs/DEPENDENCIES.md", "tools/INDEX.md"]
-
-CLAUDE_MD_MAX_BYTES = 14 * 1024
 
 errors: list[str] = []
 warns: list[str] = []
@@ -495,17 +497,9 @@ def check_doc_refs() -> None:
 
 
 def check_bare_cr() -> None:
-    """[9] 文档裸 CR。"""
-    bad = []
-    for rel in DOCS:
-        p = rp(rel)
-        if not os.path.isfile(p):
-            continue
-        with open(p, "rb") as f:
-            d = f.read()
-        n = len(re.findall(rb"\r(?!\n)", d))
-        if n:
-            bad.append((rel, n))
+    """[9] 文档裸 CR（薄委托 tools/_doc_guards.py——单一实现，pytest 同源）。"""
+    from _doc_guards import bare_cr_violations
+    bad = bare_cr_violations()
     print("    含裸 CR 的文档 %d 个" % len(bad))
     for rel, n in bad:
         print("      %-24s %d 个" % (rel, n))
@@ -514,13 +508,14 @@ def check_bare_cr() -> None:
 
 
 def check_claude_budget() -> None:
-    """[10] AGENTS.md 注入预算。"""
+    """[10] AGENTS.md 注入预算（薄委托 tools/_doc_guards.py）。"""
+    from _doc_guards import AGENTS_MAX_BYTES
     p = rp("AGENTS.md")
     if not os.path.isfile(p):
         return
     size = os.path.getsize(p)
-    print("    AGENTS.md %d 字节 / 上限 %d" % (size, CLAUDE_MD_MAX_BYTES))
-    if size > CLAUDE_MD_MAX_BYTES:
+    print("    AGENTS.md %d 字节 / 上限 %d" % (size, AGENTS_MAX_BYTES))
+    if size > AGENTS_MAX_BYTES:
         fail("AGENTS.md %d 字节，超 14 KB 注入预算" % size)
 
 
@@ -640,8 +635,21 @@ def main() -> int:
 
     todo = [int(x) for x in args.only.split(",")] if args.only else sorted(CHECKS)
 
+    # S8：扩展审计（v2 §8.2）——同一入口，钩子/CI 共用。
+    # 2026-10-10 治理改革轮：扩展项改为 14 起连续编号（原 13 与主检查 13
+    # 双占用）；注册表自证唯一，编号冲突在启动期即报，不再靠人眼发现。
+    from _audit_ext import CHECKS_EXT
+    overlap = sorted(set(CHECKS) & set(CHECKS_EXT))
+    if overlap:
+        print("✗ 检查编号冲突：%s（CHECKS 与 CHECKS_EXT 不得复用编号）" % overlap)
+        return 1
+    gaps = sorted(set(range(min(CHECKS_EXT), max(CHECKS_EXT) + 1)) - set(CHECKS_EXT))
+    if gaps:
+        print("⚠️  扩展编号有空洞：%s（--only 按号寻址，空洞易误引）" % gaps)
+
     print("=" * 70)
-    print("项目纪律审计（%d 项 + 扩展 11 项 = 23）" % len(todo))
+    print("项目纪律审计（%d 项 + 扩展 %d 项 = %d）"
+          % (len(todo), len(CHECKS_EXT), len(todo) + len(CHECKS_EXT)))
     print("=" * 70)
     for k in todo:
         name, fn = CHECKS[k]
@@ -652,8 +660,6 @@ def main() -> int:
             print("    检查本身异常：%r" % (e,))
             warn("第 %d 项检查抛异常：%r" % (k, e))
 
-    # S8：扩展审计（13..23，v2 §8.2）——同一入口，钩子/CI 共用
-    from _audit_ext import CHECKS_EXT
     for k, (name, fn) in sorted(CHECKS_EXT.items()):
         print("\n[%2d] %s" % (k, name))
         try:

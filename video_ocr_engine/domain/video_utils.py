@@ -1,4 +1,5 @@
 """视频/数据通用工具。"""
+
 from __future__ import annotations
 import os as _os
 from pathlib import Path
@@ -8,6 +9,7 @@ from functools import lru_cache
 import numpy as np
 
 from video_ocr_engine.config import constants as config
+
 # OCR/分段预处理灰度权重（Rec.601，与 config.GRAY_RGB_WEIGHTS 单一事实源一致）。
 _GRAY_W = np.asarray(config.GRAY_RGB_WEIGHTS, dtype=np.float32)
 
@@ -39,9 +41,13 @@ def _nv12_luma(crop: "np.ndarray") -> "np.ndarray":
 #: 0.020s（见 docs/log/2026-09-10-S6性能轮.md §8），且不再每批分配
 #: B×h×w×4 的 float32 临时数组。
 _Y_LIMITED_LUT = np.clip(
-    np.floor((np.arange(256, dtype=np.float32) - np.float32(16.0))
-             * np.float32(255.0 / 219.0) + np.float32(0.5)),
-    0.0, 255.0).astype(np.uint8)
+    np.floor(
+        (np.arange(256, dtype=np.float32) - np.float32(16.0)) * np.float32(255.0 / 219.0)
+        + np.float32(0.5)
+    ),
+    0.0,
+    255.0,
+).astype(np.uint8)
 
 
 def _nv12_luma_full(crop: "np.ndarray", color_range: int = 0) -> "np.ndarray":
@@ -69,7 +75,6 @@ def _nv12_batch_luma(crops: "np.ndarray") -> "np.ndarray":
     return crops[:, :h]
 
 
-
 def nv12_to_rgb(crop: "np.ndarray", color_range: int = 0) -> "np.ndarray":
     """packed NV12 → RGB（uint8，BT.601 矩阵）。
 
@@ -92,25 +97,21 @@ def nv12_to_rgb(crop: "np.ndarray", color_range: int = 0) -> "np.ndarray":
     else:
         y = (crop[:h].astype(np.float32) - 16.0) / 255.0
     uv_rows = (h + 1) // 2
-    uv = crop[h:h + uv_rows, :w // 2 * 2]
+    uv = crop[h : h + uv_rows, : w // 2 * 2]
     u: np.ndarray = uv[:, 0::2].astype(np.float32)
     v: np.ndarray = uv[:, 1::2].astype(np.float32)
     # nearest 上采样到 luma 分辨率（每个 2x2 块共用同一 chroma 样本；
     # 奇数宽/高时末行末列补中性色度 128）
     if u.shape[0] * 2 < h:
-        u = np.pad(u, ((0, h - u.shape[0] * 2), (0, 0)),
-                   mode='constant', constant_values=128)
+        u = np.pad(u, ((0, h - u.shape[0] * 2), (0, 0)), mode="constant", constant_values=128)
     if v.shape[0] * 2 < h:
-        v = np.pad(v, ((0, h - v.shape[0] * 2), (0, 0)),
-                   mode='constant', constant_values=128)
+        v = np.pad(v, ((0, h - v.shape[0] * 2), (0, 0)), mode="constant", constant_values=128)
     u = np.repeat(u, 2, axis=0)[:h]
     v = np.repeat(v, 2, axis=0)[:h]
     if u.shape[1] * 2 < w:
-        u = np.pad(u, ((0, 0), (0, w - u.shape[1] * 2)),
-                   mode='constant', constant_values=128)
+        u = np.pad(u, ((0, 0), (0, w - u.shape[1] * 2)), mode="constant", constant_values=128)
     if v.shape[1] * 2 < w:
-        v = np.pad(v, ((0, 0), (0, w - v.shape[1] * 2)),
-                   mode='constant', constant_values=128)
+        v = np.pad(v, ((0, 0), (0, w - v.shape[1] * 2)), mode="constant", constant_values=128)
     u = np.repeat(u, 2, axis=1)[:, :w]
     v = np.repeat(v, 2, axis=1)[:, :w]
     un = (u - 128.0) / 255.0
@@ -179,10 +180,7 @@ def _np_resize(img: "np.ndarray", new_w: int, new_h: int) -> "np.ndarray":
     b = np.take(g0, x1, axis=1)
     c = np.take(g1, x0, axis=1)
     d = np.take(g1, x1, axis=1)
-    out = ((1 - wx3) * (1 - wy3) * a +
-           wx3 * (1 - wy3) * b +
-           (1 - wx3) * wy3 * c +
-           wx3 * wy3 * d)
+    out = (1 - wx3) * (1 - wy3) * a + wx3 * (1 - wy3) * b + (1 - wx3) * wy3 * c + wx3 * wy3 * d
     return out[..., 0] if one_ch else out
 
 
@@ -204,8 +202,10 @@ def nvdec_available(video_path=None) -> bool:
 def _nvdec_probe_success(video_path=None) -> bool:
     """nvdec_available 的成功路径（失败抛异常 → 不进缓存）。"""
     from decord import VideoReader, gpu
+
     if video_path is None:
         from decord import gpu as _g
+
         _g(0)
         return True
     vr = VideoReader(str(video_path), ctx=gpu(0))
@@ -222,6 +222,7 @@ def tensorrt_available() -> bool:
     try:
         import tensorrt  # noqa: F401 — shim / binding 导入
         import tensorrt_bindings
+
         pkg = Path(tensorrt_bindings.__file__).resolve().parent
         candidates = list(pkg.glob("nvinfer*.dll"))
         libs = pkg.parent / "tensorrt_libs"

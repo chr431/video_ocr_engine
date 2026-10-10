@@ -43,6 +43,7 @@ ARCHIVE.md 就是 46,253 —— 相当于 **12.7 倍的注入成本**。
 from __future__ import annotations
 
 import argparse
+import glob
 import os
 import re
 import sys
@@ -53,9 +54,19 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
 DOCS = ["docs/log/PERFORMANCE.md", "docs/log/ARCHIVE.md", "docs/log/DECISIONS.md",
-        "README.md", "AGENTS.md", "docs/DEPENDENCIES.md"]
+        "README.md", "AGENTS.md", "docs/DEPENDENCIES.md",
+        "docs/MIGRATION.md", "tools/INDEX.md", "docs/CONCLUSIONS.md"]
 
-# 每份文档按哪个标题层级切分（DECISIONS.md 主体是 ###，不是 ##）
+# 2026-10-10 治理改革轮：补 MIGRATION/INDEX/CONCLUSIONS + docs/log 按日叙事
+# （此前 --toc/--find 盖不到它们，超 16KB 的单篇只能整读——hook 拦下后
+# 必须有出路）。log 单篇动态追加，LEVEL 缺省 2。
+for _d in sorted(glob.glob(os.path.join(ROOT, "docs", "log", "*.md"))):
+    _rel = os.path.relpath(_d, ROOT).replace("\\", "/")
+    if _rel not in DOCS:
+        DOCS.append(_rel)
+
+# 每份文档按哪个标题层级切分（DECISIONS.md 主体是 ###，不是 ##；
+# INDEX.md 的 §A–§E 用 ##，章节键走字母形态）
 LEVEL = {
     "docs/log/PERFORMANCE.md": 2,
     "docs/log/ARCHIVE.md": 3,
@@ -63,6 +74,7 @@ LEVEL = {
     "README.md": 2,
     "AGENTS.md": 2,
     "docs/DEPENDENCIES.md": 2,
+    "tools/INDEX.md": 2,
 }
 
 _enc = None
@@ -92,8 +104,12 @@ def split_key(h: str) -> tuple[str, str]:
 
     章节号要能吃下 `16` / `16.8` / `4.4b` 这三种形态 —— 只取 `\d+(\.\d+)*`
     会把 §4.4b 和 §4.4c 都截成 `4.4`，目录里就分不清了。
+    INDEX.md 的 `## A. …` 字母节同样取首词当键（A/B/C/D/E）。
     """
     m = re.match(r"^#+\s*(\d+(?:\.\d+)*[a-z]?)[.\s]*(.*)$", h)
+    if m:
+        return m.group(1), m.group(2).strip()
+    m = re.match(r"^#+\s*([A-E])[.、\s]+(.*)$", h)
     if m:
         return m.group(1), m.group(2).strip()
     bare = h.lstrip("# ").strip()

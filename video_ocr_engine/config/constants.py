@@ -8,6 +8,7 @@ segmentation / video_utils 与引擎外的上层应用直接引用。
 
 自拆仓（v0.1.0）起：本文件随 video_ocr_engine 独立仓库发布、独立版本线。
 """
+
 from __future__ import annotations
 
 import os
@@ -17,7 +18,7 @@ from pathlib import Path
 # 版本单一事实源：wheel 版本号（`pyproject.toml` 用 `dynamic` + `attr` 从此处
 # 读取）与运行时 `video_ocr_engine.__version__` 同源，且必须与 git tag 一致
 # —— 否则"装的到底是哪个版本"无法判断。改动本值后记得同步打 tag。
-__version__ = "0.23.3"
+__version__ = "0.24.0"
 
 # ═══════════════════ 环境变量助手与名称常量 ═══════════════════
 # 引擎全部 env 开关/覆写在此收敛（单一事实源）。布尔开关统一走 env_bool：
@@ -65,33 +66,37 @@ def env_float(name: str, default: float) -> float:
 
 
 # 解码 / OCR / 分段
-OCR_THREADS_ENV: str = "OCR_THREADS"                            # OCR 推理线程数覆盖（值型）
-OCR_BATCH_ENV: str = "OCR_BATCH"                                # OCR 批大小覆盖（值型）
-OCR_GAMMA_ENV: str = "OCR_GAMMA"                                # OCR 预处理 gamma（值型）
-OCR_PAD_SMALL_ENV: str = "OCR_PAD_SMALL"                        # OCR 输入 pad 宽下限覆盖（值型）
+OCR_THREADS_ENV: str = "OCR_THREADS"  # OCR 推理线程数覆盖（值型）
+OCR_BATCH_ENV: str = "OCR_BATCH"  # OCR 批大小覆盖（值型）
+OCR_GAMMA_ENV: str = "OCR_GAMMA"  # OCR 预处理 gamma（值型）
+OCR_PAD_SMALL_ENV: str = "OCR_PAD_SMALL"  # OCR 输入 pad 宽下限覆盖（值型）
 # ── OCR 输入宽度自适应裁切（宽 ROI 字幕省计算）──
-OCR_ROI_AUTOCROP_ENV: str = "OCR_ROI_AUTOCROP"                  # 0 关闭宽度自适应裁切
-OCR_ROI_AUTOCROP_MARGIN_ENV: str = "OCR_ROI_AUTOCROP_MARGIN"    # 内容两侧保留余量（占 ROI 宽 %）
+OCR_ROI_AUTOCROP_ENV: str = "OCR_ROI_AUTOCROP"  # 0 关闭宽度自适应裁切
+OCR_ROI_AUTOCROP_MARGIN_ENV: str = "OCR_ROI_AUTOCROP_MARGIN"  # 内容两侧保留余量（占 ROI 宽 %）
 OCR_ROI_AUTOCROP_MIN_GAIN_ENV: str = "OCR_ROI_AUTOCROP_MIN_GAIN"  # 裁掉比例低于此值则不裁（%）
-OCR_REORDER_WINDOW_ENV: str = "OCR_REORDER_WINDOW"              # OCR 重排窗口（段）；0=不重排
-OCR_INSTANCES_ENV: str = "OCR_INSTANCES"                        # 0 关闭并行双 ONNX 实例
-TEXT_SEP_MERGE_ENV: str = "TEXT_SEP_MERGE"                      # 相似段合并分离模式
-DECODE_THREADS_ENV: str = "DECODE_THREADS"                      # CPU 软解 FFmpeg 帧线程数覆盖（值型；0=自动）
+OCR_REORDER_WINDOW_ENV: str = "OCR_REORDER_WINDOW"  # OCR 重排窗口（段）；0=不重排
+OCR_INSTANCES_ENV: str = "OCR_INSTANCES"  # 0 关闭并行双 ONNX 实例
+TEXT_SEP_MERGE_ENV: str = "TEXT_SEP_MERGE"  # 相似段合并分离模式
+DECODE_THREADS_ENV: str = "DECODE_THREADS"  # CPU 软解 FFmpeg 帧线程数覆盖（值型；0=自动）
 # 实验/诊断开关
-GPU_PIPELINE_ENV: str = "GPU_PIPELINE"                          # 0 关闭 GPU 全驻留管线；1 强制（含 GPU 分段+ONNX 实验组合）
-GPU_PIPELINE_STREAM_ENV: str = "GPU_PIPELINE_STREAM"            # 1 开启 decord get_batch_stream chunk 粒度流水发射（默认关，C-10）
-GPU_PIPELINE_DRAINER_ENV: str = "GPU_PIPELINE_DRAINER"              # 1 = get_batch 独占排空线程预取（层4；实测零收益默认关，同 C-10 判例）
-GPU_CTC_ENV: str = "GPU_CTC"                                    # 0 关闭 TRT 输出 GPU 归约
-ENGINE_PROFILE_ENV: str = "ENGINE_PROFILE"                      # 1 开启引擎级性能剖面
-TRT_SUBPROBE_ENV: str = "TRT_SUBPROBE"                          # 1 开启 TRT 子相位探针
-DEBUG_BOUNDS_ENV: str = "DEBUG_BOUNDS"                          # 1 打印分段边界调试信息
+GPU_PIPELINE_ENV: str = "GPU_PIPELINE"  # 0 关闭 GPU 全驻留管线；1 强制（含 GPU 分段+ONNX 实验组合）
+GPU_PIPELINE_STREAM_ENV: str = (
+    "GPU_PIPELINE_STREAM"  # 1 开启 decord get_batch_stream chunk 粒度流水发射（默认关，C-10）
+)
+GPU_PIPELINE_DRAINER_ENV: str = (
+    "GPU_PIPELINE_DRAINER"  # 1 = get_batch 独占排空线程预取（层4；实测零收益默认关，同 C-10 判例）
+)
+GPU_CTC_ENV: str = "GPU_CTC"  # 0 关闭 TRT 输出 GPU 归约
+ENGINE_PROFILE_ENV: str = "ENGINE_PROFILE"  # 1 开启引擎级性能剖面
+TRT_SUBPROBE_ENV: str = "TRT_SUBPROBE"  # 1 开启 TRT 子相位探针
+DEBUG_BOUNDS_ENV: str = "DEBUG_BOUNDS"  # 1 打印分段边界调试信息
 # CPU+NVDEC 混合解码（decode_backend="hybrid"）：实现完全在 decord fork 内
 # （hybrid / hybrid_gpu 设备上下文，v0.7.15+），引擎只透传解码参数：
 #   hybrid_gpu —— OCR on GPU（TRT）：输出帧驻留显存，gpu_pipeline 设备指针通路；
 #   hybrid     —— OCR on CPU：输出宿主帧（与 cpu() 同布局）。
 # 历史参数（项目层 HybridDecoder 的 SCHED/MIGRATE/SOLO_GUARD/CALIB/折扣等）
 # 已随该实现一并删除；调度由 decord 内部的生产速率实测 + min-max 积压贪心承担。
-HYBRID_CPU_THREADS_ENV: str = "HYBRID_CPU_THREADS"              # CPU reader 线程数；
+HYBRID_CPU_THREADS_ENV: str = "HYBRID_CPU_THREADS"  # CPU reader 线程数；
 # 0=自动时与 cpu 后端同一 codec 感知策略（extractor._decode_num_threads，
 # §14 定档）；旧的 [8,16] clamp 常量已随该定档删除。
 # ═══════════════════ CPU 软解线程预算（按 OCR 是否在 GPU 分档）═══════════════
@@ -121,7 +126,7 @@ DECODE_THREADS_GPU_OCR_MAX: int = 32
 # → 解码必然更占优；stride==1 时段数可接近采样帧数 → OCR 更占优。
 # 弱 CPU（绑 8 逻辑核）复核：stride8 最优 8（4/12/16 差 ≤4.6%）、
 # stride1 最优 12（8 差 2.8%）—— 取下面公式后误差 ≤5%，两端都不劣化。
-DECODE_THREADS_CPU_OCR_MAX: int = 24          # stride>1：逻辑核 3/4，上限 24
+DECODE_THREADS_CPU_OCR_MAX: int = 24  # stride>1：逻辑核 3/4，上限 24
 DECODE_THREADS_CPU_OCR_STRIDE1_MAX: int = 12  # stride==1：逻辑核 1/3，上限 12
 # h264 纯 CPU 路径独档（2026-10-10 争用配平轮 C-67）：解码轻码吃满
 # 超线程（逻辑核 3/2 钳 24）——10 档下解码饿、全长 +17%；hevc/av1
@@ -169,10 +174,10 @@ def models_dir() -> Path:
         return Path(getattr(sys, "_MEIPASS", "")) / "ocr_models"
     here = Path(__file__).resolve().parent
     candidates = [
-        here / "assets" / "ocr_models",          # 包内资源（未来 package-data 布局）
-        here.parent / "assets" / "ocr_models",   # video_ocr_engine/ 包内布局
+        here / "assets" / "ocr_models",  # 包内资源（未来 package-data 布局）
+        here.parent / "assets" / "ocr_models",  # video_ocr_engine/ 包内布局
         here.parent.parent / "assets" / "ocr_models",  # 源码树（config/ → 仓库根，S9）
-        Path(sys.prefix) / "assets" / "ocr_models",    # data-files 安装位置
+        Path(sys.prefix) / "assets" / "ocr_models",  # data-files 安装位置
     ]
     marker = "PP-OCRv6_rec_small.onnx"
     for p in candidates:
@@ -180,18 +185,19 @@ def models_dir() -> Path:
             return p
     return candidates[0]
 
-# ═══════════════════ 用户可配置默认值 ═══════════════════
-DEFAULT_OCR_MODEL: str = "v6_small"     # 唯一 OCR 模型（v2.13 起移除 tiny / 重 OCR）
 
-DEFAULT_REP_CROP_FORMAT: str = "yuv"    # 代表帧 keep_crops 默认格式：
-                                        # "yuv"=packed NV12（内部只取 Y 平面，
-                                        # 外部用 nv12_to_rgb 转 RGB——内部恒为
-                                        # 单通道灰度链路，不产 RGB 帧）；"gray"=灰度
-DEFAULT_BUFFER_SIZE: int = 128          # 解码∥OCR 流水线队列缓冲（段数）
-                                        # 64→128：GPU 解码突发时缓冲背压，减少
-                                        # 解码线程 q.put 阻塞等待（GPU+CPU wall
-                                        # -0.3s；256 无进一步收益）
-DEFAULT_DECODE_BACKEND: str = "auto"    # 解码后端 (auto / cpu / nvdec / hybrid)
+# ═══════════════════ 用户可配置默认值 ═══════════════════
+DEFAULT_OCR_MODEL: str = "v6_small"  # 唯一 OCR 模型（v2.13 起移除 tiny / 重 OCR）
+
+DEFAULT_REP_CROP_FORMAT: str = "yuv"  # 代表帧 keep_crops 默认格式：
+# "yuv"=packed NV12（内部只取 Y 平面，
+# 外部用 nv12_to_rgb 转 RGB——内部恒为
+# 单通道灰度链路，不产 RGB 帧）；"gray"=灰度
+DEFAULT_BUFFER_SIZE: int = 128  # 解码∥OCR 流水线队列缓冲（段数）
+# 64→128：GPU 解码突发时缓冲背压，减少
+# 解码线程 q.put 阻塞等待（GPU+CPU wall
+# -0.3s；256 无进一步收益）
+DEFAULT_DECODE_BACKEND: str = "auto"  # 解码后端 (auto / cpu / nvdec / hybrid)
 # （S2 删除 DECODE_BACKEND_KEYS/LABELS 与 OCR_BACKEND_KEYS/LABELS——四个
 # "校验键集"全仓零引用，实际校验散在内联元组；B3 的构造期校验在 S3 落地时
 # 以 config/ 注册表为单一事实源重建，不再复活这四个常量。）
@@ -199,32 +205,32 @@ DEFAULT_DECODE_BACKEND: str = "auto"    # 解码后端 (auto / cpu / nvdec / hyb
 # 减少 kernel/同步次数），与宿主 DECODE_BATCH_SIZE=16 刻意不同——两条路径
 # 独立调参，勿统一为一个常量。
 GPU_PIPELINE_DECODE_BATCH: int = 64
-DEFAULT_OCR_BACKEND: str = "auto"       # OCR 推理后端 (auto / cpu / tensorrt)
-DEFAULT_FORCE_ASPECT: float = 0.0       # 强制横向宽高比（0=不启用；>0 时宽度
-                                        # 强制 = 48×此值，纠正扁宽字体）
+DEFAULT_OCR_BACKEND: str = "auto"  # OCR 推理后端 (auto / cpu / tensorrt)
+DEFAULT_FORCE_ASPECT: float = 0.0  # 强制横向宽高比（0=不启用；>0 时宽度
+# 强制 = 48×此值，纠正扁宽字体）
 # **2026-08-29 回退：160 → 224**（与 OCR_PAD_WIDTH_MIN 同步，详见下方
 # §"OCR 输入 pad 宽度下限"的对照表）。extractor 默认把它传给
 # OcrEngine(fill_width=...)，因此这**才是实际生效的默认值**。
 # 上一轮下调到 160 是错的：只测了 force_aspect=0，而生产用 force_aspect>0，
 # 那里 160 使原始误读 7→26。旧值 224 的依据（320 raw 最优 0.53% vs 224
 # 0.67%，但端到端 224 最优 13 vs 16）**依然成立，不该推翻**。
-DEFAULT_FILL_WIDTH: int = 224           # OCR 输入 pad 宽度下限（引擎 _resize_norm
-                                        # pad 到该总宽）。GUI 可调 160-320，
-                                        # 默认 224。取值依赖 force_aspect：
-                                        # force_aspect>0（内容被压窄）时越大越准，
-                                        # =0（内容按原宽高比）时偏小更佳。
-DEFAULT_SAMPLE_STRIDE: int = 1          # 分频采样步长（默认 1 = 逐帧）。>1 时只
-                                        # 解码/分段/OCR 每个第 N 帧（字幕等慢更新
-                                        # 内容显著降低处理压力，时间戳仍取真实帧号）。
-                                        # 需 decord fork ≥0.7.12 的等差步长快速路径，
-                                        # 否则退化为逐索引 seek
-OCR_GAMMA: float = 2.0                  # OCR 预处理灰度 gamma 增强指数（正式预处理：
-                                        # 白字黄底等背景色块场景放大高段分离；灰度
-                                        # 先于 gamma——RGB 逐通道 gamma 视觉差异小、
-                                        # 回归多。1.0=纯灰度不增强，0=保留 RGB）
+DEFAULT_FILL_WIDTH: int = 224  # OCR 输入 pad 宽度下限（引擎 _resize_norm
+# pad 到该总宽）。GUI 可调 160-320，
+# 默认 224。取值依赖 force_aspect：
+# force_aspect>0（内容被压窄）时越大越准，
+# =0（内容按原宽高比）时偏小更佳。
+DEFAULT_SAMPLE_STRIDE: int = 1  # 分频采样步长（默认 1 = 逐帧）。>1 时只
+# 解码/分段/OCR 每个第 N 帧（字幕等慢更新
+# 内容显著降低处理压力，时间戳仍取真实帧号）。
+# 需 decord fork ≥0.7.12 的等差步长快速路径，
+# 否则退化为逐索引 seek
+OCR_GAMMA: float = 2.0  # OCR 预处理灰度 gamma 增强指数（正式预处理：
+# 白字黄底等背景色块场景放大高段分离；灰度
+# 先于 gamma——RGB 逐通道 gamma 视觉差异小、
+# 回归多。1.0=纯灰度不增强，0=保留 RGB）
 
 # ═══════════════════ 段管线参数 ═══════════════════
-SEG_C: float = 5.0              # 分段聚类阈值：max 3×3 窗口和 < C ⇒ 显示未变
+SEG_C: float = 5.0  # 分段聚类阈值：max 3×3 窗口和 < C ⇒ 显示未变
 # 相似段合并（生产默认开启）：连续两段代表帧在字幕/背景分离图上比较，
 # 平均绝对差 ≤ 阈值时视为同一视觉内容（如噪声把同一条字幕切成多段），
 # 合并后只 OCR 一次。
@@ -246,7 +252,7 @@ SEG_MERGE_MAX_CHANGED_RATIO: float = 0.01
 # 与 docs/log/2026-09-12-准确项.md §3。旋钮 segment.merge_dense_gate 经
 # resolve() 生效（D6）；0=关，>0=阈值。
 SEG_MERGE_DENSE_GATE_ENV: str = "SEG_MERGE_DENSE_GATE"
-SEG_MERGE_DENSE_GATE: int = 5              # 默认 = SEG_C，与断段判据同源
+SEG_MERGE_DENSE_GATE: int = 5  # 默认 = SEG_C，与断段判据同源
 
 # ═══════════════════ OCR 输入 pad 宽度下限 ═══════════════════
 # **2026-08-29 回退：160 → 224。上一轮的"下调到 160"是错的，勿再改。**
@@ -422,7 +428,7 @@ TRT_WORKSPACE_BYTES: int = 1 << 30
 # 2026-09-14 起运行期探测（cudaDeviceGetAttribute compute capability），
 # 探测失败（无 CUDA 绑定/无设备）回落本常量。探测在 trt.py 的
 # engine_sm() 实现——constants 不 import CUDA（保持无副作用 import）。
-TRT_ENGINE_SM: str = "sm89"   # 回落值（本机 RTX 4060 = Ada = sm89）
+TRT_ENGINE_SM: str = "sm89"  # 回落值（本机 RTX 4060 = Ada = sm89）
 # ═══════════════════ 少核 CPU 解码线程分核预算（v2.15.2 实验） ═══════════════════
 # CPU 软解 + 物理核 ≤ CPU_CORES_SPLIT_THRESHOLD 时，OCR 线程与 decord
 # FFmpeg 线程各分 cores//2（显式分核），避免 FFmpeg 2 帧线程（fork 默认，

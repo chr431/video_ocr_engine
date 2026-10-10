@@ -22,19 +22,24 @@
 ⚠️ 现役规则以本文件为准（DECISIONS 是迁出存档，避免两套真相，D6）；
 结论当前状态（active/superseded/dead）以 `docs/CONCLUSIONS.md` 为准。
 
-### ⛔ 查文档前先定位，不要整文件读
+### ⛔ 查文档前先定位；大文档禁止无 offset 整读
 
-大文档实测（cl100k）：PERFORMANCE ≈ **30k**、ARCHIVE ≈ **28k**、
-DECISIONS ≈ **17k** tokens，本文件才 **~2.4k**——误读一次≈12 倍注入成本。
+大文档实测（cl100k）：PERFORMANCE ≈ **31k**、ARCHIVE ≈ **28k**、
+DECISIONS ≈ **20k**、INDEX ≈ **9k** tokens——误读一次 PERFORMANCE
+≈ **9 倍**本文件注入成本。**规则：>16 KB 的 md 一律不得无 offset 整读**
+（ZCode PreToolUse hook `tools/_hook_guard_read.py` 会拦并给指引；
+带 offset/limit 的分段读放行）：
 
 ```bash
 python tools/_doc_section.py --find <关键词>   # 跨文档按标题定位（≈357 tok）
 python tools/_doc_section.py --toc <文件>      # 目录+token 数（≈838 tok）
-python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.8 / 4.4b）
+python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.8 / 4.4b / A~E）
 ```
 
 `--toc` + 单章 ≈ **2,800 tokens**，比整文件读**省 84~96%**；`--find` 只搜标题，
-搜正文用 grep。查结论先读 `docs/CONCLUSIONS.md`（≈3k，预算受测试守护）。
+搜正文用 grep。覆盖面=全部治理文档+docs/log 单篇（含按日叙事）。查结论
+先读 `docs/CONCLUSIONS.md`（≈3k，预算受测试守护）。新增大文档必须带
+≥3 个章节标题（守卫：`tools/_doc_guards.py`，否则无法分章定位）。
 
 ## 铁律（先量后做）
 
@@ -52,8 +57,10 @@ python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.
 8. **结论分离**：结论一行进 `docs/CONCLUSIONS.md`（必须带状态/前提/复评
    触发），实验叙事进 `docs/log/`（PERFORMANCE.md 已冻结增长）；历史章节
    不回溯重写。版本号改动必须打同名 git tag。
-9. **迁移清扫**：依赖升级 / 大迁移落地时，grep `docs/CONCLUSIONS.md` 的
-   "前提/触发"列，逐条复核命中行并翻状态（active / superseded / dead）。
+9. **迁移清扫**：依赖升级 / 大迁移落地时，逐条复核结论的"前提/触发"
+   并翻状态（active / superseded / dead）——执行体
+   `python tools/conclusions_sweep.py`（列钉版落后与触发命中的清单，
+   发版时必跑；翻状态前先看证据）。
 10. **向后兼容**：新功能默认关闭，除非明确作为新默认；新增遗留面一律先标
    deprecated、两个版本后删除。
 
@@ -77,24 +84,19 @@ python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.
 | 性能 A/B | `tools/bench.py`（`run`/`diff`/`show`/`ab`/`telemetry-check`；报告落 `bench/registry.jsonl`） |
 
 ⚠️ **A/B 必须交错**（`bench ab`，2026-09-17 起含臂序轮转 + GPU 时钟门禁
-+ 自动判定）：同码连跑两次实测可差 **7.7%**（GPU 热降），顺序跑会把漂移
-记到 B 头上。⚠️ **门禁阈值 ≥ 本机可分辨下限**：先
-`bench telemetry-check --aa` 标定（默认 n=25：std 限 +0.30% / full 限
-+1.20%；n=50 标定的 \|均值\|+3SE 已达 0.198% → **地板降为 0.20%**，要
-用 0.20 需标定/门禁/--std-limit 三者都用 n=50）；**ab 子进程协议另有
-标定**（`ab --aa`：GPU sd 0.25~0.28% → --hard 0.40~0.55%；纯 CPU 1.2~2.6%
-→ 1.45% 级；冷带另标 `--hard-cold`，GPU 3.40%/CPU 3.95%），阈值 =
-\|偏差\|+3×SE，判据 = 同轮配对差分**均值** + 符号多数一致；归因表带
-显著性（** = CI 排零 ∧ 符号多数，只归因不判失败，C-42）；µs 级严格性见
-`tests/config/test_telemetry_cost.py`。执行体在脚本（`knowledge/rules.yaml`）。
++ 自动判定）：同码连跑两次实测可差 **7.7%**（GPU 热降）。⚠️ **门禁阈值
+≥ 本机可分辨下限**：先 `bench telemetry-check --aa` 标定（阈值=|偏差|+3×SE）；
+ab 子进程协议另有 `ab --aa` 标定。**标定值、判定判据、hybrid 评估基线
+（C-53：对照臂=目标码最快纯臂）等细则的执行体在 `knowledge/rules.yaml`，
+本文件不重复数字（防双份漂移）**；µs 级严格性见
+`tests/config/test_telemetry_cost.py`。
 ⚠️ **遥测两档**（0.22.0，D30）：off=发布默认；full=调试/bench 默认
 （成本限 ≤1.2%，改遥测跑成本守卫+`--aa` 重标）；std=别名→full（0.24.0 拒收）。
 
 **现役并行维度只有一个**：`decode_backend="hybrid"` 的 CPU+NVDEC 双解码，
-**已由 decord fork 原生实现**（v0.7.15+ 的 `hybrid`/`hybrid_gpu` ctx，引擎只
-透传解码参数；项目层 `hybrid_decode.py` 已删除，迁移记录见 DECISIONS 同名
-章节与 PERF §24）。**没有 dual pipeline、没有 `DUAL_*` 环境变量、
-没有 `_dual_pipeline.py`** —— 历史提及均为旧档案，勿据此调优。
+**已由 decord fork 原生实现**（`hybrid`/`hybrid_gpu` ctx，引擎只透传解码
+参数；旧项目层实现已删，迁移见 PERF §24）。**没有 dual pipeline、没有
+`DUAL_*` 环境变量、没有 `_dual_pipeline.py`** —— 历史提及均为旧档案，勿据此调优。
 
 其他现役事实：
 
@@ -112,74 +114,88 @@ python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.
 最易踩的六条：
 
 - 并发退化真因 = **NVDEC 会话数**；互补配对首选 NVDEC∥CPU，聚合 1.87×（PERF §21）
-- `auto` **恒为 NVDEC 优先**（刻意决策，2026-09-10 重申）：本机 h264 CPU 软解虽快
-  1.7~2.8×（C-04），但弱 CPU 可能反慢且必带争用/功耗代价（C-07/C-08）。
-  **批量吞吐 = 逐文件 hybrid 顺序跑（2026-09-20 实测，串行 28.61s 快于
-  一切跨视频并发；`pool.run` 已 0.16.0 删除，C-52→C-53）**
+- `auto` **恒为 NVDEC 优先**（刻意决策，C-08：本机 h264 CPU 虽快 1.7~2.8×，
+  但弱 CPU 可能反慢且必带争用/功耗代价，峰值才选显式 cpu）。**批量吞吐 =
+  逐文件顺序跑**（串行快于一切跨视频并发；`pool.run` 已删，C-52→C-53）
 - GPU 分段 + ONNX OCR 无净收益，门控只放行 NVDEC+TRT（PERF §9）
-- hybrid 已迁 **decord 原生**；现役架构 = **包缓存 + 供料期 GOP 派工**（C-46，fork fef3c4b 已随 wheel 发布）：Push 只入压缩包缓存（512MB），泵按当下速率贪心派工 GOP（前瞻+同侧保序）；**kick 必须经泵按流序注入**（错位=IDR 冲掉重排窗→遮蔽损坏，fork 级测不出）；fork 对并联和 96/92/96%（同会话三臂交错口径）。**⚠️ hybrid 的 e2e 评估基线 = 目标码最快纯臂（C-53，勿再用错）**：h264 基线=CPU → hybrid **+53.6% 慢（h264 选显式 cpu）**；hevc/av1 基线=NVDEC → hybrid −23%/−34%（选 hybrid）；窗口须越过该码交叉点（C-40）。fork 遥测经 `vr.hybrid_stats()` 直通 RunReport `hybrid` 段（v6）。GPU 侧余量=OCR：**fp16 已产品化（TRT_FP16=1，opt-in）**——真值准确率 1.0000（30664 帧）+热池 −3%/−1%；CUDA Graph e2e 无收益且 hevc 崩，已移除。旧机制（计划/视界/REPLAN/债务克隆）已删除
-- **racelog_test 全部视频测量/验证一律 `sample_stride=1`**（2026-09-10 重申，
-  防漏信息）；stride>1 仅用于字幕场景（字幕更新频率慢，如批量剧集字幕提取）
+- hybrid 已迁 **decord 原生**（现役架构=包缓存+供料期 GOP 派工与达成率
+  数字见 C-46/C-66）；**kick 必须经泵按流序注入**（错位=IDR 冲掉重排窗
+  →遮蔽损坏，fork 级测不出）；**e2e 评估基线=目标码最快纯臂（C-53 勿再
+  用错）**，窗口须越过该码交叉点（C-40）；fork 遥测经 `vr.hybrid_stats()`
+  直通 RunReport；fp16 已产品化（`TRT_FP16=1`，opt-in）；CUDA Graph
+  无收益已移除；旧机制（计划/视界/REPLAN/债务克隆）已删除
 - **合并判定默认带「稠密簇门」**（`segment.merge_dense_gate`）：遥测内容不再合并，
   段数比此前高 1~4%（C-38）
 
 ## 编辑护栏（docs/log/PERFORMANCE.md）
 
-✅ **纯 LF，裸 CR = 0**——文本/Edit/二进制三种写法实测都保真（2026-08-31
-清 934 处，成因与「工具不安全」旧规勘误见 DECISIONS「编辑护栏」两节）；
-自检 `open(p,'rb').read().count(b'\r') == 0`，防护 `tests/test_docs_hygiene.py`。
+✅ **纯 LF，裸 CR = 0**（2026-08-31 曾清 934 处；成因与「工具不安全」
+旧规勘误见 DECISIONS「编辑护栏」）；自检 `count(b'\r')==0`，防护
+`tests/test_docs_hygiene.py`（判据单源 `tools/_doc_guards.py`）。
 
 ## 纪律与自动化守卫
 
-**改完代码跑一次**（两批检查，项数以脚本输出为准，非 0 即违规）；mypy 面 = domain+pipeline+decode：
+**两级合规**（2026-10-10 治理改革轮定形）：日常改动跑 `--since` 快检；
+**发版 / 依赖迁移 / 隔周**跑全量。入口两个（项数以脚本输出为准，非 0
+即违规；渲染一致性/结论路径活性已折入审计，不再单跑第三条命令）：
 
 ```bash
-python tools/_probe_discipline_audit.py          # 全量
-python tools/_probe_discipline_audit.py --only 1,3,7
-python tools/_probe_index_audit.py               # 数字漂移直接 --fix 自动校准
+python tools/_probe_discipline_audit.py --since HEAD   # 日常快检（变更 .py）
+python tools/_probe_discipline_audit.py                # 全量
+python tools/_probe_index_audit.py                     # INDEX 数字漂移 --fix 自动校准
 ```
 
-松绑速记：INDEX 计数不符→`--fix`；版本 bump 未推送=warn（推送即须
-同名 tag）；金标 `--tier smoke` 迭代/全量发布；CI 红自动开 issue
-（ci-watchdog）。
+**单一实现**：裸 CR / 注入预算 / 各文档预算的判据与常量只在
+`tools/_doc_guards.py`——审计与 pytest 都从它取数（此前三处各写一遍，
+两处常量迟早分叉）。**mypy 面**：以 pyproject `[tool.mypy] files` 为唯一
+描述源（domain+pipeline+decode+gpu+`_gpu_kernels.py`）。**代码风格**：
+pyproject `[tool.ruff]` 成文（formatter=双引号/行宽 100 单一执行面，
+CI `ruff format --check` 挡增量；lint 精选集不扩）。**发版清扫**：
+`tools/conclusions_sweep.py`（铁律 9 的执行体）。
+
+松绑速记：INDEX 计数不符→`--fix`；L2 live 名单外一律 frozen（计数不写死，
+名单由 index 审计【6】守护）；版本 bump 未推送=warn（推送即须同名 tag）；
+金标 `--tier smoke` 迭代/全量发布；CI 红自动开 issue（ci-watchdog）。
 
 几条容易踩、且已自动化的：
 
 - **路径不许写死**：仓库内路径一律 `__file__` 推导；外部视频走环境变量
-  （`RACELOG_VIDEO_DIR` / `RACELOG_BATCH_DIR`），硬编码值只能当默认值。
-  **外部依赖（ffmpeg/decord）一律经 `tools/env_probe.py` 解析**
-  （`from env_probe import ffmpeg_bin`）——2026-09-19 纪律轮：4 处硬编码
-  ffmpeg 路径（3 处失效）因「tools/ 豁免」无人察觉；检查 1 已升级（不再
-  豁免）+ 新增检查 13（DLL 部署一致性）。环境异常先跑 `env_doctor.py`；
+  （`RACELOG_VIDEO_DIR` / `RACELOG_BATCH_DIR`）；**ffmpeg/decord 一律经
+  `tools/env_probe.py` 解析**（`from env_probe import ffmpeg_bin`）——
+  2026-09-19 纪律轮：4 处硬编码 ffmpeg 路径 3 处失效，因「tools/ 豁免」
+  无人察觉（审计项 1/13 已不再豁免）。环境异常先跑 `env_doctor.py`；
   改完 decord C++ 跑 `rebuild_dev.bat`（构建即部署，md5 自动校验）。
-  ⚠️ **`WORKER = r"""..."""` 子进程模板是特例**：它以 `python -c` 执行，
-  **`-c` 下 `__file__` 未定义**，须靠父进程注入 `PROBE_ROOT`（`_probe_cpu_onnx.py`
-  例外：它做新旧版本 A/B，子进程 cwd 就是旧 worktree，**必须插 cwd**）。
+  ⚠️ `WORKER = r"""..."""` 子进程模板是特例：`python -c` 下 `__file__`
+  未定义，须靠父进程注入 `PROBE_ROOT`（`_probe_cpu_onnx.py` 例外：
+  子进程 cwd 是旧 worktree，必须插 cwd）。
 - **`except … pass` 不许无声**：要么 `logger.debug`，要么 `pass  # 为何可忽略`
   （存量 63 处登记在 `tools/_discipline_baseline.json`，**存量豁免、增量严格**；
   改到该文件时顺手补注释即自然脱出）。`except BaseException` 仅清理路径允许。
 - **产品代码的 print 必须受 debug 开关保护**（`env_bool(DEBUG_BOUNDS_ENV)` /
   `self._probe`），否则走 `logging`。docstring 里的用法示例不算。
 - **未使用的 import**：有意 re-export 加 `# noqa: F401`，否则删掉。
-- **探针分层（L2）**：`tools/INDEX.md` 的「探针状态」小节是唯一权威——**只有 `live` 名单里的探针有修复义务**，其余默认 `frozen`（证据已产出、结论已封板 → 豁免活性检查，重构时不必修）。新增 live 须写理由。**现状数字见 INDEX（不在此快照，防漂移）**——抑制「探针无限堆积 + 失效修复成本无限增高」的机制。
+- **探针分层（L2）**：`tools/INDEX.md`「探针状态」是唯一权威——只有 `live`
+  名单里的探针有修复义务，其余默认 `frozen`（证据已封板 → 豁免活性检查，
+  重构不必修）；新增 live 须写理由；**计数不写死**（防漂移，名单由
+  index 审计【6】守护）。
 - **六个根模块 shim 已于 0.14.1 删除**（`engine_config` / `gpu_setup` /
   `ocr_native` / `ocr_trt` / `segmentation` / `video_utils`）——旧路径不可
   导入，改用包内路径（`video_ocr_engine.config.constants` 等）。下游
   （RaceVideoToLog 33 文件 / video_subtitle_extractor）已先行迁移；
   迁移表 `docs/MIGRATION.md` §1。
-- **文档裸 CR = 0、AGENTS.md ≤ 14 KB**：`tests/test_docs_hygiene.py` 守护。
+- **文档裸 CR = 0、AGENTS.md ≤ 14 KB、CONCLUSIONS 预算**：
+  `tests/test_docs_hygiene.py` 守护，判据单一实现于 `tools/_doc_guards.py`。
 
 ## 环境与命令
 
 - Python：`c:/Users/eric chen/AppData/Local/Programs/Python/python313/python.exe`
   （项目环境；PATH `python` 本机即它，换环境先自证 numpy）。pytest / numpy / psutil / cuda.bindings / decord
   均可用。
-- 硬件：RTX 4060（**单 NVDEC 单元**）/ 16C32T / 2×16GB DDR5-6000（实测流式
-  上限 **55.8 GB/s**；WMI `Speed`=5600 是 SPD 标称，`ConfiguredClockSpeed`
-  =6000 才是实际值）。
+- 硬件：RTX 4060（**单 NVDEC 单元**）/ 16C32T / 2×16GB DDR5-6000
+  （实测流式上限 **55.8 GB/s**；WMI `Speed`=5600 是 SPD 标称）。
 - 测试视频 `D:\Videos\racelog_test\`，真值在 `ground_truth_csv/`
   （头是 `# roi=...`，**必须用正则取四个整数**，按逗号切只能拿到第一个）。
-  ⚠️ **该目录全部视频一律 `sample_stride=1`**（防漏信息）；`stride>1` 只用于
-  字幕提取场景（`text_text`/`batch_test`，字幕更新频率慢）。
+  ⚠️ **该目录全部视频一律 `sample_stride=1`**（2026-09-10 重申，防漏信息）；
+  `stride>1` 只用于字幕提取场景（字幕更新频率慢）。
 - 中文输出需 `sys.stdout.reconfigure(encoding="utf-8")`（GBK 控制台会崩）。
 - `tools/` 子目录下 `sys.path[0]` 是 tools/，探针须 `sys.path.insert(0, 上级目录)`。

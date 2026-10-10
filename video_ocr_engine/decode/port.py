@@ -4,6 +4,7 @@ S3-2 起定义；S3-3 起由 decord 适配器（decode/decord_source.py）实现
 语义要点来自 S0 冻结的 decoder_contract.yaml（DC-01..10）——尤其
 roi_format（ROI-first 是引擎性能地基）与 color_range（决定 Y 平面展开）。
 """
+
 from __future__ import annotations
 
 from typing import Literal, Protocol, Sequence, runtime_checkable

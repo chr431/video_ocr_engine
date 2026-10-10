@@ -11,6 +11,7 @@ v1 的 `dev` 槽依产生路径承载三种形状（4/5/6 元组），消费者�
 `owner` 保活底层缓冲（decord NDArray / 池帧 / 宿主数组）；
 调用方必须保持 owner 存活直至消费完成（§9 契约 2）。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -40,5 +41,4 @@ class DeviceRef:
 
     def with_crop(self, x_off: int, crop_w: int) -> "DeviceRef":
         """派生已裁切引用（保留 owner/ptr/sharp，丢弃标记态）。"""
-        return replace(self, x_off=int(x_off), crop_w=int(crop_w),
-                       sharp=None)
+        return replace(self, x_off=int(x_off), crop_w=int(crop_w), sharp=None)

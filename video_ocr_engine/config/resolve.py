@@ -8,6 +8,7 @@ v1 相反（env 盖过构造参数，README 自称排查陷阱）；过渡逃生
 解析语义与 engine_config.env_* 逐位一致（由 tests/config/test_resolve.py
 的等价性测试锁死，防止两套解析器漂移）。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -78,8 +79,9 @@ def _parse(knob, raw: str) -> Any:
     return raw  # str：原样（v1 TEXT_SEP_MERGE 是裸 get）
 
 
-def resolve(*, env: Mapping[str, str] | None = None,
-            overrides: Mapping[str, Any] | None = None) -> RunConfig:
+def resolve(
+    *, env: Mapping[str, str] | None = None, overrides: Mapping[str, Any] | None = None
+) -> RunConfig:
     """从 env + 显式参数构造不可变 RunConfig（含 config_digest）。
 
     overrides：键为旋钮规范名（如 "ocr.pad_small"）；值 None = 未给出，
@@ -106,17 +108,16 @@ def resolve(*, env: Mapping[str, str] | None = None,
         warnings.warn(
             "VOE_TELEMETRY=std 已于 0.22.0 两档化弃用（std 实测开销与 "
             "full 同在噪声内）——已按 full 处理；0.24.0 起将拒绝该值",
-            DeprecationWarning, stacklevel=2)
+            DeprecationWarning,
+            stacklevel=2,
+        )
         values["diag.telemetry"] = "full"
 
     # digest 只覆盖**生效值**（2026-09-19）：env_live_only 旋钮的实际
     # 行为由调用期 env 决定，把解析结果计入 digest 会让 A/B 指纹撒谎。
     # values 的键是**点号形式**（k.name），排除集合必须同形
-    _live_only = {k.name for k in KNOBS.knobs
-                  if getattr(k, "env_live_only", False)}
+    _live_only = {k.name for k in KNOBS.knobs if getattr(k, "env_live_only", False)}
     _digest_vals = {k: v for k, v in values.items() if k not in _live_only}
-    digest_src = json.dumps(_digest_vals, sort_keys=True, ensure_ascii=True,
-                            default=str)
-    values["config_digest"] = hashlib.sha256(
-        digest_src.encode("utf-8")).hexdigest()[:16]
+    digest_src = json.dumps(_digest_vals, sort_keys=True, ensure_ascii=True, default=str)
+    values["config_digest"] = hashlib.sha256(digest_src.encode("utf-8")).hexdigest()[:16]
     return RunConfig.from_values(values)

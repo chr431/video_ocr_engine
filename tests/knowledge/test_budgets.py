@@ -1,4 +1,8 @@
-"""知识库预算与一致性门禁（v2 §14.2 四预算之 knowledge 两项 + 渲染一致性）。"""
+"""知识库预算与一致性门禁（v2 §14.2 四预算之 knowledge 两项 + 渲染一致性）。
+
+预算常量唯一事实源 = tools/_doc_guards.py（2026-10-10 治理改革轮收敛：
+此前本文件与 _audit_ext 各写一遍上限，两处迟早分叉）。
+"""
 from __future__ import annotations
 
 import subprocess
@@ -6,21 +10,30 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+
+from _doc_guards import (  # noqa: E402
+    AGENTS_MAX_BYTES,
+    CONCLUSIONS_SRC_MAX_BYTES,
+    KNOBS_YAML_MAX_BYTES,
+)
 
 
 def test_conclusions_budget():
-    # 14 KB（2026-09-20 稳健性轮由 12KB 上调）：CONCLUSIONS.md 按需读取
-    # （非会话注入），14KB≈3.5k tok/次定位成本；12KB 饱和后每次新条目
-    # 都要修剪旧规范性文本（实测三轮修剪触碰 20+ 条措辞）——审查负担
-    # 与漂移风险大于读取成本。超预算时的压缩顺序：evidence 字段
-    # （机械可压 ~15%）→ premises → conclusion 正文最后动。
+    # 16 KB（2026-10-10 治理改革轮由 14KB 上调）：CONCLUSIONS 按需读取
+    # （非会话注入），14KB 饱和后（实测 14,241/14,336 只剩 95B）每条新
+    # 结论都要仓促修剪旧规范性文本——审查负担与漂移风险大于读取成本。
+    # 超预算时的压缩顺序：evidence 字段（机械可压 ~15%）→ premises →
+    # conclusion 正文最后动。
     size = (ROOT / "knowledge" / "conclusions.md").stat().st_size
-    assert size <= 14 * 1024, "conclusions.md %d B 超 14 KB 预算" % size
+    assert size <= CONCLUSIONS_SRC_MAX_BYTES, (
+        "conclusions.md %d B 超 %d B 预算" % (size, CONCLUSIONS_SRC_MAX_BYTES))
 
 
 def test_knobs_budget():
     size = (ROOT / "knowledge" / "knobs.yaml").stat().st_size
-    assert size <= 24 * 1024, "knobs.yaml %d B 超 24 KB 预算" % size
+    assert size <= KNOBS_YAML_MAX_BYTES, (
+        "knobs.yaml %d B 超 %d B 预算" % (size, KNOBS_YAML_MAX_BYTES))
 
 
 def test_render_check_passes():
@@ -32,7 +45,8 @@ def test_render_check_passes():
 
 def test_agents_budget():
     size = (ROOT / "AGENTS.md").stat().st_size
-    assert size <= 14 * 1024, "AGENTS.md %d B 超 14 KB 注入预算" % size
+    assert size <= AGENTS_MAX_BYTES, (
+        "AGENTS.md %d B 超 %d B 注入预算" % (size, AGENTS_MAX_BYTES))
 
 
 def test_superseded_pointers_resolve():

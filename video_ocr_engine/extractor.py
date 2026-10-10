@@ -29,6 +29,7 @@
 "hybrid"）由 decord fork 原生实现（≥v0.7.15 的 hybrid/hybrid_gpu ctx），
 引擎只透传解码参数；项目层 hybrid_decode.py 已删除，勿再引用。
 """
+
 import logging
 import os as _os
 import time
@@ -38,15 +39,19 @@ import numpy as np
 
 from video_ocr_engine.config import constants as config
 from video_ocr_engine.domain.segmentation import _text_sep_binary
+
 # 下列 re-export 为引擎内部结构（_helpers/_result_types 均属下划线私有
 # 命名，从 extractor 再导出仅为旧导入路径兼容，勿直接 import；公共入口
 # 是 video_ocr_engine.__init__ 的三件套）。
 from ._result_types import (  # noqa: F401
-    ExtractedSegment, ExtractionResult,
+    ExtractedSegment,
+    ExtractionResult,
 )
 from ._helpers import (  # noqa: F401
-    _ocr_batch_size, _ndarray_device_ptr,
-    _decode_progress_pct, _ocr_progress_pct,
+    _ocr_batch_size,
+    _ndarray_device_ptr,
+    _decode_progress_pct,
+    _ocr_progress_pct,
     _read_fps_from_vr,
 )
 from .config import resolve
@@ -55,8 +60,11 @@ from .domain.metrics import NULL_METRICS, make_metrics
 from .domain.prof import ProfSpine
 from .pipeline.engine import EngineInputs, SegmentEngine
 from .pipeline.policy import (
-    gpu_pipeline_enabled, merge_effective_mode,
-    ocr_engine_type, ocr_num_threads, ocr_on_gpu,
+    gpu_pipeline_enabled,
+    merge_effective_mode,
+    ocr_engine_type,
+    ocr_num_threads,
+    ocr_on_gpu,
 )
 from typing import TYPE_CHECKING
 
@@ -91,21 +99,29 @@ class FieldExtractor:
     的等差步长快速路径，否则退化为逐索引 seek）。
     """
 
-    def __init__(self, video_path: str, roi: tuple, *, frame_start=None,
-                 frame_end=None,
-                 force_aspect: float = config.DEFAULT_FORCE_ASPECT,
-                 decode_backend: str = config.DEFAULT_DECODE_BACKEND,
-                 ocr_backend: str = config.DEFAULT_OCR_BACKEND,
-                 buffer_size: int | None = None, fill_width: int | None = None,
-                 C: float | None = None,
-                 sample_stride: int = config.DEFAULT_SAMPLE_STRIDE,
-                 progress_cb=None, cancel_check=None,
-                 rep_crop_format: str | None = None,
-                 keep_crops: bool = True,
-                 keep_frames: bool = True,
-                 merge_similar: bool = config.DEFAULT_MERGE_SIMILAR,
-                 merge_similar_threshold: float | None = None,
-                 merge_text_sep: str | None = None):
+    def __init__(
+        self,
+        video_path: str,
+        roi: tuple,
+        *,
+        frame_start=None,
+        frame_end=None,
+        force_aspect: float = config.DEFAULT_FORCE_ASPECT,
+        decode_backend: str = config.DEFAULT_DECODE_BACKEND,
+        ocr_backend: str = config.DEFAULT_OCR_BACKEND,
+        buffer_size: int | None = None,
+        fill_width: int | None = None,
+        C: float | None = None,
+        sample_stride: int = config.DEFAULT_SAMPLE_STRIDE,
+        progress_cb=None,
+        cancel_check=None,
+        rep_crop_format: str | None = None,
+        keep_crops: bool = True,
+        keep_frames: bool = True,
+        merge_similar: bool = config.DEFAULT_MERGE_SIMILAR,
+        merge_similar_threshold: float | None = None,
+        merge_text_sep: str | None = None,
+    ):
         self._video_path = Path(video_path)
         self._roi = tuple(roi)
         # fps 强制自测：open decoder 后从 get_avg_fps/get_fps 读（truth 头的
@@ -117,9 +133,8 @@ class FieldExtractor:
         self._decode_backend = decode_backend
         self._ocr_backend = ocr_backend
         self._ocr_model = config.DEFAULT_OCR_MODEL
-        self._ocr_backend_used = ""    # run 后填实际引擎（供 CSV 头输出）
-        self._buffer_size = (buffer_size if buffer_size is not None
-                             else config.DEFAULT_BUFFER_SIZE)
+        self._ocr_backend_used = ""  # run 后填实际引擎（供 CSV 头输出）
+        self._buffer_size = buffer_size if buffer_size is not None else config.DEFAULT_BUFFER_SIZE
         # S9-2（D6/Q5）：配置构造期一次解析并冻结（resolve 为唯一 env
         # 读取点；构造后改 env 不再生效——v1 README 曾承诺"仍生效"，
         # 属有意行为变更，见 docs/MIGRATION.md）。优先级：显式参数 >
@@ -127,43 +142,44 @@ class FieldExtractor:
         self._rc = resolve(env=_os.environ)
         _pad_env = self._rc.ocr_pad_small
         if fill_width is not None:
-            self._fill_width = fill_width          # Q5：显式参数锁定
+            self._fill_width = fill_width  # Q5：显式参数锁定
             self._pad_floor_env = 0
         else:
             self._fill_width = config.DEFAULT_FILL_WIDTH
-            self._pad_floor_env = _pad_env          # 参数缺省 → env 抬升下限
-        self._merge_text_sep_resolved = (merge_text_sep if merge_text_sep is not None
-                                         else self._rc.segment_text_sep_merge)
+            self._pad_floor_env = _pad_env  # 参数缺省 → env 抬升下限
+        self._merge_text_sep_resolved = (
+            merge_text_sep if merge_text_sep is not None else self._rc.segment_text_sep_merge
+        )
         self._merge_text_sep = self._merge_text_sep_resolved
-        self._C = (C if C is not None else config.SEG_C)  # 分段聚类阈值
+        self._C = C if C is not None else config.SEG_C  # 分段聚类阈值
         self._sample_stride = max(1, int(sample_stride))
         self._keep_crops = bool(keep_crops)
         # rep_crop_format：代表帧 keep_crops 的像素格式。内部链恒为单通道
         # 灰度（不产 RGB 帧——RGB→灰度在解码侧/fork 内完成）：
         #   "yuv"  —— packed NV12（默认；内部只取 Y 平面，外部 nv12_to_rgb 转 RGB）
         #   "gray" —— 灰度
-        fmt = (rep_crop_format or '').strip().lower() or config.DEFAULT_REP_CROP_FORMAT
-        if fmt not in ('yuv', 'gray'):
-            raise ValueError(
-                f"rep_crop_format 必须为 'yuv' 或 'gray'，收到 {fmt!r}")
+        fmt = (rep_crop_format or "").strip().lower() or config.DEFAULT_REP_CROP_FORMAT
+        if fmt not in ("yuv", "gray"):
+            raise ValueError(f"rep_crop_format 必须为 'yuv' 或 'gray'，收到 {fmt!r}")
         self._rep_crop_format = fmt
         # 实际 decord 输出格式：keep_crops=False 时无 UV 平面需求 → 直接 gray
-        #（省 0.5B/px 解码转换/传输）；yuv420 仅在 keep YUV 时启用。
-        self._yuv_output = bool(self._keep_crops and fmt == 'yuv')
+        # （省 0.5B/px 解码转换/传输）；yuv420 仅在 keep YUV 时启用。
+        self._yuv_output = bool(self._keep_crops and fmt == "yuv")
         self._keep_frames = bool(keep_frames)
         self._merge_similar = bool(merge_similar)
         self._merge_similar_threshold = (
             float(merge_similar_threshold)
             if merge_similar_threshold is not None
-            else float(config.SEG_MERGE_SIMILAR_THRESHOLD))
+            else float(config.SEG_MERGE_SIMILAR_THRESHOLD)
+        )
         # S9-2(D6)：merge_text_sep 构造期解析（参数 > env > 默认）；
         # 早前 :120 的赋值是初值，此处为最终冻结值
         self._merge_text_sep = self._merge_text_sep_resolved
-        self._color_range = 0            # run 时从 decoder get_color_range 读取
-        self._codec = ""                 # run 时从 decoder get_codec 探测
+        self._color_range = 0  # run 时从 decoder get_color_range 读取
+        self._codec = ""  # run 时从 decoder get_codec 探测
         self._backend = ""
         self._bin_thresh = 0
-        self._degraded: list = []        # 本次提取的降级/回退原因（D3，meta 透出）
+        self._degraded: list = []  # 本次提取的降级/回退原因（D3，meta 透出）
         # OCR 输入宽度自适应裁切（宽 ROI 字幕省卷积）+ 跨批按宽度分组。
         # 详见 segmentation.content_range_to_crop 与 config 中的实测注释。
         # 四个 autocrop/重排旋钮为 property 调用期读 env（A6：与
@@ -200,7 +216,8 @@ class FieldExtractor:
         roi_w = max(1, self._roi[2] - self._roi[0] + 1)
         roi_h = max(1, self._roi[3] - self._roi[1] + 1)
         self._merge_max_changed_pixels = max(
-            32, int(roi_w * roi_h * config.SEG_MERGE_MAX_CHANGED_RATIO))
+            32, int(roi_w * roi_h * config.SEG_MERGE_MAX_CHANGED_RATIO)
+        )
         # 稠密簇门（segment.merge_dense_gate）：0=关；>0=差异图 win3 阈值。
         # 构造期一次冻结（D6）；与断段判据 SEG_C 共用同一"内容变了"定义。
         self._merge_dense_gate = max(0, int(self._rc.segment_merge_dense_gate))
@@ -209,35 +226,36 @@ class FieldExtractor:
     def _validate_params(self) -> None:
         """构造期静态参数校验（帧范围相对视频总长在打开解码器后校验）。"""
         if len(self._roi) != 4:
-            raise ValueError(
-                f"roi 必须为 (x1, y1, x2, y2) 四元组，收到 {len(self._roi)} 个元素")
+            raise ValueError(f"roi 必须为 (x1, y1, x2, y2) 四元组，收到 {len(self._roi)} 个元素")
         x1, y1, x2, y2 = self._roi
         if x1 < 0 or y1 < 0 or x2 < 0 or y2 < 0:
             raise ValueError(f"roi 坐标不能为负: {self._roi}")
         if x2 <= x1 or y2 <= y1:
-            raise ValueError(
-                f"roi 必须满足 x2 > x1 且 y2 > y1: {self._roi}")
+            raise ValueError(f"roi 必须满足 x2 > x1 且 y2 > y1: {self._roi}")
         if self._frame_start < 0:
             raise ValueError(f"frame_start 不能为负: {self._frame_start}")
-        if (self._frame_end is not None and self._frame_end != 0
-                and self._frame_end <= self._frame_start):
+        if (
+            self._frame_end is not None
+            and self._frame_end != 0
+            and self._frame_end <= self._frame_start
+        ):
             raise ValueError(
                 f"frame_end 必须大于 frame_start（或为 0/None 表示到末尾）: "
-                f"start={self._frame_start}, end={self._frame_end}")
+                f"start={self._frame_start}, end={self._frame_end}"
+            )
         # B3（Q8 裁决，S3）：未知后端构造期硬失败。v1 语义是静默兜底——
         # decode_backend 未知值静默走 CPU、ocr_backend 未知值当 tensorrt
         # （P0-3：排查陷阱）；合法集与 _open_vr/_ocr_engine_type 的判定一致
-        _dec = (self._decode_backend or 'auto').lower()
-        if _dec not in ('auto', 'cpu', 'nvdec', 'hybrid'):
+        _dec = (self._decode_backend or "auto").lower()
+        if _dec not in ("auto", "cpu", "nvdec", "hybrid"):
             raise ValueError(
-                f"decode_backend 必须为 auto/cpu/nvdec/hybrid，"
-                f"收到 {self._decode_backend!r}")
-        _ocr = (self._ocr_backend or 'auto').lower()
-        if _ocr not in ('auto', 'cpu', 'tensorrt', 'hybrid'):
+                f"decode_backend 必须为 auto/cpu/nvdec/hybrid，收到 {self._decode_backend!r}"
+            )
+        _ocr = (self._ocr_backend or "auto").lower()
+        if _ocr not in ("auto", "cpu", "tensorrt", "hybrid"):
             raise ValueError(
-                f"ocr_backend 必须为 auto/cpu/tensorrt/hybrid，"
-                f"收到 {self._ocr_backend!r}")
-
+                f"ocr_backend 必须为 auto/cpu/tensorrt/hybrid，收到 {self._ocr_backend!r}"
+            )
 
     # ── env 旋钮统一调用期读取（A6：与 OCR_PAD_SMALL/OCR_GAMMA 等同时机，
     #    构造后改 env 即生效；此前 autocrop 四项在构造期烘焙，语义不一致）──
@@ -272,30 +290,40 @@ class FieldExtractor:
     def _content_range_to_crop(self, first: int, last: int, w: int):
         """「有墨迹列范围」→ 裁切区间；实现见 segmentation.content_range_to_crop。"""
         from video_ocr_engine.domain.segmentation import content_range_to_crop
+
         return content_range_to_crop(
-            first, last, w,
+            first,
+            last,
+            w,
             margin_pct=self._ocr_autocrop_margin_pct,
-            min_gain=self._ocr_autocrop_min_gain)
+            min_gain=self._ocr_autocrop_min_gain,
+        )
 
     def _crop_to_content(self, crop):
         """按二值图裁掉两侧空白（fa=0 路径）；实现见
         segmentation.crop_to_content（fa>0 走 _crop_after_aspect 顺序⑦）。"""
         from video_ocr_engine.domain.segmentation import crop_to_content
+
         return crop_to_content(
-            crop, self._bin_thresh,
+            crop,
+            self._bin_thresh,
             autocrop=self._ocr_autocrop,
-            force_aspect=float(getattr(self, '_force_aspect', 0) or 0.0),
+            force_aspect=float(getattr(self, "_force_aspect", 0) or 0.0),
             margin_pct=self._ocr_autocrop_margin_pct,
-            min_gain=self._ocr_autocrop_min_gain)
+            min_gain=self._ocr_autocrop_min_gain,
+        )
 
     def _crop_after_aspect(self, img):
         """已定比例图上再按内容列裁（fa>0 路径）；实现见
         segmentation.crop_after_aspect（阈值现算 Otsu，不能用校准阈值）。"""
         from video_ocr_engine.domain.segmentation import crop_after_aspect
+
         return crop_after_aspect(
-            img, autocrop=self._ocr_autocrop,
+            img,
+            autocrop=self._ocr_autocrop,
             margin_pct=self._ocr_autocrop_margin_pct,
-            min_gain=self._ocr_autocrop_min_gain)
+            min_gain=self._ocr_autocrop_min_gain,
+        )
 
     def _start_ocr_session(self, _ocr_engines: list | None = None) -> "OcrSession":
         """启动 OCR 消费会话（S3-3b：构建显式 SessionSpec）。
@@ -305,6 +333,7 @@ class FieldExtractor:
         宿主/GPU 两管线共用。
         """
         from .pipeline.ocr_stage import OcrSession
+
         return OcrSession(self._build_session_spec(), _ocr_engines)
 
     def _build_session_spec(self):
@@ -312,15 +341,17 @@ class FieldExtractor:
         s = self
         from .pipeline.ocr_stage import SessionSpec, effective_reorder_window
         from .ocr.native import ocr_pad_floor
+
         _x1, _y1, _x2, _y2 = s._roi
         _roi_w = max(1, _x2 - _x1 + 1)
         _roi_h = max(1, _y2 - _y1 + 1)
-        _force_aspect = float(getattr(s, '_force_aspect', 0) or 0.0)
+        _force_aspect = float(getattr(s, "_force_aspect", 0) or 0.0)
         # S6-f：pad 下限支配时按宽分组不可能有收益 → 窗口收敛到 1（唯一出处
         # 见 ocr_stage.effective_reorder_window 的判据说明）
         _floor = ocr_pad_floor(s._ocr_model, s._fill_width, s._pad_floor_env)
         _window = effective_reorder_window(
-            _roi_w, _roi_h, _floor, _force_aspect, s._ocr_reorder_window)
+            _roi_w, _roi_h, _floor, _force_aspect, s._ocr_reorder_window
+        )
         return SessionSpec(
             buffer_size=s._buffer_size,
             model=s._ocr_model,
@@ -337,7 +368,7 @@ class FieldExtractor:
             prof_end=s._prof_end,
             progress=s._progress,
             cancel=s._cancel,
-            on_backend_used=lambda v: setattr(s, '_ocr_backend_used', v),
+            on_backend_used=lambda v: setattr(s, "_ocr_backend_used", v),
             on_degraded=s._degraded.append,
             gamma=s._rc.ocr_gamma,
             ocr_batch=s._rc.ocr_batch,
@@ -362,7 +393,7 @@ class FieldExtractor:
         仍是 segmentation.py，C-32。）
         """
         _text_mode = self._merge_effective_mode()
-        if _text_mode == 'binary':
+        if _text_mode == "binary":
             # S2：直连实现（原 _text_sep_gray 转发壳已删；mode 恒 binary，
             # th 由调用方显式给出——壳的历史默认分支无活调用点）
             a = _text_sep_binary(a, self._bin_thresh)
@@ -374,18 +405,23 @@ class FieldExtractor:
         # 整数精确累加一致（阈值处仅 float32 末位舍入差异，文档已承认）。
         # 两阈值判定统一走 segmentation.similar_decision（GPU 共用）。
         diff = np.abs(a.astype(np.int16) - b.astype(np.int16))
-        from video_ocr_engine.domain.segmentation import (dense_gate_hit,
-                                                          similar_decision,
-                                                          _cluster_win3)
+        from video_ocr_engine.domain.segmentation import (
+            dense_gate_hit,
+            similar_decision,
+            _cluster_win3,
+        )
+
         # 稠密簇门：diff>10 与 changed_px 同一谓词（binary 模式下 diff∈{0,255}
         # 与阈值穿越逐位等价）。win3 ≥ 分段阈值 C 的稠密簇 = 笔画级变化，
         # 与断段判据自洽（同一 win3 定义“内容变了”），恒不合并。
-        _dense = dense_gate_hit(_cluster_win3(diff > 10),
-                                self._merge_dense_gate)
-        return similar_decision(float(diff.mean()), int(np.sum(diff > 10)),
-                                self._merge_similar_threshold,
-                                self._merge_max_changed_pixels,
-                                dense=_dense)
+        _dense = dense_gate_hit(_cluster_win3(diff > 10), self._merge_dense_gate)
+        return similar_decision(
+            float(diff.mean()),
+            int(np.sum(diff > 10)),
+            self._merge_similar_threshold,
+            self._merge_max_changed_pixels,
+            dense=_dense,
+        )
 
     def extract(self):
         """通用文本提取：解码∥分段∥OCR → 结构化结果（每段原始文本+置信度）。
@@ -414,8 +450,7 @@ class FieldExtractor:
         self._metrics = make_metrics(self._rc.diag_telemetry)
         # 自诊断：挂在既有 VOE_REPORT_FILE opt-in 上（不新增旋钮）。
         # 未 opt-in → NULL_DIAG，下面 tick 是一次属性判断即返回。
-        self._diag = open_diagnostics(self._rc.diag_report_file,
-                                      metrics=self._metrics)
+        self._diag = open_diagnostics(self._rc.diag_report_file, metrics=self._metrics)
         self._report = {}
         self._hardware = None
         self._trace = None
@@ -430,16 +465,16 @@ class FieldExtractor:
         if _tf:
             if self._metrics.enabled:
                 from .domain.trace import TraceRecorder
+
                 self._trace = TraceRecorder()
                 self._trace.start_hardware()
             else:
                 logger.warning("VOE_TRACE_FILE 需 VOE_TELEMETRY != off，已忽略")
         # R1：计时脊柱（原 _profile_enabled/_prof_lock/_metric_totals/
         # _metric_max 的 B1 重置至此一并完成；profile 读面 = 派生 property）
-        self._spine = ProfSpine(self._profile_enabled, self._metrics,
-                                self._trace, self._diag)
+        self._spine = ProfSpine(self._profile_enabled, self._metrics, self._trace, self._diag)
         try:
-            _outcome = self._run_pipelined()   # S9-6：RunOutcome（裸 5 元组已退场）
+            _outcome = self._run_pipelined()  # S9-6：RunOutcome（裸 5 元组已退场）
         finally:
             self._hardware = self._metrics.hardware_report()
             # 诊断收尾（2026-09-19 审查轮）：此前 _diag.stop() 只在成功
@@ -450,90 +485,99 @@ class FieldExtractor:
                 try:
                     self._diag.stop()
                 except Exception:  # noqa: BLE001
-                    logger.debug("诊断收尾失败（run 失败路径）",
-                                 exc_info=True)
+                    logger.debug("诊断收尾失败（run 失败路径）", exc_info=True)
         _wall = time.perf_counter() - _t_run
         frames, segs, texts, confs, rep_frames = _outcome.as_tuple()
         self._frames = frames
         segments = [
             ExtractedSegment(
-                start=seg[0], end=seg[-1],
+                start=seg[0],
+                end=seg[-1],
                 frames=tuple(seg) if self._keep_frames else (),
                 rep_frame=rep_frames[i],
                 text=texts[i] if i < len(texts) else None,
                 confidence=confs[i] if i < len(confs) else 0.0,
-                rep_crop=(self._crops.get(rep_frames[i])
-                          if self._keep_crops else None))
+                rep_crop=(self._crops.get(rep_frames[i]) if self._keep_crops else None),
+            )
             for i, seg in enumerate(segs)
         ]
         meta = self._build_meta(segments, _wall)
         if self._trace is not None:
             # 收尾：顶层 run 事件（真实锚点）+ 落盘（含 NVML 点列）
             self._trace.record_run(_t_run, _wall)
-            _info = self._trace.dump(
-                self._rc.diag_trace_file, meta=meta, wall=_wall)
+            _info = self._trace.dump(self._rc.diag_trace_file, meta=meta, wall=_wall)
             logger.debug("trace 时间线已落盘：%s", _info)
         return ExtractionResult(
             segments=segments,
             frames=frames if self._keep_frames else [],
             fps=self._fps or 0.0,
             timing=dict(self._timing),
-            meta=meta)
+            meta=meta,
+        )
 
     def _build_meta(self, segments: list, wall: float) -> dict:
         """meta 组装（§10.1 的 9 键逐字不变 + S6-0 增补 report，只增不改）。"""
-        meta = {"backend": self._backend,
-                "ocr_backend": self._ocr_backend_used,
-                "codec": self._codec,
-                "n_segments": len(segments),
-                "engine_version": config.__version__,
-                # D4：rep_crop_rgb helper 依赖这两个字段还原预览
-                "color_range": self._color_range,
-                "rep_crop_format": ("yuv" if self._yuv_output
-                                    else "gray"),
-                "degraded_reason": (self._degraded or None),   # D3
-                "params": {                                     # D3
-                    "roi": tuple(self._roi),
-                    "frame_start": self._frame_start,
-                    "frame_end": self._frame_end,
-                    "decode_backend": self._decode_backend,
-                    "ocr_backend": self._ocr_backend,
-                    "sample_stride": self._sample_stride,
-                    "fill_width": self._fill_width,
-                    "force_aspect": self._force_aspect,
-                    "rep_crop_format": self._rep_crop_format,
-                    "keep_crops": self._keep_crops,
-                    "keep_frames": self._keep_frames,
-                    "merge_similar": self._merge_similar,
-                    "merge_similar_threshold": self._merge_similar_threshold,
-                    "merge_dense_gate": self._merge_dense_gate,
-                    "merge_text_sep": self._merge_effective_mode(),
-                    "buffer_size": self._buffer_size,
-                    "C": self._C}}
+        meta = {
+            "backend": self._backend,
+            "ocr_backend": self._ocr_backend_used,
+            "codec": self._codec,
+            "n_segments": len(segments),
+            "engine_version": config.__version__,
+            # D4：rep_crop_rgb helper 依赖这两个字段还原预览
+            "color_range": self._color_range,
+            "rep_crop_format": ("yuv" if self._yuv_output else "gray"),
+            "degraded_reason": (self._degraded or None),  # D3
+            "params": {  # D3
+                "roi": tuple(self._roi),
+                "frame_start": self._frame_start,
+                "frame_end": self._frame_end,
+                "decode_backend": self._decode_backend,
+                "ocr_backend": self._ocr_backend,
+                "sample_stride": self._sample_stride,
+                "fill_width": self._fill_width,
+                "force_aspect": self._force_aspect,
+                "rep_crop_format": self._rep_crop_format,
+                "keep_crops": self._keep_crops,
+                "keep_frames": self._keep_frames,
+                "merge_similar": self._merge_similar,
+                "merge_similar_threshold": self._merge_similar_threshold,
+                "merge_dense_gate": self._merge_dense_gate,
+                "merge_text_sep": self._merge_effective_mode(),
+                "buffer_size": self._buffer_size,
+                "C": self._C,
+            },
+        }
         report = self._assemble_report(wall, len(segments))
         if report:
-            meta["report"] = report                     # §8.6 N-3：只增不改
+            meta["report"] = report  # §8.6 N-3：只增不改
             _rf = (self._rc.diag_report_file or "").strip()
             if _rf:
                 try:
                     write_report_file(report, _rf)
                 except OSError:
                     # 写 sidecar 是显式 opt-in 的副作用，失败不该毁掉 run
-                    logger.warning("RunReport sidecar 写入失败: %s", _rf,
-                                   exc_info=True)
+                    logger.warning("RunReport sidecar 写入失败: %s", _rf, exc_info=True)
         return meta
 
     def _assemble_report(self, wall: float, n_segments: int) -> dict:
         """把单次 run 的观测收敛成 RunReport（实现：pipeline/report.
         finalized_report；off 档返回 {}）。"""
         rep = finalized_report(
-            self._metrics, self._spine, self._timing, self._trace,
-            self._diag, self._degraded,
-            wall=wall, n_segments=n_segments,
-            backend=self._backend, ocr_backend=self._ocr_backend_used,
-            hardware=self._hardware, fork_stats=self._fork_stats,
+            self._metrics,
+            self._spine,
+            self._timing,
+            self._trace,
+            self._diag,
+            self._degraded,
+            wall=wall,
+            n_segments=n_segments,
+            backend=self._backend,
+            ocr_backend=self._ocr_backend_used,
+            hardware=self._hardware,
+            fork_stats=self._fork_stats,
             gpu_mode=self._gpu_mode_box[0],
-            config_digest=self._rc.config_digest)
+            config_digest=self._rc.config_digest,
+        )
         self._report = rep
         return rep
 
@@ -563,10 +607,10 @@ class FieldExtractor:
         """
         spec = self._build_session_spec()
         from .pipeline.ocr_stage import warmup_engines
+
         t0 = time.perf_counter()
         n = warmup_engines(spec)
-        logger.debug("OCR 引擎池预热完成：%d 个，耗时 %.3fs",
-                     n, time.perf_counter() - t0)
+        logger.debug("OCR 引擎池预热完成：%d 个，耗时 %.3fs", n, time.perf_counter() - t0)
         return n
 
     def _prof_end(self, group: str, key: str, t0: float) -> None:
@@ -581,12 +625,17 @@ class FieldExtractor:
     def _make_source(self) -> DecordFrameSource:
         """构建解码源适配器（open 前无资源；每 run 由 _open_vr 重建）。"""
         return DecordFrameSource(
-            self._video_path, self._roi, self._decode_backend,
-            yuv_output=self._yuv_output, degraded=self._degraded,
-            frame_start=self._frame_start, frame_end=self._frame_end,
+            self._video_path,
+            self._roi,
+            self._decode_backend,
+            yuv_output=self._yuv_output,
+            degraded=self._degraded,
+            frame_start=self._frame_start,
+            frame_end=self._frame_end,
             decode_threads_fn=self._decode_num_threads,
             hybrid_cpu_threads=self._rc.decode_hybrid_cpu_threads,
-            ocr_on_gpu_fn=self._ocr_on_gpu)
+            ocr_on_gpu_fn=self._ocr_on_gpu,
+        )
 
     def _open_vr(self):
         """按 decode_backend 打开解码器（auto/cpu/nvdec/hybrid）。
@@ -620,21 +669,24 @@ class FieldExtractor:
         判定依据与三态语义的完整 docstring 见 policy 模块；门控对
         `gpu.device` 模块属性的 patch 点在 policy 内函数级 import 保持。
         """
-        return gpu_pipeline_enabled(self._rc, self._decode_backend,
-                                    self._ocr_backend,
-                                    str(self._video_path))
+        return gpu_pipeline_enabled(
+            self._rc, self._decode_backend, self._ocr_backend, str(self._video_path)
+        )
 
-    def _decode_num_threads(self, codec: str | None=None) -> int | None:
+    def _decode_num_threads(self, codec: str | None = None) -> int | None:
         """CPU 软解的 decord FFmpeg 帧线程数（按 codec/stride/OCR 位置分档）。
 
-            完整分档依据与实测表已迁 ``config.decode_caliber.decode_num_threads``
-            （2026-09-18 口径轮：单一事实源，探针与引擎同源派生）。
-            """
+        完整分档依据与实测表已迁 ``config.decode_caliber.decode_num_threads``
+        （2026-09-18 口径轮：单一事实源，探针与引擎同源派生）。
+        """
         from video_ocr_engine.config.decode_caliber import decode_num_threads
+
         return decode_num_threads(
-            codec, sample_stride=self._sample_stride,
+            codec,
+            sample_stride=self._sample_stride,
             ocr_on_gpu=self._ocr_on_gpu(),
-            override=self._rc.decode_num_threads)
+            override=self._rc.decode_num_threads,
+        )
 
     # ── 输出格式适配（实现：DecordFrameSource；活读 yuv/color_range）──
     def _crop_luma(self, crop: np.ndarray) -> np.ndarray:
@@ -644,8 +696,7 @@ class FieldExtractor:
     def _batch_luma(self, crops: np.ndarray) -> np.ndarray:
         return self._source.batch_luma(crops)
 
-    def _batch_luma_out(self, crops: np.ndarray,
-                        out: np.ndarray) -> np.ndarray:
+    def _batch_luma_out(self, crops: np.ndarray, out: np.ndarray) -> np.ndarray:
         """批量灰度写入预分配 out（省每批临时数组分配；形状恒定才可复用）。"""
         return self._source.batch_luma_out(crops, out)
 
@@ -660,8 +711,7 @@ class FieldExtractor:
     def _ocr_num_threads(self) -> int:
         """OCR 推理线程预算（实现：pipeline/policy.ocr_num_threads；
         codec/backend_label 为 open 后的活读值）。"""
-        return ocr_num_threads(self._rc, getattr(self, '_codec', ''),
-                               getattr(self, '_backend', ''))
+        return ocr_num_threads(self._rc, getattr(self, "_codec", ""), getattr(self, "_backend", ""))
 
     def _run_pipelined(self, _ocr_engines: list | None = None):
         """入口分发（S3-3d → R1 注入式）：构建 EngineInputs → SegmentEngine。
@@ -673,18 +723,24 @@ class FieldExtractor:
         伪造 `_run_pipelined` 的测试（返回 RunOutcome）不受同步影响。
         """
         inp = EngineInputs(
-            frame_start=self._frame_start, frame_end=self._frame_end,
-            sample_stride=self._sample_stride, roi=tuple(self._roi),
+            frame_start=self._frame_start,
+            frame_end=self._frame_end,
+            sample_stride=self._sample_stride,
+            roi=tuple(self._roi),
             buffer_size=self._buffer_size,
-            C=self._C, merge_similar=self._merge_similar,
+            C=self._C,
+            merge_similar=self._merge_similar,
             merge_similar_threshold=self._merge_similar_threshold,
             merge_max_changed_pixels=self._merge_max_changed_pixels,
             merge_dense_gate=self._merge_dense_gate,
-            keep_crops=self._keep_crops, yuv_output=self._yuv_output,
-            color_range=self._color_range, ocr_autocrop=self._ocr_autocrop,
+            keep_crops=self._keep_crops,
+            yuv_output=self._yuv_output,
+            color_range=self._color_range,
+            ocr_autocrop=self._ocr_autocrop,
             gpu_pipeline=self._gpu_pipeline_enabled(),
             segments_similar=self._segments_similar,
-            crop_luma=self._crop_luma, batch_luma=self._batch_luma,
+            crop_luma=self._crop_luma,
+            batch_luma=self._batch_luma,
             batch_luma_out=self._batch_luma_out,
             crop_is_expected=self._crop_is_expected,
             content_range_to_crop=self._content_range_to_crop,
@@ -693,14 +749,16 @@ class FieldExtractor:
             backend_label=lambda: self._backend,
             ocr_on_gpu=self._ocr_on_gpu,
             merge_effective_mode=self._merge_effective_mode,
-            progress=self._progress, cancel=self._cancel,
+            progress=self._progress,
+            cancel=self._cancel,
             prof_end=self._prof_end,
             on_bin_thresh=self._set_bin_thresh,
             bin_thresh_ref=[self._bin_thresh],
             fps_box=[self._fps],
             gpu_mode_box=self._gpu_mode_box,
             degraded=self._degraded,
-            metrics=self._metrics)
+            metrics=self._metrics,
+        )
         outcome = SegmentEngine(inp).run(_ocr_engines)
         # 状态同步（原 _run_pipelined_gpu/_host 尾部的双份收口至此单处）
         self._fps = outcome.fps

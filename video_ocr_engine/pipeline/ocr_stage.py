@@ -7,6 +7,7 @@ degraded）改为显式输出挂钩，其可见性仍由 finish() 的 join 建�
 已知遗留（S3-3c 随 GPU 驱动重建修复）：GPU 管线在会话启动**后**给
 autocropper 赋值（B4）；本阶段保留该属性注入点。
 """
+
 from __future__ import annotations
 
 import logging
@@ -30,10 +31,11 @@ _OCR_JOIN_TIMEOUT_S = 10.0
 @dataclass
 class SegmentTask:
     """段任务（队列项，D3）：emit → OCR 会话的唯一载荷。"""
+
     idx: int
-    rep: object              # 代表帧号
-    crop: object             # 宿主 crop（raw 路径为 None）
-    dev: object              # DeviceRef（宿主回退路径为 None）
+    rep: object  # 代表帧号
+    crop: object  # 宿主 crop（raw 路径为 None）
+    dev: object  # DeviceRef（宿主回退路径为 None）
     frac: float
 
 
@@ -44,6 +46,7 @@ class InferBatch:
     raw 路径：procs=None、infos/force_aspect 就位（设备指针直通）；
     宿主路径：procs 就位、infos=None。
     """
+
     idxs: list
     reps: list
     procs: "list | None"
@@ -54,6 +57,7 @@ class InferBatch:
 
 class OcrResult(NamedTuple):
     """单段 OCR 结果（text, conf, rep_frame）——NamedTuple 保留索引访问。"""
+
     text: "str | None"
     conf: float
     rep: object
@@ -62,6 +66,7 @@ class OcrResult(NamedTuple):
 @dataclass
 class SessionSpec:
     """OCR 会话的全量输入契约（取代 OcrSession(ex) 的私有属性读取）。"""
+
     # 静态输入（构造期冻结；v1 的 reorder_window/force_aspect 为活读，
     # 按值传入后与 D6"一次 run 一个不可变配置"语义一致——金标无漂移）
     buffer_size: int
@@ -71,10 +76,10 @@ class SessionSpec:
     reorder_window: int
     yuv_output: bool
     color_range: int
-    gpu_pipeline_mode: bool        # 会话创建前由驱动定，会话期内恒定
+    gpu_pipeline_mode: bool  # 会话创建前由驱动定，会话期内恒定
     # 派生决策（保留函数体：内含 env 活读/解码状态判断）
-    num_threads_fn: Callable       # () -> int
-    engine_type_fn: Callable       # () -> str
+    num_threads_fn: Callable  # () -> int
+    engine_type_fn: Callable  # () -> str
     # 裁切/预处理回调（实现唯一出处 segmentation，经门面薄层注入）
     crop_to_content: Callable
     crop_after_aspect: Callable
@@ -88,7 +93,7 @@ class SessionSpec:
     # S9-2(D6) 注入口（None=沿用各模块调用期 env 读取，直接用户不变；
     # 引擎路径由 resolve 构造期冻结后注入）
     gamma: float | None = None
-    ocr_batch: int = 0                 # 0 → 沿用 _ocr_batch_size() 的 env 读取
+    ocr_batch: int = 0  # 0 → 沿用 _ocr_batch_size() 的 env 读取
     ocr_instances: bool | None = None
     gpu_ctc: bool | None = None
     pad_floor_env: int | None = None
@@ -105,9 +110,10 @@ def acquire_engines(spec: "SessionSpec") -> "tuple[list, str]":
     状态（如第二实例构建失败）已取到的引擎归池再上抛。
     """
     from video_ocr_engine.ocr.native import acquire_ocr_engine, checkin_ocr_engine
+
     ot = spec.num_threads_fn()
     engine_type = spec.engine_type_fn()
-    if engine_type == 'hybrid':
+    if engine_type == "hybrid":
         # 双 OCR（2026-09-20 hybrid ocr 轮，opt-in）：TRT 设备车道 +
         # OpenVINO CPU 车道各一引擎，worker 为每引擎起一条 infer 线程
         # 共享 infer_q（自然工作窃取，与双实例 ONNX 同骨架——库存派工，
@@ -117,42 +123,59 @@ def acquire_engines(spec: "SessionSpec") -> "tuple[list, str]":
         # OcrEngine 内部回退 OV → 双 OV 仍成立（等价双实例）。
         engines: list = [
             acquire_ocr_engine(
-                spec.model, 'tensorrt',
-                fill_width=spec.fill_width, num_threads=ot,
+                spec.model,
+                "tensorrt",
+                fill_width=spec.fill_width,
+                num_threads=ot,
                 pad_floor_env=spec.pad_floor_env,
-                gamma=spec.gamma, gpu_ctc=spec.gpu_ctc),
+                gamma=spec.gamma,
+                gpu_ctc=spec.gpu_ctc,
+            ),
             acquire_ocr_engine(
-                spec.model, 'openvino',
-                fill_width=spec.fill_width, num_threads=ot,
+                spec.model,
+                "openvino",
+                fill_width=spec.fill_width,
+                num_threads=ot,
                 pad_floor_env=spec.pad_floor_env,
-                gamma=spec.gamma, gpu_ctc=spec.gpu_ctc),
+                gamma=spec.gamma,
+                gpu_ctc=spec.gpu_ctc,
+            ),
         ]
         return engines, engine_type
-    _inst = (spec.ocr_instances if spec.ocr_instances is not None
-             else config.env_bool(config.OCR_INSTANCES_ENV, default=True))
-    ocr_instances = (engine_type == 'openvino'
-                     and ot >= config.OCR_INSTANCES_MIN_THREADS
-                     and _inst)
+    _inst = (
+        spec.ocr_instances
+        if spec.ocr_instances is not None
+        else config.env_bool(config.OCR_INSTANCES_ENV, default=True)
+    )
+    ocr_instances = engine_type == "openvino" and ot >= config.OCR_INSTANCES_MIN_THREADS and _inst
     engines = []
     try:
         if ocr_instances:
             half = max(2, ot // 2)
             engines = [
                 acquire_ocr_engine(
-                    spec.model, 'openvino',
+                    spec.model,
+                    "openvino",
                     fill_width=spec.fill_width,
                     num_threads=half,
                     pad_floor_env=spec.pad_floor_env,
                     gamma=spec.gamma,
-                    gpu_ctc=spec.gpu_ctc)
-                for _ in range(2)]
+                    gpu_ctc=spec.gpu_ctc,
+                )
+                for _ in range(2)
+            ]
         else:
-            engines = [acquire_ocr_engine(
-                spec.model, engine_type,
-                fill_width=spec.fill_width, num_threads=ot,
-                pad_floor_env=spec.pad_floor_env,
-                gamma=spec.gamma,
-                gpu_ctc=spec.gpu_ctc)]
+            engines = [
+                acquire_ocr_engine(
+                    spec.model,
+                    engine_type,
+                    fill_width=spec.fill_width,
+                    num_threads=ot,
+                    pad_floor_env=spec.pad_floor_env,
+                    gamma=spec.gamma,
+                    gpu_ctc=spec.gpu_ctc,
+                )
+            ]
     except BaseException:
         logger.debug("引擎半建状态回收", exc_info=True)
         while engines:
@@ -175,6 +198,7 @@ def warmup_engines(spec: "SessionSpec") -> int:
     由此函数与 `acquire_engines` 同源保证。返回预热引擎数。
     """
     from video_ocr_engine.ocr.native import checkin_ocr_engine
+
     engines, _ = acquire_engines(spec)
     n = len(engines)
     for eng in engines:
@@ -185,8 +209,9 @@ def warmup_engines(spec: "SessionSpec") -> int:
     return n
 
 
-def effective_reorder_window(roi_w: int, roi_h: int, floor_px: int,
-                             force_aspect: float, window: int) -> int:
+def effective_reorder_window(
+    roi_w: int, roi_h: int, floor_px: int, force_aspect: float, window: int
+) -> int:
     """S6-f：把"按宽分组"的等待窗口收敛到**它真能起作用**的场合。
 
     分组（跨批按"裁后内容宽"排序）只可能在 **pad 宽由内容宽决定**时改变
@@ -202,7 +227,7 @@ def effective_reorder_window(roi_w: int, roi_h: int, floor_px: int,
     if window <= 1:
         return 1
     if force_aspect and force_aspect > 0:
-        return 1          # 输入被压到固定宽高比：分组同样不可能改变 pad
+        return 1  # 输入被压到固定宽高比：分组同样不可能改变 pad
     floor_ratio = float(floor_px) / max(1, config.OCR_TARGET_H)
     return 1 if (float(roi_w) / max(1, roi_h)) <= floor_ratio else window
 
@@ -215,23 +240,28 @@ def _lane_host(eng, shape, cudart):
     """
     import ctypes
     import numpy as np
+
     nbytes = int(np.prod(shape)) * 4
-    buf = getattr(eng, '_lane_host_buf', None)
+    buf = getattr(eng, "_lane_host_buf", None)
     if buf is None or buf[1] < nbytes:
         if buf is not None:
             cudart.cudaFreeHost(buf[0])
         _err, ptr = cudart.cudaMallocHost(nbytes)
         buf = (ptr, nbytes)
         eng._lane_host_buf = buf
-    arr = np.ctypeslib.as_array(
-        ctypes.cast(buf[0], ctypes.POINTER(ctypes.c_float)),
-        shape=(nbytes // 4,)).view(np.float32).reshape(shape)
+    arr = (
+        np.ctypeslib.as_array(
+            ctypes.cast(buf[0], ctypes.POINTER(ctypes.c_float)), shape=(nbytes // 4,)
+        )
+        .view(np.float32)
+        .reshape(shape)
+    )
     return buf[0], arr
 
 
 def _lane_ev(eng, cudart):
     """车道 D2H 事件（每引擎一份，复用）。"""
-    ev = getattr(eng, '_lane_ev', None)
+    ev = getattr(eng, "_lane_ev", None)
     if ev is None:
         _err, ev = cudart.cudaEventCreate()
         eng._lane_ev = ev
@@ -251,8 +281,7 @@ class OcrSession:
     方法：put(item)（C7 取消响应式入队）、finish()（哨兵 + join）。
     """
 
-    def __init__(self, spec: SessionSpec,
-                 _ocr_engines: list | None = None) -> None:
+    def __init__(self, spec: SessionSpec, _ocr_engines: list | None = None) -> None:
         from queue import Queue
 
         self._spec = spec
@@ -261,7 +290,7 @@ class OcrSession:
         self.results: dict = {}
         self.err: list = []
         self.wall = [0.0]
-        self.raw_ready = [False]   # raw 直通可用：worker 引擎就绪后置位（单 TRT）
+        self.raw_ready = [False]  # raw 直通可用：worker 引擎就绪后置位（单 TRT）
         # 批量 autocrop 挂点（GPU 管线注入）：autocropper 存在时，raw 项
         # emit 为 5 元组 (owner,ptr,h,w,sharp)，autocrop 推迟到 flush 批量
         # 执行。None = emit 内逐段裁切。（B4：事后赋值，S3-3c 改构造注入）
@@ -274,7 +303,8 @@ class OcrSession:
         self._thread.start()
         # v8 线程账本登记：OCR worker（宿主预处理+分批的执行者）
         from video_ocr_engine.domain.resources import register_thread
-        register_thread('ocr', self._thread)
+
+        register_thread("ocr", self._thread)
 
     # ── 生产者接口 ──────────────────────────────────────────
 
@@ -289,12 +319,12 @@ class OcrSession:
         if self.err:
             raise self.err[0]
         if not self._thread.is_alive() and not self.err:
-            raise RuntimeError(
-                "OCR worker 线程已退出但未记录异常（BaseException 逃逸？）")
+            raise RuntimeError("OCR worker 线程已退出但未记录异常（BaseException 逃逸？）")
 
     def put(self, item) -> None:
         """入队一个段任务；队列满时保持取消响应（C7）。"""
         from queue import Full
+
         while True:
             self._raise_if_dead()
             try:
@@ -307,6 +337,7 @@ class OcrSession:
     def finish(self) -> None:
         """投递哨兵并等待 OCR worker 退出（join 带超时，审查轮加固）。"""
         from queue import Full
+
         while True:
             try:
                 self.q.put(None, timeout=0.2)
@@ -319,9 +350,10 @@ class OcrSession:
         # 外层 except 吞不掉）。超时后线程为 daemon，进程可退出。
         self._thread.join(timeout=_OCR_JOIN_TIMEOUT_S)
         if self._thread.is_alive():
-            logger.warning("OCR worker 未在 %.1fs 内退出（卡在设备调用？）"
-                           "——放弃等待，进程退出时回收",
-                           _OCR_JOIN_TIMEOUT_S)
+            logger.warning(
+                "OCR worker 未在 %.1fs 内退出（卡在设备调用？）——放弃等待，进程退出时回收",
+                _OCR_JOIN_TIMEOUT_S,
+            )
 
     # ── OCR worker（引擎取还 / 预处理分流 / 推理）────────────
 
@@ -335,10 +367,11 @@ class OcrSession:
         缺 CPU）。OCR 是临界路径，升一档让它在与解码线程争核时先行；
         线程退出即失效，无跨会话影响。非 Windows 与失败路径静默。
         """
-        if sys.platform != 'win32':
+        if sys.platform != "win32":
             return
         try:
             import ctypes
+
             k32 = ctypes.windll.kernel32
             if not k32.SetThreadPriority(k32.GetCurrentThread(), 1):
                 pass  # 设置失败（句柄/权限）：维持 NORMAL，无正确性影响
@@ -349,6 +382,7 @@ class OcrSession:
         import time
         from queue import Full, Queue
         from video_ocr_engine.ocr.native import checkin_ocr_engine
+
         self._bump_priority()
         spec = self._spec
         t0 = time.perf_counter()
@@ -360,40 +394,37 @@ class OcrSession:
                 if not engines:
                     # 契约违反显式化（2026-09-19 审查轮）：此前空列表直接
                     # 走 engines[0] → IndexError，错误信息与真实原因无关。
-                    raise ValueError(
-                        "注入引擎路径要求 _ocr_engines 非空（收到空列表）")
+                    raise ValueError("注入引擎路径要求 _ocr_engines 非空（收到空列表）")
                 spec.on_backend_used(
-                    'tensorrt+openvino'
-                    if len(engines) == 2 and
-                    engines[0].backend_name != engines[1].backend_name
-                    else engines[0].backend_name)
+                    "tensorrt+openvino"
+                    if len(engines) == 2 and engines[0].backend_name != engines[1].backend_name
+                    else engines[0].backend_name
+                )
             else:
                 _t_eng = time.perf_counter()
                 engines, engine_type = acquire_engines(spec)
                 _names = sorted({e.backend_name for e in engines})
-                spec.on_backend_used('+'.join(_names))
-                if (engine_type == 'tensorrt'
-                        and engines[0].backend_name != 'tensorrt'):
+                spec.on_backend_used("+".join(_names))
+                if engine_type == "tensorrt" and engines[0].backend_name != "tensorrt":
                     # D3：请求 TRT 但引擎回退 ONNX → 降级原因透出 meta
-                    spec.on_degraded('TRT 引擎不可用，回退 ONNX')
-                if (engine_type == 'hybrid'
-                        and _names == ['openvino']):
+                    spec.on_degraded("TRT 引擎不可用，回退 ONNX")
+                if engine_type == "hybrid" and _names == ["openvino"]:
                     # 双车道里 TRT 臂也不可用 → 全 OV（等价双实例），
                     # 降级原因同样透出
-                    spec.on_degraded('TRT 引擎不可用，双车道退化为双 OpenVINO')
+                    spec.on_degraded("TRT 引擎不可用，双车道退化为双 OpenVINO")
                 if spec.prof_end is not None:
-                    spec.prof_end('ocr', 'engine_init', _t_eng)
+                    spec.prof_end("ocr", "engine_init", _t_eng)
             # S6-0（§8.6 N-2）：引擎只在本次会话内被独占使用，指标记录器随
             # checkout 注入（池归还后下一次 checkout 会重新覆盖；PI-10 的
             # 热池判定由 acquire 打的 _pool_hit 标记给出）。外部注入引擎
             # （_ocr_engines 非空）同样接入。
             _m = spec.metrics
             if _m is not None and _m.enabled:
-                if getattr(engines[0], '_pool_hit', False):
-                    _m.counter('ocr.engine_reuse')
+                if getattr(engines[0], "_pool_hit", False):
+                    _m.counter("ocr.engine_reuse")
                 for _e in engines:
                     _e._metrics = _m
-                    if getattr(_e, '_trt', None) is not None:
+                    if getattr(_e, "_trt", None) is not None:
                         _e._trt._metrics = _m
             # 引擎就绪 → 供 GPU 管线 emit 决策（raw 直通需设备帧可被消费；
             # 置位后该会话内代表帧可全程留显存，仅输出/回退时 D2H）。
@@ -401,13 +432,13 @@ class OcrSession:
             # prep 消费（TRT 车道 call_gpu_raw、OV 车道车道 prep+D2H），
             # 两侧都不需要宿主代表帧。
             self.raw_ready[0] = (
-                (len(engines) == 1
-                 and getattr(engines[0], '_trt', None) is not None)
-                or (len(engines) == 2
-                    and {getattr(e, 'backend_name', '') for e in engines}
-                    == {'tensorrt', 'openvino'}
-                    and spec.gpu_pipeline_mode))
-            B = (spec.ocr_batch or _ocr_batch_size())
+                len(engines) == 1 and getattr(engines[0], "_trt", None) is not None
+            ) or (
+                len(engines) == 2
+                and {getattr(e, "backend_name", "") for e in engines} == {"tensorrt", "openvino"}
+                and spec.gpu_pipeline_mode
+            )
+            B = spec.ocr_batch or _ocr_batch_size()
             # TRT 批对齐 max_batch（§8.1）：TRT 按 profile max_batch 切
             # 子批，末批 batch 维变化前必须 cudaStreamSynchronize（TRT
             # 不允许 in-flight 改 context 形状）——OCR_BATCH=16 在
@@ -416,12 +447,12 @@ class OcrSession:
             # ocr_infer -13%）。单 TRT 引擎时分块对齐到 max_batch 整倍数
             # 即零 sync；ONNX 路径保持 B（18=16+2 切伤 ONNX_CHUNK=16
             # 尾批，实测 +3.7%），双实例同理。
-            _trt_max = (engines[0]._trt.max_batch
-                        if (len(engines) == 1 and
-                            getattr(engines[0], '_trt', None) is not None)
-                        else 0)
-            chunk = (max(B, -(-B // _trt_max) * _trt_max)
-                     if _trt_max else B)
+            _trt_max = (
+                engines[0]._trt.max_batch
+                if (len(engines) == 1 and getattr(engines[0], "_trt", None) is not None)
+                else 0
+            )
+            chunk = max(B, -(-B // _trt_max) * _trt_max) if _trt_max else B
             infer_q: Queue = Queue(maxsize=config.OCR_INFER_QUEUE_SIZE)
             ocr_progress_frac = [0.0]
 
@@ -436,16 +467,14 @@ class OcrSession:
                         # 推理线程全部退出（异常/正常收尾）而队列仍满：
                         # 无人再消费，继续自旋 = 挂死（审查轮：与
                         # put/finish 同族的「等一个永不到来的事件」）。
-                        if infer_threads and not any(
-                                t.is_alive() for t in infer_threads):
+                        if infer_threads and not any(t.is_alive() for t in infer_threads):
                             return False
                         continue
 
             def _report_ocr_progress(idx: int, frac: float) -> None:
                 if frac - ocr_progress_frac[0] >= 0.01 or frac >= 1.0:
                     ocr_progress_frac[0] = frac
-                    spec.progress(f'[OCR] 段 {idx + 1}',
-                                  _ocr_progress_pct(frac))
+                    spec.progress(f"[OCR] 段 {idx + 1}", _ocr_progress_pct(frac))
 
             def infer_worker(eng) -> None:
                 self._bump_priority()
@@ -453,44 +482,44 @@ class OcrSession:
                 # prep——见 ocr_lane_prep 的流语义注释。单引擎/双实例
                 # ONNX 路径 _lane_prep 恒 None（行为不变）。
                 _lane_prep = None
-                if (getattr(eng, '_trt', None) is None
-                        and getattr(eng, 'backend_name', '') == 'openvino'
-                        and spec.gpu_pipeline_mode
-                        and len(engines) == 2):
+                if (
+                    getattr(eng, "_trt", None) is None
+                    and getattr(eng, "backend_name", "") == "openvino"
+                    and spec.gpu_pipeline_mode
+                    and len(engines) == 2
+                ):
                     try:
                         from video_ocr_engine.ocr.native import ocr_lane_prep
+
                         _lane_prep = ocr_lane_prep(eng)
                     except Exception:  # noqa: BLE001
-                        logger.debug("车道 prep 挂载失败，回退宿主路径",
-                                     exc_info=True)
+                        logger.debug("车道 prep 挂载失败，回退宿主路径", exc_info=True)
                         _lane_prep = None
                 # TRT_DEFER_SYNC（默认关）：单 TRT 引擎 + raw 直通批走深度 2
                 # 延迟收集——提交不等待，结果滞后一批交付（提交序 FIFO，
                 # 协议见 ocr/native.py 延迟收集组）。pending 记已提交未交付
                 # 的批，与引擎侧 FIFO 一一对应。
-                defer_on = (len(engines) == 1
-                            and getattr(eng, '_defer_sync', False)
-                            and eng is engines[0]
-                            and getattr(eng, '_trt', None) is not None)
+                defer_on = (
+                    len(engines) == 1
+                    and getattr(eng, "_defer_sync", False)
+                    and eng is engines[0]
+                    and getattr(eng, "_trt", None) is not None
+                )
                 pending: "deque[Any]" = deque()
 
                 def _deliver(item, res) -> None:
                     _t_c = time.perf_counter()
-                    for idx, rep, r, frac in zip(
-                            item.idxs, item.reps, res, item.fracs):
-                        if hasattr(r, 'txts'):
-                            raw_text = (str(r.txts[0])
-                                        if r.txts and r.txts[0] else None)
-                            scores = getattr(r, 'scores', [])
-                            ocr_conf = (float(scores[0])
-                                        if scores else 0.0)
+                    for idx, rep, r, frac in zip(item.idxs, item.reps, res, item.fracs):
+                        if hasattr(r, "txts"):
+                            raw_text = str(r.txts[0]) if r.txts and r.txts[0] else None
+                            scores = getattr(r, "scores", [])
+                            ocr_conf = float(scores[0]) if scores else 0.0
                         else:
                             raw_text, ocr_conf = (None, 0.0)
-                        self.results[idx] = OcrResult(
-                            raw_text, ocr_conf, rep)
+                        self.results[idx] = OcrResult(raw_text, ocr_conf, rep)
                         _report_ocr_progress(idx, frac)
                     if spec.prof_end is not None:
-                        spec.prof_end('ocr', 'ctc_decode', _t_c)
+                        spec.prof_end("ocr", "ctc_decode", _t_c)
 
                 try:
                     while True:
@@ -503,8 +532,7 @@ class OcrSession:
                             return
                         _t_i = time.perf_counter()
                         if item.infos is not None and defer_on:
-                            eng._gpu_raw_submit(
-                                item.infos, force_aspect=item.force_aspect)
+                            eng._gpu_raw_submit(item.infos, force_aspect=item.force_aspect)
                             pending.append(item)
                             res = eng._gpu_raw_collect()
                             if res is not None and pending:
@@ -516,14 +544,14 @@ class OcrSession:
                             res = _lane_infer(_lane_prep, eng, item)
                             _deliver(item, res)
                         else:
-                            res = (eng.call_gpu_raw(
-                                       item.infos,
-                                       force_aspect=item.force_aspect)
-                                   if item.infos is not None
-                                   else eng(item.procs))
+                            res = (
+                                eng.call_gpu_raw(item.infos, force_aspect=item.force_aspect)
+                                if item.infos is not None
+                                else eng(item.procs)
+                            )
                             _deliver(item, res)
                         if spec.prof_end is not None:
-                            spec.prof_end('ocr', 'infer', _t_i)
+                            spec.prof_end("ocr", "infer", _t_i)
                 except Exception as e:
                     self.err.append(e)
 
@@ -545,38 +573,41 @@ class OcrSession:
                 from cuda.bindings import runtime as cudart
                 from video_ocr_engine.ocr.native import ocr_pad_floor
                 from video_ocr_engine.config import constants as _cfg
+
                 infos = item.infos
                 src_h = int(infos[0].h)
-                _floor = ocr_pad_floor(eng._variant, eng._fill_width,
-                                       eng._pad_floor_env)
+                _floor = ocr_pad_floor(eng._variant, eng._fill_width, eng._pad_floor_env)
                 fa = float(item.force_aspect or 0.0)
                 if fa > 0:
                     _ratio = fa
                 else:
                     _ratio = max(float(t.span[1]) for t in infos) / float(src_h)
-                out_width = int(_cfg.OCR_TARGET_H * max(
-                    _floor / _cfg.OCR_TARGET_H, _ratio))
-                dev_ptr, shape = pre.process_gray_raw(
-                    infos, out_width, force_aspect=fa)
+                out_width = int(_cfg.OCR_TARGET_H * max(_floor / _cfg.OCR_TARGET_H, _ratio))
+                dev_ptr, shape = pre.process_gray_raw(infos, out_width, force_aspect=fa)
                 nbytes = int(np.prod(shape)) * 4
                 host = _lane_host(eng, shape, cudart)
                 cudart.cudaMemcpyAsync(
-                    host[0], dev_ptr, nbytes,
-                    cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, pre._stream)
+                    host[0],
+                    dev_ptr,
+                    nbytes,
+                    cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost,
+                    pre._stream,
+                )
                 cudart.cudaEventRecord(_lane_ev(eng, cudart), pre._stream)
                 cudart.cudaEventSynchronize(_lane_ev(eng, cudart))
                 return eng.call_prepped(host[1])
 
             infer_threads = [
-                threading.Thread(target=infer_worker, args=(eng,), daemon=True)
-                for eng in engines]
+                threading.Thread(target=infer_worker, args=(eng,), daemon=True) for eng in engines
+            ]
             for t in infer_threads:
                 t.start()
             # v8 线程账本登记：推理线程（每引擎一条）
             from video_ocr_engine.domain.resources import register_thread
+
             for _i, _t in enumerate(infer_threads):
-                register_thread('infer%d' % _i, _t)
-            b_idx: list = []        # flush 批簿记：段索引/代表帧号/crop/dev/frac
+                register_thread("infer%d" % _i, _t)
+            b_idx: list = []  # flush 批簿记：段索引/代表帧号/crop/dev/frac
             b_reps: list = []
             b_crops: list = []
             b_devs: list = []
@@ -585,7 +616,7 @@ class OcrSession:
             def _count_chunks(n: int) -> None:
                 """S6-0：chunk 计数（PI-3 的分母；细档另记 per-chunk span）。"""
                 if _m is not None and _m.enabled:
-                    _m.counter('ocr.chunks', n)
+                    _m.counter("ocr.chunks", n)
 
             def flush() -> None:
                 if not b_idx:
@@ -600,17 +631,22 @@ class OcrSession:
                 # 自己的流上），OV 车道由 infer_worker 用车道独立流的
                 # GpuPreprocessor 做一次 prep + D2H 已预处理张量后调
                 # call_prepped（跳过宿主 resize——v0 的 1.37ms/段回归根因）。
-                _dual = (len(engines) == 2 and spec.gpu_pipeline_mode
-                         and {getattr(e, 'backend_name', '') for e in engines}
-                         == {'tensorrt', 'openvino'})
+                _dual = (
+                    len(engines) == 2
+                    and spec.gpu_pipeline_mode
+                    and {getattr(e, "backend_name", "") for e in engines}
+                    == {"tensorrt", "openvino"}
+                )
                 raw_sel = [
-                    i for i in range(len(b_devs))
+                    i
+                    for i in range(len(b_devs))
                     if b_devs[i] is not None
                     and spec.gpu_pipeline_mode
-                    and (_dual
-                         or (len(engines) == 1
-                             and getattr(engines[0], '_trt', None) is not None))
-                    ]
+                    and (
+                        _dual
+                        or (len(engines) == 1 and getattr(engines[0], "_trt", None) is not None)
+                    )
+                ]
                 if raw_sel:
                     # 批量预处理（emit 时推迟的 5 元组项）：yuv 批量 luma
                     # 提取 + 一次 col_ink_batch 裁切区间，整批一次 sync，
@@ -619,9 +655,8 @@ class OcrSession:
                     deferred = [i for i in raw_sel if b_devs[i].deferred]
                     if deferred and self.autocropper is not None:
                         for i, dev6 in zip(
-                                deferred,
-                                self.autocropper.process(
-                                    [b_devs[i] for i in deferred])):
+                            deferred, self.autocropper.process([b_devs[i] for i in deferred])
+                        ):
                             b_devs[i] = dev6
                     elif deferred:
                         # autocropper 缺席兜底：全宽（与未裁语义一致）
@@ -637,20 +672,22 @@ class OcrSession:
                     # infos)。按批大小拆子批：pad 宽 = 子批内最大内容宽。
                     _count_chunks(-(-len(raw_sel) // chunk))
                     for s in range(0, len(raw_sel), chunk):
-                        chk = raw_sel[s:s + chunk]
+                        chk = raw_sel[s : s + chunk]
                         # S9-3：DeviceRef 直接作为 kernel 面载荷
                         # （取代 4/6 元组——裁切区间经 .span 显式化）
                         infos = [b_devs[i] for i in chk]
-                        if not _put_infer(InferBatch(
+                        if not _put_infer(
+                            InferBatch(
                                 [b_idx[i] for i in chk],
-                                [b_reps[i] for i in chk], None,
+                                [b_reps[i] for i in chk],
+                                None,
                                 [b_fracs[i] for i in chk],
                                 force_aspect=float(spec.force_aspect),
-                                infos=infos)):
+                                infos=infos,
+                            )
+                        ):
                             return
-                host_sel = [
-                    i for i in range(len(b_crops))
-                    if b_crops[i] is not None]
+                host_sel = [i for i in range(len(b_crops)) if b_crops[i] is not None]
                 if host_sel:
                     _t_p = time.perf_counter()
                     # 子相位累加：每批上报一次，**不在逐项循环里调 prof_end**
@@ -659,22 +696,22 @@ class OcrSession:
                     _acc_l = _acc_a = _acc_r = 0.0
                     # 内容宽度自适应裁切（统一实现见 segmentation.
                     # crop_to_content / crop_after_aspect）。
-                    prepped: list = []   # [(i, ndarray)]：宿主预处理产物（分组批）
+                    prepped: list = []  # [(i, ndarray)]：宿主预处理产物（分组批）
                     for i in host_sel:
                         c = b_crops[i]
                         if spec.yuv_output:
                             from video_ocr_engine.domain.video_utils import _nv12_luma_full
+
                             _t = time.perf_counter()
-                            c = _nv12_luma_full(
-                                c, spec.color_range)[..., None]
+                            c = _nv12_luma_full(c, spec.color_range)[..., None]
                             _acc_l += time.perf_counter() - _t
                         if spec.force_aspect and spec.force_aspect > 0:
                             # force_aspect>0：**先定比例、后裁**（顺序 ⑦）。
                             # 反序会因内容宽高比被改变而引入畸变。
                             _t = time.perf_counter()
                             p = preprocess_standard(
-                                c, force_aspect=spec.force_aspect,
-                                gamma=spec.gamma)
+                                c, force_aspect=spec.force_aspect, gamma=spec.gamma
+                            )
                             _acc_r += time.perf_counter() - _t
                             _t = time.perf_counter()
                             p = spec.crop_after_aspect(p)
@@ -685,19 +722,19 @@ class OcrSession:
                             _acc_a += time.perf_counter() - _t
                             _t = time.perf_counter()
                             p = preprocess_standard(
-                                c, force_aspect=spec.force_aspect,
-                                gamma=spec.gamma)
+                                c, force_aspect=spec.force_aspect, gamma=spec.gamma
+                            )
                             _acc_r += time.perf_counter() - _t
                         prepped.append((i, p))
                     if spec.prof_end is not None:
-                        spec.prof_end('ocr', 'preprocess', _t_p)
+                        spec.prof_end("ocr", "preprocess", _t_p)
                         # 合成 t0 = now - 累加值（_prof_end 语义即 now - t0），
                         # 这样无需给 SessionSpec 增加新钩子。
                         _now = time.perf_counter()
                         if _acc_l:
-                            spec.prof_end('ocr', 'preproc_luma', _now - _acc_l)
-                        spec.prof_end('ocr', 'preproc_autocrop', _now - _acc_a)
-                        spec.prof_end('ocr', 'preproc_resize', _now - _acc_r)
+                            spec.prof_end("ocr", "preproc_luma", _now - _acc_l)
+                        spec.prof_end("ocr", "preproc_autocrop", _now - _acc_a)
+                        spec.prof_end("ocr", "preproc_resize", _now - _acc_r)
                     # 跨批按宽度分组：pad 宽 = 批内最大宽，顺序分批时
                     # 每批都被满宽成员顶上去，只有把宽度相近的段分到
                     # 同一批才真的降下来（-23.9%）。
@@ -707,12 +744,15 @@ class OcrSession:
                     for s in range(0, len(prepped), chunk):
                         # hchk：元素是 (i, ndarray) 二元组（与 raw 路径的
                         # chk=list[int] 同名不同物，改名让类型面不合并）
-                        hchk = prepped[s:s + chunk]
-                        if not _put_infer(InferBatch(
+                        hchk = prepped[s : s + chunk]
+                        if not _put_infer(
+                            InferBatch(
                                 [b_idx[t[0]] for t in hchk],
                                 [b_reps[t[0]] for t in hchk],
                                 [t[1] for t in hchk],
-                                [b_fracs[t[0]] for t in hchk])):
+                                [b_fracs[t[0]] for t in hchk],
+                            )
+                        ):
                             return
                 b_idx.clear()
                 b_reps.clear()
@@ -724,7 +764,7 @@ class OcrSession:
                 _t_w = time.perf_counter()
                 item = self.q.get()
                 if spec.prof_end is not None:
-                    spec.prof_end('ocr', 'q_get_wait', _t_w)
+                    spec.prof_end("ocr", "q_get_wait", _t_w)
                 if item is None:
                     break
                 if self.err:

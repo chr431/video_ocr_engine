@@ -15,6 +15,7 @@ similar / abort / fallback / stop_consume / after_stream / release
 取在 OCR 会话启动**之后**（旧宿主口径；旧 GPU 口径含会话启动）——
 两路径自此同义，L1 per_phase 差分可比。
 """
+
 from __future__ import annotations
 
 import logging
@@ -25,8 +26,7 @@ from video_ocr_engine.domain.segmentation import SegmentStateMachine
 logger = logging.getLogger(__name__)
 
 
-def run_segment_pipeline(spec, res, lane, ocr_engines=None,
-                         preopened_vr=None):
+def run_segment_pipeline(spec, res, lane, ocr_engines=None, preopened_vr=None):
     """资源阶段 → 会话 → 校准 → 帧流消费 → 收尾（宿主/GPU 共用）。
 
     spec 取两 RunSpec 的公共字段（帧区间/采样/C/回调/指标）；res 由
@@ -35,12 +35,14 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None,
     fallback 分支只有 GPU lane 会走。
     """
     from ._run_common import begin_reading, compute_frames, ensure_fps
+
     _MET = spec.metrics
     # v8 线程账本登记：consumer=本（调用方）线程——宿主路径直接拉动解码
     # 生成器，GPU 路径从生产者队列消费（两路径同名同义，键集一致由
     # test_phase_key_registry 守护）。
     from ..domain.resources import register_thread
-    register_thread('consumer')
+
+    register_thread("consumer")
     _t_open = time.perf_counter()
     vr = preopened_vr if preopened_vr is not None else spec.open_vr()
     lane.after_open(vr)
@@ -54,8 +56,8 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None,
         except Exception:
             pass  # 清理路径：close 失败无需上抛（资源由进程回收）
         raise ValueError(
-            f"帧区间为空: frame_start={spec.frame_start}, "
-            f"frame_end={spec.frame_end}, total={total}")
+            f"帧区间为空: frame_start={spec.frame_start}, frame_end={spec.frame_end}, total={total}"
+        )
     try:
         begin_reading(vr, spec, frames)
     except BaseException:
@@ -66,11 +68,11 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None,
             pass  # 清理路径：close 失败无需上抛
         raise
     if spec.prof_end is not None:
-        spec.prof_end('producer', 'open_and_fps', _t_open)
+        spec.prof_end("producer", "open_and_fps", _t_open)
     # L1 资源边界（§8.6 r5）：粗相位结束处各采一次，差分见 run report。
     # 记的是**进程级**用量，OCR 与解码并发时核数会互相计入——这是"该相位
     # 平均并行核数"的本意（不是单相位隔离）。off 档此调用为空操作。
-    _MET.checkpoint('open')
+    _MET.checkpoint("open")
     # OCR 会话提前到校准前启动：worker 线程内构建引擎，与校准并行重叠；
     # 引擎就绪前 emit 自动走 host 回退，语义不变。
     try:
@@ -106,36 +108,38 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None,
         # 的 reader（get_batch 随机访问无消费状态，免二次打开/解码器悬挂）。
         return lane.fallback(res, ocr_session, ocr_engines, vr)
     res.bin_thresh = _th
-    lane.after_calibrate(_th, ocr_session)   # F-4：阈值即时回写等收尾装配
+    lane.after_calibrate(_th, ocr_session)  # F-4：阈值即时回写等收尾装配
     if spec.prof_end is not None:
         # 键统一为 calib_total（旧 GPU 路径的 gpu_calib_total 与其映射
         # 同一指标 pipeline.calibrate——双键是两驱动各自调用点的历史
         # 残留，P1 合一后单调用点单键）
-        spec.prof_end('producer', 'calib_total', _t_calib)
-    _MET.checkpoint('calibrate')
+        spec.prof_end("producer", "calib_total", _t_calib)
+    _MET.checkpoint("calibrate")
 
     # ── 帧流消费（宿主=线程内生成器；GPU=生产者线程+队列包成生成器）──
     from .._helpers import _decode_progress_pct
+
     machine = SegmentStateMachine(
-        frames, C=spec.C,
+        frames,
+        C=spec.C,
         on_emit=lambda seg, rep, frac: lane.emit(seg, rep, frac),
         on_similar=lane.similar,
         on_cancel=spec.cancel,
         on_progress=lambda k, frac: spec.progress(
-            f'[{spec.backend_label()}] {lane.progress_verb}: '
-            f'{k}/{len(frames)}',
-            _decode_progress_pct(frac)),
-        debug_tag=lane.debug_tag)
+            f"[{spec.backend_label()}] {lane.progress_verb}: {k}/{len(frames)}",
+            _decode_progress_pct(frac),
+        ),
+        debug_tag=lane.debug_tag,
+    )
     segs: list = []
     t0 = time.perf_counter()
     try:
         k = 0
-        for fi, sharp, feed_kwargs in lane.frame_items(
-                spec, vr, frames, ocr_session):
+        for fi, sharp, feed_kwargs in lane.frame_items(spec, vr, frames, ocr_session):
             _t_feed = time.perf_counter()
             machine.feed(k, fi, sharp, **feed_kwargs)
             if spec.prof_end is not None:
-                spec.prof_end('producer', 'consume_feed', _t_feed)
+                spec.prof_end("producer", "consume_feed", _t_feed)
             k += 1
         lane.after_stream()
         machine.finish()
@@ -143,15 +147,15 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None,
     finally:
         lane.stop_consume()
         _t_consume_end = time.perf_counter()
-        res.timing['decode'] = _t_consume_end - t0
-        _MET.checkpoint('decode')
+        res.timing["decode"] = _t_consume_end - t0
+        _MET.checkpoint("decode")
         if spec.prof_end is not None:
-            spec.prof_end('producer', 'consumer_total', t0)
+            spec.prof_end("producer", "consumer_total", t0)
         try:
             ocr_session.finish()
         except BaseException:
             logger.debug("ocr_session.finish 清理忽略异常", exc_info=True)
-        res.timing['ocr_tail'] = time.perf_counter() - _t_consume_end
+        res.timing["ocr_tail"] = time.perf_counter() - _t_consume_end
         # fork 遥测穿透（2026-09-17）：close 前取快照（原子计数器，此后
         # 解码器将销毁）；非 hybrid 解码器方法缺席 → 保持 None。
         _fs = getattr(vr, "hybrid_stats", None)
@@ -164,14 +168,16 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None,
             # CU 臂启动竞态冻结发生过且已被自愈重掷（fork 侧为统计根治，
             # 非消除竞态）。报告 hybrid 段全量穿透此值；真值生产中计数
             # 持续增长时按 fork tools/ 取证链续钻（DEPENDENCIES decord 节）。
-            _stall = int((res.fork_stats or {}).get('gpu_arm_stall') or 0)
+            _stall = int((res.fork_stats or {}).get("gpu_arm_stall") or 0)
             if _stall:
                 logger.warning(
-                    'decord hybrid GPU 臂冻结自愈触发 %d 次（gpu_arm_stall；'
-                    'nvcuvid 启动竞态已自愈，计数持续增长请按 fork 取证链'
-                    '续钻）', _stall)
+                    "decord hybrid GPU 臂冻结自愈触发 %d 次（gpu_arm_stall；"
+                    "nvcuvid 启动竞态已自愈，计数持续增长请按 fork 取证链"
+                    "续钻）",
+                    _stall,
+                )
         try:
-            vr.close()   # hybrid 探针/资源释放：显式停止生产者线程
+            vr.close()  # hybrid 探针/资源释放：显式停止生产者线程
         except Exception:
             pass  # 清理路径：close 失败无需上抛（资源由进程回收）
         lane.release()
@@ -179,10 +185,10 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None,
         # C4：补"OCR worker 失败"上下文并保留原始异常链
         raise RuntimeError(f"OCR worker 失败: {ocr_err[0]!r}") from ocr_err[0]
     # PI-15：逐段计数一律在此一次性上报（run 内不再逐段调 Python）
-    _MET.counter('segment.segments', len(segs))
+    _MET.counter("segment.segments", len(segs))
     lane.report_counters()
-    res.timing['ocr'] = ocr_wall[0]
-    _MET.checkpoint('ocr')
+    res.timing["ocr"] = ocr_wall[0]
+    _MET.checkpoint("ocr")
     res.frames = frames
     res.segs = segs
     res.n_segments = len(segs)

@@ -103,7 +103,7 @@
   evidence: log 2026-09-08 decord-0.8.1；DEPENDENCIES decord 节
 
 - id: C-32
-  conclusion: 实现唯一出处=segmentation.py：宿主直调，GPU kernel 逐位镜像、判据同文件；不做插件抽象面
+  conclusion: 实现唯一出处=video_ocr_engine/domain/segmentation.py（0.14.0 前在根级，已删）：宿主直调，GPU kernel（_gpu_kernels.py）逐位镜像、判据同文件；不做插件抽象面
   status: active
   premises: 0.11.0；两侧行为由真值用例逐位守护
   revisit: 真实 GPU 侧插件需求出现

@@ -35,7 +35,26 @@
   mechanism: ci
 - rule: 探针的打桩点必须经 tools/_probe_hooks.py 的 POINTS 表取点，不得直接 import 产品私有符号——重构后只改该表，探针不动
   mechanism: ci
-  # 执行体 = tools/_audit_ext.py [23] probe_hooks_resolve；POINTS 选点原则见该文件头
+  # 执行体 = tools/_audit_ext.py probe_hooks_resolve（按名引用，编号会重排）；POINTS 选点原则见该文件头
 - rule: 新增代码不得引用六个废弃根模块 shim（engine_config/gpu_setup/ocr_native/ocr_trt/segmentation/video_utils）——存量 45 处已迁包内路径，白名单只留两个冻结 shim 可导入性的契约测试；0.14.0 删除时改的就是这两个文件
   mechanism: ci
-  # 执行体 = tools/_audit_ext.py [22] no_deprecated_shim_usage；迁移表 docs/MIGRATION.md §1
+  # 执行体 = tools/_audit_ext.py no_deprecated_shim_usage（按名引用）；迁移表 docs/MIGRATION.md §1
+- rule: 代码风格单一执行面——formatter（双引号、line-length 100）+ lint 精选集 E4/E7/E9/F 不扩；% 格式化与长中文注释行保留（E501/UP 不启用）；docstring=单行中文摘要+可选解释段；命名 snake_case/UPPER_CASE/PascalCase
+  mechanism: ci
+  # 执行体 = CI ruff check + ruff format --check（政策成文于 pyproject [tool.ruff]）。
+  # 2026-10-10 风格轮一次性 format 归位（42 文件，金标复验零行为变更）；tools/tests 不在面内。
+- rule: 两级合规——日常改动 --since 快检；发版/依赖迁移/隔周跑全量（纪律审计+index 审计+渲染一致性，后三者一个入口）
+  mechanism: script
+  # 执行体 = tools/_probe_discipline_audit.py（--since HEAD 快检 / 全量；render --check 已折入审计项 render_consistency）
+- rule: 大文档禁止无 offset 整读——>16KB 的 md 先 --toc/--find/单章定位（误读 PERFORMANCE 一次 ≈ 9 倍注入成本）
+  mechanism: hook
+  # 执行体 = .zcode/config.json PreToolUse(Read) → tools/_hook_guard_read.py（拦截并指路 _doc_section.py；
+  #   带 offset/limit 分段读放行；knowledge/conclusions.md 豁免=本就设计为整读）。结构性前提=大文档必须可分章
+  #   （_doc_guards.big_doc_section_violations，pytest + 审计同源）。_doc_section 已覆盖全部治理文档+log 单篇。
+- rule: 发版清扫——bump 版本时列出前提钉版落后/触发命中的结论清单，逐条复核后翻状态（铁律 9 脚本化）
+  mechanism: script
+  # 执行体 = tools/conclusions_sweep.py（钉版类别按上下文词判定，只列清单不自动翻状态；--strict 供发版钩子）
+- rule: 两仓版本口径一致——DEPENDENCIES.md 的 decord 行必须含本机实际安装的 decord 版本
+  mechanism: ci
+  # 执行体 = tools/_audit_ext.py decord_pin（import decord 取 __version__；CI 无 decord 时按环境事实跳过）
+

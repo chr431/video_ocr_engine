@@ -4,7 +4,9 @@ _ocr_batch_size / _ndarray_device_ptr / 进度映射 / _read_fps_from_vr。
 （S2：_otsu_from_hist/_otsu_median_threshold/_gray_mean_abs_diff 已删——
 前两者是转发壳，实现唯一出处 segmentation；后者全仓零产品调用点。）
 """
+
 from video_ocr_engine.config import constants as config
+
 
 def _ocr_batch_size() -> int:
     return max(1, config.env_int(config.OCR_BATCH_ENV, config.OCR_BATCH_SIZE))
@@ -29,6 +31,7 @@ def _ndarray_device_ptr(nd):
     返回 (base_ptr:int, shape:tuple[int,...])。调用方必须保持 nd 存活。
     """
     import ctypes
+
     cap = nd.to_dlpack()
     _get = ctypes.pythonapi.PyCapsule_GetPointer
     _get.restype = ctypes.c_void_p
@@ -36,19 +39,21 @@ def _ndarray_device_ptr(nd):
     ptr = _get(cap, b"dltensor")
 
     class _DLDevice(ctypes.Structure):
-        _fields_ = [("device_type", ctypes.c_int32),
-                    ("device_id", ctypes.c_int32)]
+        _fields_ = [("device_type", ctypes.c_int32), ("device_id", ctypes.c_int32)]
 
     class _DLDataType(ctypes.Structure):
-        _fields_ = [("code", ctypes.c_uint8), ("bits", ctypes.c_uint8),
-                    ("lanes", ctypes.c_uint16)]
+        _fields_ = [("code", ctypes.c_uint8), ("bits", ctypes.c_uint8), ("lanes", ctypes.c_uint16)]
 
     class _DLTensor(ctypes.Structure):
-        _fields_ = [("data", ctypes.c_void_p), ("device", _DLDevice),
-                    ("ndim", ctypes.c_int32), ("dtype", _DLDataType),
-                    ("shape", ctypes.POINTER(ctypes.c_int64)),
-                    ("strides", ctypes.POINTER(ctypes.c_int64)),
-                    ("byte_offset", ctypes.c_uint64)]
+        _fields_ = [
+            ("data", ctypes.c_void_p),
+            ("device", _DLDevice),
+            ("ndim", ctypes.c_int32),
+            ("dtype", _DLDataType),
+            ("shape", ctypes.POINTER(ctypes.c_int64)),
+            ("strides", ctypes.POINTER(ctypes.c_int64)),
+            ("byte_offset", ctypes.c_uint64),
+        ]
 
     t = ctypes.cast(ptr, ctypes.POINTER(_DLTensor)).contents
     shape = tuple(int(t.shape[i]) for i in range(t.ndim))
@@ -60,7 +65,7 @@ def _read_fps_from_vr(vr):
 
     都拿不到（或均为非正）返回 None，调用方按 DEFAULT_FPS_FALLBACK 兜底。
     """
-    for m in ('get_avg_fps', 'get_fps'):
+    for m in ("get_avg_fps", "get_fps"):
         fn = getattr(vr, m, None)
         if fn is None:
             continue

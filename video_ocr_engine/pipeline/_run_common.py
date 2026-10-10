@@ -4,6 +4,7 @@
 空区间守卫/seek/hybrid_begin）；契约化后字段同名，抽到此共享。
 teardown 相位差异实质（宿主无生产者线程/设备缓冲），保留各自实现。
 """
+
 from __future__ import annotations
 
 import logging
@@ -25,8 +26,7 @@ def ensure_fps(spec, vr) -> float:
 def compute_frames(spec, total: int) -> list:
     """帧区间推导 + 超界截断告警（A4：静默截断至少要能被发现）。"""
     if (spec.frame_end or 0) > total:
-        logger.warning('frame_end=%s 超出视频总帧数 %d，按片尾截断',
-                       spec.frame_end, total)
+        logger.warning("frame_end=%s 超出视频总帧数 %d，按片尾截断", spec.frame_end, total)
     end = min(spec.frame_end or total, total)
     return list(range(spec.frame_start, end, spec.sample_stride))
 

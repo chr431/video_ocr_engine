@@ -10,7 +10,7 @@
 | numpy | 2.x | PyPI | 预处理/信号计算，纯 numpy 无 scipy |
 | openvino | **2026.3.x（pyproject 上界 `<2026.4`）**；本机 2026.3.1 | PyPI | **CPU OCR 默认后端**（2026-09-14 起）：模型级 2.1× 于 ORT + argmax 全一致（log 2026-09-14-OpenVINO模型级A-B/集成轮）；wheel ~76MB，仅 CPU 插件。**冻结分发可剪至 73MB**（删 NPU/GPU/异构前端等，配方与等价性实证见 log 2026-09-14-OpenVINO冻结瘦身）。⚠️ **2026.4.0 发布当天（2026-09-28）在 windows runner `_infer` 原生崩溃**（同版本上午绿/下午红 = VM 异构或间歇崩溃；本机未评估）——上界钉 2026.3 系，换代评估按 C-48 复评触发另起一轮 |
 | psutil | 6+ | PyPI | 物理核数探测 / RSS 采样（缺失时降级） |
-| decord | **0.8.5（已发布 [v0.8.5](https://github.com/chr431/decord/releases/tag/v0.8.5)；本机已装回 cp313 wheel，master 领先见下节）** | chr431/decord release | NVDEC 硬解 + CPU 软解；**PyPI 官方版不支持** `next_roi` / ROI-first / GPU gray / YUV420 / `sample_stride` 等差步长快速路径；fork 自 0.8.2 起发布 cp39–cp314 全版本 wheel，`pip install <wheel>` 即用 |
+| decord | **0.9.2 本机（本地构建部署，审计项 decord_pin 守护此口径）；已发布 wheel 至 [v0.8.5](https://github.com/chr431/decord/releases/tag/v0.8.5)，master 领先见下节** | chr431/decord release | NVDEC 硬解 + CPU 软解；**PyPI 官方版不支持** `next_roi` / ROI-first / GPU gray / YUV420 / `sample_stride` 等差步长快速路径；fork 自 0.8.2 起发布 cp39–cp314 全版本 wheel，`pip install <wheel>` 即用 |
 | cuda-python | 13.x | PyPI | TRT 执行 + decord GPU DLL 注册 |
 | tensorrt_*_bindings | 11.x | PyPI | TensorRT thin binding（~1MB）；运行 DLL 从系统 PATH 加载 |
 
@@ -22,8 +22,8 @@
 | 包 | 当前版本 | 说明 |
 | --- | --- | --- |
 | pytest | 8+/9+ | 测试 |
-| ruff | 0.16.6 | 精选集 E4/E7/E9/F（pyproject `[tool.ruff.lint]`）；产品代码零违规基线；风格类规则不启用（% 格式化与长中文注释是本仓风格） |
-| mypy | 2.3.1 | **domain/ 严格试点**（`files` + `follow_imports=skip` 边界）；无 stubs 第三方（decord/cuda/psutil/tensorrt）按 Any 容忍 |
+| ruff | 0.16.6 | lint 精选集 E4/E7/E9/F（pyproject `[tool.ruff.lint]`）零违规基线；**风格执行面 = `ruff format`**（双引号、line-length 100，2026-10-10 风格轮一次性归位 + CI `--check`），% 格式化与长中文注释行保留（UP/E501 仍不启用） |
+| mypy | 2.3.1 | 检查面 = domain/pipeline/decode/gpu + `_gpu_kernels.py`（pyproject `files`，2026-10-10 起以 pyproject 为唯一描述源）；`follow_imports=skip` 边界；无 stubs 第三方（decord/cuda/psutil/tensorrt）按 Any 容忍 |
 
 ## GPU 加速（运行时，不打包）
 

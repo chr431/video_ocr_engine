@@ -9,6 +9,7 @@ t1 复用已算好的 t0+elapsed，不另取时钟。两档全关时 end() 只�
 每次 run 新建一个实例（B1 同类重置：profile/totals/maxes 均为 run 内
 状态）；diag 的进展心跳（挂死时可归因到相位）挂在 armed 判定下。
 """
+
 from __future__ import annotations
 
 import threading
@@ -16,16 +17,21 @@ import time
 from typing import Any
 
 from .metrics import (
-    PROFILE_GAUGES, PROFILE_SPANS, PROFILE_TOTALS,
-    PROFILE_TOTALS_HIST, PROFILE_TOTALS_MAX, PROFILE_TOTALS_N,
+    PROFILE_GAUGES,
+    PROFILE_SPANS,
+    PROFILE_TOTALS,
+    PROFILE_TOTALS_HIST,
+    PROFILE_TOTALS_MAX,
+    PROFILE_TOTALS_N,
 )
 
 
 class ProfSpine:
     """单次 run 的计时脊柱：profile 字典 + 注册指标 + trace/diag 心跳。"""
 
-    def __init__(self, profile_enabled: bool, metrics: Any,
-                 trace: Any = None, diag: Any = None) -> None:
+    def __init__(
+        self, profile_enabled: bool, metrics: Any, trace: Any = None, diag: Any = None
+    ) -> None:
         self._profile_enabled = profile_enabled
         self._metrics = metrics
         self._trace = trace
@@ -45,7 +51,7 @@ class ProfSpine:
             return
         elapsed = time.perf_counter() - t0
         if prof:
-            assert self._lock is not None   # _profile_enabled 与锁同构造
+            assert self._lock is not None  # _profile_enabled 与锁同构造
             with self._lock:
                 d = self.profile.setdefault(group, {})
                 d[key] = d.get(key, 0.0) + elapsed
@@ -59,8 +65,7 @@ class ProfSpine:
                 # 进展心跳：挂死时可归因到相位
                 self._diag.tick("%s.%s" % (group, key), "%.4fs" % elapsed)
 
-    def _metric_from_profile(self, group: str, key: str,
-                             elapsed: float) -> str | None:
+    def _metric_from_profile(self, group: str, key: str, elapsed: float) -> str | None:
         """(group, key) → 注册指标名（映射表在 domain/metrics.py，单一出处）。
 
         返回主指标名（P4 trace 用）；未映射键返回 None。
@@ -68,11 +73,11 @@ class ProfSpine:
         m = self._metrics
         name = PROFILE_GAUGES.get((group, key))
         if name is not None:
-            m.gauge(name, elapsed)          # 单值量：末次即本 run 的 engine_init
+            m.gauge(name, elapsed)  # 单值量：末次即本 run 的 engine_init
             return name
         name = PROFILE_SPANS.get((group, key))
         if name is not None:
-            m.record_span(name, elapsed)    # 有界相位：std 档逐次采样
+            m.record_span(name, elapsed)  # 有界相位：std 档逐次采样
             return name
         name = PROFILE_TOTALS.get((group, key))
         if name is not None:
@@ -86,7 +91,7 @@ class ProfSpine:
                 if elapsed > self.maxes.get(_mx, 0.0):
                     self.maxes[_mx] = elapsed
             if m.detailed:
-                m.record_span(name, elapsed)   # full 档另留逐次样本
+                m.record_span(name, elapsed)  # full 档另留逐次样本
                 # W1：分布形状（full 档专属；每事件 0.165µs，std 预算付不起）
                 _h = PROFILE_TOTALS_HIST.get((group, key))
                 if _h is not None:

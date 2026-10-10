@@ -23,7 +23,7 @@
 | C-15 | **OCR 输入侧参数都不是杠杆**。pad 下限 224 保持；预处理六变体仅一非负；翻转系实例级判决 | v6_small+racelog | pad/预处理架构变更；换模型或字体/ROI 形态 | log 09-12-准确项 §4.1 |
 | C-16 | OCR 裁切余量 10% 优于 0%；裁切提准确率（旧"守卫"前提错） | — | ROI 形态 / 分辨率大变 | DECISIONS 第四轮 |
 | C-31 | decord 0.8.1：av1 慢系 NT=4 假象；修=钳[8,24]：CPU −50%、e2e −45% | wheel 0.8.2 | fork/驱动/FFmpeg 换代 | log 2026-09-08 decord-0.8.1；DEPENDENCIES decord 节 |
-| C-32 | 实现唯一出处=segmentation.py：宿主直调，GPU kernel 逐位镜像、判据同文件；不做插件抽象面 | 0.11.0；两侧行为由真值用例逐位守护 | 真实 GPU 侧插件需求出现 | log 2026-09-09 引擎四方向 |
+| C-32 | 实现唯一出处=video_ocr_engine/domain/segmentation.py（0.14.0 前在根级，已删）：宿主直调，GPU kernel（_gpu_kernels.py）逐位镜像、判据同文件；不做插件抽象面 | 0.11.0；两侧行为由真值用例逐位守护 | 真实 GPU 侧插件需求出现 | log 2026-09-09 引擎四方向 |
 | C-36 | 冷启动=cuda.core 0.22+NVRTC 0.09+TRT 0.4s；warmup 移出首 extract −33% | 热池；首 extract | 换后端/引擎格式 | log §3；test_warmup |
 | C-37 | 消费端提交可批量化：D2H 异步+本流同步 −5.19%、keep_crops 并批窗 16 −2.45%；按宽分组无收益 | 本机 4060；交错 A/B | 段密度翻倍 / ROI 形态翻转 | log §4-§6 |
 | C-38 | **合并判定稠密簇门**（win3≥SEG_C，默认开）；段数 +1.2~3.6% | 六片真值；宿主/GPU 逐位一致 | 大字号字体 / OCR-bound 部署 | log 09-12-准确项 §3 |

@@ -6,6 +6,7 @@
 H2D）与部分释放（_gpu_release_partial）。编排在 pipeline/gpu_backend.py；
 池机制在 gpu/pools.py；可用性探测留在 gpu/device.py（§10.4 patch 点）。
 """
+
 import logging
 import time
 from dataclasses import dataclass
@@ -15,7 +16,9 @@ import numpy as np
 
 from video_ocr_engine.config import constants as config
 from video_ocr_engine.domain.segmentation import (  # noqa: F401 —— 等价性由金标向量守护（C-32）
-    _otsu_from_hist, otsu_median_threshold)
+    _otsu_from_hist,
+    otsu_median_threshold,
+)
 from .frame_ref import DeviceRef
 from .pools import _CpuFrameRef, _DevBatchPool
 from .._helpers import _ndarray_device_ptr
@@ -59,9 +62,22 @@ class _GpuRunCtx:
 
     字段由 _gpu_prepare_calibration 填充，帧流生成器与消费循环只读/推进；
     _gpu_release_partial 负责统一释放。"""
-    __slots__ = ("analyzer", "pool", "y_pool", "calib_owner", "calib_nds",
-                 "calib_base", "calib_gray", "src_h", "src_w", "fnb",
-                 "prev_holder", "prev_ptr", "calib_n")
+
+    __slots__ = (
+        "analyzer",
+        "pool",
+        "y_pool",
+        "calib_owner",
+        "calib_nds",
+        "calib_base",
+        "calib_gray",
+        "src_h",
+        "src_w",
+        "fnb",
+        "prev_holder",
+        "prev_ptr",
+        "calib_n",
+    )
 
     def __init__(self) -> None:
         # 惰性协作者：_gpu_prepare_calibration 填充、帧流只读（生命周期
@@ -95,10 +111,10 @@ def _gpu_fill_prev(analyzer, prev_buf, base, B, fnb, first_src) -> None:
     批耗时 ~25ms，这笔开销占在引擎内 hybrid 增益流失（2601→2132fps）
     的可归因部分。"""
     from cuda.bindings import runtime as cudart
+
     _d2d = cudart.cudaMemcpyKind.cudaMemcpyDeviceToDevice
     if B > 1:
-        cudart.cudaMemcpyAsync(
-            prev_buf + fnb, base, (B - 1) * fnb, _d2d, analyzer._stream)
+        cudart.cudaMemcpyAsync(prev_buf + fnb, base, (B - 1) * fnb, _d2d, analyzer._stream)
     cudart.cudaMemcpyAsync(prev_buf, first_src, fnb, _d2d, analyzer._stream)
 
 
@@ -126,9 +142,9 @@ def _gpu_release_partial(ctx: _GpuRunCtx) -> None:
         ctx.analyzer = None
 
 
-def _gpu_prepare_calibration(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list, *,
-                             on_gpu: bool, yuv: bool,
-                             roi: tuple) -> "tuple[bool, int]":
+def _gpu_prepare_calibration(
+    hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list, *, on_gpu: bool, yuv: bool, roi: tuple
+) -> "tuple[bool, int]":
     """GPU 管线校准：解码校准帧 + 逐帧直方图 Otsu（阈值取中位数）。
 
     填充 ctx（analyzer/pool/calib_owner/calib_nds/calib_base/calib_gray/
@@ -137,6 +153,7 @@ def _gpu_prepare_calibration(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: lis
     """
     from cuda.bindings import runtime as cudart
     from video_ocr_engine.ocr.trt import GpuFrameAnalyzer
+
     ctx.analyzer = analyzer = GpuFrameAnalyzer()
     calib_n = ctx.calib_n = min(config.SEG_CALIB_FRAMES, len(frames))
     if on_gpu:
@@ -152,8 +169,8 @@ def _gpu_prepare_calibration(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: lis
             ctx.src_h = calib_shape[1] * 2 // 3
             ctx.src_w = calib_shape[2]
             ctx.calib_gray = analyzer.extract_luma(
-                calib_base, calib_n, ctx.src_h, ctx.src_w,
-                limited=hooks.limited)
+                calib_base, calib_n, ctx.src_h, ctx.src_w, limited=hooks.limited
+            )
         else:
             if len(calib_shape) != 4 or calib_shape[-1] != 1:
                 # 灰度帧非 4D 单通道（部分 decord fork 输出 (B,H,W)）：GPU
@@ -162,8 +179,8 @@ def _gpu_prepare_calibration(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: lis
             ctx.src_h, ctx.src_w = calib_shape[1], calib_shape[2]
             ctx.calib_gray = calib_base
         ctx.fnb = ctx.src_h * ctx.src_w
-        ctx.prev_holder = ctx.calib_nds      # 保住前一 decord NDArray（防解码池复用）
-        ctx.prev_ptr = calib_base            # 灰色模式：上一批/校准末帧 device 指针
+        ctx.prev_holder = ctx.calib_nds  # 保住前一 decord NDArray（防解码池复用）
+        ctx.prev_ptr = calib_base  # 灰色模式：上一批/校准末帧 device 指针
     else:
         # ── CPU 解码（P1-3）：校准批 asnumpy → 宿主灰度 → H2D ──
         ctx.calib_nds = vr.get_batch(frames[:calib_n], roi=roi)
@@ -178,7 +195,7 @@ def _gpu_prepare_calibration(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: lis
                 return False, 0
             ctx.src_h, ctx.src_w = crops.shape[1], crops.shape[2]
         ctx.fnb = ctx.src_h * ctx.src_w
-        assert hooks.batch_luma is not None   # CPU 解码路径契约（DevHooks）
+        assert hooks.batch_luma is not None  # CPU 解码路径契约（DevHooks）
         g = np.ascontiguousarray(hooks.batch_luma(crops))
         if g.shape != (calib_n, ctx.src_h, ctx.src_w):
             return False, 0
@@ -189,15 +206,17 @@ def _gpu_prepare_calibration(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: lis
         # 缓冲），异步错误延迟到 TRT enqueue 才爆（invalid argument），并
         # 污染 analyzer 后续结果（段数漂移）。默认 64 ≥ 50 从未触发。
         # （2026-09-09 sweep batch=32 复现后定位，见 docs/log 同日叙事。）
-        _pool = _DevBatchPool(
-            max(config.GPU_PIPELINE_DECODE_BATCH, calib_n) * ctx.fnb)
+        _pool = _DevBatchPool(max(config.GPU_PIPELINE_DECODE_BATCH, calib_n) * ctx.fnb)
         ctx.pool = _pool
         owner = _pool.acquire(crops)
         ctx.calib_owner = owner
         cudart.cudaMemcpyAsync(
-            owner.ptr, g.ctypes.data, calib_n * ctx.fnb,
+            owner.ptr,
+            g.ctypes.data,
+            calib_n * ctx.fnb,
             cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
-            analyzer._stream)
+            analyzer._stream,
+        )
 
     # 逐帧直方图校准：与单流水线"前 50 帧 Otsu 取中位数"语义逐位一致
     # （含退化双值帧的阈值行为），D2H 仅 B×1KB 标量表，校准帧不落 RAM。
@@ -208,17 +227,15 @@ def _gpu_prepare_calibration(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: lis
     else:
         assert ctx.calib_owner is not None
         calib_gray_dev = ctx.calib_owner.ptr
-    _hist_mat = analyzer.histograms_perframe(
-        calib_gray_dev, calib_n, ctx.src_h, ctx.src_w)
-    th = otsu_median_threshold(
-        [_otsu_from_hist(_hist_mat[k]) for k in range(calib_n)])
+    _hist_mat = analyzer.histograms_perframe(calib_gray_dev, calib_n, ctx.src_h, ctx.src_w)
+    th = otsu_median_threshold([_otsu_from_hist(_hist_mat[k]) for k in range(calib_n)])
     hooks.set_bin(th)
     return True, th
 
 
-
-def _gpu_frame_stream_nvdec(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list, *,
-                            yuv: bool, roi: tuple, th: int):
+def _gpu_frame_stream_nvdec(
+    hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list, *, yuv: bool, roi: tuple, th: int
+):
     """NVDEC 设备批直通帧流：yield (frame_idx, dev, sharp, cluster)。
 
     dev 元组 gray=(nds,yptr,H,W) / yuv=(nds,nv12ptr,rows,W)；sharp/cluster
@@ -226,31 +243,31 @@ def _gpu_frame_stream_nvdec(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list
     （prev_holder 保活 decord NDArray，防解码池复用）。
     """
     from cuda.bindings import runtime as cudart
+
     DECODE_BATCH = config.GPU_PIPELINE_DECODE_BATCH
     _d2d = cudart.cudaMemcpyKind.cudaMemcpyDeviceToDevice
     limited = hooks.limited
     analyzer = ctx.analyzer
-    assert analyzer is not None   # 生命周期：prepare_calibration 已填
+    assert analyzer is not None  # 生命周期：prepare_calibration 已填
 
     def _analyze_batch(gray_base, prev_single, B, H, W):
         fnb = H * W
-        prev_buf = analyzer._ensure_prev(
-            max(B, DECODE_BATCH) * fnb)
+        prev_buf = analyzer._ensure_prev(max(B, DECODE_BATCH) * fnb)
         _gpu_fill_prev(analyzer, prev_buf, gray_base, B, fnb, prev_single)
-        return analyzer.analyze_batch(
-            gray_base, prev_buf, B, H, W, th), fnb
+        return analyzer.analyze_batch(gray_base, prev_buf, B, H, W, th), fnb
 
     # ── 校准帧整批分析（yuv 已在外部提取 Y → calib_gray）──
     B = ctx.calib_n
-    sums, fnb = _analyze_batch(ctx.calib_gray, ctx.calib_gray, B,
-                               ctx.src_h, ctx.src_w)
+    sums, fnb = _analyze_batch(ctx.calib_gray, ctx.calib_gray, B, ctx.src_h, ctx.src_w)
     rows = ctx.src_h + (ctx.src_h + 1) // 2
     for k in range(B):
         cur = ctx.calib_base + k * (rows * ctx.src_w if yuv else fnb)
-        yield (frames[k],
-               DeviceRef(ptr=cur, h=(rows if yuv else ctx.src_h),
-                         w=ctx.src_w, owner=ctx.calib_nds),
-               float(sums[k, 0]), float(sums[k, 1]))
+        yield (
+            frames[k],
+            DeviceRef(ptr=cur, h=(rows if yuv else ctx.src_h), w=ctx.src_w, owner=ctx.calib_nds),
+            float(sums[k, 0]),
+            float(sums[k, 1]),
+        )
         ctx.prev_holder = ctx.calib_nds
         ctx.prev_ptr = cur
     # yuv：末帧 Y 存入单帧缓冲（extract_luma 复用主缓冲会覆盖，
@@ -261,21 +278,20 @@ def _gpu_frame_stream_nvdec(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list
     if yuv:
         prev_front = analyzer._ensure_prev(fnb)
         cudart.cudaMemcpyAsync(
-            prev_front, ctx.calib_gray + (ctx.calib_n - 1) * fnb, fnb,
-            _d2d, analyzer._stream)
+            prev_front, ctx.calib_gray + (ctx.calib_n - 1) * fnb, fnb, _d2d, analyzer._stream
+        )
         have_prev_front = True
 
     # chunk 粒度流水发射（decord get_batch_stream）：后台预取
     # 下一批，解码完成即交付 —— 消费（extract_luma/analyze）与
     # 解码重叠。GPU_PIPELINE_STREAM 默认关（实测零收益，C-10）。
-    _use_stream = (config.env_bool(config.GPU_PIPELINE_STREAM_ENV,
-                                   default=False)
-                   and hasattr(vr, 'get_batch_stream'))
+    _use_stream = config.env_bool(config.GPU_PIPELINE_STREAM_ENV, default=False) and hasattr(
+        vr, "get_batch_stream"
+    )
 
     def _batch_iter():
         if _use_stream:
-            for s0, nds in vr.get_batch_stream(
-                    frames[ctx.calib_n:], roi=roi, batch=DECODE_BATCH):
+            for s0, nds in vr.get_batch_stream(frames[ctx.calib_n :], roi=roi, batch=DECODE_BATCH):
                 yield s0, nds
             return
         # ── 层4 排空线程（GPU_PIPELINE_DRAINER，默认关，见下）──
@@ -286,8 +302,7 @@ def _gpu_frame_stream_nvdec(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list
         # next_roi 在此流启动前已结束。
         # 默认关：实测零收益（引擎税源于线程争用而非排空阻塞，与
         # C-10 流水发射同判）；留旋钮供复评。
-        _drainer_on = config.env_bool(config.GPU_PIPELINE_DRAINER_ENV,
-                                      default=False)
+        _drainer_on = config.env_bool(config.GPU_PIPELINE_DRAINER_ENV, default=False)
         bstarts = range(ctx.calib_n, len(frames), DECODE_BATCH)
         if not _drainer_on:
             for bstart in bstarts:
@@ -296,12 +311,13 @@ def _gpu_frame_stream_nvdec(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list
                 # （2026-09-10 实测 hybrid av1 2487→2264 fps，-9%；
                 # _probe_roi_decode 已证 CPU 路径两种传法等价）。
                 _t_dec = time.perf_counter()
-                nds = vr.get_batch(frames[bstart:bstart + DECODE_BATCH])
-                hooks.tick('producer', 'decode_batch', _t_dec)
+                nds = vr.get_batch(frames[bstart : bstart + DECODE_BATCH])
+                hooks.tick("producer", "decode_batch", _t_dec)
                 yield bstart, nds
             return
         import queue as _queue
         import threading as _threading
+
         _q: "_queue.Queue" = _queue.Queue(maxsize=4)
         _err: list = []
 
@@ -311,19 +327,19 @@ def _gpu_frame_stream_nvdec(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list
                     bend = min(bstart + DECODE_BATCH, len(frames))
                     _t_dec = time.perf_counter()
                     nds = vr.get_batch(frames[bstart:bend])
-                    hooks.tick('producer', 'decode_batch', _t_dec)
+                    hooks.tick("producer", "decode_batch", _t_dec)
                     _q.put((bstart, nds))
             except BaseException as e:  # noqa: BLE001
                 _err.append(e)
             finally:
                 _q.put(None)
 
-        _dt = _threading.Thread(target=_drain, daemon=True,
-                                name='voe-decode-drainer')
+        _dt = _threading.Thread(target=_drain, daemon=True, name="voe-decode-drainer")
         _dt.start()
         # v8 线程账本登记：设备侧排放排空线程
         from video_ocr_engine.domain.resources import register_thread
-        register_thread('drain', _dt)
+
+        register_thread("drain", _dt)
         while True:
             item = _q.get()
             if item is None:
@@ -338,46 +354,48 @@ def _gpu_frame_stream_nvdec(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list
         B = int(bend - bstart)
         if yuv:
             if len(shape) != 3:
-                raise RuntimeError(
-                    "GPU yuv 分段仅支持 decord yuv420 输出")
+                raise RuntimeError("GPU yuv 分段仅支持 decord yuv420 输出")
             H = shape[1] * 2 // 3
             W = shape[2]
             rows = H + (H + 1) // 2
             # extract 覆盖 _luma 主缓冲 → 先取上一批末帧副本
-            gray_base = analyzer.extract_luma(
-                base, B, H, W, limited)
+            gray_base = analyzer.extract_luma(base, B, H, W, limited)
             prev_s = prev_front if have_prev_front else gray_base
         else:
             if len(shape) != 4 or shape[-1] != 1:
-                raise RuntimeError(
-                    "GPU 分段仅支持 decord gray 输出")
+                raise RuntimeError("GPU 分段仅支持 decord gray 输出")
             H, W = shape[1], shape[2]
             rows = H
             gray_base = base
             prev_s = ctx.prev_ptr
         _t_an = time.perf_counter()
         sums, fnb = _analyze_batch(gray_base, prev_s, B, H, W)
-        hooks.tick('producer', 'stream_analyze', _t_an)
+        hooks.tick("producer", "stream_analyze", _t_an)
         if yuv and have_prev_front:
             cudart.cudaMemcpyAsync(
-                prev_front, gray_base + (B - 1) * fnb, fnb,
-                _d2d, analyzer._stream)
+                prev_front, gray_base + (B - 1) * fnb, fnb, _d2d, analyzer._stream
+            )
             have_prev_front = True
         # stream 模式 bstart 即首帧号；seq 模式 bstart 是
         # frames 下标 → 统一转帧号
-        f0 = (bstart if _use_stream else frames[bstart])
+        f0 = bstart if _use_stream else frames[bstart]
         for k in range(B):
             cur = base + k * (rows * W if yuv else fnb)
-            yield (f0 + k, DeviceRef(ptr=cur, h=rows, w=W, owner=nds),
-                   float(sums[k, 0]), float(sums[k, 1]))
+            yield (
+                f0 + k,
+                DeviceRef(ptr=cur, h=rows, w=W, owner=nds),
+                float(sums[k, 0]),
+                float(sums[k, 1]),
+            )
             ctx.prev_holder = nds
             ctx.prev_ptr = cur
         if yuv:
             have_prev_front = True
 
 
-def _gpu_frame_stream_cpu(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list, *,
-                          yuv: bool, roi: tuple, th: int):
+def _gpu_frame_stream_cpu(
+    hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list, *, yuv: bool, roi: tuple, th: int
+):
     """CPU 解码（P1-3）帧流：get_batch → 宿主灰度 → H2D → analyze。
 
     每批缓冲从池取（引用归零归还）；上一批末帧作本批 analyze
@@ -385,12 +403,13 @@ def _gpu_frame_stream_cpu(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list, 
     同步返回后本批帧指针即可交付（H2D/kernel 均已完成）。
     """
     from cuda.bindings import runtime as cudart
+
     DECODE_BATCH = config.GPU_PIPELINE_DECODE_BATCH
     _d2d = cudart.cudaMemcpyKind.cudaMemcpyDeviceToDevice
     _h2d = cudart.cudaMemcpyKind.cudaMemcpyHostToDevice
     fnb = ctx.fnb
     analyzer = ctx.analyzer
-    assert analyzer is not None          # 生命周期：prepare_calibration 已填
+    assert analyzer is not None  # 生命周期：prepare_calibration 已填
     assert ctx.pool is not None
     pool = ctx.pool
     assert hooks.batch_luma is not None  # CPU 解码路径契约（DevHooks）
@@ -398,19 +417,20 @@ def _gpu_frame_stream_cpu(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list, 
     assert calib_owner is not None
     calib_n = ctx.calib_n
     src_h, src_w = ctx.src_h, ctx.src_w
-    prev_buf = analyzer._ensure_prev(
-        max(calib_n, DECODE_BATCH) * fnb)
+    prev_buf = analyzer._ensure_prev(max(calib_n, DECODE_BATCH) * fnb)
     # ── 校准帧整批分析（校准批已在外部 H2D → calib_owner）──
-    _gpu_fill_prev(analyzer, prev_buf, calib_owner.ptr,
-                   calib_n, fnb, calib_owner.ptr)
-    sums = analyzer.analyze_batch(
-        calib_owner.ptr, prev_buf, calib_n, src_h, src_w, th)
+    _gpu_fill_prev(analyzer, prev_buf, calib_owner.ptr, calib_n, fnb, calib_owner.ptr)
+    sums = analyzer.analyze_batch(calib_owner.ptr, prev_buf, calib_n, src_h, src_w, th)
     for k in range(calib_n):
-        yield (frames[k],
-               DeviceRef(ptr=calib_owner.ptr + k * fnb, h=src_h,
-                         w=src_w, owner=_CpuFrameRef(calib_owner, k)),
-               float(sums[k, 0]), float(sums[k, 1]))
-    prev_owner = calib_owner       # 上一批缓冲（fill_prev 读取期间保活）
+        yield (
+            frames[k],
+            DeviceRef(
+                ptr=calib_owner.ptr + k * fnb, h=src_h, w=src_w, owner=_CpuFrameRef(calib_owner, k)
+            ),
+            float(sums[k, 0]),
+            float(sums[k, 1]),
+        )
+    prev_owner = calib_owner  # 上一批缓冲（fill_prev 读取期间保活）
     prev_ptr = calib_owner.ptr + (calib_n - 1) * fnb
     for bstart in range(calib_n, len(frames), DECODE_BATCH):
         bend = min(bstart + DECODE_BATCH, len(frames))
@@ -421,38 +441,32 @@ def _gpu_frame_stream_cpu(hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list, 
         _t_dec = time.perf_counter()
         nds = vr.get_batch(frames[bstart:bend], roi=roi)
         crops = nds.asnumpy()
-        hooks.tick('producer', 'decode_batch', _t_dec)
+        hooks.tick("producer", "decode_batch", _t_dec)
         if yuv:
             if crops.ndim != 3:
-                raise RuntimeError(
-                    "GPU yuv 分段仅支持 decord yuv420 输出")
+                raise RuntimeError("GPU yuv 分段仅支持 decord yuv420 输出")
         else:
             if crops.ndim != 4 or crops.shape[-1] != 1:
-                raise RuntimeError(
-                    "GPU 分段仅支持 decord gray 输出")
+                raise RuntimeError("GPU 分段仅支持 decord gray 输出")
         _t_gray = time.perf_counter()
         g = np.ascontiguousarray(hooks.batch_luma(crops))
-        hooks.tick('producer', 'gray_batch', _t_gray)
+        hooks.tick("producer", "gray_batch", _t_gray)
         if g.shape != (B, src_h, src_w):
-            raise RuntimeError(
-                f"GPU(CPU解码) 灰度形状不符: {g.shape} != "
-                f"{(B, src_h, src_w)}")
+            raise RuntimeError(f"GPU(CPU解码) 灰度形状不符: {g.shape} != {(B, src_h, src_w)}")
         owner = pool.acquire(crops)
-        cudart.cudaMemcpyAsync(
-            owner.ptr, g.ctypes.data, B * fnb, _h2d,
-            analyzer._stream)
+        cudart.cudaMemcpyAsync(owner.ptr, g.ctypes.data, B * fnb, _h2d, analyzer._stream)
         base = owner.ptr
-        prev_buf = analyzer._ensure_prev(
-            max(B, DECODE_BATCH) * fnb)
+        prev_buf = analyzer._ensure_prev(max(B, DECODE_BATCH) * fnb)
         _t_an = time.perf_counter()
         _gpu_fill_prev(analyzer, prev_buf, base, B, fnb, prev_ptr)
-        sums = analyzer.analyze_batch(
-            base, prev_buf, B, src_h, src_w, th)
-        hooks.tick('producer', 'stream_analyze', _t_an)
+        sums = analyzer.analyze_batch(base, prev_buf, B, src_h, src_w, th)
+        hooks.tick("producer", "stream_analyze", _t_an)
         for k in range(B):
-            yield (frames[bstart + k],
-                   DeviceRef(ptr=base + k * fnb, h=src_h, w=src_w,
-                             owner=_CpuFrameRef(owner, k)),
-                   float(sums[k, 0]), float(sums[k, 1]))
+            yield (
+                frames[bstart + k],
+                DeviceRef(ptr=base + k * fnb, h=src_h, w=src_w, owner=_CpuFrameRef(owner, k)),
+                float(sums[k, 0]),
+                float(sums[k, 1]),
+            )
         prev_owner = owner  # noqa: F841  # 保活：下批 fill_prev 读 prev_ptr（旧 owner 设备内存）期间不得回收
         prev_ptr = base + (B - 1) * fnb

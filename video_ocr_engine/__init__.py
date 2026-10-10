@@ -25,7 +25,9 @@
 # 需要 decord fork ≥v0.7.13 的透传支持（旧版忽略该 env，行为不变）。
 
 from video_ocr_engine.extractor import (  # noqa: F401
-    FieldExtractor, ExtractedSegment, ExtractionResult,
+    FieldExtractor,
+    ExtractedSegment,
+    ExtractionResult,
 )
 from video_ocr_engine import _version  # noqa: F401
 

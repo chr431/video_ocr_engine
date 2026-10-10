@@ -8,6 +8,7 @@
 
 输出对象携带 .txts / .scores（文本与置信度，供上层应用做数值解析/纠错）。
 """
+
 from __future__ import annotations
 
 import logging
@@ -37,6 +38,7 @@ _models_dir = config.models_dir
 def cpu_physical_cores() -> int:  # noqa: F401  # re-export
     """物理核数——2026-09-18 迁 config.decode_caliber（单一事实源）。"""
     from video_ocr_engine.config.decode_caliber import cpu_physical_cores as _c
+
     return _c()
 
 
@@ -61,8 +63,7 @@ class RecOut:
         self.scores = [float(score)]
 
 
-def ocr_pad_floor(variant: str, fill_width: int,
-                  pad_floor_env: "int | None" = None) -> int:
+def ocr_pad_floor(variant: str, fill_width: int, pad_floor_env: "int | None" = None) -> int:
     """OCR 输入 pad 宽度下限（**唯一出处**：批识别与 GPU 直通两条路径共用）。
 
     优先级：env `OCR_PAD_SMALL` > 用户 `fill_width` > 模型下限。
@@ -80,8 +81,9 @@ def ocr_pad_floor(variant: str, fill_width: int,
     fill_width 放在最前，而 extractor 默认就传 224 → env 旋钮其实是死的
     （README 自称排查陷阱之一）。
     """
-    _env = (pad_floor_env if pad_floor_env is not None
-            else config.env_int(config.OCR_PAD_SMALL_ENV, 0))
+    _env = (
+        pad_floor_env if pad_floor_env is not None else config.env_int(config.OCR_PAD_SMALL_ENV, 0)
+    )
     if _env > 0:
         return int(_env)
     if fill_width is not None and fill_width <= 0:
@@ -91,8 +93,7 @@ def ocr_pad_floor(variant: str, fill_width: int,
         return 1
     if fill_width:
         return int(fill_width)
-    return int(config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(variant,
-                                                    config.OCR_PAD_WIDTH_MIN))
+    return int(config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(variant, config.OCR_PAD_WIDTH_MIN))
 
 
 def ocr_lane_prep(eng, stream: int | None = None):
@@ -109,9 +110,10 @@ def ocr_lane_prep(eng, stream: int | None = None):
     ⚠️ 生命周期：本对象挂在引擎上，引擎 release 时随之释放
     （_release_lane_prep）。不得借用会随 extract 结束销毁的 TRT 流。
     """
-    pre = getattr(eng, '_gpu_pre_lane', None)
+    pre = getattr(eng, "_gpu_pre_lane", None)
     if pre is None:
         from video_ocr_engine.ocr.trt import GpuPreprocessor
+
         pre = GpuPreprocessor(stream=stream, gamma=None)
         eng._gpu_pre_lane = pre
     return pre
@@ -119,7 +121,7 @@ def ocr_lane_prep(eng, stream: int | None = None):
 
 def release_lane_prep(eng) -> None:
     """释放车道 prep（引擎归池前的显式清理；幂等）。"""
-    pre = getattr(eng, '_gpu_pre_lane', None)
+    pre = getattr(eng, "_gpu_pre_lane", None)
     if pre is not None:
         try:
             pre.release()
@@ -143,14 +145,17 @@ class OcrEngine:
             auto_ocr_thread_count()（全物理核），因此 CPU/GPU 解码后端统一。
     """
 
-    def __init__(self, variant: str = "v6_small",
-                 engine_type: str = "openvino",
-                 progress_cb: "callable | None" = None,
-                 fill_width: int | None = None,
-                 num_threads: int | None = None,
-                 pad_floor_env: "int | None" = None,
-                 gamma: "float | None" = None,
-                 gpu_ctc: "bool | None" = None) -> None:
+    def __init__(
+        self,
+        variant: str = "v6_small",
+        engine_type: str = "openvino",
+        progress_cb: "callable | None" = None,
+        fill_width: int | None = None,
+        num_threads: int | None = None,
+        pad_floor_env: "int | None" = None,
+        gamma: "float | None" = None,
+        gpu_ctc: "bool | None" = None,
+    ) -> None:
         # S9-2(D6):三个 env 旋钮可由上层一次性解析后注入;None=沿用
         # 本模块的调用期 env 读取(直接构造 OcrEngine 的旧用法不变)
         self._variant = variant
@@ -166,29 +171,27 @@ class OcrEngine:
         # ── 字符表（与 rapidocr CTCLabelDecode.get_character 一致）──
         dict_name = "ppocrv6_dict.txt"
         with open(models / dict_name, "rb") as f:
-            chars = [ln.decode("utf-8").strip("\n").strip("\r\n")
-                     for ln in f.readlines()]
-        chars.append(" ")          # 末尾插入空格
-        chars.insert(0, "blank")   # 开头插入 blank（CTC 空白，索引 0）
+            chars = [ln.decode("utf-8").strip("\n").strip("\r\n") for ln in f.readlines()]
+        chars.append(" ")  # 末尾插入空格
+        chars.insert(0, "blank")  # 开头插入 blank（CTC 空白，索引 0）
         self._chars = chars
 
         # ── 模型 ──
         self._trt: TrtEngine | None = None
         self._gpu_pre = None  # TRT GPU 预处理（懒加载）
-        self._ov = None       # OpenVINO CPU 编译模型（_init_ov 按需创建）
+        self._ov = None  # OpenVINO CPU 编译模型（_init_ov 按需创建）
         # 显存全驻留 CTC：TRT 输出在 GPU 完成 vocab 维 argmax/max，输出
         # 不落 RAM。host 输入（`_call_trt_gpu`）与 NVDEC 直通
         # （`call_gpu_raw`）两条路径都生效，语义等价、结果逐位一致
         # （见 docs/PERFORMANCE.md §16.2 P0-2）；GPU_CTC=0 显式关闭。
-        self._gpu_ctc_mode = (engine_type == "tensorrt" and
-                              (gpu_ctc if gpu_ctc is not None else
-                               config.env_bool(config.GPU_CTC_ENV, default=True)))
+        self._gpu_ctc_mode = engine_type == "tensorrt" and (
+            gpu_ctc if gpu_ctc is not None else config.env_bool(config.GPU_CTC_ENV, default=True)
+        )
         # TRT_DEFER_SYNC（默认关）：raw 直通批深度 2 延迟收集——整批提交
         # 不等待，结果滞后一批取回（提交与 GPU 执行跨批重叠）。交付顺序
         # 由 _defer_fifo（提交序 FIFO）保证，穿插的宿主批/不可延迟批也
         # 走同一队列。消费者契约见 ocr_stage.infer_worker。
-        self._defer_sync = config.env_bool(config.TRT_DEFER_SYNC_ENV,
-                                           default=False)
+        self._defer_sync = config.env_bool(config.TRT_DEFER_SYNC_ENV, default=False)
         self._defer_fifo = deque()
         if engine_type == "tensorrt":
             try:
@@ -251,15 +254,16 @@ class OcrEngine:
             ) from e
         model_path = models / f"PP-OCRv6_rec_{size}.onnx"
         self._ov = ov.Core().compile_model(
-            str(model_path), "CPU",
-            {"INFERENCE_NUM_THREADS": str(n)})
+            str(model_path), "CPU", {"INFERENCE_NUM_THREADS": str(n)}
+        )
         self._ov_out = self._ov.outputs[0]
 
     # ═══════════════ 预处理（复刻 rapidocr resize_norm_img）═══════════════
 
     @staticmethod
-    def _resize_norm(img: np.ndarray, max_wh_ratio: float,
-                     height: int = config.OCR_TARGET_H) -> np.ndarray:
+    def _resize_norm(
+        img: np.ndarray, max_wh_ratio: float, height: int = config.OCR_TARGET_H
+    ) -> np.ndarray:
         """resize 到固定高 + (x/255-0.5)/0.5 归一化 + pad 到 batch 最大宽。
 
         输入已是目标高度 float32（pipeline._preprocess_standard 输出）时跳过
@@ -267,6 +271,7 @@ class OcrEngine:
         （省略的是同一 float32 数据的整块拷贝），逐位一致。
         """
         from video_ocr_engine.domain.video_utils import _np_resize
+
         img_width = int(height * max_wh_ratio)
         h, w = img.shape[:2]
         ratio = w / float(h)
@@ -311,23 +316,20 @@ class OcrEngine:
     def _infer_locked(self, batch_np: np.ndarray) -> np.ndarray:
         if self._trt is not None:
             self._drain_defer_to_fifo()
-            first_batch = batch_np[:min(len(batch_np), self._trt.max_batch)]
+            first_batch = batch_np[: min(len(batch_np), self._trt.max_batch)]
             out_shape = self._trt._prepare_shape(first_batch.shape)
             # 预分配整批输出并让每个子批直接写进对应切片，免去逐批 host_out
             # 分配和最后的 concatenate 拷贝。
-            preds = np.empty(
-                (len(batch_np),) + tuple(out_shape[1:]), dtype=np.float32)
+            preds = np.empty((len(batch_np),) + tuple(out_shape[1:]), dtype=np.float32)
             # 所有子批全部异步 enqueue 到同一 CUDA stream，最后只同步一次；
             # 消除每个子批一次 host-GPU 往返同步，让 GPU 连续执行。
-            for i, n, need_sync in self._trt_subbatches(
-                    len(batch_np), self._trt.max_batch):
+            for i, n, need_sync in self._trt_subbatches(len(batch_np), self._trt.max_batch):
                 if need_sync:
                     # 末批 batch 维与前批不同 → execute_async 内会重设
                     # context shape；TRT 不支持 in-flight 修改 context 形状，
                     # 先同步再入队（仅超大批触发一次，代价可忽略）。
                     self._trt.synchronize()
-                self._trt.execute_async(
-                    batch_np[i:i + n], out_host=preds[i:i + n])
+                self._trt.execute_async(batch_np[i : i + n], out_host=preds[i : i + n])
             self._trt.synchronize()
             return preds
         # CPU 动态 batch 无上限：超大输入会让中间激活内存爆炸
@@ -337,12 +339,11 @@ class OcrEngine:
         _ov = getattr(self, "_ov", None)
         if _ov is not None:
             if len(batch_np) <= ov_max:
-                return np.asarray(
-                    _ov(batch_np)[self._ov_out], dtype=np.float32)
+                return np.asarray(_ov(batch_np)[self._ov_out], dtype=np.float32)
             outs = [
-                np.asarray(_ov(batch_np[i:i + ov_max])[self._ov_out],
-                           dtype=np.float32)
-                for i in range(0, len(batch_np), ov_max)]
+                np.asarray(_ov(batch_np[i : i + ov_max])[self._ov_out], dtype=np.float32)
+                for i in range(0, len(batch_np), ov_max)
+            ]
             return np.concatenate(outs, axis=0)
 
     # ═══════════════ 后处理（复刻 CTCLabelDecode）═══════════════
@@ -361,7 +362,7 @@ class OcrEngine:
         """
         out: list = []
         for s0 in range(0, len(preds), config.OCR_CTC_CHUNK):
-            chunk = preds[s0:s0 + config.OCR_CTC_CHUNK]
+            chunk = preds[s0 : s0 + config.OCR_CTC_CHUNK]
             idx = chunk.argmax(axis=2)  # (B, seq) int64
             prob = chunk.max(axis=2)
             keep = np.ones_like(idx, dtype=bool)
@@ -406,8 +407,7 @@ class OcrEngine:
         # h0 归一化整批，且 GPU 路径的 out_width/批 buffer 也假设等高；
         # 静默拉伸会让结果偏离 rapidocr 语义。引擎内部批（同一 ROI）恒等高。
         if any(h != h0 for h in heights[1:]):
-            raise ValueError("OcrEngine 批内图像高度必须一致（收到 "
-                             f"{sorted(set(heights))}）")
+            raise ValueError(f"OcrEngine 批内图像高度必须一致（收到 {sorted(set(heights))}）")
         # 按宽度排序（rapidocr 的加速策略；结果映射回原顺序）
         order = np.argsort([im.shape[1] for im in img_list])
         # pad 宽度 = max(批内最大宽高比, 模型下限/OCR_TARGET_H)。速度数字
@@ -419,22 +419,20 @@ class OcrEngine:
         # fill_width=DEFAULT_FILL_WIDTH(224) → **OCR_PAD_SMALL 永远轮不到**，
         # README 里那个"OCR 输入 pad 宽下限覆盖"的旋钮其实是死的。
         # env 是"调参覆盖"语义，必须能盖过构造参数，故提到最前。
-        _floor = ocr_pad_floor(self._variant, self._fill_width,
-                               self._pad_floor_env)
-        max_wh = max(_floor / config.OCR_TARGET_H,
-                     *(float(im.shape[1]) / im.shape[0] for im in img_list))
-        _m = getattr(self, '_metrics', None)
-        if _m is not None and getattr(_m, 'enabled', False):
+        _floor = ocr_pad_floor(self._variant, self._fill_width, self._pad_floor_env)
+        max_wh = max(
+            _floor / config.OCR_TARGET_H, *(float(im.shape[1]) / im.shape[0] for im in img_list)
+        )
+        _m = getattr(self, "_metrics", None)
+        if _m is not None and getattr(_m, "enabled", False):
             _rows = len(img_list)
-            _m.counter('ocr.rows', _rows)
-            _m.counter('ocr.padded_cols', int(h0 * max_wh) * _rows)
-            _m.counter('ocr.content_cols',
-                       sum(int(im.shape[1]) for im in img_list))
+            _m.counter("ocr.rows", _rows)
+            _m.counter("ocr.padded_cols", int(h0 * max_wh) * _rows)
+            _m.counter("ocr.content_cols", sum(int(im.shape[1]) for im in img_list))
         if self._trt is not None:
             # GPU 预处理路径：直接生成显存模型输入，省去 host batch 构造
             return self._call_trt_gpu(img_list, max_wh, h0)
-        batch_np = np.stack([self._resize_norm(img_list[i], max_wh, h0)
-                             for i in order])
+        batch_np = np.stack([self._resize_norm(img_list[i], max_wh, h0) for i in order])
         preds = self._infer(batch_np)
         results: list = [None] * len(img_list)
         # 批向量化 decode：argmax/max/keep 一次归约（与逐帧 _ctc_decode
@@ -453,13 +451,12 @@ class OcrEngine:
     def _get_gpu_pre(self):
         """创建 GpuPreprocessor 并与 TrtEngine 共享同一 CUDA stream。"""
         from video_ocr_engine.ocr.trt import GpuPreprocessor
+
         if self._gpu_pre is None:
-            self._gpu_pre = GpuPreprocessor(stream=self._trt._ensure_stream(),
-                                        gamma=self._gamma)
+            self._gpu_pre = GpuPreprocessor(stream=self._trt._ensure_stream(), gamma=self._gamma)
         return self._gpu_pre
 
-    def _call_trt_gpu(self, img_list: list, max_wh: float,
-                      h0: int) -> list:
+    def _call_trt_gpu(self, img_list: list, max_wh: float, h0: int) -> list:
         """TRT：GPU 端 transpose+normalize+pad → device tensor → 推理。
 
         GPU_CTC=1（默认）时与 `call_gpu_raw` 一致：TRT 输出在 GPU 上完成
@@ -502,8 +499,7 @@ class OcrEngine:
         self._get_gpu_pre()
         src_h = int(infos[0].h)
         # 优先级同 __call__：env OCR_PAD_SMALL > fill_width > 模型下限。
-        _floor = ocr_pad_floor(self._variant, self._fill_width,
-                               self._pad_floor_env)
+        _floor = ocr_pad_floor(self._variant, self._fill_width, self._pad_floor_env)
         if force_aspect and force_aspect > 0:
             _ratio = float(force_aspect)
         else:
@@ -512,15 +508,15 @@ class OcrEngine:
         max_wh = max(_floor / config.OCR_TARGET_H, _ratio)
         out_width = int(config.OCR_TARGET_H * max_wh)
         # S6-f：填充率计量（pad 宽是 rec 的计算宽度；content 是真实内容宽）
-        _m = getattr(self, '_metrics', None)
-        if _m is not None and getattr(_m, 'enabled', False):
+        _m = getattr(self, "_metrics", None)
+        if _m is not None and getattr(_m, "enabled", False):
             _rows = len(infos)
-            _m.counter('ocr.rows', _rows)
-            _m.counter('ocr.padded_cols', out_width * _rows)
-            _m.counter('ocr.content_cols',
-                       sum(int(t.span[1]) for t in infos))
+            _m.counter("ocr.rows", _rows)
+            _m.counter("ocr.padded_cols", out_width * _rows)
+            _m.counter("ocr.content_cols", sum(int(t.span[1]) for t in infos))
         dev_ptr, shape = self._gpu_pre.process_gray_raw(
-            infos, out_width, force_aspect=float(force_aspect))
+            infos, out_width, force_aspect=float(force_aspect)
+        )
         if getattr(self, "_gpu_ctc_mode", False):
             idx2d, prob2d = self._trt.execute_device_argmax(dev_ptr, shape)
             return self._ctc_from_idxprob(idx2d, prob2d)
@@ -544,8 +540,7 @@ class OcrEngine:
         同步路径会改 context 形状——TRT 不允许 in-flight 改形状，必须先
         排干；结果按提交序进 FIFO，由后续 _gpu_raw_collect 交付。
         """
-        if not (self._defer_sync and self._trt is not None
-                and self._trt.has_deferred()):
+        if not (self._defer_sync and self._trt is not None and self._trt.has_deferred()):
             return
         idx2d, prob2d = self._trt.collect_argmax_deferred()
         if idx2d is not None:
@@ -559,8 +554,7 @@ class OcrEngine:
         """
         self._get_gpu_pre()
         src_h = int(infos[0].h)
-        _floor = ocr_pad_floor(self._variant, self._fill_width,
-                               self._pad_floor_env)
+        _floor = ocr_pad_floor(self._variant, self._fill_width, self._pad_floor_env)
         if force_aspect and force_aspect > 0:
             _ratio = float(force_aspect)
         else:
@@ -568,7 +562,8 @@ class OcrEngine:
         max_wh = max(_floor / config.OCR_TARGET_H, _ratio)
         out_width = int(config.OCR_TARGET_H * max_wh)
         dev_ptr, shape = self._gpu_pre.process_gray_raw(
-            infos, out_width, force_aspect=float(force_aspect))
+            infos, out_width, force_aspect=float(force_aspect)
+        )
         if not self._trt.submit_argmax_deferred(dev_ptr, shape, keep=infos):
             self._drain_defer_to_fifo()
             idx2d, prob2d = self._trt.execute_device_argmax(dev_ptr, shape)
@@ -578,8 +573,7 @@ class OcrEngine:
         """深度 2 第二半：取回最旧未交付批的结果；无在途返回 None。"""
         if self._defer_fifo:
             return self._defer_fifo.popleft()
-        if not (self._defer_sync and self._trt is not None
-                and self._trt.has_deferred()):
+        if not (self._defer_sync and self._trt is not None and self._trt.has_deferred()):
             return None
         idx2d, prob2d = self._trt.collect_argmax_deferred()
         if idx2d is None:
@@ -593,8 +587,7 @@ class OcrEngine:
         self._drain_defer_to_fifo()
         self._defer_fifo.clear()
 
-    def _ctc_from_idxprob(self, idx: "np.ndarray",
-                          prob: "np.ndarray") -> list:
+    def _ctc_from_idxprob(self, idx: "np.ndarray", prob: "np.ndarray") -> list:
         """从 GPU 归约后的 (B,S) 索引/概率做 CTC 解码（与
         _ctc_decode_batch 语义一致：相邻去重 → 去 blank → 字符映射，
         置信度 = 保留位置概率均值 round5）。"""
@@ -620,8 +613,7 @@ class OcrEngine:
         max_batch = self._trt.max_batch
         first_shape = (min(B, max_batch),) + tuple(shape[1:])
         out_shape = self._trt._prepare_shape(first_shape)
-        preds = np.empty(
-            (B,) + tuple(out_shape[1:]), dtype=np.float32)
+        preds = np.empty((B,) + tuple(out_shape[1:]), dtype=np.float32)
         elem_floats = int(np.prod(shape[1:]))
         for i, n, need_sync in self._trt_subbatches(B, max_batch):
             if need_sync:
@@ -630,8 +622,8 @@ class OcrEngine:
                 self._trt.synchronize()
             off = i * elem_floats * 4
             self._trt.execute_device_async(
-                dev_ptr + off, (n,) + tuple(shape[1:]),
-                out_host=preds[i:i + n])
+                dev_ptr + off, (n,) + tuple(shape[1:]), out_host=preds[i : i + n]
+            )
         self._trt.synchronize()
         return preds
 
@@ -643,19 +635,22 @@ class OcrEngine:
 # 引擎"一致）；README 的多线程批量场景 = 多个并发 checkout，互不共享在途
 # 引擎。池内引擎常驻（显存换复用），淘汰/进程退出才释放。
 _POOL_LOCK = threading.Lock()
-_ENGINE_POOL: dict = {}          # key -> list[OcrEngine]（空闲栈）
+_ENGINE_POOL: dict = {}  # key -> list[OcrEngine]（空闲栈）
 _POOL_IDLE_ORDER: OrderedDict = OrderedDict()  # id(engine) -> engine（最旧优先）
-_POOL_MAX_PER_KEY = 4            # 防异常并发下池无限膨胀
-_POOL_MAX_TOTAL = 16             # 限制所有 key 的空闲引擎总数
+_POOL_MAX_PER_KEY = 4  # 防异常并发下池无限膨胀
+_POOL_MAX_TOTAL = 16  # 限制所有 key 的空闲引擎总数
 
 
-def acquire_ocr_engine(variant: str = "v6_small",
-                       engine_type: str = "openvino", *,
-                       fill_width: int | None = None,
-                       num_threads: int | None = None,
-                       pad_floor_env: "int | None" = None,
-                       gamma: "float | None" = None,
-                       gpu_ctc: "bool | None" = None) -> OcrEngine:
+def acquire_ocr_engine(
+    variant: str = "v6_small",
+    engine_type: str = "openvino",
+    *,
+    fill_width: int | None = None,
+    num_threads: int | None = None,
+    pad_floor_env: "int | None" = None,
+    gamma: "float | None" = None,
+    gpu_ctc: "bool | None" = None,
+) -> OcrEngine:
     """从池取空闲引擎；无空闲则新建。构造 key 记录在引擎上供 checkin 归位。
 
     S9-2：pad/gamma/gpu_ctc 为 D6 注入口（None=引擎内调用期读 env）。
@@ -666,20 +661,31 @@ def acquire_ocr_engine(variant: str = "v6_small",
     （`GpuPreprocessor(gamma=...)`），此前不在 key 里——同进程内改
     `OCR_GAMMA` 后重跑会命中旧 key 拿到旧 gamma 的引擎 = 旋钮静默失效。
     key 维度增加对稳态 PI-10 无影响（同 run 内注入值恒定）。"""
-    key = (variant, engine_type, int(fill_width or 0), int(num_threads or 0),
-           int(pad_floor_env) if pad_floor_env is not None else -1,
-           round(float(gamma), 6) if gamma is not None else -1.0,
-           int(bool(gpu_ctc)) if gpu_ctc is not None else -1)
+    key = (
+        variant,
+        engine_type,
+        int(fill_width or 0),
+        int(num_threads or 0),
+        int(pad_floor_env) if pad_floor_env is not None else -1,
+        round(float(gamma), 6) if gamma is not None else -1.0,
+        int(bool(gpu_ctc)) if gpu_ctc is not None else -1,
+    )
     with _POOL_LOCK:
         idle = _ENGINE_POOL.get(key)
         if idle:
             eng = idle.pop()
             _POOL_IDLE_ORDER.pop(id(eng), None)
-            eng._pool_hit = True     # S6-0：PI-10 热池判定（RunReport 计数）
+            eng._pool_hit = True  # S6-0：PI-10 热池判定（RunReport 计数）
             return eng
-    eng = OcrEngine(variant, engine_type, fill_width=fill_width,
-                    num_threads=num_threads, pad_floor_env=pad_floor_env,
-                    gamma=gamma, gpu_ctc=gpu_ctc)
+    eng = OcrEngine(
+        variant,
+        engine_type,
+        fill_width=fill_width,
+        num_threads=num_threads,
+        pad_floor_env=pad_floor_env,
+        gamma=gamma,
+        gpu_ctc=gpu_ctc,
+    )
     eng._pool_key = key
     eng._pool_hit = False
     return eng

@@ -6,6 +6,7 @@ resolve() 是全仓库唯一的 env 读取点（D6）；未注册的名字不得
 rationale_id 在 S2 之前指向 engine_config 内的依据注释锚点（ec:<起止行>），
 S2 建 knowledge/knobs.yaml 后改为 yaml 条目 id——代码只留 id 反查。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -18,15 +19,15 @@ _REGISTRY_CAP = 64  # §8.6 N-1：注册表上限，防 span/旋钮爆炸
 
 @dataclass(frozen=True)
 class Knob:
-    name: str                    # 规范名，如 "ocr.pad_small"
-    py_name: str                 # v1 常量名（兼容 alias），如 "OCR_PAD_SMALL_ENV"
-    env: str | None              # env 名；None = 无 env 入口
-    type: str                    # "int" / "float" / "bool" / "str" / "bool|none"
+    name: str  # 规范名，如 "ocr.pad_small"
+    py_name: str  # v1 常量名（兼容 alias），如 "OCR_PAD_SMALL_ENV"
+    env: str | None  # env 名；None = 无 env 入口
+    type: str  # "int" / "float" / "bool" / "str" / "bool|none"
     default: object
     domain: Domain
     applies_to: tuple[str, ...]  # ("cpu", "gpu") —— 取代散落的门控注释
-    rationale_id: str            # → 依据锚点（S2 前为 ec:<行>，之后为 knobs.yaml id）
-    note: str = ""               # 解析语义备注（三态 / 特殊回退等）
+    rationale_id: str  # → 依据锚点（S2 前为 ec:<行>，之后为 knobs.yaml id）
+    note: str = ""  # 解析语义备注（三态 / 特殊回退等）
     # 2026-09-19：该旋钮由消费者**调用期 env 活读**，RunConfig 字段值
     # 不决定行为 → 从 config_digest 排除（否则 A/B 指纹与实际不符）。
     # 标记为 True 的旋钮，其 RunConfig 字段仅供 introspection 兼容。

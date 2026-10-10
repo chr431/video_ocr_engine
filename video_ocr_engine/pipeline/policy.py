@@ -13,6 +13,7 @@
 decode/decord_source.py（打开流程的一部分）；CPU 软解线程档位的事实源
 在 config.decode_caliber（单一出处，探针与引擎同源派生）。
 """
+
 from __future__ import annotations
 
 from video_ocr_engine.config import constants as config
@@ -24,12 +25,12 @@ def merge_effective_mode(text_sep: str | None) -> str:
     contrast 模式已移除（实验证实无净收益，0.9.0 清理）；未知值归一
     到引擎默认 binary。
     """
-    _m = (text_sep or '').strip().lower()
-    if _m in ('2', 'binary'):
-        return 'binary'
-    if _m in ('off', ''):
-        return ''
-    return 'binary'   # contrast/未知值 → 引擎默认 binary
+    _m = (text_sep or "").strip().lower()
+    if _m in ("2", "binary"):
+        return "binary"
+    if _m in ("off", ""):
+        return ""
+    return "binary"  # contrast/未知值 → 引擎默认 binary
 
 
 def ocr_on_gpu(ocr_backend: str | None) -> bool:
@@ -40,7 +41,7 @@ def ocr_on_gpu(ocr_backend: str | None) -> bool:
     不表示 TRT 一定可用（不可用时 OcrEngine 内部回退 OpenVINO，此时
     解码线程偏多只是轻微过订阅，实测不劣化）。
     """
-    return (ocr_backend or 'auto').lower() != 'cpu'
+    return (ocr_backend or "auto").lower() != "cpu"
 
 
 def ocr_engine_type(ocr_backend: str | None) -> str:
@@ -52,17 +53,17 @@ def ocr_engine_type(ocr_backend: str | None) -> str:
     仅 batch_test 稠密字幕 stride=1 类负载，infer 忙时 92% wall）；
     decode-bound 的常规负载零收益（L3 本就空等）。
     """
-    _b = (ocr_backend or 'auto').lower()
-    if _b == 'cpu':
-        return 'openvino'
-    if _b == 'hybrid':
-        return 'hybrid'
-    return 'tensorrt'
+    _b = (ocr_backend or "auto").lower()
+    if _b == "cpu":
+        return "openvino"
+    if _b == "hybrid":
+        return "hybrid"
+    return "tensorrt"
 
 
-def gpu_pipeline_enabled(rc, decode_backend: str | None,
-                         ocr_backend: str | None,
-                         video_path: str) -> bool:
+def gpu_pipeline_enabled(
+    rc, decode_backend: str | None, ocr_backend: str | None, video_path: str
+) -> bool:
     """GPU 全驻留零拷贝管线：NVDEC 直通或 CPU 解码 + H2D（P1-3）。
 
     默认（GPU_PIPELINE 未设置）启用条件（全部满足）：
@@ -82,6 +83,7 @@ def gpu_pipeline_enabled(rc, decode_backend: str | None,
     truthy 强制）。
     """
     from ..gpu import device as _gp
+
     # 经模块属性解析:tests/探针 patch gpu.device.nvdec_available
     # 等模块级名字(§10.4 patch 点),函数级导入保持该间接性
     _cuda = _gp._cuda_python_available
@@ -92,17 +94,17 @@ def gpu_pipeline_enabled(rc, decode_backend: str | None,
         forced = True
     else:
         forced = False
-    backend = (decode_backend or 'auto').lower()
-    if backend not in ('auto', 'nvdec', 'cpu', 'hybrid'):
+    backend = (decode_backend or "auto").lower()
+    if backend not in ("auto", "nvdec", "cpu", "hybrid"):
         return False
     if not _cuda():
         return False
     if not forced:
-        if (ocr_backend or 'auto').lower() == 'cpu':
+        if (ocr_backend or "auto").lower() == "cpu":
             return False
         if not _gp.tensorrt_available():
             return False
-    if backend == 'cpu':
+    if backend == "cpu":
         # CPU 解码分支不依赖 NVDEC：跳过 nvdec 探测（避免无谓的
         # GPU reader 试开；TRT 可用性已由上方门控确认）。
         return True
@@ -120,12 +122,13 @@ def ocr_num_threads(rc, codec: str, backend_label: str) -> int:
     差 → 保持全核。显式参数传入引擎，不污染全局 env。
     """
     from video_ocr_engine.ocr.native import auto_ocr_thread_count
+
     _env = rc.ocr_threads
     if _env:
         return max(1, _env)
     cores = auto_ocr_thread_count()
-    if codec == 'av1' and backend_label.startswith('decord/CPU'):
+    if codec == "av1" and backend_label.startswith("decord/CPU"):
         return max(2, cores // 2)
-    if backend_label.startswith('decord/CPU') and cores <= config.CPU_CORES_SPLIT_THRESHOLD:
+    if backend_label.startswith("decord/CPU") and cores <= config.CPU_CORES_SPLIT_THRESHOLD:
         return max(2, cores // 2)
     return cores

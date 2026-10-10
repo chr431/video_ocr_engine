@@ -6,6 +6,7 @@
 release_all 置 _released）的完整依据见各类 docstring——本文件是池
 语义的**唯一出处**，消费方只在 gpu/streams.py 与 pipeline/gpu_backend.py。
 """
+
 import logging
 import threading
 
@@ -55,10 +56,10 @@ class _YFrame:
         if not pooled:
             try:
                 from cuda.bindings import runtime as cudart
+
                 cudart.cudaFree(self.ptr)
             except Exception:
-                logger.debug("Y 池放弃路径 cudaFree 失败（进程退出兜底）",
-                             exc_info=True)
+                logger.debug("Y 池放弃路径 cudaFree 失败（进程退出兜底）", exc_info=True)
 
 
 class _YFramePool:
@@ -70,14 +71,14 @@ class _YFramePool:
     worker，GC 时自动归还（跨线程安全，释放走 CUDA runtime）。
     """
 
-    _MAX = 32   # ≥ OCR 批上限（16）+ 合并判定 2，避免高频 cudaMalloc 抖动
+    _MAX = 32  # ≥ OCR 批上限（16）+ 合并判定 2，避免高频 cudaMalloc 抖动
 
     def __init__(self, fnb: int):
         self._fnb = int(fnb)
         self._free: list = []
-        self._lk = threading.Lock()   # acquire/_recycle/release_all 互斥
-                                      # （2026-09-19 审查轮：此前无锁，
-                                      #  check-then-act 可 pop 空列表）
+        self._lk = threading.Lock()  # acquire/_recycle/release_all 互斥
+        # （2026-09-19 审查轮：此前无锁，
+        #  check-then-act 可 pop 空列表）
         self._released = False
 
     def acquire(self) -> _YFrame:
@@ -99,11 +100,13 @@ class _YFramePool:
 
     def _malloc_frame(self) -> _YFrame:
         from cuda.bindings import runtime as cudart
+
         err, ptr = cudart.cudaMalloc(self._fnb)
         if int(err) != 0 or not ptr:
             raise MemoryError(
                 "cudaMalloc(%d B) 失败: %s（审查轮：此前丢弃 _err，"
-                "int(None) 误报 TypeError）" % (self._fnb, err))
+                "int(None) 误报 TypeError）" % (self._fnb, err)
+            )
         return _YFrame(self, int(ptr), self._fnb)
 
     def _recycle(self, frame: _YFrame) -> bool:
@@ -131,10 +134,10 @@ class _YFramePool:
         if not self._recycle(frame):
             try:
                 from cuda.bindings import runtime as cudart
+
                 cudart.cudaFree(frame.ptr)
             except Exception:
-                logger.debug("Y 池显式归还列满 cudaFree 失败（进程退出兜底）",
-                             exc_info=True)
+                logger.debug("Y 池显式归还列满 cudaFree 失败（进程退出兜底）", exc_info=True)
 
     def release_all(self) -> None:
         """显式释放全部空闲缓冲（extract 结束调用；DESIGN-REVIEW C5：池
@@ -150,10 +153,10 @@ class _YFramePool:
                 frame = self._free.pop()
             try:
                 from cuda.bindings import runtime as cudart
+
                 cudart.cudaFree(frame.ptr)
             except Exception:
-                logger.debug("cudaFree 失败，忽略（进程退出兜底）",
-                             exc_info=True)
+                logger.debug("cudaFree 失败，忽略（进程退出兜底）", exc_info=True)
                 pass  # 释放失败仅余进程退出兜底，无进一步处置手段
 
 
@@ -188,10 +191,10 @@ class _DevBatch:
         if not pooled:
             try:
                 from cuda.bindings import runtime as cudart
+
                 cudart.cudaFree(self.ptr)
             except Exception:
-                logger.debug("批池放弃路径 cudaFree 失败（进程退出兜底）",
-                             exc_info=True)
+                logger.debug("批池放弃路径 cudaFree 失败（进程退出兜底）", exc_info=True)
 
 
 class _CpuFrameRef:
@@ -227,12 +230,12 @@ class _CpuFrameRef:
 class _DevBatchPool:
     """CPU 解码批 device 缓冲池：固定容量 DECODE_BATCH×H×W，引用归零归还。"""
 
-    _MAX = 8    # 2~3 个在途批 + OCR 队列中 rep 引用的批缓冲余量
+    _MAX = 8  # 2~3 个在途批 + OCR 队列中 rep 引用的批缓冲余量
 
     def __init__(self, nbytes: int):
         self._nbytes = int(nbytes)
         self._free: list = []
-        self._lk = threading.Lock()   # 同 _YFramePool（审查轮加锁）
+        self._lk = threading.Lock()  # 同 _YFramePool（审查轮加锁）
         self._released = False
 
     def acquire(self, host) -> _DevBatch:
@@ -246,11 +249,12 @@ class _DevBatchPool:
                 parked.pool = None
                 return _DevBatch(self, ptr, size, host)
         from cuda.bindings import runtime as cudart
+
         err, ptr = cudart.cudaMalloc(self._nbytes)
         if int(err) != 0 or not ptr:
             raise MemoryError(
-                "cudaMalloc(%d B) 失败: %s（审查轮：此前误报 TypeError）"
-                % (self._nbytes, err))
+                "cudaMalloc(%d B) 失败: %s（审查轮：此前误报 TypeError）" % (self._nbytes, err)
+            )
         return _DevBatch(self, int(ptr), self._nbytes, host)
 
     def _recycle(self, b: _DevBatch) -> bool:
@@ -275,10 +279,10 @@ class _DevBatchPool:
         if not self._recycle(b):
             try:
                 from cuda.bindings import runtime as cudart
+
                 cudart.cudaFree(b.ptr)
             except Exception:
-                logger.debug("批池显式归还列满 cudaFree 失败（进程退出兜底）",
-                             exc_info=True)
+                logger.debug("批池显式归还列满 cudaFree 失败（进程退出兜底）", exc_info=True)
 
     def release_all(self) -> None:
         """显式释放全部空闲缓冲（同 _YFramePool.release_all，C5；
@@ -292,8 +296,8 @@ class _DevBatchPool:
                 b = self._free.pop()
             try:
                 from cuda.bindings import runtime as cudart
+
                 cudart.cudaFree(b.ptr)
             except Exception:
-                logger.debug("cudaFree 失败，忽略（进程退出兜底）",
-                             exc_info=True)
+                logger.debug("cudaFree 失败，忽略（进程退出兜底）", exc_info=True)
                 pass  # 释放失败仅余进程退出兜底，无进一步处置手段

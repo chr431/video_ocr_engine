@@ -17,18 +17,22 @@
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
 from _paths import ROOT
 
-# 硬上限：AGENTS.md 在每个会话开头被注入，超过就必须迁内容到 docs/log/DECISIONS.md
-CLAUDE_MD_MAX_BYTES = 14 * 1024
+sys.path.insert(0, str(ROOT / "tools"))
+from _doc_guards import (  # noqa: E402 — 预算/清单唯一事实源（治理改革轮 2026-10-10）
+    AGENTS_MAX_BYTES,
+    CONCLUSIONS_MD_MAX_BYTES,
+    DOCS,
+    big_doc_section_violations,
+)
 
-DOCS = ["README.md", "AGENTS.md", "docs/log/PERFORMANCE.md", "docs/log/DECISIONS.md",
-        "docs/DEPENDENCIES.md", "docs/log/ARCHIVE.md", "tools/INDEX.md",
-        "docs/CONCLUSIONS.md", "docs/log/README.md"]
+# 硬上限：AGENTS.md 在每个会话开头被注入，超过就必须迁内容到 docs/log/DECISIONS.md
 
 
 def _existing(rel: str) -> Path | None:
@@ -67,8 +71,8 @@ def test_claude_md_within_injection_budget() -> None:
     if p is None:
         pytest.skip("AGENTS.md 不存在")
     size = p.stat().st_size
-    assert size <= CLAUDE_MD_MAX_BYTES, (
-        f"AGENTS.md 已 {size} 字节，超过注入预算 {CLAUDE_MD_MAX_BYTES} 字节"
+    assert size <= AGENTS_MAX_BYTES, (
+        f"AGENTS.md 已 {size} 字节，超过注入预算 {AGENTS_MAX_BYTES} 字节"
         f"（硬上限 14 KB）。\n"
         f"它在每个会话开头被全量注入，涨上去等于每个会话都付 token。\n"
         f"处理：把历史/过程性章节迁到 docs/log/DECISIONS.md，本文件只留指针。"
@@ -96,8 +100,8 @@ def test_doc_map_targets_exist() -> None:
 
 
 # ════════ 文档分层管理守护（2026-09-08，见 DECISIONS「文档分层管理」）════════
-
-CONCLUSIONS_MD_MAX_BYTES = 12 * 1024  # L1 索引的体积上限（现约 6.6KB）
+# CONCLUSIONS.md 产物上限在 _doc_guards.CONCLUSIONS_MD_MAX_BYTES（单源），
+# 2026-10-10 由 12 KB 上调 13 KB（源 14→16 KB 同轮：饱和即逼仓促归档）。
 
 # "现役"字样只允许出现在 AGENTS.md（注入核/总真相）与 docs/CONCLUSIONS.md
 # （L1 索引）。其余文档按「存量豁免、增量严格」：基线以下只许下降不许上涨。
@@ -235,4 +239,19 @@ def test_param_defaults_consistent_with_engine_config() -> None:
     assert not broken, (
         f"README 的默认值表述与 engine_config 不一致：{broken}。\n"
         f"参数值的唯一事实源是 engine_config.py；改引擎默认值时必须同步 README。"
+    )
+
+
+def test_big_docs_are_section_slicable() -> None:
+    """超过阈值的大文档必须带 ≥3 个章节标题（2026-10-10 治理改革轮）。
+
+    没有章节结构，`tools/_doc_section.py` 的 --toc/--find/单章定位全部
+    失效，agent 只能整文件读——PERFORMANCE 一次误读≈12 倍注入成本。
+    判据单一实现：tools/_doc_guards.py（审计同源）。
+    """
+    bad = big_doc_section_violations()
+    assert not bad, (
+        f"这些活文档超过 24KB 却没有可定位的章节结构：{bad}\n"
+        f"加 `## N.` 编号章节（_doc_section 按标题切片），或把内容拆到"
+        f" docs/log/ 带日期的新叙事文件。"
     )

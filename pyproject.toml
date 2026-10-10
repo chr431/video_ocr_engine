@@ -60,14 +60,25 @@ markers = [
 ]
 
 [tool.ruff]
-# 精选集（2026-09-20 稳健性轮）：E4/E7/E9/F，产品代码零违规基线。
-# 范围 = video_ocr_engine/（tools/ 探针多为 frozen 证据，不承担 lint
-# 义务）；风格类规则（E501/I001/UP 系）不启用——% 格式化与长中文注释
-# 行是本仓既有风格。执行：ruff check video_ocr_engine/
+# 风格政策（2026-10-10 治理改革轮成文——此前"只管正确性"是有意决策但
+# 未成文，引号混用（266 行单引号）与行宽（最长 158 列）无工具管）：
+#   · lint 精选集 E4/E7/E9/F 零违规基线不变；风格类 lint（E501/I001/UP
+#     系）仍不启用——% 格式化与长中文注释行是本仓既有风格，不罚；
+#   · 表面风格交给 formatter 单一执行面：双引号、line-length 100。
+#     2026-10-10 风格轮对全包一次性 `ruff format` 归位（金标复验零行为
+#     变更），此后 CI `ruff format --check` 挡增量漂移；
+#   · docstring = 单行中文摘要 + 可选解释段（不强制 Google/NumPy 段落）；
+#     命名 = snake_case 函数/UPPER_CASE 常量/PascalCase 类（现状已统一）。
+# 范围 = video_ocr_engine/（tools/ 探针多为 frozen 证据，不承担 lint/format
+# 义务）；执行：ruff check video_ocr_engine/ && ruff format --check video_ocr_engine/
 target-version = "py311"
+line-length = 100
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.format]
+quote-style = "double"
 
 [tool.mypy]
 # domain/ 严格试点（2026-09-20 稳健性轮）+ R2（2026-09-27）扩面

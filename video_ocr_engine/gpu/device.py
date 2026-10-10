@@ -8,17 +8,27 @@
 S4 两次延期的设备侧拆分落地）；下方 re-export 保旧导入路径
 （frozen 探针 / tests / gpu_backend 懒导入）不断。
 """
+
 import logging
 
 from video_ocr_engine.domain.video_utils import nvdec_available, tensorrt_available  # noqa: F401 —— §10.4 monkeypatch 点（经 extractor._gpu_pipeline_enabled 使用）
 
 # 旧路径兼容 re-export（规范位置：pools/streams；零逻辑改动搬迁）
 from .pools import (  # noqa: F401
-    _CpuFrameRef, _DevBatch, _DevBatchPool, _YFrame, _YFramePool,
+    _CpuFrameRef,
+    _DevBatch,
+    _DevBatchPool,
+    _YFrame,
+    _YFramePool,
 )
 from .streams import (  # noqa: F401
-    DevHooks, _GpuRunCtx, _gpu_fill_prev, _gpu_frame_stream_cpu,
-    _gpu_frame_stream_nvdec, _gpu_prepare_calibration, _gpu_release_partial,
+    DevHooks,
+    _GpuRunCtx,
+    _gpu_fill_prev,
+    _gpu_frame_stream_cpu,
+    _gpu_frame_stream_nvdec,
+    _gpu_prepare_calibration,
+    _gpu_release_partial,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,6 +43,7 @@ def _cuda_python_available() -> bool:
     """
     try:
         import importlib.util as _u
-        return _u.find_spec('cuda') is not None
+
+        return _u.find_spec("cuda") is not None
     except Exception:
         return False

@@ -1,0 +1,21 @@
+{
+  "hooks": {
+    "enabled": true,
+    "events": {
+      "PreToolUse": [
+        {
+          "matcher": "^Read$",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "python",
+              "args": ["${ZCODE_PROJECT_DIR}/tools/_hook_guard_read.py"],
+              "timeoutMs": 5000,
+              "statusMessage": "大文档整读守卫"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

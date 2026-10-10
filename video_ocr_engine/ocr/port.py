@@ -4,6 +4,7 @@ S3-2 起定义；S3-3 起由 onnx_backend / trt_backend（v1 ocr_native /
 ocr_trt 的移植）实现。池的 checkout 契约（§9）：同一 backend 实例
 同时只被一个线程使用。
 """
+
 from __future__ import annotations
 
 from typing import Protocol, Sequence, runtime_checkable

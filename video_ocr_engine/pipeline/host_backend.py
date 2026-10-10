@@ -12,6 +12,7 @@ P1（宿主/GPU 实现统一轮）：生命周期（open→fps→会话→校准
 像素与判定原语经 spec 回调注入（实现唯一出处 segmentation /
 extractor 薄层）；GPU 路径的回退经 preopened_vr 复用（C10 语义不变）。
 """
+
 from __future__ import annotations
 
 import logging
@@ -32,34 +33,35 @@ logger = logging.getLogger(__name__)
 @dataclass
 class HostRunSpec:
     """宿主驱动的全量输入契约（取代对 FieldExtractor 私有属性的读取）。"""
+
     # 帧区间 / ROI / 采样
     frame_start: int
     frame_end: int | None
     sample_stride: int
-    roi: tuple                                # (x1, y1, x2, y2)
+    roi: tuple  # (x1, y1, x2, y2)
     # 分段与输出语义
     C: float
     merge_similar: bool
     keep_crops: bool
     yuv_output: bool
     # 判定与像素原语（显式注入；实现唯一出处不变）
-    segments_similar: Callable                # (gray_a, gray_b) -> bool
-    crop_luma: Callable                       # crop -> gray
-    batch_luma: Callable                      # (B,H,W[,C]) -> (B,h,w)
-    batch_luma_out: Callable                  # 同上，写入复用缓冲
-    crop_is_expected: Callable                # (crop, roi_h, roi_w) -> bool
+    segments_similar: Callable  # (gray_a, gray_b) -> bool
+    crop_luma: Callable  # crop -> gray
+    batch_luma: Callable  # (B,H,W[,C]) -> (B,h,w)
+    batch_luma_out: Callable  # 同上，写入复用缓冲
+    crop_is_expected: Callable  # (crop, roi_h, roi_w) -> bool
     # facade 回调
-    open_vr: Callable                         # () -> vr（门面负责后端选择/降级记录）
-    start_ocr_session: Callable               # (engines|None) -> OcrSession
-    backend_label: Callable = lambda: ""      # () -> str（open_vr 后的门面标签）
+    open_vr: Callable  # () -> vr（门面负责后端选择/降级记录）
+    start_ocr_session: Callable  # (engines|None) -> OcrSession
+    backend_label: Callable = lambda: ""  # () -> str（open_vr 后的门面标签）
     progress: Callable = lambda m, p: None
     cancel: Callable = lambda: None
-    prof_end: Callable | None = None          # (group, key, t0)
+    prof_end: Callable | None = None  # (group, key, t0)
     # 校准阈值即时回写（F-4：_segments_similar 在流式期间活读宿主的
     # _bin_thresh——回写若延迟到 run 结束，合并判定会用旧值，段数漂移）
-    on_bin_thresh: Callable | None = None     # (th) -> None
+    on_bin_thresh: Callable | None = None  # (th) -> None
     # 可变盒（门面持有缓存，后端读写）
-    fps_box: list = field(default_factory=lambda: [None])     # B2：同实例缓存
+    fps_box: list = field(default_factory=lambda: [None])  # B2：同实例缓存
     # S6-0：注入的指标记录器（§8.6 N-2；off 档为 NullMetrics 单例）
     metrics: Any = NULL_METRICS
 
@@ -67,6 +69,7 @@ class HostRunSpec:
 @dataclass
 class HostRunResult:
     """宿主驱动的全量输出（v1 裸 5 元组的显式化）。"""
+
     frames: list = field(default_factory=list)
     segs: list = field(default_factory=list)
     texts: list = field(default_factory=list)
@@ -75,7 +78,7 @@ class HostRunResult:
     fps: float | None = None
     bin_thresh: int = 0
     crops: dict = field(default_factory=dict)
-    fork_stats: dict | None = None   # fork 遥测穿透（hybrid 解码器才有）
+    fork_stats: dict | None = None  # fork 遥测穿透（hybrid 解码器才有）
     timing: dict = field(default_factory=dict)
     n_segments: int = 0
 
@@ -96,6 +99,7 @@ def _calibrate(spec: HostRunSpec, vr, frames, *, with_dev: bool):
     (fi, crop, gray, sharp, dev_info)。
     """
     from .._helpers import _ndarray_device_ptr
+
     x1, y1, x2, y2 = spec.roi
     calib_n = min(config.SEG_CALIB_FRAMES, len(frames))
     calib: list = []
@@ -110,29 +114,26 @@ def _calibrate(spec: HostRunSpec, vr, frames, *, with_dev: bool):
         for k in range(calib_n):
             c = crops[k]
             if not spec.crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
-                c = c[y1:y2 + 1, x1:x2 + 1]
+                c = c[y1 : y2 + 1, x1 : x2 + 1]
             g = spec.crop_luma(c)
             dev_info = None
             if dev_c == 1 and len(shape) == 4:
                 src_h, src_w = shape[1], shape[2]
-                dev_info = DeviceRef(ptr=base + k * src_h * src_w,
-                                     h=src_h, w=src_w, owner=nds)
+                dev_info = DeviceRef(ptr=base + k * src_h * src_w, h=src_h, w=src_w, owner=nds)
             calib.append((frames[k], c, g, float(g.std()), dev_info))
     else:
         for k in range(calib_n):
             nd = vr.next_roi(x1, y1, x2 + 1, y2 + 1)
             c = nd.asnumpy()
             if not spec.crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
-                c = c[y1:y2 + 1, x1:x2 + 1]
+                c = c[y1 : y2 + 1, x1 : x2 + 1]
             g = spec.crop_luma(c)
             dev_info = None
             if with_dev and len(nd.shape) == 3 and nd.shape[-1] == 1:
                 base, shape = _ndarray_device_ptr(nd)
-                dev_info = DeviceRef(ptr=base, h=shape[0], w=shape[1],
-                                     owner=nd)
+                dev_info = DeviceRef(ptr=base, h=shape[0], w=shape[1], owner=nd)
             calib.append((frames[k], c, g, float(g.std()), dev_info))
-    return calib, otsu_median_threshold(
-        [_otsu(g) for _fi, _c, g, _s, _dev in calib])
+    return calib, otsu_median_threshold([_otsu(g) for _fi, _c, g, _s, _dev in calib])
 
 
 def _frame_stream(spec: HostRunSpec, frames, vr, calib, th, *, with_dev: bool):
@@ -142,21 +143,22 @@ def _frame_stream(spec: HostRunSpec, frames, vr, calib, th, *, with_dev: bool):
     yield (frame_idx, crop, gray, sharp, bin, dev_info)。
     """
     from .._helpers import _ndarray_device_ptr
+
     DECODE_BATCH = config.DECODE_BATCH_SIZE
     x1, y1, x2, y2 = spec.roi
     for fi, c, g, s, *dev_rest in calib:
         yield (fi, c, g, s, g > th, dev_rest[0] if dev_rest else None)
-    g_buf = None   # 复用批量灰度缓冲（每批形状恒定：B×H×W）
+    g_buf = None  # 复用批量灰度缓冲（每批形状恒定：B×H×W）
     for bstart in range(len(calib), len(frames), DECODE_BATCH):
         bend = min(bstart + DECODE_BATCH, len(frames))
         _t_d = time.perf_counter()
         nds = vr.get_batch(frames[bstart:bend], roi=(x1, y1, x2 + 1, y2 + 1))
         crops = nds.asnumpy()
-        _prof(spec, 'producer', 'decode_batch', _t_d)
+        _prof(spec, "producer", "decode_batch", _t_d)
         if spec.metrics.enabled:
             m = spec.metrics
-            m.counter('decode.batches')
-            m.counter('decode.frames', bend - bstart)
+            m.counter("decode.batches")
+            m.counter("decode.frames", bend - bstart)
         _t_g = time.perf_counter()
         if g_buf is None:
             # 灰度 Y 缓冲（每批形状恒定才可跨批复用）：
@@ -164,23 +166,27 @@ def _frame_stream(spec: HostRunSpec, frames, vr, calib, th, *, with_dev: bool):
             #   gray：crops=(B, H, W[, 1]) → Y=(B, H, W)
             g_buf = np.empty(
                 (crops.shape[0], crops.shape[1] * 2 // 3, crops.shape[2])
-                if spec.yuv_output else crops.shape[:3],
-                dtype=np.uint8)
-        if (g_buf.shape[1:] == ((crops.shape[1] * 2 // 3, crops.shape[2])
-                                if spec.yuv_output else crops.shape[1:3])
-                and len(crops) <= g_buf.shape[0]):
+                if spec.yuv_output
+                else crops.shape[:3],
+                dtype=np.uint8,
+            )
+        if (
+            g_buf.shape[1:]
+            == ((crops.shape[1] * 2 // 3, crops.shape[2]) if spec.yuv_output else crops.shape[1:3])
+            and len(crops) <= g_buf.shape[0]
+        ):
             # 末批 B 更小：只复用前 B 行，避免形状不匹配
-            g = spec.batch_luma_out(crops, g_buf[:len(crops)])
+            g = spec.batch_luma_out(crops, g_buf[: len(crops)])
         else:
             g = spec.batch_luma(crops)
-        _prof(spec, 'producer', 'gray_batch', _t_g)
+        _prof(spec, "producer", "gray_batch", _t_g)
         g = np.ascontiguousarray(g)
         _t_s = time.perf_counter()
         sharp = g.std(axis=(1, 2))
-        _prof(spec, 'producer', 'sharp_batch', _t_s)
+        _prof(spec, "producer", "sharp_batch", _t_s)
         _t_b = time.perf_counter()
         bs = g > th
-        _prof(spec, 'producer', 'bin_batch', _t_b)
+        _prof(spec, "producer", "bin_batch", _t_b)
         dev_base = 0
         src_h = src_w = 0
         if with_dev and len(nds.shape) == 4 and nds.shape[-1] == 1:
@@ -189,15 +195,13 @@ def _frame_stream(spec: HostRunSpec, frames, vr, calib, th, *, with_dev: bool):
         for k, gi in enumerate(range(bstart, bend)):
             d = None
             if dev_base:
-                d = DeviceRef(ptr=dev_base + k * src_h * src_w,
-                              h=src_h, w=src_w, owner=nds)
+                d = DeviceRef(ptr=dev_base + k * src_h * src_w, h=src_h, w=src_w, owner=nds)
             # gray 必须拷贝：payload 灰度会作为代表帧逃逸出批作用域，
             # 而 g_buf 跨批复用——不拷贝则 merge_similar 在后续批读到
             # 被覆写的帧（2026-09-10 D1 调查：test5 host 45/1089 合并
             # 判定失真、段数 1042 vs GPU 正确值 1083；sharp/bs 为标量/
             # 每批新数组不受影响）。拷贝 ~3.5KB/帧，量级可忽略。
-            yield (frames[gi], crops[k], g[k].copy(), float(sharp[k]),
-                   bs[k], d)
+            yield (frames[gi], crops[k], g[k].copy(), float(sharp[k]), bs[k], d)
 
 
 class _HostLane:
@@ -207,8 +211,8 @@ class _HostLane:
     similar 判定取 [2]（灰度）。
     """
 
-    progress_verb = '解码+分段'
-    debug_tag = 'HB'
+    progress_verb = "解码+分段"
+    debug_tag = "HB"
 
     def __init__(self, spec: HostRunSpec) -> None:
         self._spec = spec
@@ -245,19 +249,20 @@ class _HostLane:
 
     def after_calibrate(self, th, ocr_session) -> None:
         if self._spec.on_bin_thresh is not None:
-            self._spec.on_bin_thresh(th)   # 流式合并判定活读，必须即时回写（F-4）
+            self._spec.on_bin_thresh(th)  # 流式合并判定活读，必须即时回写（F-4）
 
     def frame_items(self, spec, vr, frames, ocr_session):
         for fi, c, g, sharp, b, d in _frame_stream(
-                spec, frames, vr, self._calib, self._th,
-                with_dev=self._with_dev):
+            spec, frames, vr, self._calib, self._th, with_dev=self._with_dev
+        ):
             yield fi, sharp, dict(payload=(fi, c, g, d), bin=b)
 
     def emit(self, seg, rep, frac) -> None:
         _t_push = time.perf_counter()
         from .ocr_stage import SegmentTask
+
         self._put_ocr(SegmentTask(self._seg_idx, rep[0], rep[1], rep[3], frac))
-        _prof(self._spec, 'producer', 'q_put_block', _t_push)
+        _prof(self._spec, "producer", "q_put_block", _t_push)
         if self._spec.keep_crops:
             self._rep_crops[rep[0]] = rep[1]
         self._seg_idx += 1
@@ -272,7 +277,7 @@ class _HostLane:
         try:
             return self._spec.segments_similar(a[2], b[2])
         finally:
-            _prof(self._spec, 'producer', 'merge_pair', _t)
+            _prof(self._spec, "producer", "merge_pair", _t)
 
     # ── 宿主路径的空挂钩（生命周期差异全在 GPU lane 侧）──
     def abort(self, ocr_session) -> None:
@@ -297,12 +302,11 @@ class _HostLane:
         pass
 
 
-def run_host_pipeline(spec: HostRunSpec, ocr_engines=None,
-                      preopened_vr=None) -> HostRunResult:
+def run_host_pipeline(spec: HostRunSpec, ocr_engines=None, preopened_vr=None) -> HostRunResult:
     """宿主驱动入口：解码∥分段∥OCR（段一闭合即把代表帧交给 OCR 会话
     线程）。生命周期由 _driver.run_segment_pipeline 承载（P1），本模块
     只提供宿主 lane 策略。
     """
     from ._driver import run_segment_pipeline
-    return run_segment_pipeline(spec, HostRunResult(), _HostLane(spec),
-                                ocr_engines, preopened_vr)
+
+    return run_segment_pipeline(spec, HostRunResult(), _HostLane(spec), ocr_engines, preopened_vr)

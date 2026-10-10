@@ -21,6 +21,7 @@
 - 默认关闭（铁律 10）；`auto` 档随既有 `VOE_REPORT_FILE` opt-in 开启，
   不产生新的文件副作用。
 """
+
 from __future__ import annotations
 
 import json
@@ -64,6 +65,7 @@ class Progress:
     def seq(self) -> int:
         return self._seq
 
+
 def _stack_of(frames: dict, tid: int) -> list:
     fr = frames.get(tid)
     if fr is None:
@@ -80,13 +82,12 @@ class RunJournal:
         self._lock = threading.Lock()
         self._n_written = 0
         self._n_dropped = 0
-        self._last_err: str = ""   # 2026-09-19 审查轮：此前只在 except
-                                   # 分支赋值，report() 读它会 AttributeError
+        self._last_err: str = ""  # 2026-09-19 审查轮：此前只在 except
+        # 分支赋值，report() 读它会 AttributeError
         self._fh: "TextIO | None" = None
 
     def add(self, event: str, **fields) -> None:
-        rec = {"t": round(time.monotonic(), 4), "wall": time.time(),
-               "event": event}
+        rec = {"t": round(time.monotonic(), 4), "wall": time.time(), "event": event}
         rec.update(fields)
         with self._lock:
             if len(self._buf) == self._buf.maxlen:
@@ -103,12 +104,11 @@ class RunJournal:
         try:
             if self._fh is None:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
-                self._fh = open(self.path, "a", encoding="utf-8",
-                                newline="\n", buffering=1)
+                self._fh = open(self.path, "a", encoding="utf-8", newline="\n", buffering=1)
             for r in recs:
                 self._fh.write(json.dumps(r, ensure_ascii=False) + "\n")
             self._fh.flush()
-        except Exception as e:                      # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
             self._n_dropped += len(recs)
             self._last_err = repr(e)
             return 0
@@ -120,38 +120,47 @@ class RunJournal:
         if self._fh is not None:
             try:
                 self._fh.close()
-            except Exception:                       # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 pass  # 关闭失败无需上抛：进程即将回收 fd
             self._fh = None
 
     def report(self) -> dict:
         # last_error（2026-09-19 审查轮）：_last_err 此前只写不读——落盘
         # 持续失败（磁盘满/权限）时报告里只有计数，失败原因永远不可见。
-        return {"path": str(self.path), "written": self._n_written,
-                "dropped": self._n_dropped,
-                "last_error": self._last_err or None}
+        return {
+            "path": str(self.path),
+            "written": self._n_written,
+            "dropped": self._n_dropped,
+            "last_error": self._last_err or None,
+        }
 
 
 class StallWatchdog:
     """停顿看门狗：无进展超过阈值即落现场快照。"""
 
-    def __init__(self, progress: Progress, out_prefix: str | Path, *,
-                 stall_s: float = DEFAULT_STALL_S,
-                 poll_s: float = DEFAULT_POLL_S,
-                 flush_s: float = DEFAULT_FLUSH_S,
-                 journal: RunJournal | None = None,
-                 snapshot=None, native_stacks: bool = False,
-                 abort: bool = False) -> None:
+    def __init__(
+        self,
+        progress: Progress,
+        out_prefix: str | Path,
+        *,
+        stall_s: float = DEFAULT_STALL_S,
+        poll_s: float = DEFAULT_POLL_S,
+        flush_s: float = DEFAULT_FLUSH_S,
+        journal: RunJournal | None = None,
+        snapshot=None,
+        native_stacks: bool = False,
+        abort: bool = False,
+    ) -> None:
         self._p = progress
         self._prefix = Path(out_prefix)
         self._stall_s = float(stall_s)
         self._poll_s = float(poll_s)
         self._flush_s = float(flush_s)
         self._journal = journal
-        self._snapshot = snapshot          # 返回指标快照的可调用对象
+        self._snapshot = snapshot  # 返回指标快照的可调用对象
         self._native = bool(native_stacks)
         self._abort = bool(abort)
-        self._depths: dict = {}            # 只在停顿/落盘时调用，不进稳态
+        self._depths: dict = {}  # 只在停顿/落盘时调用，不进稳态
         self._stop = threading.Event()
         self._th: threading.Thread | None = None
         self._stalls = 0
@@ -167,13 +176,13 @@ class StallWatchdog:
             return
         if self._native:
             import faulthandler
+
             try:
                 fh = open(str(self._prefix) + ".faulthandler.txt", "a")
                 faulthandler.enable(file=fh, all_threads=True)
-            except Exception:                       # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 pass  # 原生栈是尽力而为：拿不到也不影响 Python 侧通道
-        self._th = threading.Thread(target=self._loop, name="voe-watchdog",
-                                    daemon=True)
+        self._th = threading.Thread(target=self._loop, name="voe-watchdog", daemon=True)
         self._th.start()
 
     def _loop(self) -> None:
@@ -190,7 +199,7 @@ class StallWatchdog:
                 t_flush = now
             if (now - last_change) >= self._stall_s:
                 self.dump_stall(now - last_change)
-                last_change = now      # 每次停顿只落一次，避免刷盘风暴
+                last_change = now  # 每次停顿只落一次，避免刷盘风暴
 
     def dump_stall(self, age: float) -> dict:
         """落一份停顿现场（JSON）并返回该 dict；自身绝不抛异常。"""
@@ -208,30 +217,31 @@ class StallWatchdog:
         if self._snapshot is not None:
             try:
                 payload["metrics"] = self._snapshot()
-            except Exception as e:                  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001
                 payload["metrics_error"] = repr(e)
         try:
             payload["hybrid_stats"] = self._hybrid_stats()
-        except Exception:                           # noqa: BLE001
+        except Exception:  # noqa: BLE001
             pass  # fork 侧统计为可选增强，缺失不影响现场价值
         if self._journal is not None:
-            self._journal.add("stall", age_s=round(float(age), 3),
-                              stall_index=self._stalls)
+            self._journal.add("stall", age_s=round(float(age), 3), stall_index=self._stalls)
             self._journal.flush()
             payload["journal"] = self._journal.report()
         path = "%s.stall-%d.json" % (self._prefix, self._stalls)
         try:
             tmp = path + ".tmp"
-            Path(tmp).write_text(json.dumps(payload, ensure_ascii=False,
-                                            indent=1, default=repr),
-                                 encoding="utf-8", newline="\n")
+            Path(tmp).write_text(
+                json.dumps(payload, ensure_ascii=False, indent=1, default=repr),
+                encoding="utf-8",
+                newline="\n",
+            )
             os.replace(tmp, path)
             self._last_dump = path
-        except Exception as e:                      # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
             payload["write_error"] = repr(e)
         self._stall_reports.append({"age_s": payload["age_s"], "path": path})
         if self._abort:
-            os._exit(70)                            # 显式请求时才中止进程
+            os._exit(70)  # 显式请求时才中止进程
         return payload
 
     def _thread_dump(self) -> dict:
@@ -240,8 +250,11 @@ class StallWatchdog:
         for t in threading.enumerate():
             if t.name == "voe-watchdog":
                 continue
-            out[t.name] = {"daemon": t.daemon, "alive": t.is_alive(),
-                           "stack": _stack_of(frames, t.ident or 0)}
+            out[t.name] = {
+                "daemon": t.daemon,
+                "alive": t.is_alive(),
+                "stack": _stack_of(frames, t.ident or 0),
+            }
         return out
 
     def _depth_dump(self) -> dict:
@@ -249,7 +262,7 @@ class StallWatchdog:
         for label, fn in self._depths.items():
             try:
                 out[label] = fn()
-            except Exception as e:                  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001
                 out[label] = "err:%r" % (e,)
         return out
 
@@ -260,6 +273,7 @@ class StallWatchdog:
         取不到就返回空——本模块不因缺它而降级。
         """
         import decord
+
         fn = getattr(decord, "hybrid_stats", None)
         return dict(fn()) if callable(fn) else {}
 
@@ -273,8 +287,12 @@ class StallWatchdog:
         return self.report()
 
     def report(self) -> dict:
-        out: dict[str, object] = {"armed": True, "stall_s": self._stall_s,
-               "polls": int(self._stalls), "stalls": self._stalls}
+        out: dict[str, object] = {
+            "armed": True,
+            "stall_s": self._stall_s,
+            "polls": int(self._stalls),
+            "stalls": self._stalls,
+        }
         if self._stall_reports:
             out["dumps"] = list(self._stall_reports)
         if self._last_dump:
@@ -289,8 +307,7 @@ class Diagnostics:
 
     armed = True
 
-    def __init__(self, progress: Progress, watchdog: StallWatchdog,
-                 journal: RunJournal) -> None:
+    def __init__(self, progress: Progress, watchdog: StallWatchdog, journal: RunJournal) -> None:
         self.progress = progress
         self.watchdog = watchdog
         self.journal = journal
@@ -316,8 +333,9 @@ class Diagnostics:
         return self.watchdog.report()
 
 
-def open_diagnostics(report_file: str | None, *, metrics=None,
-                     stall_s: float = DEFAULT_STALL_S) -> object:
+def open_diagnostics(
+    report_file: str | None, *, metrics=None, stall_s: float = DEFAULT_STALL_S
+) -> object:
     """按既有 opt-in 开启诊断；未 opt-in 返回 `NULL_DIAG`（零成本）。
 
     设计：**不新增环境旋钮**。诊断会写文件（副作用），故挂在既有
@@ -338,8 +356,8 @@ def open_diagnostics(report_file: str | None, *, metrics=None,
         # 等阈值指标偏小 → 门禁静默放行。
         def snap():
             return metrics.snapshot(drain=False)
-    wd = StallWatchdog(progress, base + ".diag", stall_s=stall_s,
-                       journal=journal, snapshot=snap)
+
+    wd = StallWatchdog(progress, base + ".diag", stall_s=stall_s, journal=journal, snapshot=snap)
     diag = Diagnostics(progress, wd, journal)
     journal.add("run_start", pid=os.getpid())
     return diag

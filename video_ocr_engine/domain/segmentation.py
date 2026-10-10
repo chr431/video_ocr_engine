@@ -12,16 +12,23 @@ GPU 各有一份同构逻辑。本文件是**唯一实现地**：
 
 章节：§1 像素原语 §2 校准与判定 §3 分段状态机 §4 裁切与预处理
 """
+
 from __future__ import annotations
 
 import numpy as np
 
 from video_ocr_engine.config import constants as config
-from video_ocr_engine.domain.video_utils import (_gray, _GRAY_W, _nv12_luma_full,
-                         _nv12_batch_luma_full, _np_resize)
+from video_ocr_engine.domain.video_utils import (
+    _gray,
+    _GRAY_W,
+    _nv12_luma_full,
+    _nv12_batch_luma_full,
+    _np_resize,
+)
 
 
 # ═══════════════════ §1 像素原语 ═══════════════════
+
 
 def _gray_batch(crops: np.ndarray) -> np.ndarray:
     """批量灰度：(B,H,W,3) → (B,H,W)；decord gray 输出 (B,H,W,1) 直接取通道。
@@ -68,8 +75,7 @@ def _gray_seg_yuv_batch(crops: np.ndarray, color_range: int = 0) -> np.ndarray:
     return _nv12_batch_luma_full(crops, color_range)
 
 
-def _nv12_batch_luma_full_out(crops: np.ndarray, color_range: int,
-                              out: np.ndarray) -> np.ndarray:
+def _nv12_batch_luma_full_out(crops: np.ndarray, color_range: int, out: np.ndarray) -> np.ndarray:
     """批量 Y 平面 + range 展开，写入预分配 out（形状必须匹配）。
 
     数值路径与 _nv12_batch_luma_full 逐位一致（S6-f′ 起两者共用同一张
@@ -77,17 +83,15 @@ def _nv12_batch_luma_full_out(crops: np.ndarray, color_range: int,
     与结果分配（主流水线每批形状恒定，缓冲可跨批复用）。
     """
     from ..domain.video_utils import _Y_LIMITED_LUT
+
     h = crops.shape[1] * 2 // 3
     w = crops.shape[2]
-    out = out[:crops.shape[0], :h, :w]   # 末批可能不满 B；按实际 Y 高/宽取切片
+    out = out[: crops.shape[0], :h, :w]  # 末批可能不满 B；按实际 Y 高/宽取切片
     if color_range == 1:
         out[...] = crops[:, :h]
         return out
     out[...] = _Y_LIMITED_LUT[crops[:, :h]]
     return out
-
-
-
 
 
 def _otsu_from_hist(hist) -> int:
@@ -166,8 +170,6 @@ def _otsu(g: np.ndarray) -> int:
     return _otsu_from_hist(hist)
 
 
-
-
 def otsu_median_threshold(ths) -> int:
     """校准阈值：Otsu 列表取中位数；空列表回退 OTSU_FALLBACK_THRESH。"""
     if not ths:
@@ -184,8 +186,9 @@ def dense_gate_hit(win3: float, gate: int) -> bool:
     return gate > 0 and win3 >= gate
 
 
-def similar_decision(mean: float, changed_px: int, threshold: float,
-                     max_changed: int, dense: bool = False) -> bool:
+def similar_decision(
+    mean: float, changed_px: int, threshold: float, max_changed: int, dense: bool = False
+) -> bool:
     """相似段合并的两阈值判定（宿主 numpy 统计与 GPU sim_pair 标量共用）。
 
     只看平均绝对差会把宽 ROI 中的单字短字幕（如"在""不"）误判为噪声：
@@ -227,6 +230,7 @@ def _text_sep_binary(gray: np.ndarray, th: int) -> np.ndarray:
 
 # ═══════════════════ §3 分段状态机（双管线共用编排） ═══════════════════
 
+
 class SegmentStateMachine:
     """断段 / 代表帧选择 / 相似合并的统一编排（宿主与 GPU 管线共用）。
 
@@ -240,12 +244,19 @@ class SegmentStateMachine:
       （宿主 = (frame_idx, crop, gray, dev_info)；GPU = (frame_idx, dev, sharp)）。
     """
 
-    def __init__(self, frames: list, *, C: float,
-                 on_emit, on_similar,
-                 on_cancel=None, on_progress=None,
-                 debug_tag: str | None = None,
-                 debug_bounds: "bool | None" = None):
-        self._debug_bounds = debug_bounds   # S9-2(D6):None=feed 期读 env(直连用户兼容)
+    def __init__(
+        self,
+        frames: list,
+        *,
+        C: float,
+        on_emit,
+        on_similar,
+        on_cancel=None,
+        on_progress=None,
+        debug_tag: str | None = None,
+        debug_bounds: "bool | None" = None,
+    ):
+        self._debug_bounds = debug_bounds  # S9-2(D6):None=feed 期读 env(直连用户兼容)
         """on_emit(seg, rep_payload, frac) — 段闭合投递（frac = k/total）。
         on_similar(a_payload, b_payload) -> bool — 相邻发射段代表帧相似判定；
             仅在已有发射段时被调用（空段列表不调用，等价宿主原 `segs and` 短路）。
@@ -262,7 +273,7 @@ class SegmentStateMachine:
         self.segs: list = []
         self._s = 0
         self._started = False
-        self._prev_bin: "np.ndarray | None" = None   # _started 门保证第二帧起非 None
+        self._prev_bin: "np.ndarray | None" = None  # _started 门保证第二帧起非 None
         self._rep_payload = None
         self._last_rep_payload = None
         self._rep_sharp = -1.0
@@ -272,9 +283,16 @@ class SegmentStateMachine:
         self._rep_sharp = sharp
         self._rep_payload = payload
 
-    def feed(self, k: int, fi: int, sharp: float, payload,
-             *, bin: "np.ndarray | None" = None,
-             cluster: "float | None" = None) -> None:
+    def feed(
+        self,
+        k: int,
+        fi: int,
+        sharp: float,
+        payload,
+        *,
+        bin: "np.ndarray | None" = None,
+        cluster: "float | None" = None,
+    ) -> None:
         """消费一帧。宿主管线传 bin（二值图），GPU 管线传 cluster（win3 分数）。"""
         if self._started:
             if bin is not None:
@@ -287,20 +305,20 @@ class SegmentStateMachine:
                 score = float(cluster)  # type: ignore[arg-type]  # 契约：bin=None 时 cluster 必传
                 changed = score >= self._C
             if changed:
-                seg = self._frames[self._s:k]
-                if (self._debug_tag is not None
-                        and (self._debug_bounds if self._debug_bounds is not None
-                             else config.env_bool(config.DEBUG_BOUNDS_ENV))):
-                    print(f'[{self._debug_tag}]{fi}:{score:.0f}', flush=True)
-                if self.segs and self._on_similar(self._last_rep_payload,
-                                                  self._rep_payload):
+                seg = self._frames[self._s : k]
+                if self._debug_tag is not None and (
+                    self._debug_bounds
+                    if self._debug_bounds is not None
+                    else config.env_bool(config.DEBUG_BOUNDS_ENV)
+                ):
+                    print(f"[{self._debug_tag}]{fi}:{score:.0f}", flush=True)
+                if self.segs and self._on_similar(self._last_rep_payload, self._rep_payload):
                     # 同一视觉内容被噪声切成多段：并入前一段，不产生新的
                     # OCR 任务，保留前一段代表帧/文本。
                     self.segs[-1].extend(seg)
                 else:
                     self.segs.append(seg)
-                    self._on_emit(seg, self._rep_payload,
-                                  k / self._total)
+                    self._on_emit(seg, self._rep_payload, k / self._total)
                     self._last_rep_payload = self._rep_payload
                 self._s = k
                 self._set_rep(fi, sharp, payload)
@@ -317,9 +335,8 @@ class SegmentStateMachine:
 
     def finish(self) -> None:
         """流结束：处理尾段（与 feed 内闭合逻辑同判据）。"""
-        seg = self._frames[self._s:]
-        if self.segs and self._on_similar(self._last_rep_payload,
-                                          self._rep_payload):
+        seg = self._frames[self._s :]
+        if self.segs and self._on_similar(self._last_rep_payload, self._rep_payload):
             self.segs[-1].extend(seg)
         else:
             self.segs.append(seg)
@@ -328,8 +345,8 @@ class SegmentStateMachine:
 
 # ═══════════════════ §4 裁切与预处理 ═══════════════════
 
-def content_range_to_crop(first: int, last: int, w: int, *, margin_pct: int,
-                          min_gain: float):
+
+def content_range_to_crop(first: int, last: int, w: int, *, margin_pct: int, min_gain: float):
     """「有墨迹列范围」→ 裁切区间 (x_off, crop_w)；满宽/收益不足返回 None。
 
     宿主 `_crop_to_content` 与 GPU 直通（`_autocrop_device`）共用的同一余量
@@ -352,13 +369,19 @@ def content_range_to_crop(first: int, last: int, w: int, *, margin_pct: int,
         return None
     if min_gain > 0.0:
         if (w - (hi - lo)) / w < min_gain:
-            return None          # 收益太小：不值得承担切笔画的风险
+            return None  # 收益太小：不值得承担切笔画的风险
     return lo, hi - lo
 
 
-def crop_to_content(crop: np.ndarray, bin_thresh: int, *, autocrop: bool = True,
-                    force_aspect: float = 0.0, margin_pct: int = 10,
-                    min_gain: float = 0.1) -> np.ndarray:
+def crop_to_content(
+    crop: np.ndarray,
+    bin_thresh: int,
+    *,
+    autocrop: bool = True,
+    force_aspect: float = 0.0,
+    margin_pct: int = 10,
+    min_gain: float = 0.1,
+) -> np.ndarray:
     """按二值图的"有墨迹列范围"裁掉两侧空白（宽 ROI 字幕省 OCR 计算）。
 
     判据与分段完全一致（`g > bin_thresh`，墨迹为亮），
@@ -382,16 +405,18 @@ def crop_to_content(crop: np.ndarray, bin_thresh: int, *, autocrop: bool = True,
     cols = np.nonzero((g > bin_thresh).sum(axis=0) >= 2)[0]
     if len(cols) == 0:
         return crop
-    rng = content_range_to_crop(int(cols[0]), int(cols[-1]), w,
-                                margin_pct=margin_pct, min_gain=min_gain)
+    rng = content_range_to_crop(
+        int(cols[0]), int(cols[-1]), w, margin_pct=margin_pct, min_gain=min_gain
+    )
     if rng is None:
         return crop
     lo, cw = rng
-    return crop[:, lo:lo + cw]
+    return crop[:, lo : lo + cw]
 
 
-def crop_after_aspect(img: np.ndarray, *, autocrop: bool = True,
-                      margin_pct: int = 10, min_gain: float = 0.1) -> np.ndarray:
+def crop_after_aspect(
+    img: np.ndarray, *, autocrop: bool = True, margin_pct: int = 10, min_gain: float = 0.1
+) -> np.ndarray:
     """`force_aspect > 0` 时，在**已定比例**的图上再按内容列裁。
 
     ## 顺序很关键：必须"先定比例、后裁切"（⑦），不能"先裁再定比例"（⑥）
@@ -423,16 +448,18 @@ def crop_after_aspect(img: np.ndarray, *, autocrop: bool = True,
     cols = np.nonzero((g > _otsu(g8)).sum(axis=0) >= 2)[0]
     if len(cols) == 0:
         return img
-    rng = content_range_to_crop(int(cols[0]), int(cols[-1]), w,
-                                margin_pct=margin_pct, min_gain=min_gain)
+    rng = content_range_to_crop(
+        int(cols[0]), int(cols[-1]), w, margin_pct=margin_pct, min_gain=min_gain
+    )
     if rng is None:
         return img
     lo, cw = rng
-    return img[:, lo:lo + cw]
+    return img[:, lo : lo + cw]
 
 
-def preprocess_standard(crop: np.ndarray, force_aspect: float = 0.0,
-                        gamma: "float | None" = None) -> np.ndarray:
+def preprocess_standard(
+    crop: np.ndarray, force_aspect: float = 0.0, gamma: "float | None" = None
+) -> np.ndarray:
     """标准预处理：resize 到 OCR_TARGET_H 高 + 可选强制宽高比 + 灰度 gamma。
 
     force_aspect > 0 时强制横向宽度 = OCR_TARGET_H × force_aspect（px，
@@ -462,7 +489,7 @@ def preprocess_standard(crop: np.ndarray, force_aspect: float = 0.0,
     # 0.000000（30064 段次）、金标 --verify 28/28。端到端当前无收益
     # （CPU+CPU 墙钟由推理聚合吞吐决定，消费者线程有等待余量），
     # 按用户裁定保留：其他环节加速后此项可能兑现。
-    _gray_first = (gamma > 0 and crop.ndim == 3 and crop.shape[-1] >= 3)
+    _gray_first = gamma > 0 and crop.ndim == 3 and crop.shape[-1] >= 3
     src = (crop @ _GRAY_W) if _gray_first else crop
     if new_w == w and abs(target_h - h) <= config.OCR_RESIZE_TOL * target_h:
         # 目标尺寸已一致（或高差在容差内）→ 跳过无谓 resize；宽高任一需变
@@ -474,11 +501,11 @@ def preprocess_standard(crop: np.ndarray, force_aspect: float = 0.0,
         # 灰度 + gamma（正式预处理）：RGB 逐通道 gamma 视觉差异小、回归多
         # （tools/_gamma_misread_montage 对比），灰度版视觉更清晰、回归少。
         if resized.ndim == 2:
-            gray = resized                                # 2D (H,W) 灰度输入
+            gray = resized  # 2D (H,W) 灰度输入
         elif resized.shape[-1] == 1:
-            gray = resized[..., 0]                        # decord gray 输出
+            gray = resized[..., 0]  # decord gray 输出
         else:
-            gray = resized @ _GRAY_W                      # (h, w) float32
+            gray = resized @ _GRAY_W  # (h, w) float32
         resized = 255.0 * np.power(gray / 255.0, gamma)
         resized = np.stack([resized] * 3, axis=-1)
     return resized

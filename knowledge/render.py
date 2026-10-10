@@ -94,6 +94,28 @@ def render_knobs_yaml() -> str:
     return "\n".join(lines)
 
 
+_PATH_TOKEN = re.compile(
+    r"((?:video_ocr_engine|docs|tools|knowledge|tests)/[\w./-]+\.(?:py|md|yaml))")
+
+
+def _conclusion_path_errors(entries: list[dict]) -> list[str]:
+    """结论字段里的仓库内**全路径**必须存在（2026-10-10 治理改革轮）。
+
+    C-32 教训：包化重构后结论里"segmentation.py"的旧路径标签静默存活
+    （悬空检查按 basename 匹配抓不到）。约定：结论涉及代码一律写包内
+    全路径，本函数在渲染校验时逐条验证。裸 basename 不在此管（语义
+    模糊，靠人写全路径的约定 + 本校验兜底）。
+    """
+    bad: list[str] = []
+    for e in entries:
+        for field in ("conclusion", "premises", "revisit", "evidence"):
+            for m in _PATH_TOKEN.finditer(str(e.get(field, ""))):
+                rel = m.group(1)
+                if "*" not in rel and not (ROOT / rel).exists():
+                    bad.append("%s(%s): %s" % (e.get("id", "?"), field, rel))
+    return bad
+
+
 def check() -> int:
     bad = 0
     entries = load_conclusions()
@@ -105,6 +127,13 @@ def check() -> int:
               "python knowledge/render.py --write）")
     else:
         print("✓ CONCLUSIONS.md 一致")
+    path_bad = _conclusion_path_errors(entries)
+    if path_bad:
+        bad += 1
+        print("✗ 结论引用了不存在的路径（改成现存全路径，或改为历史注记）：%s"
+              % "；".join(path_bad[:4]))
+    else:
+        print("✓ 结论路径活性")
     for path, gen, label in (
             (ROOT / "docs" / "KNOBS.md", render_knobs_md, "KNOBS.md"),
             (KNOW / "knobs.yaml", render_knobs_yaml, "knobs.yaml")):

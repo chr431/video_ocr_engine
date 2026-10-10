@@ -10,6 +10,7 @@
   不起采样器（PI-15 由 bench 三档互比门禁背书）。
 - 细档 JSON sidecar 由 `diagnostics.report_file` 显式 opt-in（写文件是副作用）。
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -57,22 +58,29 @@ REPORT_VERSION = 10
 #:   故无 consumer 关系；ocr 两对关系两路径同构。
 SPAN_RELATIONS: dict = {
     "host": {
-        "pipeline.consumer": ("decode.batch", "decode.luma_batch",
-                              "decode.sharp_batch", "decode.binarize_batch",
-                              "pipeline.consume_feed"),
-        "pipeline.consume_feed": ("segment.merge_pair",
-                                  "pipeline.q_put_block"),
+        "pipeline.consumer": (
+            "decode.batch",
+            "decode.luma_batch",
+            "decode.sharp_batch",
+            "decode.binarize_batch",
+            "pipeline.consume_feed",
+        ),
+        "pipeline.consume_feed": ("segment.merge_pair", "pipeline.q_put_block"),
         "ocr.infer": ("ocr.ctc_decode",),
-        "ocr.preprocess": ("ocr.preproc_luma", "ocr.preproc_autocrop",
-                           "ocr.preproc_resize"),
+        "ocr.preprocess": ("ocr.preproc_luma", "ocr.preproc_autocrop", "ocr.preproc_resize"),
     },
     "gpu": {
         # W2+W9：TRT 子相位（full 档才有值；同步路径=enq/reduce/concat，
         # defer 路径=submit/collect——每 run 只走其一，缺席侧记 0）
-        "ocr.infer": ("ocr.ctc_decode", "ocr.trt_enq", "ocr.trt_reduce",
-                      "ocr.trt_concat", "ocr.trt_submit", "ocr.trt_collect"),
-        "ocr.preprocess": ("ocr.preproc_luma", "ocr.preproc_autocrop",
-                           "ocr.preproc_resize"),
+        "ocr.infer": (
+            "ocr.ctc_decode",
+            "ocr.trt_enq",
+            "ocr.trt_reduce",
+            "ocr.trt_concat",
+            "ocr.trt_submit",
+            "ocr.trt_collect",
+        ),
+        "ocr.preprocess": ("ocr.preproc_luma", "ocr.preproc_autocrop", "ocr.preproc_resize"),
     },
 }
 
@@ -95,9 +103,9 @@ def _derive_other_spans(spans: dict, gauges: dict, path: str) -> dict:
             if v is None:
                 v = gauges.get(c)
             acc += float(v or 0.0)
-        out[parent + "_other"] = {"n": p["n"],
-                                  "sum": _num(max(0.0, p["sum"] - acc))}
+        out[parent + "_other"] = {"n": p["n"], "sum": _num(max(0.0, p["sum"] - acc))}
     return out
+
 
 #: PI 守卫阈值（§13.2 N-5：散文 → 指标名 + 阈值）
 PI_LIMITS = {
@@ -119,15 +127,17 @@ def environment() -> dict:
     if _ENV_CACHE is not None:
         return dict(_ENV_CACHE)
     from video_ocr_engine.config import constants as config
-    env = {"engine_version": getattr(config, "__version__", None),
-           "python": sys.version.split()[0]}
+
+    env = {"engine_version": getattr(config, "__version__", None), "python": sys.version.split()[0]}
     try:
         import decord
+
         env["decord"] = decord.__version__
     except Exception:  # noqa: BLE001
         env["decord"] = None
     try:
         import tensorrt
+
         env["tensorrt"] = tensorrt.__version__
     except Exception:  # noqa: BLE001
         env["tensorrt"] = None
@@ -135,15 +145,20 @@ def environment() -> dict:
     # 且不起子进程），失败才回退 nvidia-smi；两者都不行记 unavailable。
     # 这段成本落在**报告组装路径**上（进程级缓存，只付一次），故能省则省。
     from video_ocr_engine.domain.resources import gpu_identity
+
     ident = gpu_identity()
     if ident:
         env["gpu"], env["driver"], env["gpu_source"] = ident[0], ident[1], "nvml"
     else:
         try:
             out = subprocess.run(
-                ["nvidia-smi", "--query-gpu=name,driver_version",
-                 "--format=csv,noheader"], capture_output=True, text=True,
-                encoding="utf-8", errors="replace", timeout=10).stdout.strip()
+                ["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=10,
+            ).stdout.strip()
             name, _, drv = out.partition(",")
             env["gpu"] = name.strip() or None
             env["driver"] = drv.strip() or None
@@ -171,23 +186,39 @@ def health(snap: dict, *, counters: dict | None = None) -> dict:
     v = gauges.get("ocr.engine_init")
     if v is not None:
         hot = counters.get("ocr.engine_reuse", 0) > 0
-        out["PI-10"] = {"metric": "ocr.engine_init", "value": _num(v),
-                        "limit": "<0.1s(热池)", "hot_pool": hot,
-                        "ok": (v < PI_LIMITS["PI-10"][1]) if hot else True}
+        out["PI-10"] = {
+            "metric": "ocr.engine_init",
+            "value": _num(v),
+            "limit": "<0.1s(热池)",
+            "hot_pool": hot,
+            "ok": (v < PI_LIMITS["PI-10"][1]) if hot else True,
+        }
     v = gauges.get("ocr.syncs_per_chunk")
     if v is not None:
-        out["PI-3"] = {"metric": "ocr.syncs_per_chunk", "value": _num(v),
-                       "limit": "<=3", "ok": v <= PI_LIMITS["PI-3"][1]}
+        out["PI-3"] = {
+            "metric": "ocr.syncs_per_chunk",
+            "value": _num(v),
+            "limit": "<=3",
+            "ok": v <= PI_LIMITS["PI-3"][1],
+        }
     return out
 
 
-def build_report(metrics, *, wall: float, config_digest: str = "",
-                 params: dict | None = None, degradations: list | None = None,
-                 n_segments: int = 0, backend: str = "",
-                 ocr_backend: str = "", extra: dict | None = None,
-                 hardware: dict | None = None,
-                 diagnostics: dict | None = None,
-                 span_path: str = "host") -> dict:
+def build_report(
+    metrics,
+    *,
+    wall: float,
+    config_digest: str = "",
+    params: dict | None = None,
+    degradations: list | None = None,
+    n_segments: int = 0,
+    backend: str = "",
+    ocr_backend: str = "",
+    extra: dict | None = None,
+    hardware: dict | None = None,
+    diagnostics: dict | None = None,
+    span_path: str = "host",
+) -> dict:
     """组装 RunReport（telemetry=off 时返回 {}）。"""
     if not getattr(metrics, "enabled", False):
         return {}
@@ -197,8 +228,7 @@ def build_report(metrics, *, wall: float, config_digest: str = "",
     _content = snap["counters"].get("ocr.content_cols", 0)
     if _pad:
         snap["gauges"]["ocr.fill_pct"] = 100.0 * _content / _pad
-    spans = {k: {kk: _num(vv) for kk, vv in v.items()}
-             for k, v in snap["spans"].items()}
+    spans = {k: {kk: _num(vv) for kk, vv in v.items()} for k, v in snap["spans"].items()}
     gauges = {k: _num(v) for k, v in snap["gauges"].items()}
     # v4：缺口派生（只加键；条目形状 {n,sum}，不伪造分位数）
     derived = _derive_other_spans(spans, gauges, span_path)
@@ -212,15 +242,18 @@ def build_report(metrics, *, wall: float, config_digest: str = "",
         "gauges": gauges,
         "health": health(snap),
         "environment": environment(),
-        "pipeline": {"backend": backend, "ocr_backend": ocr_backend,
-                     "n_segments": n_segments,
-                     "config_digest": config_digest},
+        "pipeline": {
+            "backend": backend,
+            "ocr_backend": ocr_backend,
+            "n_segments": n_segments,
+            "config_digest": config_digest,
+        },
         "degradations": list(degradations or []),
         "span_relations": {
             "path": span_path,
             "parent_children": dict(SPAN_RELATIONS.get(span_path, {})),
-            "note": "_other = parent.sum − Σ在场子项 sum（缺席记 0；子项互"
-                    "不重叠）"},
+            "note": "_other = parent.sum − Σ在场子项 sum（缺席记 0；子项互不重叠）",
+        },
     }
     # §8.6 r5 资源层（**report_version 2 的新增段，只加不改**）：
     # resources = L1 相位边界差分（std+ 即有）；hardware = L2 NVML 峰值因子
@@ -229,35 +262,37 @@ def build_report(metrics, *, wall: float, config_digest: str = "",
         res = metrics.resource_report()
         if res:
             res = dict(res)
-            res["notes"] = ("L1 为进程级差分，OCR 与解码并发时核数互相计入"
-                            "（相位平均并行核数的本意）；cores_avg_cycles 为"
-                            "cycle 口径权威读数（无 15.625ms tick 量化；按全程"
-                            "平均频率换算，变频相位有偏）；cores_avg 仅 cycles"
-                            "来源缺席（非 Windows）时的回退；"
-                            "cycles/cycles_e2e 为原始周期账本（C-63：A/B 配对"
-                            "判据，跨频稳定但 SMT 争用带 ±16% 均值漂移，交错"
-                            "仍需）；thr/thr_duty 为引擎自有线程的逐线程账本"
-                            "（full 档；duty=忙碌份额，等待不计；外来线程群"
-                            "不可分）；本机自测口径，跨机不可比；PCIe 本机不可"
-                            "直读，只能由 counter 字节 ÷ 相位墙钟推算（L3 "
-                            "推导区，本表不产该字段）")
+            res["notes"] = (
+                "L1 为进程级差分，OCR 与解码并发时核数互相计入"
+                "（相位平均并行核数的本意）；cores_avg_cycles 为"
+                "cycle 口径权威读数（无 15.625ms tick 量化；按全程"
+                "平均频率换算，变频相位有偏）；cores_avg 仅 cycles"
+                "来源缺席（非 Windows）时的回退；"
+                "cycles/cycles_e2e 为原始周期账本（C-63：A/B 配对"
+                "判据，跨频稳定但 SMT 争用带 ±16% 均值漂移，交错"
+                "仍需）；thr/thr_duty 为引擎自有线程的逐线程账本"
+                "（full 档；duty=忙碌份额，等待不计；外来线程群"
+                "不可分）；本机自测口径，跨机不可比；PCIe 本机不可"
+                "直读，只能由 counter 字节 ÷ 相位墙钟推算（L3 "
+                "推导区，本表不产该字段）"
+            )
             rep["resources"] = res
     if hardware is not None:
         rep["hardware"] = hardware
     # v5：分布形状（full 档专属；std 档不写该键——缺席 ≠ 空值）
     hists = snap.get("histograms") or {}
     if hists:
-        from video_ocr_engine.domain.metrics import (
-            HIST_BUCKET_LOWER, HIST_EXP_BIAS, HIST_N_BUCKETS)
+        from video_ocr_engine.domain.metrics import HIST_BUCKET_LOWER, HIST_EXP_BIAS, HIST_N_BUCKETS
+
         rep["histograms"] = {
-            k: {"n": v["n"], "buckets": list(v["buckets"])}
-            for k, v in hists.items()}
+            k: {"n": v["n"], "buckets": list(v["buckets"])} for k, v in hists.items()
+        }
         rep["histograms_meta"] = {
             "n_buckets": HIST_N_BUCKETS,
             "exp_bias": HIST_EXP_BIAS,
             "bucket_lower_s": [round(x, 8) for x in HIST_BUCKET_LOWER],
             "note": "桶号 = frexp(秒)指数 + %d；桶 i 覆盖 [lower[i], "
-                    "lower[i+1])，末桶含上溢；读数=事件次数" % HIST_EXP_BIAS,
+            "lower[i+1])，末桶含上溢；读数=事件次数" % HIST_EXP_BIAS,
         }
     # v3：诊断段（未 arming 时不写该键，而不是写空值冒充）
     if diagnostics:
@@ -355,18 +390,30 @@ class RunReport:
 def write_report_file(report: dict, path: str) -> None:
     """细档 JSON sidecar（显式 opt-in；写文件是副作用，默认关闭）。"""
     import json
+
     p = Path(path)
     if p.parent and not p.parent.exists():
         p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(report, ensure_ascii=False, indent=1),
-                 encoding="utf-8", newline="\n")
+    p.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8", newline="\n")
 
 
-def finalized_report(metrics, spine, timing: dict, trace, diag,
-                     degraded: list, *, wall: float, n_segments: int,
-                     backend: str, ocr_backend: str, hardware,
-                     fork_stats, gpu_mode: bool,
-                     config_digest: str) -> dict:
+def finalized_report(
+    metrics,
+    spine,
+    timing: dict,
+    trace,
+    diag,
+    degraded: list,
+    *,
+    wall: float,
+    n_segments: int,
+    backend: str,
+    ocr_backend: str,
+    hardware,
+    fork_stats,
+    gpu_mode: bool,
+    config_digest: str,
+) -> dict:
     """把单次 run 的观测收敛成 RunReport（off 档返回 {}）。
 
     R1（2026-09-27）自 extractor._assemble_report 下放：输入全部显式
@@ -376,42 +423,46 @@ def finalized_report(metrics, spine, timing: dict, trace, diag,
     组装时长，dump note 有说明——真实锚点由脊柱事件提供）。
     """
     import time
+
     if not metrics.enabled:
         return {}
     for name, total in spine.totals.items():
         metrics.gauge(name, total)
     for name, mx in spine.maxes.items():
-        metrics.gauge(name, mx)      # 单次最长（0 = 一次都没发生）
+        metrics.gauge(name, mx)  # 单次最长（0 = 一次都没发生）
     # 编排三段的显式计时段（res.timing 由两后端直写；此处转成正样本 span）。
     # pipeline.decode 仅 GPU 路径产出（生产者线程成本的真实相位键）；
     # host 的同区间由脊柱 pipeline.consumer 表达——双键同值稀释报告，
     # 0.17.0 删除 host 侧发射（MIGRATION §2）。
     _phases = (("decode", "pipeline.decode"),) if gpu_mode else ()
-    for _k, _name in (*_phases, ("ocr", "pipeline.ocr"),
-                      ("ocr_tail", "pipeline.ocr_tail")):
+    for _k, _name in (*_phases, ("ocr", "pipeline.ocr"), ("ocr_tail", "pipeline.ocr_tail")):
         _v = timing.get(_k)
         if _v is not None:
             metrics.record_span(_name, float(_v))
     if trace is not None:
         _now = time.perf_counter()
-        for _k, _name in (*_phases, ("ocr", "pipeline.ocr"),
-                          ("ocr_tail", "pipeline.ocr_tail")):
+        for _k, _name in (*_phases, ("ocr", "pipeline.ocr"), ("ocr_tail", "pipeline.ocr_tail")):
             _v = timing.get(_k)
             if _v is not None:
                 trace.record(_name, _now - float(_v), _now)
     # 诊断收尾：停看门狗、冲刷崩溃日志（未 arming 时是空字典）
     diag_rep = diag.stop() if diag.armed else {}
     return build_report(
-        metrics, wall=wall, config_digest=config_digest,
-        degradations=degraded, n_segments=n_segments,
-        backend=backend, ocr_backend=ocr_backend,
-        hardware=hardware, diagnostics=diag_rep,
+        metrics,
+        wall=wall,
+        config_digest=config_digest,
+        degradations=degraded,
+        n_segments=n_segments,
+        backend=backend,
+        ocr_backend=ocr_backend,
+        hardware=hardware,
+        diagnostics=diag_rep,
         span_path=("gpu" if gpu_mode else "host"),
         # fork 遥测穿透（hybrid 解码器才有；缺席≠空值）
-        extra=({"hybrid": fork_stats} if fork_stats else None))
+        extra=({"hybrid": fork_stats} if fork_stats else None),
+    )
 
 
 def red_flags(report: dict) -> list:
     """报告中的失败项（bench 在线判失败用）。"""
-    return [k for k, v in (report.get("health") or {}).items()
-            if not v.get("ok", True)]
+    return [k for k, v in (report.get("health") or {}).items() if not v.get("ok", True)]

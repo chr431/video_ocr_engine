@@ -14,6 +14,7 @@ driver 消费面本轮仍为裸 vr（`open()` 返回 reader 本体，零驱动�
 FrameSource 协议面（len/fps/codec/batch/close）以薄委托形式先行接线，
 端口收口（driver 直接消费 source）属后续轮次。
 """
+
 from __future__ import annotations
 
 import logging
@@ -24,9 +25,12 @@ import numpy as np
 from video_ocr_engine.config.decode_caliber import decode_num_threads
 from video_ocr_engine.decode.contract import probe_contract
 from video_ocr_engine.domain.segmentation import (
-    _gray_seg, _gray_seg_batch,
-    _gray_seg_yuv, _gray_seg_yuv_batch,
-    _nv12_batch_luma_full_out, _gray_batch_out,
+    _gray_seg,
+    _gray_seg_batch,
+    _gray_seg_yuv,
+    _gray_seg_yuv_batch,
+    _nv12_batch_luma_full_out,
+    _gray_batch_out,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,14 +54,14 @@ def ensure_roi_capable_decoder() -> None:
         return
     contract = probe_contract()
     if contract is not None:
-        contract.require('roi_first', 'DC-01',
-                         'ROI-first 解码（引擎性能地基，无降级路径）')
+        contract.require("roi_first", "DC-01", "ROI-first 解码（引擎性能地基，无降级路径）")
         return
-    if not hasattr(_vr_mod, '_CAPI_VideoReaderSetRoi'):
+    if not hasattr(_vr_mod, "_CAPI_VideoReaderSetRoi"):
         raise ValueError(
             "当前 decord 不支持 ROI-first 解码（缺 _CAPI_VideoReaderSetRoi）。"
             "引擎需要 chr431/decord fork（见 README「解码后端」）；"
-            "拒绝在整帧模式下静默忽略 roi 参数。")
+            "拒绝在整帧模式下静默忽略 roi 参数。"
+        )
 
 
 class DecordFrameSource:
@@ -68,22 +72,31 @@ class DecordFrameSource:
       翻 False——代表帧退化灰度，降级原因进 degraded 列表）。
     """
 
-    def __init__(self, video_path, roi: tuple, decode_backend: str,
-                 yuv_output: bool, degraded: list, *,
-                 frame_start: int = 0, frame_end=None,
-                 decode_threads_fn=None, hybrid_cpu_threads: int = 0,
-                 ocr_on_gpu_fn=None) -> None:
+    def __init__(
+        self,
+        video_path,
+        roi: tuple,
+        decode_backend: str,
+        yuv_output: bool,
+        degraded: list,
+        *,
+        frame_start: int = 0,
+        frame_end=None,
+        decode_threads_fn=None,
+        hybrid_cpu_threads: int = 0,
+        ocr_on_gpu_fn=None,
+    ) -> None:
         self._video_path = Path(video_path)
         self._roi = tuple(roi)
         self._decode_backend = decode_backend
         self.yuv_output = yuv_output
-        self._degraded = degraded          # 与门面共享的降级原因列表（D3）
+        self._degraded = degraded  # 与门面共享的降级原因列表（D3）
         self._frame_start = frame_start
         self._frame_end = frame_end
         # (codec|None) -> int|None：codec 感知 CPU 软解线程档位（事实源
         # config.decode_caliber；门面注入以共享同一 rc override）
         self._decode_threads_fn = decode_threads_fn
-        self._hybrid_cpu_threads = hybrid_cpu_threads   # rc 冻结值；<=0 = auto
+        self._hybrid_cpu_threads = hybrid_cpu_threads  # rc 冻结值；<=0 = auto
         self._ocr_on_gpu_fn = ocr_on_gpu_fn
         self._vr = None
         self.backend_label = ""
@@ -97,10 +110,11 @@ class DecordFrameSource:
     @property
     def fps(self) -> float:
         from video_ocr_engine._helpers import _read_fps_from_vr
+
         return _read_fps_from_vr(self._require_open()) or 0.0
 
     def roi_format(self) -> str:
-        return 'yuv420' if self.yuv_output else 'gray'
+        return "yuv420" if self.yuv_output else "gray"
 
     def batch(self, frames):
         return self._require_open().get_batch(frames)
@@ -118,59 +132,61 @@ class DecordFrameSource:
     def open(self):
         """按 decode_backend 打开解码器（auto/cpu/nvdec/hybrid）。
 
-            auto: 尝试 GPU (NVDEC) 失败回退 CPU。cpu: 强制 CPU。
-            nvdec: 强制 GPU（失败回退 CPU 并警告）。
-            hybrid: CPU+NVDEC 混合解码（fork 原生 hybrid/hybrid_gpu ctx）；
-                NVDEC 不可用时回退 CPU 并警告；激活安全门见下方条件。
+        auto: 尝试 GPU (NVDEC) 失败回退 CPU。cpu: 强制 CPU。
+        nvdec: 强制 GPU（失败回退 CPU 并警告）。
+        hybrid: CPU+NVDEC 混合解码（fork 原生 hybrid/hybrid_gpu ctx）；
+            NVDEC 不可用时回退 CPU 并警告；激活安全门见下方条件。
 
-            ROI-first（decord ≥0.7.5）：构造时传入固定 ROI（半开区间）——
-            解码器只输出该矩形（CPU filter 先 crop 再转换 / GPU 转换 kernel
-            只算 ROI 窗口 + 输出池 ROI 尺寸），免全帧转换与逐帧裁剪。
-            """
+        ROI-first（decord ≥0.7.5）：构造时传入固定 ROI（半开区间）——
+        解码器只输出该矩形（CPU filter 先 crop 再转换 / GPU 转换 kernel
+        只算 ROI 窗口 + 输出池 ROI 尺寸），免全帧转换与逐帧裁剪。
+        """
         from decord import cpu as _cpu
+
         try:
             import decord.video_reader as _vr_mod
-            _has_roi_api = hasattr(_vr_mod, '_CAPI_VideoReaderSetRoi')
+
+            _has_roi_api = hasattr(_vr_mod, "_CAPI_VideoReaderSetRoi")
         except ImportError:
             _has_roi_api = False
         from video_ocr_engine.config.decode_caliber import roi_for_decord
+
         roi = roi_for_decord(self._roi)
-        roi_kw = {'roi': roi} if _has_roi_api else {}
-        backend = (self._decode_backend or 'auto').lower()
+        roi_kw = {"roi": roi} if _has_roi_api else {}
+        backend = (self._decode_backend or "auto").lower()
         vr = None
-        label = 'CPU'
+        label = "CPU"
         # ⚠️ auto 恒为 NVDEC 优先是**刻意决策**（2026-09-10 重申，勿再改）：
         # 本机强多核下实测 h264 CPU 软解确比 NVDEC 快 1.7~2.8×，但 auto 不
         # 据此分流——弱 CPU 上 h264 软解可能慢于 NVDEC，且 CPU 解码必然
         # 引入资源争用与整机功耗上升，NVDEC 稳妥优先。峰值吞吐差异留给
         # 用户显式 decode_backend="cpu"。见 CONCLUSIONS C-07/C-08/C-33。
-        if backend in ('auto', 'nvdec', 'hybrid'):
+        if backend in ("auto", "nvdec", "hybrid"):
             try:
                 from decord import gpu as _g
+
                 vr = self._open_reader(_g(0), roi_kw)
-                label = 'GPU'
+                label = "GPU"
             except Exception as e:  # noqa: BLE001
                 # 保留异常文本（2026-09-19 审查轮）：此前吞掉原始异常，
                 # 「驱动/权限不可用」与「代码 bug 导致打开失败」在
                 # auto 路径下完全无法区分，性能回归静默发生。
                 vr = None
-                self._degraded.append('NVDEC 打开失败，回退 CPU: %r' % (e,))
-                logger.warning('NVDEC 解码不可用，回退 CPU: %r', e,
-                               exc_info=True)
+                self._degraded.append("NVDEC 打开失败，回退 CPU: %r" % (e,))
+                logger.warning("NVDEC 解码不可用，回退 CPU: %r", e, exc_info=True)
         if vr is None:
-            vr = self._open_reader(_cpu(0), roi_kw,
-                                   num_threads=self._decode_threads())
-            label = 'CPU'
-        self.backend_label = f'decord/{label}'
-        if label == 'CPU':
+            vr = self._open_reader(_cpu(0), roi_kw, num_threads=self._decode_threads())
+            label = "CPU"
+        self.backend_label = f"decord/{label}"
+        if label == "CPU":
             try:
-                self.codec = str(vr.get_codec() or '').lower()
+                self.codec = str(vr.get_codec() or "").lower()
             except Exception:  # noqa: BLE001
                 # 探测失败=线程档位按默认 h264 走（hevc/av1 实测差
                 # 4~13%）——记降级原因（2026-09-19 审查轮）。
-                self.codec = ''
-                self._degraded.append('codec 探测失败，解码线程档位按默认')
-                logger.debug('codec 探测失败', exc_info=True)
+                self.codec = ""
+                self._degraded.append("codec 探测失败，解码线程档位按默认")
+                logger.debug("codec 探测失败", exc_info=True)
             # codec 感知线程档位（2026-09-10 实测表，见 decode_num_threads）：
             # hevc/av1 在 FFmpeg9 下的帧线程扩展性与 h264 分化（hevc
             # stride=1 到 32 线程仍在涨、av1 stride=8 最优 48），通用档位
@@ -179,17 +195,16 @@ class DecordFrameSource:
             nt = self._decode_threads()
             nt_codec = self._decode_threads(codec=self.codec or None)
             if nt_codec != nt:
-                vr = self._open_reader(_cpu(0), roi_kw,
-                                      num_threads=nt_codec)
+                vr = self._open_reader(_cpu(0), roi_kw, num_threads=nt_codec)
         else:
             try:
-                self.codec = str(vr.get_codec() or '').lower()
+                self.codec = str(vr.get_codec() or "").lower()
             except Exception:  # noqa: BLE001
                 # 探测失败=线程档位按默认 h264 走（hevc/av1 实测差
                 # 4~13%）——记降级原因（2026-09-19 审查轮）。
-                self.codec = ''
-                self._degraded.append('codec 探测失败，解码线程档位按默认')
-                logger.debug('codec 探测失败', exc_info=True)
+                self.codec = ""
+                self._degraded.append("codec 探测失败，解码线程档位按默认")
+                logger.debug("codec 探测失败", exc_info=True)
         self._remember_color_range(vr)
         # CPU+NVDEC 混合解码（decode_backend="hybrid" 显式选择，与 auto/cpu/nvdec
         # 并列）：速率比例分界 + 两端连续扫掠（fork 原生 hybrid ctx）。
@@ -202,7 +217,7 @@ class DecordFrameSource:
         # NVDEC 的 HEVC/AV1 场景与纯 NVDEC 持平不退化，CPU 快于 NVDEC 的
         # h264 场景显著更快；尊重用户显式选择。NVDEC 不可用时上面已回退
         # CPU 并警告；初始化失败回退纯 GPU 不致命。
-        if backend == 'hybrid' and label == 'GPU':
+        if backend == "hybrid" and label == "GPU":
             # ── decord 原生混合解码（fork ≥ v0.7.15，2026-09）──────────
             # 单 demux 流在解码器内部按关键帧 chunk 路由 CPU 软解 + NVDEC，
             # 引擎只需把 ctx 换成 hybrid/hybrid_gpu，参数面（output_format /
@@ -221,12 +236,15 @@ class DecordFrameSource:
             _contract = probe_contract()
             if _contract is not None:
                 _contract.require(
-                    'hybrid_gpu_ctx' if (self._ocr_on_gpu_fn is not None
-                                         and self._ocr_on_gpu_fn())
-                    else 'hybrid_ctx',
-                    'DC-03', 'hybrid/hybrid_gpu 设备上下文')
+                    "hybrid_gpu_ctx"
+                    if (self._ocr_on_gpu_fn is not None and self._ocr_on_gpu_fn())
+                    else "hybrid_ctx",
+                    "DC-03",
+                    "hybrid/hybrid_gpu 设备上下文",
+                )
             try:
                 from decord import hybrid as _hy, hybrid_gpu as _hyg
+
                 _ct = self._hybrid_cpu_threads
                 if _ct <= 0:
                     # §14 定档（2026-09-12，引擎全片 e2e 配对 A/B，三码文本
@@ -241,8 +259,7 @@ class DecordFrameSource:
                     # 但引擎消费节奏（OCR/分段线程与解码共存）顶点更高——
                     # 档位以引擎口径为准。复评触发：decord 再换代 / 核数
                     # 格局变化。
-                    _ct = (self._decode_threads(codec=self.codec or None)
-                           or 16)
+                    _ct = self._decode_threads(codec=self.codec or None) or 16
                 _on_gpu = self._ocr_on_gpu_fn is not None and self._ocr_on_gpu_fn()
                 _hctx = _hyg(0) if _on_gpu else _hy(0)
                 vr = self._open_reader(_hctx, roi_kw, num_threads=_ct)
@@ -259,32 +276,33 @@ class DecordFrameSource:
                 # 2026-09-28 根因链与矩阵 12/12 证据见 log 同日叙事），
                 # 契约键 `window_seek_safe` = ②的机器宣告；旧 fork（含
                 # 0.8.5 wheel）无此键 → 谓词保留，行为不变。
-                _sdw = getattr(vr, 'set_decode_window', None)
-                if (_contract is not None and not _contract.has(
-                        'hard_decode_window')):
+                _sdw = getattr(vr, "set_decode_window", None)
+                if _contract is not None and not _contract.has("hard_decode_window"):
                     # R4：契约面在而硬窗能力缺 → 显式记降级（getattr 裸探测
                     # 留给无契约面的旧 fork，行为不变）
                     self._degraded.append(
-                        'decord 契约面无硬窗能力（hard_decode_window），'
-                        '短窗全片供料')
-                    logger.info('decord 无 set_decode_window 能力，跳过硬窗')
+                        "decord 契约面无硬窗能力（hard_decode_window），短窗全片供料"
+                    )
+                    logger.info("decord 无 set_decode_window 能力，跳过硬窗")
                     _sdw = None
-                _seek_safe = (_contract is not None
-                              and _contract.has('window_seek_safe'))
-                if (_sdw is not None and self._frame_end is not None
-                        and (_seek_safe
-                             or self._frame_start
-                             < (self._frame_end - self._frame_start))
-                        and self._frame_end - self._frame_start < len(vr)):
+                _seek_safe = _contract is not None and _contract.has("window_seek_safe")
+                if (
+                    _sdw is not None
+                    and self._frame_end is not None
+                    and (_seek_safe or self._frame_start < (self._frame_end - self._frame_start))
+                    and self._frame_end - self._frame_start < len(vr)
+                ):
                     _sdw(self._frame_end - self._frame_start)
-                self.backend_label = 'decord/hybrid'
-                logger.info('混合解码开启(原生): codec=%s ctx=%s cpuT=%d',
-                            self.codec,
-                            'hybrid_gpu' if _on_gpu else 'hybrid',
-                            _ct)
+                self.backend_label = "decord/hybrid"
+                logger.info(
+                    "混合解码开启(原生): codec=%s ctx=%s cpuT=%d",
+                    self.codec,
+                    "hybrid_gpu" if _on_gpu else "hybrid",
+                    _ct,
+                )
             except Exception as e:  # noqa: BLE001
-                self._degraded.append(f'hybrid 打开失败，回退纯 GPU: {e}')
-                logger.warning('原生混合解码打开失败，回退纯 GPU: %s', e)
+                self._degraded.append(f"hybrid 打开失败，回退纯 GPU: {e}")
+                logger.warning("原生混合解码打开失败，回退纯 GPU: %s", e)
         self._vr = vr
         return vr
 
@@ -297,24 +315,27 @@ class DecordFrameSource:
     def _open_reader(self, ctx, roi_kw: dict, num_threads=None):
         """按当前输出格式打开 decord reader（原 extractor._open_decord_reader）。
 
-            yuv420 仅在 fork ≥0.7.10 可用：旧 DLL 会抛 ValueError，此时
-            回退 gray（分段/OCR 不变，仅代表帧预览退化灰度）并重置标志。
-            num_threads：CPU 软解的 FFmpeg 帧线程数（少核分核，None=decord
-            默认；GPU/NVDEC 不传）。
-            """
+        yuv420 仅在 fork ≥0.7.10 可用：旧 DLL 会抛 ValueError，此时
+        回退 gray（分段/OCR 不变，仅代表帧预览退化灰度）并重置标志。
+        num_threads：CPU 软解的 FFmpeg 帧线程数（少核分核，None=decord
+        默认；GPU/NVDEC 不传）。
+        """
         from decord import VideoReader
-        fmt = 'yuv420' if self.yuv_output else 'gray'
-        nt_kw = {'num_threads': num_threads} if num_threads else {}
+
+        fmt = "yuv420" if self.yuv_output else "gray"
+        nt_kw = {"num_threads": num_threads} if num_threads else {}
         try:
             return VideoReader(str(self._video_path), ctx=ctx, output_format=fmt, **nt_kw, **roi_kw)
         except ValueError:
             if not self.yuv_output:
                 raise
-            logger.warning('当前 decord 不支持 yuv420 输出，回退 gray （代表帧预览将为灰度）')
-            self._degraded.append('decord 不支持 yuv420 输出，代表帧退化灰度')
+            logger.warning("当前 decord 不支持 yuv420 输出，回退 gray （代表帧预览将为灰度）")
+            self._degraded.append("decord 不支持 yuv420 输出，代表帧退化灰度")
             self.yuv_output = False
             self.color_range = 0
-            return VideoReader(str(self._video_path), ctx=ctx, output_format='gray', **nt_kw, **roi_kw)
+            return VideoReader(
+                str(self._video_path), ctx=ctx, output_format="gray", **nt_kw, **roi_kw
+            )
 
     def _remember_color_range(self, vr) -> None:
         """YUV 模式下从 decoder 读取流 color_range（0=limited/tv）。"""
@@ -327,7 +348,7 @@ class DecordFrameSource:
             # range 流被当 limited 会错误拉伸 Y → 分段阈值/OCR 像素静默
             # 改变，此前 meta['color_range']=0 与"真的是 limited"不可分。
             self.color_range = 0
-            self._degraded.append('color_range 读取失败，按 limited 处理')
+            self._degraded.append("color_range 读取失败，按 limited 处理")
 
     # ── 输出格式适配（luma 四件套，活读 yuv/color_range 状态）────────
     def crop_luma(self, crop: np.ndarray) -> np.ndarray:
@@ -341,8 +362,7 @@ class DecordFrameSource:
             return _gray_seg_yuv_batch(crops, self.color_range)
         return _gray_seg_batch(crops)
 
-    def batch_luma_out(self, crops: np.ndarray,
-                       out: np.ndarray) -> np.ndarray:
+    def batch_luma_out(self, crops: np.ndarray, out: np.ndarray) -> np.ndarray:
         """批量灰度写入预分配 out（省每批临时数组分配；形状恒定才可复用）。"""
         if self.yuv_output:
             return _nv12_batch_luma_full_out(crops, self.color_range, out)

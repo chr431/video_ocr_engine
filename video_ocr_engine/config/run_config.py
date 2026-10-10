@@ -5,6 +5,7 @@ S3 起扩展为完整 RunConfig（video_path / roi / decode_backend 等每次调
 参数并入对应子域，v2 §6.1）。config_digest 覆盖全部生效值并写进 meta，
 供 A/B 对账（v1 的 meta.params 只有 16 字段、env-only 旋钮不在其中）。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,35 +14,35 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class RunConfig:
     # ── decode ──
-    decode_num_threads: int = 0            # 0=自动（codec 感知档，decode_caliber.py）
-    decode_hybrid_cpu_threads: int = 0     # 0=自动（同上：与 cpu 后端共用档位）
+    decode_num_threads: int = 0  # 0=自动（codec 感知档，decode_caliber.py）
+    decode_hybrid_cpu_threads: int = 0  # 0=自动（同上：与 cpu 后端共用档位）
     # ── ocr ──
-    ocr_threads: int = 0                   # 0=全部物理核
+    ocr_threads: int = 0  # 0=全部物理核
     ocr_batch: int = 16
     ocr_gamma: float = 2.0
-    ocr_pad_small: int = 0                 # 0=不生效
+    ocr_pad_small: int = 0  # 0=不生效
     ocr_roi_autocrop: bool = True
     ocr_roi_autocrop_margin: int = 10
     ocr_roi_autocrop_min_gain: int = 10
     ocr_reorder_window: int = 64
     ocr_instances: bool = True
     ocr_gpu_ctc: bool = True
-    ocr_trt_fp16: bool = False              # fp16 ONNX + STRONGLY_TYPED 引擎
-    ocr_trt_defer_sync: bool = False        # raw 批深度 2 延迟收集（滞后一批交付）
+    ocr_trt_fp16: bool = False  # fp16 ONNX + STRONGLY_TYPED 引擎
+    ocr_trt_defer_sync: bool = False  # raw 批深度 2 延迟收集（滞后一批交付）
     # ── segment ──
     segment_text_sep_merge: str = "binary"
-    segment_merge_dense_gate: int = 5      # 0=关；>0=差异图 win3 阈值（稠密簇门）
+    segment_merge_dense_gate: int = 5  # 0=关；>0=差异图 win3 阈值（稠密簇门）
     # ── pipeline ──
-    pipeline_gpu: bool | None = None       # None=规则判定
+    pipeline_gpu: bool | None = None  # None=规则判定
     pipeline_gpu_stream: bool = False
-    pipeline_gpu_drainer: bool = False     # 层4 排空线程（实测零收益默认关）
+    pipeline_gpu_drainer: bool = False  # 层4 排空线程（实测零收益默认关）
     # ── diag ──
     diag_profile: bool = False
     diag_subprobe: bool = False
     diag_bounds_debug: bool = False
-    diag_telemetry: str = "off"            # off/full 两档（0.22.0 起；std=受谴责别名经 resolve 映射 full）
-    diag_report_file: str = ""             # RunReport sidecar 路径（§8.6 N-3）
-    diag_trace_file: str = ""              # P4 实验性时间线路径（默认关）
+    diag_telemetry: str = "off"  # off/full 两档（0.22.0 起；std=受谴责别名经 resolve 映射 full）
+    diag_report_file: str = ""  # RunReport sidecar 路径（§8.6 N-3）
+    diag_trace_file: str = ""  # P4 实验性时间线路径（默认关）
     # ── 指纹 ──
     config_digest: str = ""
 

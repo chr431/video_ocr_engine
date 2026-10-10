@@ -5,6 +5,7 @@ OcrEngine 初始化 TensorRT 前调用 ensure_gpu_initialized()；旧的后端�
 （select_backend/get_engine_type/get_setup_advice）已废弃：OcrEngine 自身
 按 engine_type 直接初始化并在失败时回退 ONNX。
 """
+
 from __future__ import annotations
 import logging
 import os as _os
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)  # S1：与其他根模块一致（P1-6）
 
 # ═══════════════════ 内部状态 ═══════════════════
 _gpu_initialized: bool = False
-_gpu_init_lock = threading.Lock()   # 2026-09-19 审查轮：见下
+_gpu_init_lock = threading.Lock()  # 2026-09-19 审查轮：见下
 _dll_dir_cookies: list = []  # 保持 os.add_dll_directory() 返回值存活
 
 
@@ -58,10 +59,15 @@ def _register_gpu_dlls() -> None:
     if _os.name == "nt":
         try:
             import winreg as _wr
+
             _reg_paths: list[str] = []
-            for _hive, _subkey in [(_wr.HKEY_CURRENT_USER, "Environment"),
-                                    (_wr.HKEY_LOCAL_MACHINE,
-                                        r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")]:
+            for _hive, _subkey in [
+                (_wr.HKEY_CURRENT_USER, "Environment"),
+                (
+                    _wr.HKEY_LOCAL_MACHINE,
+                    r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+                ),
+            ]:
                 try:
                     _k = _wr.OpenKey(_hive, _subkey, 0, _wr.KEY_READ)
                     _val, _ = _wr.QueryValueEx(_k, "Path")
@@ -71,8 +77,9 @@ def _register_gpu_dlls() -> None:
                     pass
             # 追加注册表中独有的条目（去重）
             _env_set = {_os.path.normpath(p) for p in _path_raw.split(_os.pathsep) if p.strip()}
-            _reg_extra = [p for p in _reg_paths
-                            if p.strip() and _os.path.normpath(p) not in _env_set]
+            _reg_extra = [
+                p for p in _reg_paths if p.strip() and _os.path.normpath(p) not in _env_set
+            ]
             if _reg_extra:
                 _path_raw += _os.pathsep + _os.pathsep.join(_reg_extra)
                 logger.info("PATH 补充注册表条目: %d 个", len(_reg_extra))
@@ -115,8 +122,12 @@ def _register_gpu_dlls() -> None:
     _dll_dir_cookies.clear()
     _registered = 0
     _path_new: list[str] = []
-    for _label, _dirs in [("CUDA", _found_cuda), ("cuDNN", _found_cudnn),
-                            ("TensorRT", _found_trt), ("DLL", _other_dirs)]:
+    for _label, _dirs in [
+        ("CUDA", _found_cuda),
+        ("cuDNN", _found_cudnn),
+        ("TensorRT", _found_trt),
+        ("DLL", _other_dirs),
+    ]:
         if _dirs:
             logger.info("%s: %s", _label, ", ".join(_dirs[:3]))
         for _d in _dirs:
@@ -130,10 +141,15 @@ def _register_gpu_dlls() -> None:
     # 将找到的目录前置到 PATH（tensorrt 包依赖此路径）
     if _path_new:
         _existing = _os.environ.get("PATH", "")
-        _os.environ["PATH"] = _os.pathsep.join(_path_new) + \
-            (_os.pathsep + _existing if _existing else "")
+        _os.environ["PATH"] = _os.pathsep.join(_path_new) + (
+            _os.pathsep + _existing if _existing else ""
+        )
 
     if not _found_trt:
         logger.info("TensorRT DLL 未在 PATH 中找到 (搜索了 %d 个目录)", len(_path_entries))
-    logger.info("GPU DLL 搜索路径注册: %d 个目录 (TRT:%d CUDA:%d)",
-        _registered, len(_found_trt), len(_found_cuda))
+    logger.info(
+        "GPU DLL 搜索路径注册: %d 个目录 (TRT:%d CUDA:%d)",
+        _registered,
+        len(_found_trt),
+        len(_found_cuda),
+    )

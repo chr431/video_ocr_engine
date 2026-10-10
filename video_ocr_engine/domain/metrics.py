@@ -27,6 +27,7 @@ PI-15 由 bench 三档互比门禁背书）。线程口径：**每线程局部�
 本地桶 append + `snapshot()` 一次性合并；线程桶在**首次使用时**登记，
 snapshot 时遍历登记表（每线程一次加锁，之后全无锁）。
 """
+
 from __future__ import annotations
 
 import math
@@ -50,8 +51,8 @@ HIST_EXP_BIAS = 20
 HIST_N_BUCKETS = 32
 #: 桶 i 的秒级下界（供 report 自述；i=0 覆盖 [0, 2^-20)）
 HIST_BUCKET_LOWER = tuple(
-    (2.0 ** (i - HIST_EXP_BIAS)) if i > 0 else 0.0
-    for i in range(HIST_N_BUCKETS))
+    (2.0 ** (i - HIST_EXP_BIAS)) if i > 0 else 0.0 for i in range(HIST_N_BUCKETS)
+)
 
 
 def hist_bucket(seconds: float) -> int:
@@ -60,6 +61,7 @@ def hist_bucket(seconds: float) -> int:
         return 0
     k = math.frexp(seconds)[1] + HIST_EXP_BIAS
     return 0 if k < 0 else (HIST_N_BUCKETS - 1 if k >= HIST_N_BUCKETS else k)
+
 
 # 注册表（§8.6 N-1）：命名空间 = 阶段；pi_binding 指向 §13.2 不变式。
 # 元组 = (name, kind, unit, stage, pi_binding)。
@@ -189,9 +191,10 @@ class MetricRegistry:
         return tuple(self._by_name)
 
 
-METRICS = MetricRegistry(tuple(
-    MetricSpec(row[0], cast(MetricKind, row[1]), *row[2:]) for row in _SEED))
-    # row 为普通 tuple，splat 丢 Literal——cast 只还类型不改运行时
+METRICS = MetricRegistry(
+    tuple(MetricSpec(row[0], cast(MetricKind, row[1]), *row[2:]) for row in _SEED)
+)
+# row 为普通 tuple，splat 丢 Literal——cast 只还类型不改运行时
 
 # ── 单一计时脊柱（§8.6 N-2）──────────────────────────────────────────
 # 编排三段与 Protocol 边界的既有计时点（`_prof_end(group, key, t0)`）直接
@@ -276,11 +279,22 @@ class Metrics:
     `detailed`）+ L2 NVML + 线程账本 + 直方图。
     """
 
-    __slots__ = ("_tier", "_registry", "_clock", "_lock", "_local",
-                 "_buckets", "_master", "_checked", "_resources", "_hw")
+    __slots__ = (
+        "_tier",
+        "_registry",
+        "_clock",
+        "_lock",
+        "_local",
+        "_buckets",
+        "_master",
+        "_checked",
+        "_resources",
+        "_hw",
+    )
 
-    def __init__(self, tier: str = "off", registry: MetricRegistry = METRICS,
-                 clock=time.perf_counter) -> None:
+    def __init__(
+        self, tier: str = "off", registry: MetricRegistry = METRICS, clock=time.perf_counter
+    ) -> None:
         # 显式校验而非 assert（2026-09-19 审查轮）：assert 在 python -O
         # 下消失，非法档位会静默变成"enabled 但非 detailed"的混合态
         # （full 档专属直方图静默不产）；且此前无消息的 AssertionError
@@ -290,7 +304,8 @@ class Metrics:
         if tier not in ("off", "full"):
             raise ValueError(
                 "遥测档位必须为 off/full，收到 %r（env VOE_TELEMETRY；"
-                "std 已是 full 的受谴责别名，经 resolve 映射）" % (tier,))
+                "std 已是 full 的受谴责别名，经 resolve 映射）" % (tier,)
+            )
         self._tier = tier
         self._registry = registry
         self._clock = clock
@@ -298,13 +313,14 @@ class Metrics:
         self._local = threading.local()
         self._buckets: list = []
         self._master: dict = _empty_bucket()
-        self._checked: set = set()     # 已校验名（首次上报校验，之后集合命中）
+        self._checked: set = set()  # 已校验名（首次上报校验，之后集合命中）
         # §8.6 r5 资源层：L1 相位边界差分（std+，纯 stdlib 计数，见
         # domain/resources.py 的成本实测）；L2 设备峰值采样仅 full 档显式启动。
         # None = off 档永不采样；False = std+ 但本 run 还没到边界（惰性建探针：
         # 探针构造含 ctypes 结构定义，宿主/短路径不必付这笔钱）。
         self._resources: "ResourceProbe | bool | None" = (
-            None if tier == "off" else False)   # 三态：None=off/False=未建/probe=已建
+            None if tier == "off" else False
+        )  # 三态：None=off/False=未建/probe=已建
         self._hw: "NvmlSampler | None" = None
 
     def _check(self, name: str) -> None:
@@ -330,7 +346,7 @@ class Metrics:
         b = getattr(self._local, "bucket", None)
         if b is None:
             b = self._local.bucket = _empty_bucket()
-            with self._lock:          # 每线程一次
+            with self._lock:  # 每线程一次
                 self._buckets.append(b)
         return b
 
@@ -339,7 +355,7 @@ class Metrics:
         if not self.enabled:
             yield
             return
-        self._check(name)                  # 未注册即 KeyError——硬失败
+        self._check(name)  # 未注册即 KeyError——硬失败
         t0 = self._clock()
         try:
             yield
@@ -357,7 +373,7 @@ class Metrics:
             return
         if r is False:
             r = self._resources = ResourceProbe()
-        assert isinstance(r, ResourceProbe)   # 三态契约收口（见 __init__ 注）
+        assert isinstance(r, ResourceProbe)  # 三态契约收口（见 __init__ 注）
         r.checkpoint(phase, threads=self.detailed)
 
     def resource_report(self) -> dict | None:
@@ -386,7 +402,7 @@ class Metrics:
     def record_span(self, name: str, seconds: float) -> None:
         """已计时点的上报口（`_prof_end` 单一时序脊柱走这里，零额外时钟）。"""
         if not self.enabled:
-            return                    # off 档：不查注册表、不取桶、不分配（PI-15）
+            return  # off 档：不查注册表、不取桶、不分配（PI-15）
         self._check(name)
         b = self._bucket()
         s = b["spans"]
@@ -443,7 +459,7 @@ class Metrics:
         with self._lock:
             if drain:
                 buckets, self._buckets = self._buckets, []
-                self._local = threading.local()      # 丢弃本线程桶引用
+                self._local = threading.local()  # 丢弃本线程桶引用
             else:
                 buckets = list(self._buckets)
         spans: dict = {}
@@ -482,10 +498,8 @@ class Metrics:
                 "p50": xs[n // 2],
                 "p99": xs[min(n - 1, int(n * 0.99))],
             }
-        out_hists = {k: {"n": sum(arr), "buckets": arr}
-                     for k, arr in hists.items() if sum(arr)}
-        return {"spans": out_spans, "counters": counters, "gauges": gauges,
-                "histograms": out_hists}
+        out_hists = {k: {"n": sum(arr), "buckets": arr} for k, arr in hists.items() if sum(arr)}
+        return {"spans": out_spans, "counters": counters, "gauges": gauges, "histograms": out_hists}
 
 
 class NullMetrics(Metrics):

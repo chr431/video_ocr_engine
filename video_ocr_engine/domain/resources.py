@@ -22,14 +22,21 @@
 诚实性口径：全部读数都是**本机自测**、跨机不可比；PCIe 本机不可直读，只能
 由 counter 字节数 ÷ 相位墙钟**推算**，属 L3 推导区（本模块不产该字段）。
 """
+
 from __future__ import annotations
 
 import sys
 import threading
 import time
 
-__all__ = ["ResourceProbe", "NvmlSampler", "nvml_handle", "gpu_identity",
-           "register_thread", "thread_ledger"]
+__all__ = [
+    "ResourceProbe",
+    "NvmlSampler",
+    "nvml_handle",
+    "gpu_identity",
+    "register_thread",
+    "thread_ledger",
+]
 
 _WIN = sys.platform == "win32"
 
@@ -47,6 +54,7 @@ def nvml_handle():
     if st["state"]:
         return st["state"]
     import ctypes
+
     try:
         nvml = ctypes.CDLL("nvml.dll")
         if int(nvml.nvmlInit_v2()) != 0:
@@ -75,14 +83,14 @@ def gpu_identity():
         return None
     try:
         import ctypes
+
         name = ctypes.create_string_buffer(96)
         if int(nvml.nvmlDeviceGetName(h, name, 96)) != 0:
             return None
         drv = ctypes.create_string_buffer(80)
         if int(nvml.nvmlSystemGetDriverVersion(drv, 80)) != 0:
             return None
-        return (name.value.decode("utf-8", "replace"),
-                drv.value.decode("utf-8", "replace"))
+        return (name.value.decode("utf-8", "replace"), drv.value.decode("utf-8", "replace"))
     except Exception:  # noqa: BLE001 老驱动缺入口 → 让调用方回退 nvidia-smi
         return None
 
@@ -112,16 +120,15 @@ class ThreadLedger:
 
     def __init__(self) -> None:
         import ctypes
+
         # 私有 WinDLL 实例 + 显式原型：windll 是进程级共享缓存，函数对象
         # 上的 argtypes 会被各使用方互相覆盖；句柄原型必须显式（与本文件
         # GetCurrentProcess 伪句柄截断坑同族——HANDLE 走 c_void_p）。
         self._k32 = ctypes.WinDLL("kernel32", use_last_error=True)
         self._k32.OpenThread.restype = ctypes.c_void_p
-        self._k32.OpenThread.argtypes = (ctypes.c_uint32, ctypes.c_int,
-                                         ctypes.c_uint32)
+        self._k32.OpenThread.argtypes = (ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32)
         self._k32.QueryThreadCycleTime.restype = ctypes.c_int
-        self._k32.QueryThreadCycleTime.argtypes = (ctypes.c_void_p,
-                                                   ctypes.c_void_p)
+        self._k32.QueryThreadCycleTime.argtypes = (ctypes.c_void_p, ctypes.c_void_p)
         self._idents: dict = {}
         self._handles: dict = {}
         self._lock = threading.Lock()
@@ -131,12 +138,13 @@ class ThreadLedger:
         with self._lock:
             if self._idents.get(name) != ident:
                 self._idents[name] = ident
-                self._handles.pop(name, None)   # 旧句柄作废
+                self._handles.pop(name, None)  # 旧句柄作废
 
     def sample(self) -> dict:
         """名字 → 周期数；打不开/查不到的名字静默除名（返回里缺席）。"""
         out: dict = {}
         import ctypes
+
         with self._lock:
             items = list(self._idents.items())
             handles = self._handles
@@ -147,10 +155,11 @@ class ThreadLedger:
                 # 0x1000 打开成功但 QueryThreadCycleTime 报 ACCESS_DENIED=5，
                 # 唯 THREAD_ALL_ACCESS=0x1FFFFF 句柄可查（自家进程线程恒可
                 # 全权打开）；受限环境全权失败时回退试 0x0400，再失败即缺席。
-                h = (self._k32.OpenThread(0x1FFFFF, False, ident)
-                     or self._k32.OpenThread(0x0400, False, ident))
+                h = self._k32.OpenThread(0x1FFFFF, False, ident) or self._k32.OpenThread(
+                    0x0400, False, ident
+                )
                 if not h:
-                    continue   # 线程已死/权限不足：缺席（≠0）
+                    continue  # 线程已死/权限不足：缺席（≠0）
                 with self._lock:
                     handles[name] = h
             cyc = ctypes.c_ulonglong()
@@ -173,12 +182,15 @@ class ThreadLedger:
         from ctypes import wintypes as _wt
 
         class _TE32(ctypes.Structure):
-            _fields_ = [("dwSize", _wt.DWORD), ("cntUsage", _wt.DWORD),
-                        ("th32ThreadID", _wt.DWORD),
-                        ("th32OwnerProcessID", _wt.DWORD),
-                        ("tpBasePri", ctypes.c_long),
-                        ("tpDeltaPri", ctypes.c_long),
-                        ("dwFlags", _wt.DWORD)]
+            _fields_ = [
+                ("dwSize", _wt.DWORD),
+                ("cntUsage", _wt.DWORD),
+                ("th32ThreadID", _wt.DWORD),
+                ("th32OwnerProcessID", _wt.DWORD),
+                ("tpBasePri", ctypes.c_long),
+                ("tpDeltaPri", ctypes.c_long),
+                ("dwFlags", _wt.DWORD),
+            ]
 
         k32 = self._k32
         k32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
@@ -258,24 +270,29 @@ class _HostCounters:
         self._get_io = None
         self._get_cycles = None
         if not _WIN:
-            self.sources.update(rss="unavailable:非 Windows",
-                                disk="unavailable:非 Windows",
-                                cycles="unavailable:非 Windows")
+            self.sources.update(
+                rss="unavailable:非 Windows",
+                disk="unavailable:非 Windows",
+                cycles="unavailable:非 Windows",
+            )
             return
         import ctypes
+
         try:
             kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
 
             class _IO(ctypes.Structure):
-                _fields_ = [("read_ops", ctypes.c_ulonglong),
-                            ("write_ops", ctypes.c_ulonglong),
-                            ("other_ops", ctypes.c_ulonglong),
-                            ("read_bytes", ctypes.c_ulonglong),
-                            ("write_bytes", ctypes.c_ulonglong),
-                            ("other_bytes", ctypes.c_ulonglong)]
+                _fields_ = [
+                    ("read_ops", ctypes.c_ulonglong),
+                    ("write_ops", ctypes.c_ulonglong),
+                    ("other_ops", ctypes.c_ulonglong),
+                    ("read_bytes", ctypes.c_ulonglong),
+                    ("write_bytes", ctypes.c_ulonglong),
+                    ("other_bytes", ctypes.c_ulonglong),
+                ]
 
             io = _IO()
-            handle = ctypes.c_void_p(-1)   # GetCurrentProcess() 伪句柄
+            handle = ctypes.c_void_p(-1)  # GetCurrentProcess() 伪句柄
 
             def get_io(_h=handle, _io=io, _f=kernel32.GetProcessIoCounters):
                 if _f(_h, ctypes.byref(_io)):
@@ -290,17 +307,23 @@ class _HostCounters:
             psapi = ctypes.windll.psapi  # type: ignore[attr-defined]
 
             class _PMC(ctypes.Structure):
-                _fields_ = [("cb", ctypes.c_uint32),
-                            ("page_faults", ctypes.c_uint32),
-                            ("peak_ws", ctypes.c_size_t),
-                            ("ws", ctypes.c_size_t),
-                            ("_pad", ctypes.c_size_t * 6)]
+                _fields_ = [
+                    ("cb", ctypes.c_uint32),
+                    ("page_faults", ctypes.c_uint32),
+                    ("peak_ws", ctypes.c_size_t),
+                    ("ws", ctypes.c_size_t),
+                    ("_pad", ctypes.c_size_t * 6),
+                ]
 
             pmc = _PMC()
             pmc.cb = ctypes.sizeof(pmc)
 
-            def get_rss(_p=psapi.GetProcessMemoryInfo, _h=handle, _m=pmc,
-                        _cb=ctypes.c_uint(ctypes.sizeof(pmc))):
+            def get_rss(
+                _p=psapi.GetProcessMemoryInfo,
+                _h=handle,
+                _m=pmc,
+                _cb=ctypes.c_uint(ctypes.sizeof(pmc)),
+            ):
                 if _p(_h, ctypes.byref(_m), _cb):
                     return int(_m.ws)
                 return None
@@ -340,13 +363,22 @@ class _HostCounters:
         跑在什么时钟上"的直接读数（C-39 边界：NVDEC% 不能当占空比，
         时钟/throttle 位才是有效信号）。
         """
-        s = {"t": time.perf_counter(), "cpu": time.process_time(),
-             "rss": None, "rb": None, "wb": None, "vram": None,
-             "cycles": None, "sm_mhz": None, "thr": None,
-             "threads": threading.active_count()}
-        if _NVML["state"]:                     # 已初始化才读（无则零成本）
+        s = {
+            "t": time.perf_counter(),
+            "cpu": time.process_time(),
+            "rss": None,
+            "rb": None,
+            "wb": None,
+            "vram": None,
+            "cycles": None,
+            "sm_mhz": None,
+            "thr": None,
+            "threads": threading.active_count(),
+        }
+        if _NVML["state"]:  # 已初始化才读（无则零成本）
             try:
                 import ctypes
+
                 nvml, h = _NVML["state"]
                 c = ctypes.c_uint()
                 if int(nvml.nvmlDeviceGetClockInfo(h, 1, ctypes.byref(c))) == 0:
@@ -385,6 +417,7 @@ def _vram_bytes():
     try:
         from cuda.bindings import driver as cud
         from cuda.bindings import runtime as cudart
+
         rc, ctx = cud.cuCtxGetCurrent()
         if int(rc) != 0 or not ctx:
             _VRAM_STATE["why"] = "unavailable:无当前 CUDA 上下文"
@@ -407,7 +440,7 @@ class ResourceProbe:
     （Δcpu/Δwall）、RSS/VRAM 增量、磁盘读写速率，正是 §8.6 要的形态。
     """
 
-    _MAX_PHASES = 32   # 防御性上限：粗相位数远小于此（不是 per-span）
+    _MAX_PHASES = 32  # 防御性上限：粗相位数远小于此（不是 per-span）
 
     def __init__(self) -> None:
         self._counters = _HostCounters()
@@ -417,10 +450,12 @@ class ResourceProbe:
     @property
     def sources(self) -> dict:
         s = dict(self._counters.sources)
-        s["vram"] = _VRAM_STATE["why"]      # 真值来源或不可用原因（不猜）
+        s["vram"] = _VRAM_STATE["why"]  # 真值来源或不可用原因（不猜）
         s["threads"] = "threading.active_count"
-        s["sm_mhz"] = ("nvmlDeviceGetClockInfo(SM)；仅当 NVML 会话已存在"
-                       "（GPU 路径）——宿主纯 CPU 路径为 None，不主动初始化")
+        s["sm_mhz"] = (
+            "nvmlDeviceGetClockInfo(SM)；仅当 NVML 会话已存在"
+            "（GPU 路径）——宿主纯 CPU 路径为 None，不主动初始化"
+        )
         return s
 
     def checkpoint(self, phase: str, threads: bool = False) -> None:
@@ -459,8 +494,7 @@ class ResourceProbe:
         if len(rows) >= 2:
             fa, fb = rows[0][1], rows[-1][1]
             dcpu_all = float(fb["cpu"] - fa["cpu"])
-            if dcpu_all > 0 and fa.get("cycles") is not None \
-                    and fb.get("cycles") is not None:
+            if dcpu_all > 0 and fa.get("cycles") is not None and fb.get("cycles") is not None:
                 f_run = (fb["cycles"] - fa["cycles"]) / dcpu_all
         out: dict = {}
         # v10.1 出生删失修复：解码池线程常在相位中段才出生（hybrid 的
@@ -482,8 +516,7 @@ class ResourceProbe:
                 # 配对可比；SMT 争用带 ±16% 均值漂移（C-63 前提：交错仍需）。
                 row["cycles"] = max(0, cb - ca)
                 if f_run > 0:
-                    row["cores_avg_cycles"] = round(
-                        max(0, cb - ca) / dt / f_run, 2)
+                    row["cores_avg_cycles"] = round(max(0, cb - ca) / dt / f_run, 2)
             else:
                 # v9 精简（2026-10-09 监测层级轮）：cores_avg（process_time
                 # tick 口径，15.6ms 量化伪影）只在 cycles 来源缺席（非
@@ -495,13 +528,11 @@ class ResourceProbe:
             # (f_run×Δwall)，被换下等待的线程不积累周期——即忙碌份额）。
             ta, tb = sa.get("thr"), sb.get("thr")
             if isinstance(ta, dict) and isinstance(tb, dict):
-                thr = {k: max(0, tb[k] - ta[k])
-                       for k in set(ta) & set(tb)}
+                thr = {k: max(0, tb[k] - ta[k]) for k in set(ta) & set(tb)}
                 if thr:
                     row["thr"] = thr
                     if f_run > 0:
-                        row["thr_duty"] = {k: round(v / (f_run * dt), 3)
-                                           for k, v in thr.items()}
+                        row["thr_duty"] = {k: round(v / (f_run * dt), 3) for k, v in thr.items()}
             # v10 外来线程簇：全线程快照差分 − 命名线程（decord/OMP/TBB
             # 池逐 TID；零增量剔除；个体只用于差分、结论下在簇级——
             # 外来线程 TID 复用不可控，probe 侧按旋钮差分聚簇命名）。
@@ -511,7 +542,7 @@ class ResourceProbe:
                 led = thread_ledger()
                 name2tid = {}
                 if led is not None:
-                    with led._lock:      # noqa: SLF001 - 同模块内部访问
+                    with led._lock:  # noqa: SLF001 - 同模块内部访问
                         name2tid = dict(led._idents)
                 tids_named = set(name2tid.values())
                 foreign = {}
@@ -521,8 +552,8 @@ class ResourceProbe:
                     base = aa_.get(k)
                     if base is None:
                         if k in seen_tids:
-                            continue   # 早前存在但区间起点缺席（重生/漏采）
-                        base = 0      # 本区间新出生：基线 0
+                            continue  # 早前存在但区间起点缺席（重生/漏采）
+                        base = 0  # 本区间新出生：基线 0
                     d = ab_[k] - base
                     if d > 0:
                         foreign[str(k)] = d
@@ -537,13 +568,10 @@ class ResourceProbe:
             if sa.get("sm_mhz") is not None:
                 row["sm_mhz_at_start"] = sa["sm_mhz"]
             if sa["rss"] is not None and sb["rss"] is not None:
-                row["rss_delta_mib"] = round(
-                    (sb["rss"] - sa["rss"]) / 1048576.0, 1)
+                row["rss_delta_mib"] = round((sb["rss"] - sa["rss"]) / 1048576.0, 1)
             if sa["rb"] is not None and sb["rb"] is not None:
-                row["disk_read_mbps"] = round(
-                    max(0, sb["rb"] - sa["rb"]) / dt / 1048576.0, 2)
-                row["disk_write_mbps"] = round(
-                    max(0, sb["wb"] - sa["wb"]) / dt / 1048576.0, 2)
+                row["disk_read_mbps"] = round(max(0, sb["rb"] - sa["rb"]) / dt / 1048576.0, 2)
+                row["disk_write_mbps"] = round(max(0, sb["wb"] - sa["wb"]) / dt / 1048576.0, 2)
             if sb["vram"] is not None:
                 row["vram_used_mib"] = round(sb["vram"][0] / 1048576.0, 1)
             out[name] = row
@@ -561,15 +589,15 @@ class ResourceProbe:
             if fa_c is not None and fb_c is not None:
                 out["cycles_e2e"] = {
                     "total": max(0, fb_c - fa_c),
-                    "span": "%s..%s" % (rows[0][0], rows[-1][0])}
+                    "span": "%s..%s" % (rows[0][0], rows[-1][0]),
+                }
                 # v8：线程级全程账本 = 逐相位差分求和。不能直接用首末两次
                 # 采样相减——进程级账本跨 run 存活，首采样可能持有上一轮
                 # 已死线程的陈旧句柄（同名不同线程），差值无意义（实测
                 # 'ocr':0 伪影，2026-10-09）。
                 thr_sum: dict = {}
                 for row in out.values():
-                    if isinstance(row, dict) and isinstance(row.get("thr"),
-                                                            dict):
+                    if isinstance(row, dict) and isinstance(row.get("thr"), dict):
                         for k, v in row["thr"].items():
                             thr_sum[k] = thr_sum.get(k, 0) + v
                 if thr_sum:
@@ -577,9 +605,11 @@ class ResourceProbe:
                 # v10：外来簇全程合计（跨相位求和会把中途生灭的线程
                 # 各自的贡献累上——比首末直减更符合"池总开销"语义）
                 foreign_sum = sum(
-                    v for row in out.values()
+                    v
+                    for row in out.values()
                     if isinstance(row, dict)
-                    for v in (row.get("thr_foreign") or {}).values())
+                    for v in (row.get("thr_foreign") or {}).values()
+                )
                 if foreign_sum:
                     out["cycles_e2e"]["threads_foreign"] = foreign_sum
         out["checkpoints"] = [r[0] for r in rows]
@@ -614,7 +644,7 @@ class NvmlSampler:
         self._max = int(max_points)
         # (t, gpu%, decode%, vram_mib, sm_mhz, mem_mhz, vid_mhz, throttle_mask)
         self._pts: list = []
-        self._fails = 0            # 采样失败/全空读数次数（摘要里可见，不静默）
+        self._fails = 0  # 采样失败/全空读数次数（摘要里可见，不静默）
         self._stop = threading.Event()
         self._th: threading.Thread | None = None
         self._err = ""
@@ -626,6 +656,7 @@ class NvmlSampler:
 
     def start(self) -> None:
         import ctypes
+
         try:
             nvml, h = self._open()
         except Exception as e:  # noqa: BLE001 驱动无 NVML → 整体不可用
@@ -637,9 +668,11 @@ class NvmlSampler:
             _fields_ = [("gpu", ctypes.c_uint), ("memory", ctypes.c_uint)]
 
         class _Mem(ctypes.Structure):
-            _fields_ = [("total", ctypes.c_ulonglong),
-                        ("free", ctypes.c_ulonglong),
-                        ("used", ctypes.c_ulonglong)]
+            _fields_ = [
+                ("total", ctypes.c_ulonglong),
+                ("free", ctypes.c_ulonglong),
+                ("used", ctypes.c_ulonglong),
+            ]
 
         util, mem = _Util(), _Mem()
         dec, dur = ctypes.c_uint(), ctypes.c_uint()
@@ -651,21 +684,18 @@ class NvmlSampler:
         # nvmlClockType: GRAPHICS=0 / SM=1 / MEM=2 / VIDEO=3。NVDEC 工作负载
         # 跟随 VIDEO 域（部分驱动回落 SM），两域都记。
         clock = nvml.nvmlDeviceGetClockInfo
-        throttle = getattr(nvml, "nvmlDeviceGetCurrentClocksThrottleReasons",
-                           None)
+        throttle = getattr(nvml, "nvmlDeviceGetCurrentClocksThrottleReasons", None)
 
         def loop():
             # 每 tick 独立 try（单次 NVML 调用失败只计 _fails，不杀线程）；
             # NVML 会话是进程级的（环境指纹可能还在用），故此处不 shutdown。
             while not self._stop.wait(self._interval):
-                row = [time.perf_counter(), None, None, None,
-                       None, None, None, None]
+                row = [time.perf_counter(), None, None, None, None, None, None, None]
                 try:
                     if int(rates(h, ctypes.byref(util))) == 0:
                         row[1] = int(util.gpu)
                     # 第 4 参 pUUID 传 NULL（本机单卡，按索引取设备）
-                    if int(dutil(h, ctypes.byref(dec),
-                                 ctypes.byref(dur), None)) == 0:
+                    if int(dutil(h, ctypes.byref(dec), ctypes.byref(dur), None)) == 0:
                         row[2] = int(dec.value)
                     if int(minfo(h, ctypes.byref(mem))) == 0:
                         row[3] = round(int(mem.used) / 1048576.0, 1)
@@ -675,8 +705,7 @@ class NvmlSampler:
                         row[5] = int(mclk.value)
                     if int(clock(h, 3, ctypes.byref(vclk))) == 0:
                         row[6] = int(vclk.value)
-                    if throttle is not None and int(
-                            throttle(h, ctypes.byref(reasons))) == 0:
+                    if throttle is not None and int(throttle(h, ctypes.byref(reasons))) == 0:
                         row[7] = int(reasons.value)
                 except Exception:  # noqa: BLE001 单次调用失败计入 _fails
                     self._fails += 1
@@ -684,13 +713,12 @@ class NvmlSampler:
                 if any(v is not None for v in row[1:]):
                     self._pts.append(tuple(row))
                     if len(self._pts) > self._max:
-                        del self._pts[0]      # 环形：只留最近 N 点
+                        del self._pts[0]  # 环形：只留最近 N 点
                 else:
-                    self._fails += 1          # 全空读数计入，摘要里可见
+                    self._fails += 1  # 全空读数计入，摘要里可见
 
         self.sources = "nvml"
-        self._th = threading.Thread(target=loop, daemon=True,
-                                    name="nvml-sampler")
+        self._th = threading.Thread(target=loop, daemon=True, name="nvml-sampler")
         self._th.start()
 
     def points(self) -> list:
@@ -710,26 +738,37 @@ class NvmlSampler:
         pts = list(self._pts)
         fails = self._fails
         if len(pts) < 3:
-            return {"sources": self.sources, "error": self._err or None,
-                    "sample_failures": fails, "n": len(pts)}
+            return {
+                "sources": self.sources,
+                "error": self._err or None,
+                "sample_failures": fails,
+                "n": len(pts),
+            }
         pts = pts[:-1]
 
         def summary(i):
             v = sorted(p[i] for p in pts if p[i] is not None)
             if not v:
                 return None
+
             def q(f):
                 return v[min(len(v) - 1, int(f * (len(v) - 1)))]
-            return {"min": q(0.0), "p50": q(0.5), "p99": q(0.99),
-                    "max": q(1.0), "n": len(v)}
 
-        out = {"sources": self.sources, "error": self._err or None,
-               "interval_s": self._interval, "n": len(pts),
-               "sample_failures": fails,
-               "gpu_util_pct": summary(1), "nvdec_util_pct": summary(2),
-               "vram_used_mib": summary(3),
-               "sm_clock_mhz": summary(4), "mem_clock_mhz": summary(5),
-               "video_clock_mhz": summary(6)}
+            return {"min": q(0.0), "p50": q(0.5), "p99": q(0.99), "max": q(1.0), "n": len(v)}
+
+        out = {
+            "sources": self.sources,
+            "error": self._err or None,
+            "interval_s": self._interval,
+            "n": len(pts),
+            "sample_failures": fails,
+            "gpu_util_pct": summary(1),
+            "nvdec_util_pct": summary(2),
+            "vram_used_mib": summary(3),
+            "sm_clock_mhz": summary(4),
+            "mem_clock_mhz": summary(5),
+            "video_clock_mhz": summary(6),
+        }
         # 热降/功率位：按原因记 tick 数；ticks_throttled 只计「非常态」原因
         # （GpuIdle/AppsClocksSetting/SyncBoost 除外）。与 NVDEC% 联合判读：
         # 占用率高 + 时钟贴上限 + 无原因位 = 忙且健康；占用率高 + 原因位
@@ -744,10 +783,12 @@ class NvmlSampler:
             for k, bit in self.THROTTLE_BITS:
                 if mask & bit:
                     rc[k] += 1
-                    if k not in ("gpu_idle", "apps_clocks_setting",
-                                 "sync_boost"):
+                    if k not in ("gpu_idle", "apps_clocks_setting", "sync_boost"):
                         hit = True
             n_throttle += hit
-        out["throttle"] = {"ticks_throttled": n_throttle, "ticks": len(pts),
-                           "reason_ticks": {k: v for k, v in rc.items() if v}}
+        out["throttle"] = {
+            "ticks_throttled": n_throttle,
+            "ticks": len(pts),
+            "reason_ticks": {k: v for k, v in rc.items() if v},
+        }
         return out
