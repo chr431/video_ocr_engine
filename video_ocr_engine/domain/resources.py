@@ -161,6 +161,62 @@ class ThreadLedger:
                     handles.pop(name, None)
         return out
 
+    def sample_all(self) -> dict:
+        """TID → 周期数：进程**全部**线程（含外来池：decord/OMP/TBB）。
+
+        Toolhelp32 线程快照枚举 + 逐线程开句柄查询后即关（不缓存——
+        外来线程生命周期不由我们管，TID 复用风险靠"只在差分里用个体、
+        结论只下在簇级"消化）。成本 ≈ 快照 ~1ms + 每线程 ~µs（full 档
+        每相位边界一次）。命名线程的值与 `sample()` 同源可互校。
+        """
+        import ctypes
+        from ctypes import wintypes as _wt
+
+        class _TE32(ctypes.Structure):
+            _fields_ = [("dwSize", _wt.DWORD), ("cntUsage", _wt.DWORD),
+                        ("th32ThreadID", _wt.DWORD),
+                        ("th32OwnerProcessID", _wt.DWORD),
+                        ("tpBasePri", ctypes.c_long),
+                        ("tpDeltaPri", ctypes.c_long),
+                        ("dwFlags", _wt.DWORD)]
+
+        k32 = self._k32
+        k32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+        k32.CreateToolhelp32Snapshot.argtypes = (_wt.DWORD, _wt.DWORD)
+        k32.Thread32First.restype = ctypes.c_int
+        k32.Thread32First.argtypes = (ctypes.c_void_p, ctypes.c_void_p)
+        k32.Thread32Next.restype = ctypes.c_int
+        k32.Thread32Next.argtypes = (ctypes.c_void_p, ctypes.c_void_p)
+        k32.CloseHandle.restype = ctypes.c_int
+        k32.CloseHandle.argtypes = (ctypes.c_void_p,)
+        TH32CS_SNAPTHREAD = 0x4
+        pid = k32.GetCurrentProcessId()
+        snap = k32.CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
+        if not snap or snap == ctypes.c_void_p(-1).value:
+            return {}
+        tids: list = []
+        try:
+            e = _TE32()
+            e.dwSize = ctypes.sizeof(_TE32)
+            it = ctypes.byref(e)
+            ok = k32.Thread32First(snap, it)
+            while ok:
+                if e.th32OwnerProcessID == pid:
+                    tids.append(int(e.th32ThreadID))
+                ok = k32.Thread32Next(snap, it)
+        finally:
+            k32.CloseHandle(snap)
+        out: dict = {}
+        cyc = ctypes.c_ulonglong()
+        for tid in tids:
+            h = k32.OpenThread(0x1FFFFF, False, tid)
+            if not h:
+                continue
+            if k32.QueryThreadCycleTime(h, ctypes.byref(cyc)):
+                out[tid] = int(cyc.value)
+            k32.CloseHandle(h)
+        return out
+
 
 def thread_ledger() -> "ThreadLedger | None":
     """进程级单例；非 Windows 恒 None（register_thread 同步降级为 no-op）。"""
@@ -378,6 +434,11 @@ class ResourceProbe:
                     _ts = led.sample()
                     if _ts:
                         sample["thr"] = _ts
+                    # v10 全线程快照：含外来池（decord/OMP/TBB）逐 TID 周期
+                    # ——争用定位的外来簇归因面（L2，2026-10-09 争用定位轮）
+                    _ta = led.sample_all()
+                    if _ta:
+                        sample["thr_all"] = _ta
         except Exception:  # noqa: BLE001 遥测绝不让 run 失败
             return
         with self._lock:
@@ -436,6 +497,28 @@ class ResourceProbe:
                     if f_run > 0:
                         row["thr_duty"] = {k: round(v / (f_run * dt), 3)
                                            for k, v in thr.items()}
+            # v10 外来线程簇：全线程快照差分 − 命名线程（decord/OMP/TBB
+            # 池逐 TID；零增量剔除；个体只用于差分、结论下在簇级——
+            # 外来线程 TID 复用不可控，probe 侧按旋钮差分聚簇命名）。
+            aa_, ab_ = sa.get("thr_all"), sb.get("thr_all")
+            if isinstance(aa_, dict) and isinstance(ab_, dict):
+                # 命名线程以 TID 反查排除（ledger idents：name→TID）
+                led = thread_ledger()
+                name2tid = {}
+                if led is not None:
+                    with led._lock:      # noqa: SLF001 - 同模块内部访问
+                        name2tid = dict(led._idents)
+                tids_named = set(name2tid.values())
+                foreign = {}
+                for k in set(aa_) & set(ab_):
+                    if k in tids_named:
+                        continue
+                    d = ab_[k] - aa_[k]
+                    if d > 0:
+                        foreign[str(k)] = d
+                if foreign:
+                    row["thr_foreign"] = foreign
+                    row["thr_foreign_n"] = len(foreign)
             # W3：相位**终点**的 SM 时钟（GPU 路径相位差分才有；起点读数
             # 用于人工对齐——时钟爬坡期一个相位内前后差上千 MHz 是常态）
             if sb.get("sm_mhz") is not None:
@@ -480,6 +563,14 @@ class ResourceProbe:
                             thr_sum[k] = thr_sum.get(k, 0) + v
                 if thr_sum:
                     out["cycles_e2e"]["threads"] = thr_sum
+                # v10：外来簇全程合计（跨相位求和会把中途生灭的线程
+                # 各自的贡献累上——比首末直减更符合"池总开销"语义）
+                foreign_sum = sum(
+                    v for row in out.values()
+                    if isinstance(row, dict)
+                    for v in (row.get("thr_foreign") or {}).values())
+                if foreign_sum:
+                    out["cycles_e2e"]["threads_foreign"] = foreign_sum
         out["checkpoints"] = [r[0] for r in rows]
         return out
 

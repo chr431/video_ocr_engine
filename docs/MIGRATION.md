@@ -145,6 +145,7 @@
 
 | 面 | 说明 |
 |---|---|
+| RunReport **schema v10** | `report_version` 9→10，只加键（full 档）：`resources.per_phase` 行新增 `thr_foreign`/`thr_foreign_n`（外来线程簇逐 TID 周期差分：decord 解码池/OMP/TBB 等命名线程之外的全体——争用定位的外来簇归因面）与 `cycles_e2e.threads_foreign` 合计。个体 TID 只用于差分，结论应下在簇级 |
 | RunReport **schema v9** | `report_version` 8→9。**删键语义**：Windows 报告的 `resources.per_phase` 行不再发 `cores_avg`（tick 口径）——cycles 在场时它是与 `cores_avg_cycles` 并存的重复口径；消费者改读 `cores_avg_cycles`。非 Windows（cycles 缺席）仍发 `cores_avg` 作回退 |
 | RunReport **schema v2** | `report_version` 1→2，**只加键**：`resources`（std+：每相位平均并行核数/线程数/RSS·VRAM 增量/磁盘读写速率 + 每来源真出处或 `unavailable:原因`）、`hardware`（仅 full 档采样过才出现：GPU%/NVDEC%/显存 min·p50·p99·max）。按 v1 解析的旧读者不受影响；金标只记 `meta` 键名，故无需重录（28/28 逐位一致已验） |
 | `hybrid` CPU 线程档位 | 默认 12→**16**（核数//2 钳 [8,16]），并取消按 decord 版本号的门控（对 `DECORD_LIBRARY_PATH` 换 dll 的情形判错）。交错 A/B：h264-hybrid −6.5%、hevc-hybrid −12.7%；`HYBRID_CPU_THREADS` 显式覆盖仍有效 |

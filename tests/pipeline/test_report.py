@@ -51,7 +51,7 @@ def test_report_version_is_pinned():
     # 与 `<parent>_other` 派生 span；v4→v5：+histograms/histograms_meta
     # （full 档专属）；v5→v6：+hybrid（fork 遥测直通）；v6→v7：resources
     # per_phase 行 +cycles 原始差分与 cycles_e2e（C-63 判据用；均只加键）
-    assert REPORT_VERSION == 9   # v8 +thr；v9 cores_avg 收敛回退键
+    assert REPORT_VERSION == 10  # v8 +thr；v9 cores_avg 回退；v10 +thr_foreign
 
 
 def test_report_schema_snapshot():
@@ -293,6 +293,30 @@ def test_thread_ledger_roundtrip_win32():
         t.join()
     led.register("probe-tmp", 0)          # 换 ident → 缓存句柄作废 → 打不开除名
     assert "probe-tmp" not in led.sample()
+
+
+def test_thread_ledger_sample_all_win32():
+    """v10 全线程快照：含自身线程，且与命名采样同源可互校。"""
+    if sys.platform != "win32":
+        return
+    import threading
+    import video_ocr_engine.domain.resources as _res
+    led = _res.thread_ledger()
+    assert led is not None
+    stop = threading.Event()
+    t = threading.Thread(target=stop.wait)
+    t.start()
+    try:
+        _res.register_thread("probe-all", t)
+        all1 = led.sample_all()
+        assert threading.current_thread().ident in all1
+        assert t.ident in all1
+        named = led.sample()
+        # 命名线程在两套采样里都出现（同 TID 同值口径）
+        assert all1[t.ident] == named["probe-all"]
+    finally:
+        stop.set()
+        t.join()
 
 
 def test_phase_cap_is_honored():

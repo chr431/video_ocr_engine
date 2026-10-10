@@ -40,7 +40,11 @@ from pathlib import Path
 # 在场（Windows）时**不再发**，仅非 Windows 回退（两个"平均核数"并存
 # 打架，读者分不清权威）。这是**删键语义**（Windows 报告里消失），
 # 消费者改读 `cores_avg_cycles`（MIGRATION §4）。
-REPORT_VERSION = 9
+# v10（2026-10-09 争用定位轮）：full 档新增 `thr_foreign`（外来线程簇
+# 逐 TID 周期差分：decord 解码池/OMP/TBB——命名线程之外的全体）与
+# `thr_foreign_n`、`cycles_e2e.threads_foreign`。个体 TID 只用于差分，
+# 结论应下在簇级（外来线程生命周期不由引擎管，TID 会复用）。
+REPORT_VERSION = 10
 
 #: v4：span 嵌套关系（代码级核对，2026-09-17 勘察）。**子项互不重叠**是
 #: 硬约束——嵌套更深的键（如宿主 merge_pair/q_put_block 在 consume_feed

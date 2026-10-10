@@ -265,3 +265,10 @@
   premises: 本机 4060/16C32T；test5 600 帧；sleep 注入；ALL_ACCESS 句柄怪癖见 resources 注
   revisit: 换机/换卡；OCR 提速（余量收窄）；真上重算法前复核膝点
   evidence: log 2026-10-09-跨线程账本与预处理容量
+
+- id: C-66
+  conclusion: **hybrid<双臂理论的缺口=−8.5%（hevc 3000帧），全在 CPU 臂**：GPU 臂 −2%~+1% 无损；CPU 臂 in-context −13%（rc_now 914 vs 纯臂 1053），water-fill 少派帧=最优分配非损耗。性质三连否证：非计算争用（解码池每帧周期 16M≈15.9M 不变、无 SMT 税；+8 自旋宿主负载下 decode-only 反 +4.3%）、非引擎耦合（decode-only 2740-3118 ≈ in-engine 2710-2818）——**fork 供给线封顶**：up_cempty=1322 直证 CPU 臂输入饥饿，慢臂先饿（旧「三码趋同封顶」同族，~2200→~2800）
+  status: active
+  premises: 4060/16C32T；fork 0.9.0；hevc+TRT 3000 帧；v8/v10 线程账本
+  revisit: fork 供给线并行化后复跑；h264/av1 复核；换卡
+  evidence: log 2026-10-09-争用定位与hybrid缺口
