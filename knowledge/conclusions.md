@@ -294,4 +294,10 @@
   premises: 4060/16C32T；fork 0.9.3（queue_frames_ 1536）；窗 3000；num_threads 按码档位
   revisit: 供给线并行化落地后重测 / demux 换代 / 核数格局变化
   evidence: log 2026-10-11-争用微观定位轮 §6；tools/_probe_hybrid_supply.py
+- id: C-72
+  conclusion: **h264 hybrid 1004fps 双峰锁死根因=派工空闲判据污染**——side_pending_ 统计"已路由未发射"，发射按流序合并：慢侧未轮到时快侧已解码帧也挂 pending，force_head 把"等发射轮次"误判"解码忙"→ 连续派 GPU（alloc=PiHHHHHHHH 实录，CPU 臂只拿采样 chunk）。修=判据改未解码积压（pending−已解码存货，与 ETA 规则同口径）；修后 3 冷+6 暖分配全 70:30 零锁死。取证设施=alloc_seq 派工决策序列入 hybrid_stats
+  status: active
+  premises: 4060/16C32T；fork 0.9.4；窗 3000；TRT OCR
+  revisit: 派工重构 / 流序合并语义变化
+  evidence: log 2026-10-11-争用微观定位轮 §13
 
