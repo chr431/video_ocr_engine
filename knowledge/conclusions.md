@@ -103,7 +103,7 @@
   evidence: log 2026-09-08 decord-0.8.1；DEPENDENCIES decord 节
 
 - id: C-32
-  conclusion: 实现唯一出处=domain/segmentation.py（0.14.0 前在根级）：宿主直调，GPU kernel 逐位镜像；不做插件抽象面
+  conclusion: 实现唯一出处=domain/segmentation.py（0.14.0 前在根级）：宿主直调，GPU kernel 逐位镜像；无插件抽象
   status: active
   premises: 0.11.0；两侧行为由真值用例逐位守护
   revisit: 真实 GPU 侧插件需求出现
@@ -117,7 +117,7 @@
   evidence: log §3；test_warmup
 
 - id: C-37
-  conclusion: 消费端提交可批量化：D2H 异步+同流同步 −5.19%、keep_crops 并批 −2.45%；按宽分组无收益
+  conclusion: 消费端可批量化：D2H 异步+同流同步 −5.19%、keep_crops 并批 −2.45%；按宽分组无收益
   status: active
   premises: 本机 4060；交错 A/B
   revisit: 段密度翻倍 / ROI 形态翻转
@@ -159,11 +159,11 @@
   evidence: log 09-13-填充宽度
 
 - id: C-46
-  conclusion: **hybrid=包缓存+供料期 GOP 派工**：Push 只入缓存，泵速率贪心派工；kick 经泵流序注入；A/B −5~6%
+  conclusion: **hybrid=包缓存+供料期 GOP 派工**：Push 只入缓存，泵贪心派工；kick 经泵流序注入；A/B −5~6%
   status: active
   premises: 达成率=同会话三臂
   revisit: 换卡 / fork 换代 / 截断流·bf16 重跑
-  evidence: log 2026-09-13-hybrid重设计分支；2026-09-14 达成率定稿
+  evidence: log 09-13-hybrid重设计；09-14 达成率定稿
 
 - id: C-47
   conclusion: **OCR 批延迟残差=GPU 链争用**：DEFER_SYNC 一致 e2e 平价；复测周期 +4.6%（16/16）
@@ -198,7 +198,7 @@
   status: active
   premises: 4060；共享桌面
   revisit: 换卡/机器 / 协议改即 --aa 重标 / trace 转正需锁频
-  evidence: log 2026-09-17-重设计 §7
+  evidence: log 09-17-重设计 §7
 
 - id: C-53
   conclusion: **hybrid 基线=目标码最快纯臂**：h264=CPU；hevc/av1=NVDEC→选 hybrid。批量=逐文件串行（pool 已删）
@@ -208,7 +208,7 @@
   evidence: log 09-18-hybrid启动轮
 
 - id: C-54
-  conclusion: **启动+窗口尾轮：熟前挂起+防饿死盲派+窗口尾 ETA**——盲派 13→2、hevc 交叉 ~1200；H2D 聚合无净收益→默认关
+  conclusion: **启动+窗口尾轮：熟前挂起+防饿死盲派+尾 ETA**——盲派 13→2、hevc 交叉 ~1200；H2D 聚合无净收益→关
   status: active
   premises: 盲承诺下界=2 GOP
   revisit: 换卡 / fork 换代 / infer 暴露复现日
@@ -219,9 +219,9 @@
   status: active
   premises: CPython；4 钉子
   revisit: PyPy finalizer 语义 / 池契约重构
-  evidence: log 2026-09-20-审计修复轮 §2
+  evidence: log 09-20-审计修复 §2
 - id: C-58
-  conclusion: **hybrid OCR 双车道（TRT+OV）：回归已消除、本机无净收益**（OV=TRT 1/3）；触发见 C-60
+  conclusion: **hybrid OCR 双车道（TRT+OV）：回归已消除、无净收益**（OV=TRT 1/3）；见 C-60
   status: active
   premises: batch_test 字幕 stride=1；16C32T 三层占满
   revisit: NVDEC 纯解码部署 / 多 NVDEC 卡 / OCR 变重
@@ -240,14 +240,14 @@
   evidence: log 09-20-hybridOCR裁决
 
 - id: C-62
-  conclusion: **硬窗架构重做（fork 0.9.0）：绝对帧区间+marker 语义分离（0=EOF/1=WINDOW_END）+会话对象化+窗模式禁替补（win_subs 恒 0）**——根除 C-57 族。矩阵 12/12×5+哈希逐位一致+七套件
+  conclusion: **硬窗架构重做（0.9.0）：绝对帧区间+marker 语义分离（0=EOF/1=WINDOW_END）+会话对象化+窗禁替补（win_subs 恒 0）**——根除 C-57 族。矩阵 12/12×5+哈希逐位+七套件
   status: active
   premises: fork 0.9.0 dev（52597677）；金标 D 组晚起点 5 用例
   revisit: fork 换代/窗口路径改动（matrix --repeat 5 + window 套件）/换卡/竞态再现（轮盘续钻）
   evidence: log 2026-10-08 收口与窗口架构重做
 
 - id: C-63
-  conclusion: **周期/指令账本可作 A/B 判据**：QueryProcessCycleTime CV≤2.3%（墙钟 30-36%）、nvdec 守恒 0.965。边界：SMT ±16%→交错仍需；BLAS 自旋 +139% 不可用；ncu 需管理员
+  conclusion: **周期/指令账本可作 A/B 判据**：QueryProcessCycleTime CV≤2.3%（墙钟 30-36%）、nvdec 守恒 0.965。边界：SMT ±16%→交错仍需；BLAS 自旋不可用；ncu 需管理员
   status: active
   premises: 本机 4060/16C32T/Win32；ncu 2026.2.0；引擎栈无自旋放大
   revisit: 换机/CPU；线程模型换代
@@ -260,21 +260,21 @@
   revisit: 换机/换 CPU；周期 A/A 带漂移超 1×SE 重标；BLAS/OV 线程模型换代
   evidence: log 2026-10-09-账本产品化与不可判定复测
 - id: C-65
-  conclusion: **跨线程账本（v8）+预处理容量**：full 档逐线程占空（宿主 ocr 0.20/infer 0.61；GPU 臂≤0.11）。宿主臂膝点=0.5-1ms/crop 后 1:1 传导；GPU 臂 SM 余量 ~5×（C-42/C-15）
+  conclusion: **跨线程账本（v8）+预处理容量**：full 档逐线程占空（宿主 ocr 0.20/infer 0.61；GPU 臂≤0.11）。宿主臂膝点 0.5-1ms/crop 后 1:1 传导；GPU 臂 SM 余量 ~5×（C-42/C-15）
   status: active
   premises: 本机 4060/16C32T；test5 600 帧；sleep 注入；ALL_ACCESS 句柄怪癖见 resources 注
   revisit: 换机/换卡；OCR 提速（余量收窄）；真上重算法前复核膝点
   evidence: log 10-09-跨线程账本
 
 - id: C-66
-  conclusion: **0.9.2 时代归因（C-74/76 部分翻案）**：缺口 −5.6/−33/−34% 归 CPU 臂欠配+同卡争用；"同卡无免费解"被 C-76 宿主输出推翻。遗产：尾窗 4→10（av1 CV 2.9%）；三修全反已回滚仍有效
+  conclusion: **0.9.2 时代归因（C-74/76 部分翻案）**：缺口归 CPU 臂欠配+同卡争用；"同卡无免费解"被 C-76 推翻。遗产：尾窗 4→10（av1 CV 2.9%）；三修全反已回滚仍有效
   status: active
   premises: 4060/16C32T；fork 0.9.2；v8/v10 账本
   revisit: fork 泵改动后复跑；换卡
   evidence: log 10-09/10 争用定位
 
 - id: C-67
-  conclusion: **纯 CPU 争用配平=静态预算失衡非动态**——h264 轻码 10 档饿、24 档 +27%；hevc/av1 auto 已在峰。动态不可行（OV 线程数构建期定死）→编码分档：h264 独档 24（逻辑核 3/2）
+  conclusion: **纯 CPU 配平=静态预算失衡非动态**——h264 轻码 10 档饿、24 档 +27%；hevc/av1 auto 已在峰。动态不可行（OV 线程定死）→编码分档：h264 独档 24（逻辑核 3/2）
   status: active
   premises: 16C32T；纯 CPU+OV；test6 全长；峰 24×16=1904（h264 6000 帧 +34%）
   revisit: 换 CPU（3/2 公式重验）；OV 换代；stride>1 域另验
@@ -292,16 +292,16 @@
   revisit: demux 换代 / 传输模式新增
   evidence: log 同日 §6/§16；_probe_hybrid_supply.py
 - id: C-72
-  conclusion: **hybrid 锁死=派工空闲判据污染，修复口径须 side-pure**——side_pending_ 计"已路由未发射"，流序合并下快侧已解码帧挂 pending 被误判"忙"（alloc=PiHHHHHHHH）。首版修（0.9.4）把 cpu_ready_ 记进 GPU 存货=账户互换，锁死 ~1/8 复现；完成体（0.9.5 UndecodedBacklog）：CPU 存货=filter 队列+cpu_ready_，GPU=ready_+D2H 环+cuvid 出。23 连测零锁死
+  conclusion: **hybrid 锁死=派工空闲判据污染，口径须 side-pure**——side_pending_ 计"已路由未发射"，流序合并下快侧已解码帧挂 pending 被误判"忙"（alloc=PiHHHHHHHH）。首版修（0.9.4）把 cpu_ready_ 记进 GPU 存货=账户互换，锁死 ~1/8 复现；完成体（0.9.5 UndecodedBacklog）：CPU=filter 队列+cpu_ready_，GPU=ready_+D2H 环+cuvid 出。23 连测零锁死
   status: active
   premises: 4060M/32LP；fork 0.9.5；全片 23970；TRT
   revisit: 流序合并语义变化 / 传输模式新增
   evidence: log 同日 §13-14
 
 - id: C-74
-  conclusion: **hybrid 供给线两修**——①顶饱门=NeedsPackets 非 pkt 计账（pkts 计账恒虚高→供给退化为每帧 1 包、银行枯竭 cpk 5592→0）；②C-77 批量泵送（Begin/EndPushBatch，每 512 包一次泵）：逐包泵扫描 ×24K≈0.4s 全落首帧路径（tr2 实测 EMIT 间隔 113ms）。残差=demux 在消费线程的结构性串行（~0.45s/70MB），demux 线程化属传输重设计
+  conclusion: **hybrid 供给线三修（传输重设计落成）**——①顶饱门=NeedsPackets（计账恒虚高→每帧 1 包枯竭）；②C-77 批量泵（512 量子）；③C-78 供料线程化：demux+泵专线程（消费 PushNext 降级自举、seek 停泊、force-head 请求制、TickPump 节拍、WaitFrame 落账/消账谓词）。冷 first-50 0.66→0.09s；引擎 cal 0.94→0.41s。**两坑存档**：sleep_for 最小粒度 ~1-2ms（100µs 实睡 1.5ms→量子化 ~550fps，须 notify+谓词）；EOF 预算须墙钟节流（自旋 <3s 烧完会抢在 CU 冻结 3s 检测器前误 FATAL）
   status: active
-  premises: 4060M/32LP；fork 0.9.6；全片 23970
+  premises: 4060M/32LP；fork 0.9.7；全片 23970
   revisit: demux 线程化 / 消费驱动模型变化
   evidence: log 同日 §14/§17
 - id: C-75
@@ -311,7 +311,7 @@
   revisit: 换机 / SMT 格局变化
   evidence: log 同日 §15
 - id: C-76
-  conclusion: **引擎 hybrid 传输恒选宿主输出（hybrid(0)）**——gpu-out 上载中转（H2D 攒批/同步）−13% 流交付（A/B 3805→3252）；宿主帧+OCR 上传 crop=cpu 后端同通路；配套 SetRoi 深银行重算出 out_cuda_ 门（否则 GPU 置速码 CPU 臂冲 1536 帽，av1 82.9→94.1%）。三码全片验收 93-95%（0.9.6 复测两轮 94.4/94.4/93.5、93.4/95.5/92.7）；金标 33/33、矩阵×5 过
+  conclusion: **引擎 hybrid 传输恒选宿主输出（hybrid(0)）**——gpu-out 上载中转（H2D 攒批/同步）−13% 流交付（A/B 3805→3252）；宿主帧+OCR 上传 crop=cpu 后端同通路；配套 SetRoi 深银行重算出 out_cuda_ 门（否则 GPU 置速码 CPU 臂冲 1536 帽，av1 82.9→94.1%）。三码全片验收 93-95%（0.9.7 复测 90.3/94.5/94.7——h264 同段纯臂亦降，env 开关 A/B 平手）；金标 33/33、矩阵×5 过
   status: active
   premises: 4060M/32LP；fork 0.9.5；引擎 0.26.0；TRT OCR
   revisit: fork 传输重设计 / 显存驻留管线换代
