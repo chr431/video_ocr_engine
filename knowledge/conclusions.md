@@ -288,4 +288,10 @@
   premises: 4060/16C32T；fork 0.9.2+format（md5 30ca4d37）；窗 3000；TRT OCR
   revisit: 亚 GOP 派工实现 / MPS/异卡落地 / kick 成本降至 <10ms
   evidence: log 2026-10-11-争用微观定位轮
+- id: C-69
+  conclusion: **h264 hybrid 达成率的约束=供给线单线程 + 引擎消费耦合，非 H2D 争用**——纯双臂解码供给上限（无 OCR 直读）：h264 3011/av1 2770/hevc 2899 fps；双臂胃口超供给 24%/10%/3%；引擎内 TRT-OCR 再损失 13~16%。H2D 实测无关（ROI 裁切 KB 级/帧，全窗 10-30MB）；每帧周期成本 hybrid 内不变（计算争用排除）。叙事更正："供给线容量+消费耦合"。供给<胃口时基线 kicks=5 分配已近优
+  status: active
+  premises: 4060/16C32T；fork 0.9.2（md5 30ca4d37）；窗 3000；num_threads 按码档位
+  revisit: 供给线并行化落地后重测 / demux 换代 / 核数格局变化
+  evidence: log 2026-10-11-争用微观定位轮 §6；tools/_probe_hybrid_supply.py
 
