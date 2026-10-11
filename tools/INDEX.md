@@ -61,6 +61,7 @@
 | `_probe_aa_floor_curve.py` | 103 | A/A 噪声带 floor(n) 曲线采样（inner 3 vs 1 的地板对比；标定/重标实验的证据链） | docs/log/2026-10-10-测试减负实验轮.md |
 | `_probe_c68_gap.py` | 52 | C-68 三码缺口复测口径（hevc/h264/av1 纯臂×2+hybrid，热池 3 reps 中位；泵派工改动的前后对照载体） | docs/log/2026-10-11-争用微观定位轮.md |
 | `_probe_hybrid_supply.py` | 46 | C-69 供给上限测量（无 OCR 直读 decord.hybrid 双臂；供给 vs 胃口 vs 引擎耦合的三段归因载体） | docs/log/2026-10-11-争用微观定位轮.md §6 |
+| `_probe_quiet_suite.py` | 108 | 静默机器全量补测套件（供给 B64/B300、FORCE 分臂独立子进程、引擎 span、三码缺口一次跑完；口径纠缠批效应判别） | docs/log/2026-10-11-争用微观定位轮.md §11 |
 | `check.py` | 113 | **两级标准化测试入口**：daily（pytest+快检+金标smoke ≈47s）/ release（全量审计+金标full+清扫）；每步计时汇总 | AGENTS.md「纪律与自动化守卫」 |
 | `_doc_section.py` | 230 | **文档章节级检索**：`--toc` 看目录 / `--find` 按标题定位 / 读单章。避免整文件读，实测省 84~96% tokens；2026-10-10 起覆盖全部治理文档+log 单篇（含 §A~§E 字母节键） | AGENTS.md「查文档前先定位」 |
 | `_probe_roi_decode.py` | 105 | **否定结果**：量化「打开时 SetRoi」vs「每次 get_batch 传 roi」对 CPU 软解速率的影响。实测两者无差异（1841 vs 1849 fps），但**不传 ROI = 520 fps**（3.6× 慢）→ ROI 本身是巨大优化，两种传法等价 | PERF §22.5 |
