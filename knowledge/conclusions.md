@@ -124,7 +124,7 @@
   evidence: log §4-§6
 
 - id: C-38
-  conclusion: **合并判定稠密簇门**（win3≥SEG_C，默认开）；段数 +1.2~3.6%
+  conclusion: **合并判定稠密簇门**（win3≥SEG_C 默认开）；段数 +1.2~3.6%
   status: active
   premises: 六片真值；宿主/GPU 逐位一致
   revisit: 大字号字体 / OCR-bound 部署
@@ -138,7 +138,7 @@
   evidence: log 09-13-可见性重评
 
 - id: C-40
-  conclusion: **hybrid 收益与片长相关**：h264 短窗即胜；hevc 交叉 ~1200；av1 <3000；纯 CPU 臂三码全片均胜
+  conclusion: **hybrid 收益与片长相关**：h264 短窗即胜；hevc 交叉 ~1200；av1<3000；纯 CPU 臂三码全片均胜
   status: active
   premises: 4060/16C32T；fork ≥a6cdeb7
   revisit: 换卡 / GOP 尺寸极端小 / <500 帧短片
@@ -173,11 +173,11 @@
   evidence: log 2026-09-14-TRT延迟收集流水；2026-10-09-账本产品化
 
 - id: C-48
-  conclusion: **CPU OCR=OpenVINO 唯一**：模型级 2.1×；真值零差；热池 −27.96%；冻结包 73MB
+  conclusion: **CPU OCR=OpenVINO 唯一**：模型级 2.1×（ORT）；真值零差；冻结包 74MB；2026.4.1 换代持平+逐位一致
   status: active
-  premises: 4060/Zen4；openvino 2026.3.1
-  revisit: 换 CPU（非 x86）/ openvino 换代 / 内容族大变
-  evidence: log 2026-09-14-OpenVINO模型级A-B
+  premises: 4060/Zen4；openvino 2026.4.1（换代 A/B 持平+逐位一致）
+  revisit: 换 CPU / openvino 换代 / 内容族大变
+  evidence: log 09-14-OV A/B；10-11 换代
 
 - id: C-49
   conclusion: **换依赖无剩余性能空间**：解码绑定；fork 超外部参考 989fps；PyNv+DLL 冲突；cv2 −0.26%
@@ -194,7 +194,7 @@
   evidence: log 2026-09-17-重设计 §5-§11；2026-10-09-账本产品化
 
 - id: C-51
-  conclusion: **监测系统新基线**：时钟门禁+ab 轮转；report（fork 穿透）；子相位闭合；地板 0.30%（n=50 后 0.20）；两档化
+  conclusion: **监测系统新基线**：时钟门禁+ab 轮转；report（fork 穿透）；子相位闭合；地板 0.30%（n=50 后 0.20）
   status: active
   premises: 4060；共享桌面
   revisit: 换卡/机器 / 协议改即 --aa 重标 / trace 转正需锁频
@@ -240,18 +240,18 @@
   evidence: log 09-20-hybridOCR裁决
 
 - id: C-62
-  conclusion: **硬窗架构重做（0.9.0）：绝对帧区间+marker 语义分离+会话对象化+窗禁替补（win_subs 恒 0）**——根除 C-57 族。矩阵 12/12×5+哈希逐位+七套件
+  conclusion: **硬窗架构重做（0.9.0）：绝对帧区间+marker 分离+会话对象化+窗禁替补（win_subs 恒 0）**——根除 C-57 族。矩阵 12/12×5+哈希逐位+七套件
   status: active
   premises: fork 0.9.0 dev（52597677）；金标 D 组晚起点 5 用例
   revisit: fork 换代/窗口路径改动（matrix --repeat 5 + window 套件）/换卡/竞态再现（轮盘续钻）
   evidence: log 10-08-窗口架构重做
 
 - id: C-63
-  conclusion: **周期/指令账本可作 A/B 判据**：QueryProcessCycleTime CV≤2.3%（墙钟 30-36%）、nvdec 守恒 0.965。边界：SMT ±16% 交错仍需；BLAS 自旋不可用；ncu 需管理员
+  conclusion: **周期/指令账本可作 A/B 判据**：QueryProcessCycleTime CV≤2.3%（墙钟 30-36%）、nvdec 守恒 0.965。边界：SMT ±16% 仍需交错；BLAS 自旋不可用；ncu 需管理员
   status: active
   premises: 本机 4060/16C32T/Win32；ncu 2026.2.0；引擎栈无自旋放大
   revisit: 换机/CPU；线程模型换代
-  evidence: log 10-09-周期计数首轮
+  evidence: log 10-09-周期首轮
 
 - id: C-64
   conclusion: **周期账本产品化（report v7 + bench 判读）**：per_phase 含 cycles + cycles_e2e；ab 自动周期判读（不改退出码）。A/A：cyc:e2e 下限 1.58% vs 墙钟 2.85%
@@ -260,7 +260,7 @@
   revisit: 换机/换 CPU；周期 A/A 带漂移超 1×SE 重标；BLAS/OV 线程模型换代
   evidence: log 10-09-账本产品化
 - id: C-65
-  conclusion: **跨线程账本（v8）+预处理容量**：full 档逐线程占空（宿主 ocr 0.20/infer 0.61；GPU 臂≤0.11）。宿主臂膝点 0.5-1ms/crop 1:1 传导；GPU 臂 SM 余量 ~5×（C-42/C-15）
+  conclusion: **跨线程账本（v8）+预处理容量**：full 档逐线程占空（宿主 ocr 0.20/infer 0.61；GPU 臂≤0.11）。宿主膝点 0.5-1ms/crop 1:1 传导；GPU 臂 SM 余量 ~5×
   status: active
   premises: 本机 4060/16C32T；test5 600 帧；sleep 注入；ALL_ACCESS 句柄怪癖见 resources 注
   revisit: 换机/换卡；OCR 提速（余量收窄）；真上重算法前复核膝点
@@ -286,7 +286,7 @@
   revisit: 亚 GOP 派工 / MPS 异卡 / kick <10ms
   evidence: log 同日
 - id: C-69
-  conclusion: **h264 约束链=供给线+消费耦合，非 H2D**——均已修（C-74/76）。宿主输出直读 3805=臂和 98%；H2D 无关（ROI KB 级）
+  conclusion: **h264 约束链=供给线+消费耦合非 H2D**——均已修（C-74/76）。宿主输出直读 3805=臂和 98%；H2D 无关（ROI KB 级）
   status: active
   premises: 4060M/32LP；fork 0.9.5；全片 23970
   revisit: demux 换代 / 传输模式新增

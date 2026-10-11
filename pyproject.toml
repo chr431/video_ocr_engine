@@ -19,7 +19,7 @@ dependencies = [
     # 上界钉 2026.3 系（本机 2026.3.1 全绿）：2026.4.0 发布当天在
     # windows runner 的 _infer 原生崩溃（同版本上午绿/下午红 = VM 异构
     # 或间歇崩溃，2026-09-28）。换代评估按 C-48 复评触发另起一轮。
-    "openvino>=2026.3,<2026.4",
+    "openvino>=2026.3,<2026.5",
     "psutil>=6",
 ]
 # 说明：decord（自建 fork chr431/decord）、cuda-python / TensorRT 为运行时
@@ -55,6 +55,10 @@ version = {attr = "video_ocr_engine.config.constants.__version__"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# 2026-10-11 测速轮（用户钦定）：每次运行固定打印慢测试榜——总时长已由
+# pytest 尾行给出，此加项保证**新增测试变慢即现形**（0.4s 门槛以下不列，
+# 榜取前 15；本机基线见 docs/log 第十一轮追记）。
+addopts = "--durations=15 --durations-min=0.4"
 markers = [
   "gpu: 需要 GPU + decord fork + 真值视频（S4 双后端等价门禁）",
 ]
