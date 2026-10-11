@@ -247,6 +247,8 @@ SDK 组装/手工 DLL 替换配方，连续三轮漂移成误导——去重为�
 
 - **dev 构建+部署**：fork 仓跑 `rebuild_dev.bat`（vcvars + `cmake
   --preset dev` + `--build` + 部署进 site-packages + env_doctor md5
+  （`--deploy` 自 0.26.0 起同步 DLL **与 libinfo.py 版本元数据**——此前只拷
+  DLL，版本漂移需手工补，decord_pin 审计两度捕获）
   校验；会 `taskkill python`，先停本地测试）。
 - **只构建不部署**：`build-dev\_build_dev.bat`（构建进 `build-dev/`，
   产物经 `DECORD_LIBRARY_PATH=build-dev` 切换；无缓存时自动先配置）。

@@ -124,7 +124,7 @@ def deploy_fork_dll(dry: bool = False) -> int:
     dst_md5 = _md5(dst) if dst.is_file() else ""
     if src_md5 == dst_md5:
         print("✓ 已是最新（构建产物与已部署 DLL 的 md5 一致：%s）" % src_md5[:12])
-        return 0
+        return _sync_libinfo(src, dst)
     print("构建产物: %s  (%s)" % (src, src_md5[:12]))
     print("已部署  : %s  (%s)" % (dst, dst_md5[:12] or "不存在"))
     if dry:
@@ -141,6 +141,28 @@ def deploy_fork_dll(dry: bool = False) -> int:
         print("✗ 拷贝后 md5 仍不一致（%s vs %s）" % (now_md5[:12], src_md5[:12]))
         return 3
     print("✓ 已同步（md5 %s）" % now_md5[:12])
+    return _sync_libinfo(src, dst)
+
+
+def _sync_libinfo(src: Path, dst: Path) -> int:
+    """版本元数据（libinfo.py）同步（2026-10-11 收口续）。
+
+    此前 --deploy 只拷 DLL，site-packages 版本号滞后（0.9.2 vs 已部署
+    0.9.3/0.9.4）只能手工补，decord_pin 审计两度捕获此漂移。DLL 已最新
+    而 libinfo 滞后的形态同样要修（早退路径也要走这里）。源 = fork 仓
+    python/decord/_ffi/libinfo.py。
+    """
+    libinfo_src = src.parents[1] / "python" / "decord" / "_ffi" / "libinfo.py"
+    if not libinfo_src.is_file():
+        return 0
+    libinfo_dst = dst.parent / "_ffi" / "libinfo.py"
+    try:
+        if not libinfo_dst.is_file() or _md5(libinfo_src) != _md5(libinfo_dst):
+            shutil.copy2(libinfo_src, libinfo_dst)
+            print("✓ 版本元数据已同步（libinfo.py）")
+    except (PermissionError, OSError) as e:
+        print("✗ libinfo.py 同步失败（%s）——decord_pin 审计将报版本漂移" % e)
+        return 3
     return 0
 
 
