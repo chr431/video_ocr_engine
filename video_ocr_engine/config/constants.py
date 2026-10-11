@@ -18,7 +18,7 @@ from pathlib import Path
 # 版本单一事实源：wheel 版本号（`pyproject.toml` 用 `dynamic` + `attr` 从此处
 # 读取）与运行时 `video_ocr_engine.__version__` 同源，且必须与 git tag 一致
 # —— 否则"装的到底是哪个版本"无法判断。改动本值后记得同步打 tag。
-__version__ = "0.25.2"
+__version__ = "0.26.0"
 
 # ═══════════════════ 环境变量助手与名称常量 ═══════════════════
 # 引擎全部 env 开关/覆写在此收敛（单一事实源）。布尔开关统一走 env_bool：
@@ -92,7 +92,8 @@ TRT_SUBPROBE_ENV: str = "TRT_SUBPROBE"  # 1 开启 TRT 子相位探针
 DEBUG_BOUNDS_ENV: str = "DEBUG_BOUNDS"  # 1 打印分段边界调试信息
 # CPU+NVDEC 混合解码（decode_backend="hybrid"）：实现完全在 decord fork 内
 # （hybrid / hybrid_gpu 设备上下文，v0.7.15+），引擎只透传解码参数：
-#   hybrid_gpu —— OCR on GPU（TRT）：输出帧驻留显存，gpu_pipeline 设备指针通路；
+#   C-76（0.26.0）起 TRT 也恒选 hybrid 宿主输出（gpu-out 上载中转 −13%
+#   流交付）；hybrid_gpu ctx 保留在 fork 侧供显存驻留管线；
 #   hybrid     —— OCR on CPU：输出宿主帧（与 cpu() 同布局）。
 # 历史参数（项目层 HybridDecoder 的 SCHED/MIGRATE/SOLO_GUARD/CALIB/折扣等）
 # 已随该实现一并删除；调度由 decord 内部的生产速率实测 + min-max 积压贪心承担。

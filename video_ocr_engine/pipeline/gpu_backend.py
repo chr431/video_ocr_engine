@@ -219,7 +219,11 @@ class _GpuLane:
         # （旧代码同序；门面若在 spec 构造期求值，B1 重置后的空标签会使其
         # 恒为 False → 误走 CPU 解码分支，stride>1 时 rep_frame 帧号漂移）。
         _label = spec.backend_label()
-        self._on_gpu = _label == "decord/GPU" or (_label == "decord/hybrid" and spec.ocr_on_gpu())
+        # C-76（2026-10-11）：hybrid 恒走宿主帧流——gpu-out 的解码器内上载
+        # 中转实测 −13% 流交付（3805→3252fps，fork 口径 A/B）；宿主帧流
+        # + OCR 会话上传 crop 与 cpu 后端同通路（已验证）。NVDEC 后端
+        # （decord/GPU）保持设备直通零拷贝不变。
+        self._on_gpu = _label == "decord/GPU"
 
     def calibrate(self, spec, vr, frames, ocr_session):
         x1, y1, x2, y2 = spec.roi

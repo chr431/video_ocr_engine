@@ -220,14 +220,11 @@ class DecordFrameSource:
         if backend == "hybrid" and label == "GPU":
             # ── decord 原生混合解码（fork ≥ v0.7.15，2026-09）──────────
             # 单 demux 流在解码器内部按关键帧 chunk 路由 CPU 软解 + NVDEC，
-            # 引擎只需把 ctx 换成 hybrid/hybrid_gpu，参数面（output_format /
-            # roi / num_threads）与 cpu/gpu 完全一致 —— 零适配透传：
-            #   hybrid_gpu：输出帧驻留显存（GPU chunk 零拷贝、CPU chunk 解码
-            #     器内部 H2D 上载），get_batch 返回 CUDA 批 —— gpu_pipeline 的
-            #     设备指针通路（_ndarray_device_ptr）直接可用，OCR on GPU（TRT）
-            #     时选它；
-            #   hybrid：输出宿主帧（与 cpu() 同布局），OCR on CPU / 宿主管线
-            #     时选它。
+            # 引擎只需把 ctx 换成 hybrid，参数面（output_format /
+            # roi / num_threads）与 cpu/gpu 完全一致 —— 零适配透传。
+            # C-76（0.26.0）：恒选宿主输出（与 cpu() 同布局）——gpu-out
+            # （hybrid_gpu，帧驻留显存）的解码器内上载中转实测 −13% 流
+            # 交付；宿主帧 + OCR 会话上传 crop 走 cpu 后端同通路。
             # R4 契约协商（DC-03）：hybrid ctx 是显式 decode_backend 选择，
             # 缺能力=配置错误而非环境波动——契约面在时**在降级 try 之外**
             # 显式拒绝（放 try 内会被 except 吞成静默回退纯 GPU，恰好抹掉
@@ -236,14 +233,12 @@ class DecordFrameSource:
             _contract = probe_contract()
             if _contract is not None:
                 _contract.require(
-                    "hybrid_gpu_ctx"
-                    if (self._ocr_on_gpu_fn is not None and self._ocr_on_gpu_fn())
-                    else "hybrid_ctx",
+                    "hybrid_ctx",  # C-76：恒宿主输出（gpu-out 中转税 −13%，见下方选 ctx 注释）
                     "DC-03",
-                    "hybrid/hybrid_gpu 设备上下文",
+                    "hybrid 宿主输出设备上下文",
                 )
             try:
-                from decord import hybrid as _hy, hybrid_gpu as _hyg
+                from decord import hybrid as _hy
 
                 _ct = self._hybrid_cpu_threads
                 if _ct <= 0:
@@ -260,8 +255,14 @@ class DecordFrameSource:
                     # 档位以引擎口径为准。复评触发：decord 再换代 / 核数
                     # 格局变化。
                     _ct = self._decode_threads(codec=self.codec or None) or 16
-                _on_gpu = self._ocr_on_gpu_fn is not None and self._ocr_on_gpu_fn()
-                _hctx = _hyg(0) if _on_gpu else _hy(0)
+                # C-76（2026-10-11）：hybrid 恒选宿主输出（hybrid(0)），GPU-OCR
+                # 也不例外。gpu-out（hybrid_gpu）的 CPU 臂帧需经解码器内
+                # 上载线程中转（H2D 攒批/同步）——全片实测引擎流交付
+                # 3252fps vs 宿主输出直读 3805fps（fork 口径 A/B，−13%，
+                # 上载中转即瓶颈）；宿主帧 + OCR 会话内上传 crop（cpu 后端
+                # 同通路，2764fps 已验证）反而不经过该中转。位级：宿主
+                # 输出与 cpu() 逐位一致（fork hybrid 文档口径）。
+                _hctx = _hy(0)
                 vr = self._open_reader(_hctx, roi_kw, num_threads=_ct)
                 # 硬窗界（2026-09-17 越窗修复）：短窗时声明消费上限，fork
                 # 的 demux 与 GOP 派工在窗缘硬停——窗口外一个包都不读
@@ -295,9 +296,8 @@ class DecordFrameSource:
                     _sdw(self._frame_end - self._frame_start)
                 self.backend_label = "decord/hybrid"
                 logger.info(
-                    "混合解码开启(原生): codec=%s ctx=%s cpuT=%d",
+                    "混合解码开启(原生): codec=%s ctx=hybrid cpuT=%d",
                     self.codec,
-                    "hybrid_gpu" if _on_gpu else "hybrid",
                     _ct,
                 )
             except Exception as e:  # noqa: BLE001
