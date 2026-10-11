@@ -94,9 +94,19 @@ def rp(rel: str) -> str:
     return os.path.join(ROOT, rel)
 
 
+_READ_CACHE: dict[str, str] = {}
+
+
 def read(rel: str) -> str:
-    with open(rp(rel), encoding="utf-8") as f:
-        return f.read()
+    # 2026-10-11 测速轮：多个检查项（裸 except/未用 import/未门控 print/
+    # TODO/测试纪律）各自全量重读同一批 ≈400 文件（8.5M 次 read 调用
+    # ≈1.2s）改进程级缓存——审计单进程一次性跑完，无失效问题。
+    cached = _READ_CACHE.get(rel)
+    if cached is None:
+        with open(rp(rel), encoding="utf-8") as f:
+            cached = f.read()
+        _READ_CACHE[rel] = cached
+    return cached
 
 
 def check_hardcoded_paths() -> None:

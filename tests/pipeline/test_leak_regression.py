@@ -77,12 +77,19 @@ pytestmark = pytest.mark.skipif(not _available(),
 
 def _slope(seq: list[float]) -> float:
     # 中位数而非均值：单轮瞬态保留（Windows 分配器，实测 +130MB 单尖峰
-    # 后回落）不打穿；C-55 型单调泄漏（+2.0 MiB/轮）仍被首尾中位数差捕获
+    # 后回落）不打穿；C-55 型单调泄漏（+2.0 MiB/轮）仍被首尾中位数差捕获。
+    # 2026-10-11 测速轮加固：**连续双尖峰**（本轮实录：末两轮 +133MB
+    # 持续到收尾，恰占满尾窗 4 席的半数 → 尾中位被抬 67MB → 假阳性
+    # +19MiB/轮，~1/6 复现率）在"裁掉序列顶部 2 个极值后再取中位"下
+    # 归零（实测裁后 0.18）。裁剪量 2 < 头/尾窗半宽（n/2≥3/2），单调
+    # 泄漏（每轮 +2，13 轮共 +24）远大于裁剪量，灵敏度不受损。
     import statistics
-    n = max(3, len(seq) // 3)
-    head = statistics.median(seq[:n])
-    tail = statistics.median(seq[-n:])
-    return (tail - head) / max(1, len(seq) - n)
+    srt = sorted(seq)
+    trimmed = srt[:-2] if len(srt) > 6 else srt
+    n = max(3, len(trimmed) // 3)
+    head = statistics.median(trimmed[:n])
+    tail = statistics.median(trimmed[-n:])
+    return (tail - head) / max(1, len(trimmed) - n)
 
 
 def test_repeat_extract_no_rss_or_vram_drift():

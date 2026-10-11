@@ -191,20 +191,37 @@ def main() -> int:
     # 只看前两种会漏判（`_probe_roi_segcost` 就只在 `_probe_seg_share` 的
     # docstring 里被点名，但那足以说明"别删"）。
     print("\n【3】依赖关系（实测，不信任索引）")
+    # 2026-10-11 测速轮：N×N×逐对正则（155²≈2.4 万次 search ≈1.5s，实测
+    # 与编译与否无关——成本在搜索次数）改**每文件单遍合并 alternation**
+    # （两遍 = import 形式 + 引号形式，命中归属由捕获组还原 ≈0.02s）。
+    # 等价性已证：真语料上两法产出的 (被引, 引用, 形式) 三元组集逐项相同
+    # （186 项）。分类优先级 import→子进程→提及 不变。
+    _names = sorted(ob[:-3] for ob in files)
+    _alt = "|".join(re.escape(n) for n in _names)
+    import_scan = re.compile(r"(?m)^\s*from\s+(" + _alt + r")\s+import")
+    quoted_scan = re.compile(r"[\"'](" + _alt + r")\.py[\"']")
     dep: dict[str, list[str]] = {}
+    per_file = {}
     for name, data in files.items():
         txt = data.decode("utf-8", "replace")
         base = name[:-3]
-        for other in files:
-            ob = other[:-3]
+        per_file[base] = (
+            {m.group(1) for m in import_scan.finditer(txt)},
+            {m.group(1) for m in quoted_scan.finditer(txt)},
+            txt,
+        )
+    for name, data in files.items():
+        base = name[:-3]
+        imports, quoted, txt = per_file[base]
+        for ob in _names:
             if ob == base:
                 continue
-            if re.search(r"^\s*from\s+%s\s+import" % re.escape(ob), txt, re.M):
-                dep.setdefault(other, []).append("%s (import)" % name)
-            elif re.search(r"[\"']%s\.py[\"']" % re.escape(ob), txt):
-                dep.setdefault(other, []).append("%s (子进程)" % name)
+            if ob in imports:
+                dep.setdefault(ob + ".py", []).append("%s (import)" % name)
+            elif ob in quoted:
+                dep.setdefault(ob + ".py", []).append("%s (子进程)" % name)
             elif ob in txt:
-                dep.setdefault(other, []).append("%s (提及)" % name)
+                dep.setdefault(ob + ".py", []).append("%s (提及)" % name)
     if not dep:
         print("    （无跨探针依赖）")
     for k in sorted(dep):

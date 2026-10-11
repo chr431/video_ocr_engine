@@ -45,14 +45,34 @@ def _corpus() -> dict[str, str]:
 
 
 def _dead_candidates() -> list[str]:
+    # 2026-10-11 测速轮：O(names×corpus) 的逐名单正则扫描（525 名单 ×
+    # 244 文件 ≈ 12s）改单遍合并 alternation + 命中计数（行为等价——
+    # \b 分词语义不变，命中归属由捕获组还原）。
     corpus = _corpus()
+    pkg_names: set[str] = set()
+    for path, src in corpus.items():
+        if not path.startswith(str(PKG)):
+            continue
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                 ast.ClassDef)):
+                pkg_names.add(node.name)
+            elif isinstance(node, ast.Assign):
+                # 模块级 UPPER_CASE 常量（死常量类：DEFAULT_* 孤儿即此类）
+                for t in node.targets:
+                    if (isinstance(t, ast.Name)
+                            and re.fullmatch(r"[A-Z][A-Z0-9_]{3,}", t.id)):
+                        pkg_names.add(t.id)
+    pkg_names = {n for n in pkg_names
+                 if not n.startswith("__") and n not in ALLOWLIST}
+    if not pkg_names:
+        return []
+    pat = re.compile(r"\b(" + "|".join(sorted(re.escape(n) for n in pkg_names)) + r")\b")
     counts: dict[str, int] = {}
-
-    def mentions(name: str) -> int:
-        if name not in counts:
-            pat = re.compile(r"\b" + re.escape(name) + r"\b")
-            counts[name] = sum(len(pat.findall(s)) for s in corpus.values())
-        return counts[name]
+    for src in corpus.values():
+        for m in pat.finditer(src):
+            counts[m.group(1)] = counts.get(m.group(1), 0) + 1
 
     findings = []
     for path, src in corpus.items():
@@ -65,7 +85,6 @@ def _dead_candidates() -> list[str]:
                                  ast.ClassDef)):
                 names.append(node.name)
             elif isinstance(node, ast.Assign):
-                # 模块级 UPPER_CASE 常量（死常量类：DEFAULT_* 孤儿即此类）
                 for t in node.targets:
                     if (isinstance(t, ast.Name)
                             and re.fullmatch(r"[A-Z][A-Z0-9_]{3,}", t.id)):
@@ -73,7 +92,7 @@ def _dead_candidates() -> list[str]:
             for name in names:
                 if name.startswith("__") or name in ALLOWLIST:
                     continue
-                if mentions(name) <= 1:
+                if counts.get(name, 0) <= 1:
                     findings.append(f"{name}  ({Path(path).relative_to(ROOT)})")
     return sorted(set(findings))
 
