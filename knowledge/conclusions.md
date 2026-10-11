@@ -267,12 +267,10 @@
   evidence: log 2026-10-09-跨线程账本与预处理容量
 
 - id: C-66
-  conclusion: **hybrid 缺口 −5.6/−33/−34%（3000 帧）=CPU 臂欠配**：assigned==delivered→泵 GOP 贪心近视（EWMA 冷启动锁死分配）。修法候选=比例预留/再平衡——已 C-68 证伪（切换税≈收益）；剩余=亚 GOP 派工（未立项）/同卡争用归 C-60
+  conclusion: **hybrid 缺口 −5.6/−33/−34%=CPU 臂欠配**（assigned==delivered→泵 GOP 贪心近视+EWMA 冷启动锁死）。修法候选已 C-68 证伪；剩余=亚 GOP 派工/同卡 C-60
   status: active
   premises: 4060/16C32T；fork 0.9.2；v8/v10 账本
-  长片段：分配自愈、臂速≈纯臂；剩余 −9~19%=**TRT×解码链同卡争用**（批延 +54%；CPU-OCR 判别臂 hybrid 反 +6%）；hol/idle/背压=排队影子（三修全反已回滚）；0.9.1=ROI 预算字节化
-  稳定层（0.9.2）：尾窗 4→10——av1 CV 2.9%、均值 +3.6%；忙窗估计器已回滚（自激）；残余=环境态臂速 ±7%
-  达成率三码 **92/82/92%**（vs 双臂和）且全部快于最快纯臂 +12~32%——C-53 全长片转正。h264 的 18%=CPU 臂 −26%（H2D 上载×解码争核，线程降档证伪）；同卡无免费解，剩余需 MPS/异卡（C-60 触发）
+  长片段：分配自愈、臂速≈纯臂；剩余 −9~19%=**TRT×解码链同卡争用**（批延 +54%；CPU-OCR 判别臂 hybrid 反 +6%）；hol/idle/背压=排队影子（三修全反已回滚）。稳定层（0.9.2）：尾窗 4→10（av1 CV 2.9%、均值 +3.6%）；忙窗估计器已回滚。达成率三码 **92/82/92%** 全部快于最快纯臂 +12~32%。h264 的 18%=CPU 臂 −26%（H2D×解码争核，线程降档证伪）；同卡无免费解→MPS/异卡（C-60）
   revisit: fork 泵改动后复跑；换卡
   evidence: log 2026-10-09/10 争用定位与三码矩阵
 
@@ -287,17 +285,17 @@
   status: active
   premises: 4060/16C32T；fork 0.9.2+format（md5 30ca4d37）；窗 3000；TRT OCR
   revisit: 亚 GOP 派工实现 / MPS/异卡落地 / kick 成本降至 <10ms
-  evidence: log 2026-10-11-争用微观定位轮
+  evidence: log 同日
 - id: C-69
-  conclusion: **h264 hybrid 达成率约束=供给线单线程 + 引擎消费耦合，非 H2D**——供给上限（无 OCR 直读，0.9.3）：h264 3358/av1 2716/hevc 2867 fps（引擎内再损 15~20%，靶点=GPU 管线内部）；胃口超供给 24%/10%/3%。H2D 无关（ROI 裁切 KB 级，全窗 10-30MB）；每帧周期 0.94×（计算争用排除）。叙事="供给容量+消费耦合"；供给<胃口时基线分配已近优
+  conclusion: **h264 hybrid 达成率约束=供给线 + 消费耦合，非 H2D**——供给上限（0.9.3 直读）：h264 3358/av1 2716/hevc 2867（引擎内再损 15~20%，靶点=GPU 管线内部）；胃口超供给 24%/10%/3%。H2D 无关（ROI 裁切 KB 级）；每帧周期 0.94×。供给<胃口时基线分配已近优
   status: active
-  premises: 4060/16C32T；fork 0.9.3（queue_frames_ 1536）；窗 3000；num_threads 按码档位
-  revisit: 供给线并行化落地后重测 / demux 换代 / 核数格局变化
-  evidence: log 2026-10-11-争用微观定位轮 §6；tools/_probe_hybrid_supply.py
+  premises: 4060/16C32T；fork 0.9.3；窗 3000
+  revisit: 供给并行化落地 / demux 换代
+  evidence: log 同日 §6；_probe_hybrid_supply.py
 - id: C-72
-  conclusion: **h264 hybrid 1004fps 双峰锁死根因=派工空闲判据污染**——side_pending_ 统计"已路由未发射"，发射按流序合并：慢侧未轮到时快侧已解码帧也挂 pending，force_head 把"等轮次"误判"忙"→ 连续派 GPU（alloc=PiHHHHHHHH 实录，CPU 只拿采样 chunk）。修=判据改未解码积压（与 ETA 同口径）；修后 9 连测分配全 70:30 零锁死。取证=alloc_seq 入 hybrid_stats
+  conclusion: **h264 hybrid 1004fps 锁死根因=派工空闲判据污染**——side_pending_ 统计"已路由未发射"，发射按流序：慢侧未轮到时快侧已解码帧也挂 pending，force_head 把"等轮次"误判"忙"→ 连派 GPU（alloc=PiHHHHHHHH 实录）。修=判据改未解码积压（ETA 同口径）；修后 9 连测全 70:30 零锁死。取证=alloc_seq
   status: active
   premises: 4060/16C32T；fork 0.9.4；窗 3000；TRT OCR
   revisit: 派工重构 / 流序合并语义变化
-  evidence: log 2026-10-11-争用微观定位轮 §13
+  evidence: log 同日 §13
 
