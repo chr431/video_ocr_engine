@@ -17,6 +17,15 @@ os.environ.setdefault("GPU_PIPELINE", "1")
 from _measure_lib import ROI, VIDS  # noqa: E402
 from video_ocr_engine import FieldExtractor  # noqa: E402
 
+# R-perf-quiet：后台负载门禁——超阈立即退出，不浪费整轮测量
+from _measure_lib import BackgroundLoadError, assert_machine_quiet
+
+try:
+    assert_machine_quiet()
+except BackgroundLoadError as _e:  # noqa: BLE001 — 门禁语义：超阈退出
+    print(_e)
+    raise SystemExit(2)
+
 CASES = [("hevc", "test6_hevc"), ("h264", "test6_h264"), ("av1", "test6_av1")]
 WIN = 3000
 

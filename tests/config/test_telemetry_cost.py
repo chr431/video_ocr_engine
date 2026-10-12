@@ -128,6 +128,19 @@ def test_environment_fingerprint_is_cached():
 
 
 def test_full_recording_path_cost_per_run():
+    import sys as _sys
+    from pathlib import Path as _P
+
+    _sys.path.insert(0, str(_P(__file__).resolve().parents[2] / "tools"))
+    from _measure_lib import BackgroundLoadError, assert_machine_quiet
+
+    try:  # 时敏测量：后台大负载直接失败，不浪费 94s 重放
+        assert_machine_quiet(cpu_pct=40.0, samples=2, interval=0.5, gpu=False)
+    except BackgroundLoadError as e:
+        import pytest as _pt
+
+        _pt.fail(str(e))
+
     """full 记录面（138 span + 计数器 + 报告）相对 off 的增量 ≤ 2ms/run。
 
     3000 帧 run 墙钟 ~1.0s → 2ms = 0.2%；比墙钟门禁分辨力严 ~400 倍：

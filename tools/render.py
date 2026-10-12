@@ -20,13 +20,20 @@ from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
 
+
+def _y_load(p: Path) -> dict:
+    return yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+
+
 ROOT = Path(__file__).resolve().parent.parent
 REGISTRY = ROOT / "registry"
 VIEWS = {
+    "agents": ROOT / "AGENTS.md",
     "conclusions": ROOT / "docs" / "CONCLUSIONS.md",
     "knobs_md": ROOT / "docs" / "KNOBS.md",
     "knobs_yaml": REGISTRY / "knobs.yaml",
     "index": ROOT / "tools" / "INDEX.md",
+    "health": ROOT / "docs" / "HEALTH.md",
 }
 _PATH_TOKEN = re.compile(
     r"((?:video_ocr_engine|docs|tools|tests|registry)/[\w./-]+\.(?:py|md|yaml))"
@@ -86,6 +93,87 @@ def render_conclusions_md(entries: list) -> str:
             )
         )
     lines += ["", "（复评/清扫：python tools/conclusions_sweep.py --strict，发版必跑。）", ""]
+    return "\n".join(lines)
+
+
+def render_agents_md(entries_tools: list, entries_conclusions: list) -> str:
+    """注入核 = 宪章正文（charter.md 去 H1）+ registry 快照——永不手写。
+
+    预算 ≤6KB 是宪章不变量 5（触碰=失效警报，见 _audit_ext injection_budget）。
+    """
+    charter = (ROOT / "charter.md").read_text(encoding="utf-8")
+    charter_body = "\n".join(charter.splitlines()[1:]).strip()
+    import yaml as _y
+
+    arch = _y.safe_load((ROOT / "registry" / "architecture.yaml").read_text(encoding="utf-8"))
+    env = _y.safe_load((ROOT / "registry" / "environment.yaml").read_text(encoding="utf-8"))
+    n_standing = sum(1 for e in entries_tools if e.get("tier") == "standing")
+    n_probe = sum(1 for e in entries_tools if e.get("tier") == "probe")
+    lines = [
+        "# AGENTS.md — 注入核（渲染产物；事实源 charter.md + registry/）",
+        "",
+        "> 本文件由 tools/render.py 渲染，人不得手写；引用查询 `python tools/refs.py resolve <token>`。",
+        "",
+        charter_body,
+        "",
+        "## 现役架构（源 registry/architecture.yaml）",
+        "",
+        "链路：" + str(arch.get("pipeline", "")),
+        "",
+    ]
+    for st in arch.get("stages", []):
+        lines.append(
+            "- %s → `%s`%s"
+            % (
+                st.get("name"),
+                st.get("entry"),
+                ("：" + str(st.get("note")))[:60] if st.get("note") else "",
+            )
+        )
+    lines.append("")
+    for f in arch.get("facts", []):
+        lines.append("- " + str(f))
+    dep = env.get("dependencies", {})
+    corpus = env.get("corpus", {})
+    lines += [
+        "",
+        "## 环境要点（源 registry/environment.yaml）",
+        "",
+        "- decord@%s（钉版对账=审计 decord_pin）；视频目录经 RACELOG_VIDEO_DIR（默认 %s）"
+        % (dep.get("decord_pin"), corpus.get("video_dir", "")),
+        "- 测试视频一律 sample_stride=1；中文输出须 UTF-8 重配（详见 environment）",
+        "",
+        "## 工具与门禁（源 registry/tools.yaml + rules.yaml）",
+        "",
+        "- standing %d 件（质量面=生产代码）+ probes %d 个在树（近两轮）；清单=tools/INDEX.md"
+        % (n_standing, n_probe),
+        "- 合规链 `python tools/check.py`（daily / --tier release）；A/B `python tools/bench.py ab`；",
+        "  金标 `python tests/golden/record.py --verify`；清扫 `python tools/conclusions_sweep.py --strict`；",
+        "  版本 `python tools/version_advice.py advice|verify`；性能测量启动前自动过 R-perf-quiet 负载门禁。",
+        "",
+        "## 结论",
+        "",
+        "- active %d 条（源 registry/conclusions.yaml）；表=docs/CONCLUSIONS.md；死档经 git 档案取回。"
+        % len(entries_conclusions),
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def render_health_md(kpi: dict) -> str:
+    lines = [
+        "# 制度健康度（渲染产物；事实源 registry/kpi.yaml ← tools/health.py）",
+        "",
+        "| 指标 | 值 | 目标 |",
+        "|---|---|---|",
+    ]
+    for row in kpi.get("metrics", []):
+        lines.append("| %s | %s | %s |" % (row.get("name"), row.get("value"), row.get("target")))
+    lines += [
+        "",
+        "（生成：%s；口径见 tools/health.py 头注与 S2 §7。）" % kpi.get("generated_at", ""),
+        "",
+    ]
     return "\n".join(lines)
 
 
@@ -191,12 +279,19 @@ def bare_cr(rel: str) -> list[str]:
 
 
 def generate() -> dict[str, str]:
-    return {
+    out = {
+        "agents": render_agents_md(
+            _load(REGISTRY / "tools.yaml"), _load(REGISTRY / "conclusions.yaml")
+        ),
         "conclusions": render_conclusions_md(_load(REGISTRY / "conclusions.yaml")),
         "knobs_md": render_knobs_md(),
         "knobs_yaml": render_knobs_yaml(),
         "index": render_index_md(_load(REGISTRY / "tools.yaml")),
     }
+    kpi_path = REGISTRY / "kpi.yaml"
+    if kpi_path.is_file():
+        out["health"] = render_health_md(_y_load(kpi_path) or {})
+    return out
 
 
 def check() -> list[str]:

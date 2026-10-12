@@ -115,6 +115,13 @@ def probe(video: str, roi: tuple, n_frames: int = 4000, batch: int = 64, affinit
 
 
 def main():
+    from _measure_lib import BackgroundLoadError, assert_machine_quiet
+
+    try:
+        assert_machine_quiet()
+    except BackgroundLoadError as e:  # noqa: BLE001 — 门禁语义：超阈退出
+        print(e)
+        raise SystemExit(2)
     ap = argparse.ArgumentParser()
     ap.add_argument("--video", required=True)
     ap.add_argument("--roi", required=True)

@@ -113,3 +113,111 @@ def paired_ab(
         "band": _band(diffs),
         "median": (statistics.median(a), statistics.median(b)),
     }
+
+
+# ── 后台负载门禁（R-perf-quiet，S3 Phase E）────────────────────────────
+# 旧制度"标定/实验期间机器独占，后台任务禁止并行"是 prose（从未执行过）；
+# 本节把它变成硬门禁：性能测量启动前采样外部进程负载，超阈立即报错退出，
+# 不浪费整轮测量（同码两跑差 7.7% 的教训之一即后台噪声）。
+
+LOAD_GATE_ERROR_HINT = "关掉后台任务后重测（R-perf-quiet）"
+
+
+class BackgroundLoadError(RuntimeError):
+    """后台负载超阈——测量前中止（R-perf-quiet）。"""
+
+
+def _judge_quiet(readings, gpu_pct, cpu_pct, gpu_pct_limit=50.0):
+    """判据核心（可注入假数据单测）：任一轮外部 CPU 超阈或 GPU 超阈即违规。
+
+    GPU 阈值校准（2026-10-12 实测）：桌面合成与 agent 界面常态 20-40%
+    （ZCode.exe≈31% + dwm≈28%），不属"大负载"；外来计算负载（编码/训练/
+    渲染作业）才会持续 >50%。CPU 按整机折算，15% ≈ 5 个满核（32LP 机）。
+    """
+    for i, (sys_pct, _top) in enumerate(readings):
+        if sys_pct > cpu_pct:
+            return f"第{i + 1}轮外部 CPU {sys_pct:.0f}% > {cpu_pct:.0f}%"
+    if gpu_pct > gpu_pct_limit:
+        return f"GPU 利用率 {gpu_pct:.0f}% > {gpu_pct_limit:.0f}%"
+    return None
+
+
+def _gpu_util():
+    """GPU 利用率（%）；无 nvidia-smi/超时=环境事实，返回 0 跳过该判据。"""
+    import subprocess as _sp
+
+    try:
+        r = _sp.run(
+            ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return float(r.stdout.strip().splitlines()[0])
+    except Exception:  # noqa: BLE001,S110 — 无卡/无工具/超时=环境事实
+        return 0.0
+
+
+def _prime_foreign_processes():
+    """外部进程列表（排除自身进程树与 Idle）并 prime cpu_percent 计数器。"""
+    import os
+
+    import psutil
+
+    own = {os.getpid()}
+    try:
+        own |= {q.pid for q in psutil.Process(os.getpid()).children(recursive=True)}
+    except psutil.Error:  # noqa: BLE001 — 子进程枚举失败按无子进程处理
+        pass
+    procs = []
+    for q in psutil.process_iter(["pid", "name"]):
+        try:
+            if q.pid in own or q.pid == 0:
+                continue
+            if "idle" in (q.info.get("name") or "").lower():
+                continue
+            q.cpu_percent(interval=None)  # 首调恒 0，仅 prime
+            procs.append(q)
+        except psutil.Error:  # noqa: BLE001 — 进程消失=正常竞态
+            continue
+    return procs
+
+
+def assert_machine_quiet(
+    cpu_pct: float = 15.0,
+    samples: int = 3,
+    interval: float = 1.0,
+    gpu: bool = True,
+    gpu_pct_limit: float = 50.0,
+) -> None:
+    """性能测量前的机器独占门禁：超阈抛 BackgroundLoadError（含元凶清单）。
+
+    外部 CPU 按进程求和折算整机百分比（psutil 的 cpu_percent 是单核归一）；
+    本进程与子进程不计入（测量自身的负载不是"后台"）。
+    """
+    import time as _t
+
+    import psutil
+
+    procs = _prime_foreign_processes()
+    ncpu = psutil.cpu_count() or 1
+    readings = []
+    for _ in range(samples):
+        _t.sleep(interval)
+        total, top = 0.0, []
+        for q in procs:
+            try:
+                c = q.cpu_percent(interval=None)
+                total += c
+                if c > 3.0:
+                    top.append((c, q.info.get("name") or "?"))
+            except psutil.Error:  # noqa: BLE001 — 进程消失=正常竞态
+                continue
+        readings.append((total / ncpu, sorted(top, reverse=True)))
+    gpu_pct = _gpu_util() if gpu else 0.0
+    bad = _judge_quiet(readings, gpu_pct, cpu_pct, gpu_pct_limit)
+    if bad:
+        detail = "；".join("%s=%.0f%%" % (n, c) for c, n in readings[-1][1][:5])
+        raise BackgroundLoadError(
+            "后台负载超阈（%s）——%s。元凶：%s" % (bad, LOAD_GATE_ERROR_HINT, detail or "GPU")
+        )

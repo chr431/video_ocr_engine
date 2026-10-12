@@ -22,6 +22,7 @@
 | `e2e_smoke.py` | 端到端冒烟 / 真值验证（真实视频） |
 | `env_doctor.py` | 环境体检/部署/审计（R-path-no-hardcode 执行体） |
 | `env_probe.py` | ffmpeg/decord 解析统一入口（外部依赖路径唯一出口） |
+| `health.py` | KPI 计算→registry/kpi.yaml（S1 §5 自我约束执行体；HEALTH.md 视图源） |
 | `probe_decode_rates.py` | 各后端解码速率基准（bench 家族） |
 | `refs.py` | R-refs-resolve 执行体（引用解析器） |
 | `render.py` | R-render-consistency 执行体（四视图统一渲染） |

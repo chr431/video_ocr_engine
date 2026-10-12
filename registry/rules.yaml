@@ -179,6 +179,13 @@
   since: 2026-10-08
   # 注：脚本默认 --repeat 1 与本规则不一致（第一性审查 §4 P3），Phase C 迁移时改默认值 5。
 
+- id: R-perf-quiet
+  statement: 性能测量启动前必须过后台负载门禁（外部 CPU>15% 或 GPU>10% 即退出）——机器独占 prose 的机器化
+  enforcement: local-gate
+  executor: tools/_measure_lib.py#assert_machine_quiet
+  prevents: 旧 rules.yaml"标定/实验期间机器独占"（prose 从未执行）；S0-C5 噪声族（同码两跑差 7.7%）
+  since: 2026-10-12
+
 - id: R-telemetry-cost
   statement: 遥测插桩成本守卫（记录/采样/直方图分面预算，重放法）——改遥测必跑
   enforcement: local-gate
@@ -250,6 +257,7 @@
 # 旧 rules.yaml"历史文档 append-only" → 删除，被生命周期政策取代（log 发版出树）。
 # 旧 rules.yaml"不引用废弃根模块 shim" → 删除（shims 已于 0.14.1 物理删除，规则随之失效）。
 # 旧 rules.yaml"数值不重排/测量原语复用/压测规格"（prose 档） → 收编为上方 advisory。
+# 旧 rules.yaml"标定/实验期间机器独占，后台任务禁止并行" → 机器化为 R-perf-quiet。
 # 旧铁律 1/3/4/5（测量文化） → 收编为 adv-measure-first/frame-align/per-slice/gt-audit。
 # 旧铁律 7"探针放 tools/_probe_*.py" → 演化为 R-registry-schema 的路径约定（tools/probes/）。
 # 旧铁律 8/9/10 → R-version-tag/R-version-advice/R-deprecation-due（纸面协议机器化）。

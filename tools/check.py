@@ -73,9 +73,13 @@ STEPS = {
         "版本纪律（档位判据 verify）",
         [sys.executable, "tools/version_advice.py", "verify"],
     ),
+    "health": (
+        "制度健康度（KPI 对账）",
+        [sys.executable, "tools/health.py", "--check"],
+    ),
 }
 DAILY = ["pytest", "refs", "render", "ext", "golden_smoke"]
-RELEASE = ["pytest", "refs", "render", "ext", "golden_full", "sweep", "version"]
+RELEASE = ["pytest", "refs", "render", "ext", "golden_full", "sweep", "version", "health"]
 
 
 def run_step(name: str, cmd: list, timeout: int) -> tuple[str, float, str]:

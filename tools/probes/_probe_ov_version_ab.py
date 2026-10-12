@@ -61,6 +61,15 @@ def main() -> int:
     # 引擎级
     from _measure_lib import ROI, VIDS
     from video_ocr_engine import FieldExtractor
+# R-perf-quiet：后台负载门禁——超阈立即退出，不浪费整轮测量
+from _measure_lib import BackgroundLoadError, assert_machine_quiet
+
+try:
+    assert_machine_quiet()
+except BackgroundLoadError as _e:  # noqa: BLE001 — 门禁语义：超阈退出
+    print(_e)
+    raise SystemExit(2)
+
     segs_all, texts_all = [], []
     walls = []
     for rep in range(2):

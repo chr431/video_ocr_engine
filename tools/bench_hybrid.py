@@ -88,6 +88,13 @@ def check_idle(max_pct: float = 20.0, strict: bool = False) -> bool:
 
 
 def main():
+    from _measure_lib import BackgroundLoadError, assert_machine_quiet
+
+    try:
+        assert_machine_quiet()
+    except BackgroundLoadError as e:  # noqa: BLE001 — 门禁语义：超阈退出
+        print(e)
+        raise SystemExit(2)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")

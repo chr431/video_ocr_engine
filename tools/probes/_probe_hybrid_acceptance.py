@@ -11,6 +11,18 @@ os.environ['DECORD_HYBRID_STATS']='1'
 from _measure_lib import ROI, VIDS
 from video_ocr_engine import FieldExtractor
 
+import sys as _sys
+from pathlib import Path as _P
+_sys.path.insert(0, str(_P(__file__).resolve().parents[2] / "tools"))
+# R-perf-quiet：后台负载门禁——超阈立即退出，不浪费整轮测量
+from _measure_lib import BackgroundLoadError, assert_machine_quiet
+
+try:
+    assert_machine_quiet()
+except BackgroundLoadError as _e:  # noqa: BLE001 — 门禁语义：超阈退出
+    print(_e)
+    raise SystemExit(2)
+
 def run(vid, backend, reps=2):
     N = 23970
     xs, spans, stats = [], None, []

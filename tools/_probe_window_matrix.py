@@ -62,6 +62,13 @@ def read_hash(path, roi, start, n, ctx, use_win):
 
 
 def main():
+    from _measure_lib import BackgroundLoadError, assert_machine_quiet
+
+    try:
+        assert_machine_quiet()
+    except BackgroundLoadError as e:  # noqa: BLE001 — 门禁语义：超阈退出
+        print(e)
+        raise SystemExit(2)
     quick = "--quick" in sys.argv
     repeat = 5  # R-window-gate：单轮通过不作数（2026-10-08 flake 教训）
     if "--repeat" in sys.argv:

@@ -70,6 +70,15 @@ import sys, time, statistics
 sys.path.insert(0, "tools"); sys.path.insert(0, ".")
 import decord
 from _measure_lib import ROI, VIDS
+# R-perf-quiet：后台负载门禁——超阈立即退出，不浪费整轮测量
+from _measure_lib import BackgroundLoadError, assert_machine_quiet
+
+try:
+    assert_machine_quiet()
+except BackgroundLoadError as _e:  # noqa: BLE001 — 门禁语义：超阈退出
+    print(_e)
+    raise SystemExit(2)
+
 ctx = decord.hybrid(0)
 vr = decord.VideoReader(VIDS["test6_h264"], ctx=ctx, output_format="gray",
                         roi=ROI["test6"], num_threads=32)

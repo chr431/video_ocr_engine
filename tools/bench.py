@@ -1442,7 +1442,20 @@ def main() -> int:
     )
     ab.set_defaults(func=cmd_ab)
     args = ap.parse_args()
+    if args.cmd in ("run", "diff", "ab", "telemetry-check"):
+        _load_gate("bench " + args.cmd)
     return args.func(args)
+
+
+def _load_gate(label: str) -> None:
+    """性能测量前的后台负载门禁（R-perf-quiet）——超阈立即退出不浪费整轮。"""
+    from _measure_lib import BackgroundLoadError, assert_machine_quiet
+
+    try:
+        assert_machine_quiet()
+    except BackgroundLoadError as e:
+        print(f"[{label}] {e}")
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

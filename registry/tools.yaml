@@ -55,6 +55,9 @@
 - id: probe_decode_rates.py
   tier: standing
   why: 各后端解码速率基准（bench 家族）
+- id: health.py
+  tier: standing
+  why: KPI 计算→registry/kpi.yaml（S1 §5 自我约束执行体；HEALTH.md 视图源）
 - id: version_advice.py
   tier: standing
   why: R-version-tag/R-version-advice 执行体（API 面 dump/档位判据/verify/金标 manifest/bench 快照）

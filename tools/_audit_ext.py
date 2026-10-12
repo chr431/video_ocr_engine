@@ -354,11 +354,30 @@ def check_gate_manifest() -> str | None:
     return None
 
 
+def check_injection_budget() -> str | None:
+    """注入核与宪章预算（宪章不变量 5；S1 裁决 3）。
+
+    AGENTS ≤6144B（6KB）、charter ≤2048B。触碰=制度失效警报：查什么内容
+    泄漏进注入核，禁止上调数值（上调须走宪章程序并附失效复盘）。
+    """
+    charter = ROOT / "charter.md"
+    agents = ROOT / "AGENTS.md"
+    if charter.stat().st_size > 2048:
+        return "charter.md %dB 超 2048（手写制度文本应极小）" % charter.stat().st_size
+    if agents.stat().st_size > 6144:
+        return (
+            "AGENTS.md %dB 超 6144——失效警报：查注入内容泄漏（裁决 3：不上调）"
+            % agents.stat().st_size
+        )
+    return None
+
+
 CHECKS_EXT = {
     "dead_code_regression": ("dead_code 死代码回归", check_dead_code_regression),
     "decord_pin": ("decord_pin 两仓版本口径", check_decord_pin),
     "deprecation_due": ("deprecation_due 弃用到期", check_deprecation_due),
     "gate_manifest": ("gate_manifest 门禁时效", check_gate_manifest),
+    "injection_budget": ("injection_budget 注入预算", check_injection_budget),
     "knob_coverage": ("knob_coverage 旋钮依据", check_knob_coverage),
     "layering": ("layering 分层无环", check_layering),
     "metrics_coverage": ("metrics_coverage 指标注册表", check_metrics_coverage),

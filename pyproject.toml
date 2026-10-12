@@ -109,7 +109,7 @@ files = ["video_ocr_engine/domain", "video_ocr_engine/pipeline",
          # 制度重构 Phase D 起新制度 standing 四件入库（裁决 18）；
          # bench/env 等老工具整改量另测后分批（见 S3 施工进度遗留项）。
          "tools/refs.py", "tools/render.py", "tools/version_advice.py",
-         "tools/conclusions_sweep.py", "tools/_audit_ext.py"]
+         "tools/conclusions_sweep.py", "tools/_audit_ext.py", "tools/health.py"]
 follow_imports = "skip"
 
 [[tool.mypy.overrides]]
