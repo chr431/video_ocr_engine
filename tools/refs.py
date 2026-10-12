@@ -83,6 +83,16 @@ class Index:
             )
             if r.returncode == 0:
                 self.historical = set(re.findall(r"(?m)^## (C-\d+)", r.stdout))
+        # 墓碑补全：结论源文件 git 全史中出现过的 id 永远可解析（出源≠不可查）
+        hist = subprocess.run(
+            ["git", "-C", str(ROOT), "log", "--format=%H", "-p",
+             "--", "registry/conclusions.yaml", "knowledge/conclusions.md"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        self.historical |= set(re.findall(r"- id: (C-\d+)", hist.stdout))
+        self.historical -= set(self.conclusions)  # 在源里的不是墓碑
         env = _load_yaml(REGISTRY / "environment.yaml")
         self.decord_pin = str(env.get("dependencies", {}).get("decord_pin", ""))
         self.tags = _git_tags()

@@ -42,9 +42,16 @@ def test_gate_catches_real_load() -> None:
     procs = [mp.Process(target=_burn) for _ in range(4)]
     for q in procs:
         q.start()
+    time.sleep(1.0)  # 等子进程完成解释器启动进入烧核
     try:
         with pytest.raises(BackgroundLoadError) as ei:
-            assert_machine_quiet(cpu_pct=5.0, samples=2, interval=0.5, gpu=False)
+            assert_machine_quiet(
+                cpu_pct=5.0,
+                samples=3,
+                interval=0.5,
+                gpu=False,
+                ignore_own_tree=False,
+            )  # 烧核进程按外来负载计（负测不依赖桌面噪声）
         assert "元凶" in str(ei.value) or "CPU" in str(ei.value)
     finally:
         for q in procs:

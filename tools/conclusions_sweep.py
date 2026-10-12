@@ -39,7 +39,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
-_VER = re.compile(r"(\d+\.\d+\.\d+)")
+# 钉版=显式命名空间（fork/decord/wheel→decord；引擎/engine→engine）
+_PIN = re.compile(r"(fork|decord|wheel|引擎|engine)\s*v?(\d+\.\d+\.\d+)")
 
 
 def _ver_tuple(s: str) -> tuple[int, ...]:
@@ -92,26 +93,21 @@ def main() -> int:
         if e.get("status") != "active":
             continue
         blob = "%s | %s" % (e.get("premises", ""), e.get("revisit", ""))
-        for m in _VER.finditer(blob):
-            pin = m.group(1)
-            # 钉版类别按上下文词判定（跨类比较是噪音：decord 钉 0.8.3 与
-            # 引擎 0.23.3 无关）。认不出类别时对两类都比，宁多列不漏列。
-            ctx = blob[max(0, m.start() - 10) : m.end() + 6]
-            kinds = []
-            if re.search(r"fork|decord|wheel", ctx, re.I):
-                kinds.append("decord")
-            if re.search(r"引擎|engine", ctx, re.I):
-                kinds.append("engine")
-            cur_of = {"engine": engine_ver, "decord": decord_ver}
-            for kind in kinds or ["engine", "decord"]:
-                cur = cur_of[kind]
-                if not cur:
-                    continue
-                if _ver_tuple(pin) < _ver_tuple(cur):
-                    stale.append((e["id"], pin, kind, cur))
-                elif pin == cur:
-                    current_anchor.append((e["id"], pin, kind))
-        if not _VER.search(blob) and re.search(r"换代|换卡|换机|驱动变更", e.get("revisit", "")):
+        # 钉版=显式命名空间前缀（fork/decord/wheel → decord 类；引擎/engine →
+        # engine 类）。裸 x.y.z 不算钉——2026-10-12 清账轮实测：重钉注记里的
+        # 时代数字被上下文词启发式误判成钉版（与宪章引用规则同一哲学：
+        # 数字必须带命名空间，否则不可判定）。单测见 tests/registry/test_sweep_pins.py。
+        for m in _PIN.finditer(blob):
+            pin = m.group(2)
+            kind = "decord" if m.group(1) in ("fork", "decord", "wheel") else "engine"
+            cur = {"engine": engine_ver, "decord": decord_ver}[kind]
+            if not cur:
+                continue
+            if _ver_tuple(pin) < _ver_tuple(cur):
+                stale.append((e["id"], pin, kind, cur))
+            elif pin == cur:
+                current_anchor.append((e["id"], pin, kind))
+        if not _PIN.search(blob) and re.search(r"换代|换卡|换机|驱动变更", e.get("revisit", "")):
             trigger_info.append((e["id"], e.get("revisit", "")[:40]))
 
     if stale:

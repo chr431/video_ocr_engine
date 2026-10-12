@@ -156,6 +156,9 @@ def verify() -> int:
         print(f"✓ {cur_ver}：无版本变化且无 diff（未发版状态）")
         return 0
     actual = "minor" if minor_bump else ("patch" if patch_bump else "?")
+    if f"v{cur_ver}" not in {tg.strip() for tg in _git("tag", "--list").stdout.splitlines()}:
+        print(f"✗ 版本 {cur_ver} 已 bump 但同名 tag 缺失（R-version-tag）")
+        return 1
     if actual != v:
         print(
             f"✗ 乱档：实际 {actual}，判据建议 {v}（API diff={api_diff}，金标 diff={golden_diff}）"

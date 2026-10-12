@@ -1,10 +1,3 @@
-# 结论注册表（唯一事实源）——schema 承旧制（status/premises/revisit），evidence 改双指针
-#
-# evidence 元素三选一起头：commit:（git 取证锚点）/ path:（仓内文件）/ note:（原文字面）。
-# 旧档案（PERFORMANCE/DECISIONS/log）出树后经 commit 锚点 `git show <hash>:<path>` 取回；
-# archive/pre-rework tag 落点同 c5d64eb。status 仅 active 入源（superseded 次版出源，宪章 4）。
-# 每发版必跑：python tools/conclusions_sweep.py --strict（R-conclusions-sweep）。
-
 - id: C-01
   conclusion: 并发退化真因=NVDEC 会话数；NVDEC∥CPU 聚合 1.83–1.87×，双 NVDEC 1.01–1.20×
   status: active
@@ -44,9 +37,9 @@
   - commit: 9b5b9cd
     path: docs/log/2026-09-08-decord-0.8.1升级.md
 - id: C-05
-  conclusion: hybrid=fork 原生（传输恒宿主输出，C-76）；收益面=TRT；ONNX 不反超→选 nvdec；可见性 2.45×；e2e 见 C-53
+  conclusion: hybrid=fork 原生（传输恒宿主输出，C-76）；收益面=TRT；ONNX 不反超→选 nvdec；可见性 2.45×；e2e 见 C-53（可见性 2.45× 为旧代口径）
   status: active
-  premises: 4060/16C32T；0.8.3；fork ≥6da2957
+  premises: 4060/16C32T；fork 0.9.8；fork ≥6da2957
   revisit: '>32 核 / 残余=每臂混跑干扰'
   evidence:
   - commit: f7c0333
@@ -133,21 +126,10 @@
   - commit: c5d64eb
     path: docs/log/DECISIONS.md
     anchor: 第四轮
-- id: C-31
-  conclusion: decord 0.8.1：av1 慢系 NT=4 假象；修=钳[8,24]：CPU −50%、e2e −45%
-  status: active
-  premises: wheel 0.8.2
-  revisit: fork/驱动/FFmpeg 换代
-  evidence:
-  - commit: 9b5b9cd
-    path: docs/log/2026-09-08-decord-0.8.1升级.md
-    anchor: decord-0.8.1
-  - commit: c5d64eb
-    path: docs/DEPENDENCIES.md
 - id: C-32
   conclusion: 实现唯一出处=domain/segmentation.py（0.14.0 前在根级）：宿主直调，GPU kernel 逐位镜像；无插件抽象
   status: active
-  premises: 0.11.0；两侧行为由真值用例逐位守护
+  premises: 引擎 0.26.1；两侧行为由真值用例逐位守护
   revisit: 真实 GPU 侧插件需求出现
   evidence:
   - commit: 5d27201
@@ -249,9 +231,9 @@
   - commit: 51fafff
     note: 10-11 换代
 - id: C-49
-  conclusion: '**换依赖无剩余性能空间**：解码绑定；fork 超外部参考 989fps；PyNv+DLL 冲突；cv2 −0.26%'
+  conclusion: '**换依赖无剩余性能空间**：解码绑定；fork 超外部参考 989fps；PyNv+DLL 冲突；cv2 −0.26%（989fps 等为旧代口径）'
   status: active
-  premises: 4060/16C32T/Zen4；fork 0.8.3
+  premises: 4060/16C32T/Zen4；fork 0.9.8
   revisit: 换卡 / 带 ROI-first 的解码绑定 / 预处理升为关键路径
   evidence:
   - commit: 2086fa6
@@ -335,7 +317,7 @@
 - id: C-62
   conclusion: '**硬窗架构重做（0.9.0）：绝对帧区间+marker 分离+会话对象化+窗禁替补（win_subs 恒 0）**——根除 C-57 族。矩阵 12/12×5+哈希逐位+七套件'
   status: active
-  premises: fork 0.9.0 dev（52597677）；金标 D 组晚起点 5 用例
+  premises: fork 0.9.8；金标 D 组晚起点 5 用例；历代钉版均矩阵×5 复验
   revisit: fork 换代/窗口路径改动（matrix --repeat 5 + window 套件）/换卡/竞态再现
   evidence:
   - commit: e25c836
@@ -370,15 +352,6 @@
   - commit: 676a036
     path: docs/log/2026-10-09-跨线程账本与预处理容量.md
     anchor: 跨线程账本
-- id: C-66
-  conclusion: '**0.9.2 时代归因（C-74/76 部分翻案）**：缺口归 CPU 臂欠配+同卡争用；"同卡无免费解"被 C-76 推翻。遗产：尾窗 4→10（av1 CV 2.9%）；三修全反已回滚仍有效'
-  status: active
-  premises: 4060/16C32T；fork 0.9.2；v8/v10 账本
-  revisit: fork 泵改动后复跑；换卡
-  evidence:
-  - commit: 0c28cd1
-    path: docs/log/2026-10-09-争用定位与hybrid缺口.md
-    anchor: /10 争用定位
 - id: C-67
   conclusion: '**纯 CPU 配平=静态预算失衡非动态**——h264 轻码 10 档饿、24 档 +27%；hevc/av1 auto 已在峰。动态不可行（OV 线程定死）→编码分档：h264
     独档 24（逻辑核 3/2）'
@@ -393,7 +366,7 @@
   conclusion: '**比例预留/再平衡在 GOP 300×窗 3000 下不可行**：切换税≈分配收益——三变体全劣基线；收益需亚 GOP 派工或无 kick 管线。宿主修法=null（C-75）；GPU
     争用归 C-60'
   status: active
-  premises: 4060/16C32T；fork 0.9.2+format（md5 30ca4d37）；窗 3000；TRT OCR
+  premises: 4060/16C32T；fork 0.9.8（0.9.8 缺口复测仍在：对臂和 −14.9/−55.4/−35.3%）；窗 3000；TRT OCR
   revisit: 亚 GOP 派工 / MPS 异卡 / kick <10ms
   evidence:
   - commit: 19e9e3e
@@ -401,7 +374,7 @@
 - id: C-69
   conclusion: '**h264 约束链=供给线+消费耦合非 H2D**——均已修（C-74/76）。宿主输出直读=臂和 98%；H2D 无关'
   status: active
-  premises: 4060M/32LP；fork 0.9.5；全片 23970
+  premises: 4060M/32LP；fork 0.9.8；全片 23970
   revisit: demux 换代 / 传输模式新增
   evidence:
   - commit: 719cf9e
@@ -410,7 +383,7 @@
   conclusion: '**hybrid 锁死=派工空闲判据污染，口径须 side-pure**——side_pending_ 计"已路由未发射"，流序合并下快侧已解码帧挂 pending 被误判"忙"（alloc=PiHHHHHHHH）。0.9.4
     首版有账户互换回归；完成体（0.9.5 UndecodedBacklog）：CPU=filter 队列+cpu_ready_，GPU=ready_+D2H 环+cuvid 出。23 连测零锁死'
   status: active
-  premises: 4060M/32LP；fork 0.9.5；全片 23970；TRT
+  premises: 4060M/32LP；fork 0.9.8；全片 23970；TRT
   revisit: 流序合并语义变化 / 传输模式新增
   evidence:
   - commit: 48b798b
@@ -419,7 +392,7 @@
   conclusion: '**hybrid 供给线三修**——①顶饱门=NeedsPackets（计账虚高→每帧 1 包枯竭）；②fork@C-77 批量泵（512 量子）；③fork@C-78 供料线程（demux+泵专线程；seek
     停泊；请求制；TickPump；WaitFrame 落账/消账谓词）。两坑：sleep_for 最小 ~1-2ms（量子化 550fps→须 notify+谓词）；EOF 预算墙钟节流'
   status: active
-  premises: 4060M/32LP；fork 0.9.7；全片 23970
+  premises: 4060M/32LP；fork 0.9.8；全片 23970
   revisit: demux 线程化 / 消费驱动模型变化
   evidence:
   - commit: d184d5c
@@ -428,7 +401,7 @@
   conclusion: '**CPU 臂联合税非调度型（null）**——辅助降优先/提交升优先/亲和/线程 24-32/kick 关/上载批 16-32 全 A/B 平；频率两态同；C-76 后残差
     ~5%'
   status: active
-  premises: 4060M/32LP；fork 0.9.5
+  premises: 4060M/32LP；fork 0.9.8
   revisit: 换机 / SMT 格局变化
   evidence:
   - commit: d184d5c
@@ -446,7 +419,7 @@
   conclusion: '**引擎 hybrid 传输恒选宿主输出（hybrid(0)）**——gpu-out 上载中转（H2D 攒批/同步）−13% 流交付（A/B 3805→3252）；宿主帧+OCR
     上传 crop=cpu 后端同通路；配套 SetRoi 深银行出 out_cuda_ 门（否则 GPU 置速码 CPU 臂冲 1536 帽，av1 82.9→94.1%）。三码验收 92.6-95.4%（0.9.8）'
   status: active
-  premises: 4060M/32LP；fork 0.9.5；引擎 0.26.0；TRT OCR
+  premises: 4060M/32LP；fork 0.9.8；引擎 0.26.1；TRT OCR
   revisit: fork 传输重设计 / 显存驻留管线换代
   evidence:
   - commit: d184d5c

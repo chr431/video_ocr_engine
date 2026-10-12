@@ -158,17 +158,24 @@ def _gpu_util():
         return 0.0
 
 
-def _prime_foreign_processes():
-    """外部进程列表（排除自身进程树与 Idle）并 prime cpu_percent 计数器。"""
+def _prime_foreign_processes(ignore_own_tree: bool = True):
+    """外部进程列表（默认排除自身进程树与 Idle）并 prime cpu_percent 计数器。
+
+    ignore_own_tree=False 供负测使用：把子孙进程也当外来负载计——模拟
+    "另一进程树在烧 CPU"的真实形态（pytest 起的烧核进程若按默认排除，
+    负测就会依赖桌面偶发噪声而假阴性，2026-10-12 清账轮实测）。
+    """
     import os
 
     import psutil
 
-    own = {os.getpid()}
-    try:
-        own |= {q.pid for q in psutil.Process(os.getpid()).children(recursive=True)}
-    except psutil.Error:  # noqa: BLE001 — 子进程枚举失败按无子进程处理
-        pass
+    own: set[int] = set()
+    if ignore_own_tree:
+        own.add(os.getpid())
+        try:
+            own |= {q.pid for q in psutil.Process(os.getpid()).children(recursive=True)}
+        except psutil.Error:  # noqa: BLE001 — 子进程枚举失败按无子进程处理
+            pass
     procs = []
     for q in psutil.process_iter(["pid", "name"]):
         try:
@@ -189,6 +196,7 @@ def assert_machine_quiet(
     interval: float = 1.0,
     gpu: bool = True,
     gpu_pct_limit: float = 50.0,
+    ignore_own_tree: bool = True,
 ) -> None:
     """性能测量前的机器独占门禁：超阈抛 BackgroundLoadError（含元凶清单）。
 
@@ -199,7 +207,7 @@ def assert_machine_quiet(
 
     import psutil
 
-    procs = _prime_foreign_processes()
+    procs = _prime_foreign_processes(ignore_own_tree)
     ncpu = psutil.cpu_count() or 1
     readings = []
     for _ in range(samples):
