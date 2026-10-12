@@ -1,14 +1,14 @@
-"""bench —— 性能报告矩阵、run registry 与 `bench diff`（v2 §8.6 N-4）。
+"""bench —— 性能报告矩阵、run registry 与 `bench diff`。
 
 把"每次 A/B 重写一段对照脚本"变成一条命令：
-  python tools/bench.py run --label s6a-before --telemetry full
-  python tools/bench.py run --label s6a-after  --telemetry full
-  python tools/bench.py diff s6a-before s6a-after      # D10 双档判定
+  python tools/bench.py run --label before --telemetry full
+  python tools/bench.py run --label after  --telemetry full
+  python tools/bench.py diff before after      # 双档判定
 
 报告落地 `bench/registry.jsonl`（gitignored、append-only）；A/B 的数字一律
-来自报告对比，不来自"探针对探针"的手工对照（S6 门禁口径）。
-`telemetry-check` 是 PI-15 的三档互比门禁：**同轮配对差分** + 符号一致性判
-失败，阈值按本机 A/A 噪声带标定（`--aa` 现测；r11 用户裁决放松过严的
+来自报告对比，不来自"探针对探针"的手工对照。
+`telemetry-check` 是遥测成本互比门禁：**同轮配对差分** + 符号一致性判
+失败，阈值按本机 A/A 噪声带标定（`--aa` 现测；用户裁决放松过严的
 0.1%/1%——同码两判曾给出 −0.50% 与 +0.93%，说明旧阈值低于可分辨力）。
 """
 
@@ -24,20 +24,19 @@ import sys
 import time
 from pathlib import Path
 
-# PI-15 门禁（r11 用户裁决"门控过严导致误报，适当放松"后的**校准版**）：
+# 遥测成本门禁（用户裁决"门控过严导致误报，适当放松"后的**校准版**）：
 # 阈值由本机 A/A 标定得出（同档两槽、同进程交替、每槽 3 次均值、25 对：
 # 均值偏差 −0.179%、sd 1.053%、SE 0.211% → 0.179+3×0.211 ≈ 0.81 → 0.85）。
-# 出处：registry/benchmarks.yaml:pi15_gate_calibration。
-#   - 两档化（2026-10-09）后只剩一条 full 可分辨下限（std 档已退役，
-#     DECISIONS §30；µs 级严格性由 `tests/config/test_telemetry_cost.py`
+#   - 两档化后只剩一条 full 可分辨下限（std 档已退役；
+#     µs 级严格性由 `tests/config/test_telemetry_cost.py`
 #     的确定性成本守卫承担——那里有 10⁴ 倍于墙钟的分辨力）。
 #   - 判失败还需**符号多数一致**（70%），落在噪声带里的差值不再误报。
 #   - 换机器/换窗口/改配对数 n 后必须 `telemetry-check --aa` 重标（SE∝1/√n）。
-#   - 2026-10-11：full 档成本回归修复（资源采样信任门容差）后 PI-15 实配对
+#   - full 档成本回归修复（资源采样信任门容差）后实配对
 #     full−off = +0.098%（限 1.20%）；成本门禁配方 = --inner 1（A/A floor
 #     0.50% ≪ 1.20%，3× 便宜，bench/aa_floor_curve.json）。
 PI15_LIMITS = {"full_pct": 1.20, "sign_majority": 0.70}
-#: 阈值下限（P1 抽成常量）：0.30 → 0.20（2026-09-17 续，四轮标定证据：
+#: 阈值下限（抽成常量）：0.30 → 0.20（四轮标定证据：
 #: |均值|+3SE = 0.291/0.209/0.274/0.198%，n=50 时 0.198 已触 0.20——
 #: 旧地板开始 Masking 真实分辨率）。低于 0.30 的建议值只在 n≥50 标定
 #: （门禁 --rounds 50 与标定 n 一致）时出现；默认 n=25 建议值仍多为
@@ -49,11 +48,11 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
 REGISTRY = ROOT / "bench" / "registry.jsonl"
 
-# 视频注册表单一事实源 = tools/_measure_lib.py（2026-10-11 收敛：此前与
+# 视频注册表单一事实源 = tools/_measure_lib.py（此前与
 # record.py 各一份相同拷贝、两个测试再硬编码 ROI）。经 RACELOG_VIDEO_DIR 解析。
 from _measure_lib import ROI, VIDS  # noqa: E402
 
-#: §12 三配置展开为 4（与 tests/golden/bench_baseline.py 同口径，可比）
+#: 三配置展开为 4（与 tests/golden/bench_baseline.py 同口径，可比）
 CONFIGS = {
     "h264-gpu": dict(video="test5", decode_backend="nvdec"),
     "h264-cpu": dict(video="test5", decode_backend="cpu"),
@@ -61,7 +60,7 @@ CONFIGS = {
     "av1-nvdec": dict(video="test6_av1", decode_backend="nvdec"),
     "h264-hybrid": dict(video="test5", decode_backend="hybrid"),
     "av1-hybrid": dict(video="test6_av1", decode_backend="hybrid"),
-    # S6 续（hybrid 诊断）：hevc 的 hybrid/CPU 侧此前没进矩阵，而解码器
+    # hybrid 诊断：hevc 的 hybrid/CPU 侧此前没进矩阵，而解码器
     # 层实测 hybrid_gpu(2311) > nvdec(2032) —— 引擎口径必须自己量。
     "hevc-hybrid": dict(video="test6_hevc", decode_backend="hybrid"),
     "hevc-cpu": dict(video="test6_hevc", decode_backend="cpu"),
@@ -98,7 +97,7 @@ def _round(
         kw["fill_width"] = fill_width  # 0 = 关闭填充（批内自适应）
     # 遥测档位经 env 进引擎（resolve 的 env 优先级链）——此前 `telemetry`
     # 参数被收下却从未使用：`bench run --telemetry full` 一直是静默无效
-    # （2026-09-17 续轮 W1 排查直方图缺失时暴露）。进程内改 os.environ
+    # （排查直方图缺失时暴露）。进程内改 os.environ
     # 与 telemetry-check 的 in-process 口径一致。
     _prev_tier = os.environ.get("VOE_TELEMETRY")
     os.environ["VOE_TELEMETRY"] = telemetry
@@ -154,9 +153,9 @@ def _gpu_state() -> str:
         return "n/a"
 
 
-# ── 时钟门禁（2026-09-17 §8.6 落地，P1 协议降噪）──────────────────────
+# ── 时钟门禁（P1 协议降噪）────────────────────────────────────
 # 判据层：把 NVML sm_clock min 与主动压频位登记进每一轮读数，"时钟未起"
-# 的轮次不进聚合——不可比读数应当剔除，而不是被平均掉（§8.2 实测：冷轮
+# 的轮次不进聚合——不可比读数应当剔除，而不是被平均掉（实测：冷轮
 # sm_min 345~450MHz，弃冷后噪声带收窄 54×）。
 # k 校准（tools/_probe_clock_gate.py → bench/clock_gate.json）：冷轮
 # sm_min/最大SM ≈ 0.145、热轮平台 ≈ 0.870（boost 上限 3105、负载平台
@@ -260,7 +259,7 @@ class _RoundClockWatch:
 
 
 def _set_priority_above_normal() -> bool:
-    """SetPriorityClass(ABOVE_NORMAL)（§8.5：实测可用、无需管理员）。
+    """SetPriorityClass(ABOVE_NORMAL)（实测可用、无需管理员）。
 
     伪句柄 -1 直传，绕开 GetCurrentProcess 的 restype 截断陷阱（64 位
     伪句柄若按默认 c_int 返回会被截成 32 位、调用静默失败）。
@@ -411,7 +410,7 @@ def _flatten(report: dict) -> dict:
         flat["counter:" + k] = v
     for k, v in (report.get("gauges") or {}).items():
         flat["gauge:" + k] = v
-    # v7 周期账本（C-63）：resources.per_phase 的原始 cycles 差分 → 配对
+    # 周期账本（C-63）：resources.per_phase 的原始 cycles 差分 → 配对
     # 差分口径（与 span/gauge 同款进归因表；非 Windows/来源缺席时无键）。
     per_phase = (report.get("resources") or {}).get("per_phase") or {}
     for ph, row in per_phase.items():
@@ -420,7 +419,7 @@ def _flatten(report: dict) -> dict:
     e2e = per_phase.get("cycles_e2e")
     if isinstance(e2e, dict) and e2e.get("total") is not None:
         flat["cyc:e2e"] = e2e["total"]
-        # v8 线程级全程账本（full 档；bench ab 需 --telemetry full）
+        # 线程级全程账本（full 档；bench ab 需 --telemetry full）
         for name, c in (e2e.get("threads") or {}).items():
             flat["cyct:" + name] = c
     return flat
@@ -435,9 +434,7 @@ def _median_flat(reports: list) -> dict:
 def cmd_diff(args) -> int:
     a, b = _load(args.a), _load(args.b)
     hard, warn = args.hard, args.warn
-    print(
-        "D10 双档：硬失败 >%.1f%% / 告警 >%.1f%%（噪声底 %.1f%%，§12）" % (hard, warn, args.noise)
-    )
+    print("双档：硬失败 >%.1f%% / 告警 >%.1f%%（噪声底 %.1f%%）" % (hard, warn, args.noise))
     print("%-12s %10s %10s %9s  %s" % ("config", args.a, args.b, "Δ%", "判定"))
     worst = 0.0
     for name in sorted(set(a) | set(b)):
@@ -598,20 +595,20 @@ def _subproc_rounds(args, tiers: list) -> dict:
 
 
 def cmd_telemetry_check(args) -> int:
-    """PI-15：两档互比（**同进程交替 + 同轮配对差分** + 符号一致性判失败）。
+    """遥测成本两档互比（**同进程交替 + 同轮配对差分** + 符号一致性判失败）。
 
-    方法学演进（每一步都是被数据逼出来的，全部留档）：
-    1. 原实现"三档各自连跑 N 轮"把机器漂移记进档位差——同码两次可差 7.7%，
-       而阈值只有 0.1% → 改为每档独立子进程 + 逐轮交错（S6）。
+    方法学（口径为何是现在这样）：
+    1. "两档各自连跑 N 轮"会把机器漂移记进档位差——同码两次可差 7.7%，
+       而阈值只有 0.1% → 改为逐档交错。
     2. 固定 off→std→full 顺序让轮内热漂移系统性落在最后一档：full 稳定
        +3.3%，而 NVML/差分本身只值 µs 级 → 每轮轮转档位顺序（拉丁方）。
     3. 交错后仍不稳：同一份代码两次判读给出 std −0.50% 与 std +0.93%。根因是
-       **用三档各自中位数相比**，公共漂移没被减掉 → 改为**同轮内配对差分**。
+       **用两档各自中位数相比**，公共漂移没被减掉 → 改为**同轮内配对差分**。
     4. 子进程模式的 A/A（同档两槽）噪声带实测 |Δ|p50 0.24% / p95 2.33%，远大于
        被测量 → 改为**同进程交替**（共享热池与 OS 缓存，唯一差别是插桩本身）。
     5. 阈值按 A/A 现测校准（`--aa`），并要求**符号多数一致**才判失败——
-       落在噪声带里的差值判"不可判定"，不再误报（r11 用户裁决）。
-    6. 两档化（2026-10-09，DECISIONS §30）：std 实测开销与 full 同在
+       落在噪声带里的差值判"不可判定"，不再误报（用户裁决）。
+    6. 两档化：std 实测开销与 full 同在
        噪声内（0.115% vs 0.038%），中间档退役——互比收敛为 off vs full
        单一成本限（full_pct），std_pct 退役；A/A 槽位改 full/full2。
     """
@@ -752,14 +749,14 @@ def _report_pi15(per: dict, med: dict, args) -> int:
 
     ok_f, txt_f = judge(d_full, lim_full)
     print(
-        "\nPI-15（%s，同轮**配对差分** %d 对；off 中位 %.4fs /"
+        "\n遥测成本（%s，同轮**配对差分** %d 对；off 中位 %.4fs /"
         " full %.4fs）"
         % ("子进程" if args.subproc else "同进程交替", len(d_full), base, med["full"])
     )
     print("  full vs off ：%s" % txt_f)
     print(
         "  两档化后唯一成本限 full ≤ +%.2f%%；本机可分辨下限见 "
-        "`bench.py telemetry-check --aa`（阈值=校准值 %s，r11 用户裁决"
+        "`bench.py telemetry-check --aa`（阈值=校准值 %s，用户裁决"
         "放松过严阈值以消除误报）" % (lim_full, lim_full)
     )
     ok = bool(ok_f)
@@ -819,18 +816,18 @@ def _pair_idx(label: str) -> int:
 
 
 def _paired_metric_diffs(reports_a: list, reports_b: list, mode: str = "hot") -> dict:
-    """W5 归因：逐对配对差分的**指标级**口径（与 wall 判据同款统计纪律）。
+    """归因：逐对配对差分的**指标级**口径（与 wall 判据同款统计纪律）。
 
     `reports_*` = [(label, round, valid, report)]。配对键 = **(对序号, 轮号)**
-    ——对序号从 label 的 `#i@` 解析。⚠️ 此前按裸 round 号配对是错的：6 对
-    的 12 份报告被塌缩成 2 个键，表里的 "n=2" 实为两个塌缩伪样本（同码
-    都能"显著"出 −44%±52% 的伪强信号，2026-09-17 实测后修正）。
+    ——对序号从 label 的 `#i@` 解析。⚠️ 按裸 round 号配对是错的：6 对
+    的 12 份报告会被塌缩成 2 个键，表里的 "n=2" 实为两个塌缩伪样本（同码
+    都能"显著"出 −44%±52% 的伪强信号）。
 
     mode="hot"：round>1 ∧ 时钟门禁 valid（与 wall 判定同口径）；
     mode="cold"：round==1（冷轮不过门禁——时钟爬坡正是冷启动的一部分）。
 
-    为什么不用"两臂跨轮中位数相减"（v4 及以前）：那正是 PI-15 早期被否决的
-    口径——公共漂移没减掉，而配对口径把同轮的机器状态差掉了。
+    为什么不用"两臂跨轮中位数相减"：那正是被否决的口径——
+    公共漂移没减掉，而配对口径把同轮的机器状态差掉了。
     """
     import math
 
@@ -881,7 +878,7 @@ def _paired_metric_diffs(reports_a: list, reports_b: list, mode: str = "hot") ->
 
 
 def _attr_report(name: str, ra: dict, rb: dict, pairs: list, limit: float) -> None:
-    """W5 逐指标归因表：逐对配对差分 + 显著性标记（**只归因，不判失败**）。
+    """逐指标归因表：逐对配对差分 + 显著性标记（**只归因，不判失败**）。
 
     判据（与 wall 判据同款，但只用于"这个指标动了没有"的陈述）：
       - `CI 排零`：|mean| > 3×SE（单侧 ~99.7%，与 `_limit_from_band` 同源）
@@ -926,7 +923,7 @@ def _attr_report(name: str, ra: dict, rb: dict, pairs: list, limit: float) -> No
     show = (strong + weak)[:18]
     nz = len(strong)
     print(
-        "逐指标归因（W5 逐对配对差分，热轮口径；** = |均值|>3×SE ∧ 符号多数"
+        "逐指标归因（逐对配对差分，热轮口径；** = |均值|>3×SE ∧ 符号多数"
         "≥70%（按该键有效 n）；~ = 幅值够但方向不稳；符号列=正号数/n）："
     )
     print(
@@ -947,7 +944,7 @@ def _attr_report(name: str, ra: dict, rb: dict, pairs: list, limit: float) -> No
 
 
 def _cycle_verdict(name: str, ra: dict, rb: dict) -> None:
-    """周期账本判据（C-63，2026-10-09 产品化）：cycles 配对差分的判读输出。
+    """周期账本判据（C-63）：cycles 配对差分的判读输出。
 
     与 wall 判定同款统计纪律（CI 排零 ∧ 符号多数 ≥70%），但**只判读不改
     退出码**——wall 仍是唯一失败判据；cycles 的角色是墙钟分辨率不够时的
@@ -984,16 +981,16 @@ def _cycle_verdict(name: str, ra: dict, rb: dict) -> None:
 
 
 def cmd_ab(args) -> int:
-    """交错 A/B（S6 口径 → P1 加固：臂序轮转 + 时钟门禁 + 自动判定）。
+    """交错 A/B（臂序轮转 + 时钟门禁 + 自动判定）。
 
-    背景（实测 2026-09-10）：**同一份代码**连跑两次 `bench run`，h264-cpu
+    背景：**同一份代码**连跑两次 `bench run`，h264-cpu
     1.2567 → 1.1599s（−7.7%）、hevc −7.7%——功耗/热状态与后台进程造成的
     漂移**大于**被测量本身，顺序跑会把漂移记到 B 头上 → 必须交错。每个
-    variant 起独立子进程（状态干净、各含一轮预热）。P1 再加三层降噪：
+    variant 起独立子进程（状态干净、各含一轮预热）。三层降噪：
       1. **臂序逐对轮转**（AB/BA 交替）——对消轮内位置效应（先跑的臂
          系统性慢 ~1.3%，telemetry-check 同款结论）；
       2. **每轮 GPU 时钟入账**（子进程 `bench run` 内做，registry `gpu`
-         字段），低时钟/压频热轮不进聚合（P0b：冷轮 CV 6.6% → 热轮 0.12%）；
+         字段），低时钟/压频热轮不进聚合（冷轮 CV 6.6% → 热轮 0.12%）；
       3. **自动判定**：逐对热轮中位配对差分 → 均值 + SE + 符号多数（≥70%）
          vs `--hard` 阈值；B 显著慢 → 退出码 1（`--no-verdict` 回纯展示）。
     `--aa`：两臂同配置（忽略 env/args 差异）→ 差分即子进程协议噪声带，
@@ -1001,7 +998,7 @@ def cmd_ab(args) -> int:
 
     用法：
       python tools/bench.py ab --config h264-cpu --repeat 3 \
-          --a base --b s6c --env-b VOE_S6C_ASYNC=1
+          --a base --b opt --env-b VOE_XXX=1
     """
     import os
 
@@ -1013,7 +1010,7 @@ def cmd_ab(args) -> int:
         row = {}
         arm_specs = (("A", args.a, args.env_a, args.args_a), ("B", args.b, args.env_b, args.args_b))
         if i % 2 == 1:
-            arm_specs = arm_specs[::-1]  # 臂序轮转：对消位置效应（P1）
+            arm_specs = arm_specs[::-1]  # 臂序轮转：对消位置效应
         for tag, label, envspec, extra in arm_specs:
             if aa:
                 envspec, extra = "", ""  # A/A：两臂完全同配置
@@ -1061,7 +1058,7 @@ def cmd_ab(args) -> int:
             time.sleep(args.cooldown)  # 热降是本地最大噪声源（实测 2× 偏差）
         pairs.append(row)
 
-    # 聚合：直接按 registry 精确 label 集合（防历史同名污染，2026-09-13 实测）
+    # 聚合：直接按 registry 精确 label 集合（防历史同名污染）
     def _arm_rounds(labels: set) -> dict:
         out: dict = {}
         for line in REGISTRY.read_text(encoding="utf-8").splitlines():
@@ -1076,7 +1073,7 @@ def cmd_ab(args) -> int:
         return out
 
     def _arm_reports(labels: set) -> dict:
-        """config → [(label, round, valid, report)]（W5 归因逐对配对用）。"""
+        """config → [(label, round, valid, report)]（归因逐对配对用）。"""
         out: dict = {}
         for line in REGISTRY.read_text(encoding="utf-8").splitlines():
             if not line.strip():
@@ -1181,7 +1178,7 @@ def cmd_ab(args) -> int:
                 "  → 建议 --hard 阈值 = +%.2f%%（|均值偏差|+3×SE 上取整 "
                 "0.05%%，下限 %.2f%%）" % (rec_, PI15_FLOOR_PCT)
             )
-            # W6：冷启动带同表标定（引擎构建期 + 时钟爬坡，噪声面远大于热轮）
+            # 冷启动带同表标定（引擎构建期 + 时钟爬坡，噪声面远大于热轮）
             if cold_diffs:
                 cb = _band(cold_diffs)
                 crec = _limit_from_band(cb)
@@ -1203,7 +1200,7 @@ def cmd_ab(args) -> int:
                     "  → 建议 --hard-cold 阈值 = +%.2f%%（同规则；%d/%d 符号多数）"
                     % (crec, cneed, cb["n"])
                 )
-            # C-64 遗留补口（2026-10-11）：A/A 周期带直接打印——此前 aa
+            # C-64：A/A 周期带直接打印——aa
             # 分支在周期判读前 continue，周期带要事后从 registry 手工算。
             # 只列主判据两键（cyc:ocr/cyc:calibrate 的 A/A 带 27%/8.6%，
             # 小相位样本少，见 _cycle_verdict 注）。A/A=两臂同码，故这里
@@ -1244,7 +1241,7 @@ def cmd_ab(args) -> int:
                     "\n判定：不可判定（落在噪声带内；均值 %+.3f%%，SE %.3f%%，"
                     "限 ±%.2f%%，符号 %d/%d）" % (band["mean"], band["se"], lim, pos, neg)
                 )
-            # W6 冷启动判定：单独阈值（冷带含引擎构建 + 时钟爬坡，幅值大得多）
+            # 冷启动判定：单独阈值（冷带含引擎构建 + 时钟爬坡，幅值大得多）
             if cold_diffs and args.hard_cold > 0:
                 cb = _band(cold_diffs)
                 cneed = max(2, int(round(len(cold_diffs) * PI15_LIMITS["sign_majority"] + 0.5)))
@@ -1268,10 +1265,10 @@ def cmd_ab(args) -> int:
                         "冷启动判定：不可判定（均值 %+.3f%%，SE %.3f%%，限 "
                         "±%.2f%%，符号 %d/%d）" % (cb["mean"], cb["se"], clim, cpos, cneg)
                     )
-        # W5 逐指标归因（只归因不判失败；C-42：归因≠可回收量）
+        # 逐指标归因（只归因不判失败；C-42：归因≠可回收量）
         if args.telemetry != "off":
             _attr_report(name, ra_all, rb_all, pairs, args.hard)
-            # v7 周期账本判据（C-63）：cycles 第二意见（不改退出码）
+            # 周期账本判据（C-63）：cycles 第二意见（不改退出码）
             _cycle_verdict(name, ra_all, rb_all)
     if not aa:
         print("\n判读补充：符号一致=可信；符号混乱=落在漂移内。A=%s B=%s" % (args.a, args.b))
@@ -1321,16 +1318,15 @@ def main() -> int:
     r.add_argument(
         "--no-clock-gate",
         action="store_true",
-        help="关闭每轮 GPU 时钟门禁（默认开：NVML 包轮，低时钟/"
-        "压频轮不进热轮聚合；P0b 校准 k=0.75）",
+        help="关闭每轮 GPU 时钟门禁（默认开：NVML 包轮，低时钟/压频轮不进热轮聚合；校准 k=0.75）",
     )
     r.add_argument(
         "--priority",
         action="store_true",
-        help="本进程提到 ABOVE_NORMAL 优先级（§8.5 降抢占，opt-in：会改变被测调度 regime）",
+        help="本进程提到 ABOVE_NORMAL 优先级（降抢占，opt-in：会改变被测调度 regime）",
     )
     r.set_defaults(func=cmd_run)
-    d = sub.add_parser("diff", help="两个 label 的逐指标对比（D10 双档）")
+    d = sub.add_parser("diff", help="两个 label 的逐指标对比（双档判定）")
     d.add_argument("a")
     d.add_argument("b")
     d.add_argument("--hard", type=float, default=5.0)
@@ -1338,7 +1334,7 @@ def main() -> int:
     d.add_argument("--noise", type=float, default=1.3)
     d.set_defaults(func=cmd_diff)
     t = sub.add_parser(
-        "telemetry-check", help="PI-15 三档互比门禁（交错+轮转+同轮配对差分；--aa 做噪声标定）"
+        "telemetry-check", help="遥测成本互比门禁（交错+轮转+同轮配对差分；--aa 做噪声标定）"
     )
     t.add_argument("--config", default="h264-gpu")
     t.add_argument(
@@ -1374,7 +1370,7 @@ def main() -> int:
         type=int,
         default=3,
         help="同进程模式下每槽连跑次数（取均值压噪，默认 3）。"
-        "成本门禁配方（2026-10-10 实测，aa_floor_curve.json）："
+        "成本门禁配方（实测，aa_floor_curve.json）："
         "判 full 成本 ≤1.2%% 用 --inner 1（floor 0.50%% ≪ 1.20%%，"
         "3× 便宜 178s vs ~500s）；µs 级 micro 对比（--full-limit "
         "0.2~0.3）仍用默认 inner=3 + n=50",
@@ -1418,7 +1414,7 @@ def main() -> int:
         "--hard-cold",
         type=float,
         default=0.0,
-        help="冷启动判定阈值 %%（W6）；0=不判冷（默认）。冷带含"
+        help="冷启动判定阈值 %%；0=不判冷（默认）。冷带含"
         "引擎构建/时钟爬坡，幅值远大于热轮——用 `ab --aa` "
         "输出的「建议 --hard-cold」回填",
     )

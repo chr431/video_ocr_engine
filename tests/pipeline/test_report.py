@@ -1,11 +1,11 @@
-"""RunReport schema 快照 + §8.6 r5 资源层（L1 差分 / L2 NVML）守卫。
+"""RunReport schema 快照 + 资源层（L1 差分 / L2 NVML）守卫。
 
-对应 §12 验收项"运行报告 schema"：**report_version 快照一致**、schema 演进
-必须 bump、`metrics_coverage` 零未注册指标；以及资源层的两条实测踩坑防线：
+核心断言：**report_version 快照一致**、schema 演进必须 bump、
+`metrics_coverage` 零未注册指标；以及资源层的两条实测踩坑防线：
 
 1. 产品代码**不得 import psutil**——Windows 下 `Process.threads()` /
    `num_threads()` 实测 **43ms / 5.1ms 每次**（本机 `_probe_run_setup_cost`
-   同批数据），一次就吃满 PI-15 的 0.1% 预算；资源层因此只用 stdlib。
+   同批数据），一次就吃满插桩成本预算；资源层因此只用 stdlib。
 2. 不可用的读数必须写成 `"unavailable:…"`，**不得用 None/0 冒充真值**。
 """
 
@@ -21,8 +21,11 @@ from video_ocr_engine.domain.metrics import NULL_METRICS, Metrics
 from video_ocr_engine.domain.resources import NvmlSampler, ResourceProbe, _HostCounters
 from video_ocr_engine.pipeline.report import REPORT_VERSION, RunReport, build_report, health
 
-# v2 快照：新增键只允许**加**，改语义/删键必须 bump REPORT_VERSION。
-# v3（2026-09-13）：加 `diagnostics`（自诊断，仅 opt-in 时出现）→ 已 bump。
+# 快照：新增键只允许**加**，改语义/删键必须 bump REPORT_VERSION。
+# 已加键：`diagnostics`（自诊断，仅 opt-in 时出现）、`span_relations`、
+# `<parent>_other` 派生 span、`histograms`/`histograms_meta`（full 档专属）、
+# `hybrid`（fork 遥测直通）、resources per_phase 的 cycles 原始差分与
+# cycles_e2e、`thr`/`thr_foreign`、cores_avg 回退——均只加键。
 REPORT_KEYS = {
     "report_version",
     "tier",
@@ -54,11 +57,11 @@ def _std_metrics():
 
 # ── schema 快照 ────────────────────────────────────────────────────────
 def test_report_version_is_pinned():
-    # v1→v2：+resources/+hardware；v2→v3：+diagnostics；v3→v4：+span_relations
-    # 与 `<parent>_other` 派生 span；v4→v5：+histograms/histograms_meta
-    # （full 档专属）；v5→v6：+hybrid（fork 遥测直通）；v6→v7：resources
-    # per_phase 行 +cycles 原始差分与 cycles_e2e（C-63 判据用；均只加键）
-    assert REPORT_VERSION == 10  # v8 +thr；v9 cores_avg 回退；v10 +thr_foreign
+    # 只增键的演进史：+resources/+hardware；+diagnostics；+span_relations
+    # 与 `<parent>_other` 派生 span；+histograms/histograms_meta
+    # （full 档专属）；+hybrid（fork 遥测直通）；resources per_phase 行
+    # +cycles 原始差分与 cycles_e2e；+thr；cores_avg 回退；+thr_foreign
+    assert REPORT_VERSION == 10
 
 
 def test_report_schema_snapshot():
@@ -80,10 +83,10 @@ def test_report_schema_snapshot():
     assert rep["gauges"]["ocr.engine_init"] == pytest.approx(0.0002)
     assert rep["pipeline"]["n_segments"] == 7
     assert rep["pipeline"]["config_digest"] == "deadbeef"
-    # v4：关系表自述（路径 + 派生口径），供读者复核 _other 算术
+    # 关系表自述（路径 + 派生口径），供读者复核 _other 算术
     assert rep["span_relations"]["path"] == "host"
     assert "pipeline.consumer" in rep["span_relations"]["parent_children"]
-    # health 每项都是 {metric, value, limit, ok} 形态（§13.2 N-5 可判定）
+    # health 每项都是 {metric, value, limit, ok} 形态（可判定）
     assert "PI-10" in rep["health"]
     for k, v in rep["health"].items():
         assert {"metric", "value", "limit", "ok"} <= set(v), k
@@ -92,7 +95,7 @@ def test_report_schema_snapshot():
 
 
 def test_runreport_view_and_result_report():
-    """R2（0.16.0）：RunReport 类型化只读视图 + result.report 派生读面。
+    """RunReport 类型化只读视图 + result.report 派生读面。
 
     视图零复制（嵌套 section 与 data 共享）；序列化唯一形态仍是 dict
     （to_dict() 与 meta['report'] 同源）；可选段缺席 = None ≠ 空值冒充。
@@ -164,7 +167,7 @@ def test_hybrid_section_from_fork_passthrough():
 
 
 def test_host_consume_feed_relations_and_histograms():
-    """W1/W2：consume_feed ⊃ merge_pair+q_put（宿主）；full 档直方图段。"""
+    """consume_feed ⊃ merge_pair+q_put（宿主）；full 档直方图段。"""
     m = _std_metrics()
     m.record_span("pipeline.consume_feed", 0.60)
     m.gauge("segment.merge_pair", 0.25)  # TOTALS 汇总为 gauge
@@ -441,7 +444,7 @@ def test_no_psutil_thread_enumeration_in_product_code():
 
 
 def test_resource_layer_is_dependency_free():
-    """D7（无新依赖）：资源层与遥测/报告不得引入 psutil。"""
+    """资源层与遥测/报告不得引入新依赖（psutil）。"""
     for sub in ("domain", "pipeline"):
         for p in sorted((PKG / sub).rglob("*.py")):
             if "__pycache__" in p.parts:

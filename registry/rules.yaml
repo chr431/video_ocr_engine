@@ -131,6 +131,12 @@
   executor: tools/_audit_ext.py#decord_pin
   prevents: S0-C2（DEPENDENCIES 写 0.8.5 实为 0.9.2）
   since: 2026-10-10
+- id: R-dependency-floors
+  statement: 外部依赖能力 floors 唯一住 environment.yaml（注释禁写"需 fork ≥x.y.z"）；CI 校验 pin ≥ 每个 floor
+  enforcement: ci
+  executor: tools/_audit_ext.py#dependency_floors
+  prevents: S0-I3（版本数字多处定义）；注释-钉版双事实源
+  since: 2026-10-12
 
 # ── local-gate：本机门禁（GPU/视频依赖） ──────────────────────────────
 
@@ -247,6 +253,13 @@
   enforcement: advisory
   prevents: S0-E4（提交正文均长 523 字符、max 792）
   since: 2026-10-12
+- id: adv-comment-present-tense
+  statement: 注释只描述现状（约束/不变量/失败模式/禁令，现在时）；历史坐标（旧计划编号/版本归属/出树文档引用）删除或现在时化——历史看 git。判据=git log 测试：可被 git log -S 同等恢复的事实不写注释。负面知识（被否决选项）删前必须已入 conclusions。活标识（C-NN 结论/R-名 规则/PI-N 门禁/fork@C-NN 外部编号/S0-痛点）不是历史坐标，保留
+  enforcement: advisory
+  prevents: S0-D 类悬空 + 注释-注册表双事实源（129 处旧 §N 考古痕迹）
+  since: 2026-10-12
+  note: 结论出源时其引用点复核同循本原则（sweep 墓碑清单供逐点核对）
+
 
 # ── 收编记录（2026-10-12 Phase A：旧规则去向，防"为什么没了"型翻查） ──
 # 旧 AGENTS 铁律 6"别按看起来旧删脚本" → 删除，被生命周期政策取代（宪章 4）

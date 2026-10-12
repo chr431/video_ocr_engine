@@ -36,7 +36,7 @@ class ExtractionResult:
 
     @property
     def report(self):
-        """RunReport v6 的类型化只读视图（R2/0.16.0）。
+        """RunReport 的类型化只读视图。
 
         telemetry≠off 时返回 RunReport（meta['report'] 的继任读法），
         off 档返回 None（meta 无 report 键，不冒充空值）。
@@ -49,7 +49,7 @@ class ExtractionResult:
         return RunReport(raw)
 
     def rep_crop_rgb(self, seg):
-        """段代表帧 → RGB (H, W, 3) uint8 预览（DESIGN-REVIEW D4 helper）。
+        """段代表帧 → RGB (H, W, 3) uint8 预览。
 
         布局按 meta['rep_crop_format'] 解释（"yuv"=packed NV12 / "gray"；
         引擎写入的是实际生效格式，yuv 不被支持而降级时会是 "gray"）；

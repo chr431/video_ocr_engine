@@ -1,11 +1,10 @@
-"""OCR 消费阶段（v2 §5/pipeline/ocr_stage，S3-3b 自 _ocr_session.py 迁入）。
+"""OCR 消费阶段。
 
 OcrSession 只吃显式 SessionSpec——对 FieldExtractor 私有属性的 16 项
-读取至此消除（P0-1 会话子集）；worker 线程的跨线程回写（backend_used /
-degraded）改为显式输出挂钩，其可见性仍由 finish() 的 join 建立（§9 契约）。
+读取至此消除（会话子集有契约）；worker 线程的跨线程回写（backend_used /
+degraded）改为显式输出挂钩，其可见性仍由 finish() 的 join 建立。
 
-已知遗留（S3-3c 随 GPU 驱动重建修复）：GPU 管线在会话启动**后**给
-autocropper 赋值（B4）；本阶段保留该属性注入点。
+GPU 管线在会话启动**后**给 autocropper 赋值；本阶段保留该属性注入点。
 """
 
 from __future__ import annotations
@@ -24,13 +23,13 @@ from .._helpers import _ocr_batch_size, _ocr_progress_pct
 
 logger = logging.getLogger(__name__)
 
-# OCR worker join 超时（审查轮）：卡在设备调用时无超时 join = 永久挂死
+# OCR worker join 超时：卡在设备调用时无超时 join = 永久挂死
 _OCR_JOIN_TIMEOUT_S = 10.0
 
 
 @dataclass
 class SegmentTask:
-    """段任务（队列项，D3）：emit → OCR 会话的唯一载荷。"""
+    """段任务（队列项）：emit → OCR 会话的唯一载荷。"""
 
     idx: int
     rep: object  # 代表帧号
@@ -41,7 +40,7 @@ class SegmentTask:
 
 @dataclass
 class InferBatch:
-    """infer 批任务（D3）：宽/窄两条路径的显式载荷。
+    """infer 批任务：宽/窄两条路径的显式载荷。
 
     raw 路径：procs=None、infos/force_aspect 就位（设备指针直通）；
     宿主路径：procs 就位、infos=None。
@@ -67,8 +66,8 @@ class OcrResult(NamedTuple):
 class SessionSpec:
     """OCR 会话的全量输入契约（取代 OcrSession(ex) 的私有属性读取）。"""
 
-    # 静态输入（构造期冻结；v1 的 reorder_window/force_aspect 为活读，
-    # 按值传入后与 D6"一次 run 一个不可变配置"语义一致——金标无漂移）
+    # 静态输入（构造期冻结；reorder_window/force_aspect 按值传入，与
+    # "一次 run 一个不可变配置"语义一致——金标无漂移）
     buffer_size: int
     model: str
     fill_width: int | None
@@ -87,17 +86,17 @@ class SessionSpec:
     prof_end: Callable | None = None
     progress: Callable = lambda m, p: None
     cancel: Callable = lambda: None
-    # 输出挂钩（worker 线程调用；可见性由 finish() join 建立——§9）
+    # 输出挂钩（worker 线程调用；可见性由 finish() join 建立）
     on_backend_used: Callable = lambda v: None
     on_degraded: Callable = lambda msg: None
-    # S9-2(D6) 注入口（None=沿用各模块调用期 env 读取，直接用户不变；
+    # 注入口（None=沿用各模块调用期 env 读取，直接用户不变；
     # 引擎路径由 resolve 构造期冻结后注入）
     gamma: float | None = None
     ocr_batch: int = 0  # 0 → 沿用 _ocr_batch_size() 的 env 读取
     ocr_instances: bool | None = None
     gpu_ctc: bool | None = None
     pad_floor_env: int | None = None
-    # S6-0：注入的指标记录器（§8.6 N-2；off 档为 NullMetrics 单例）；
+    # 注入的指标记录器（off 档为 NullMetrics 单例）；
     # 线程口径：worker 线程局部累积，drain 时由门面 snapshot 合并
     metrics: Any = NULL_METRICS
 
@@ -105,7 +104,7 @@ class SessionSpec:
 def acquire_engines(spec: "SessionSpec") -> "tuple[list, str]":
     """按 SessionSpec 取引擎集合（会话与显式预热**唯一出处**）。
 
-    返回 (engines, engine_type)。进程级引擎池（B5/C5）：跨视频复用 TRT
+    返回 (engines, engine_type)。进程级引擎池：跨视频复用 TRT
     上下文/设备缓冲，免去每个 extract 重付反序列化+分配。失败时把半建
     状态（如第二实例构建失败）已取到的引擎归池再上抛。
     """
@@ -114,13 +113,13 @@ def acquire_engines(spec: "SessionSpec") -> "tuple[list, str]":
     ot = spec.num_threads_fn()
     engine_type = spec.engine_type_fn()
     if engine_type == "hybrid":
-        # 双 OCR（2026-09-20 hybrid ocr 轮，opt-in）：TRT 设备车道 +
-        # OpenVINO CPU 车道各一引擎，worker 为每引擎起一条 infer 线程
-        # 共享 infer_q（自然工作窃取，与双实例 ONNX 同骨架——库存派工，
-        # 无需速率学习；结果按 idx 收敛，无序交付无害）。raw 设备直通
-        # 要求单 TRT 引擎 → 双引擎自动回退宿主 crop 路径（GPU 管线的
-        # ONNX 回退既有机制，D2H 每代表帧 ≤ROI 字节）。TRT 不可用时
-        # OcrEngine 内部回退 OV → 双 OV 仍成立（等价双实例）。
+        # 双 OCR（opt-in）：TRT 设备车道 + OpenVINO CPU 车道各一引擎，
+        # worker 为每引擎起一条 infer 线程共享 infer_q（自然工作窃取，
+        # 与双实例 ONNX 同骨架——库存派工，无需速率学习；结果按 idx 收敛，
+        # 无序交付无害）。raw 设备直通要求单 TRT 引擎 → 双引擎自动回退
+        # 宿主 crop 路径（GPU 管线的 ONNX 回退既有机制，D2H 每代表帧
+        # ≤ROI 字节）。TRT 不可用时 OcrEngine 内部回退 OV → 双 OV 仍
+        # 成立（等价双实例）。
         engines: list = [
             acquire_ocr_engine(
                 spec.model,
@@ -188,13 +187,13 @@ def acquire_engines(spec: "SessionSpec") -> "tuple[list, str]":
 
 
 def warmup_engines(spec: "SessionSpec") -> int:
-    """S6-e 显式预热（v2 §7.5 P-b）：按**与 extract 完全相同**的池 key 取还
-    全部引擎，把冷启动的 TRT 反序列化/建上下文（0.35–0.44s）挪到调用方选定
-    的时机（批量循环之前）。
+    """显式预热：按**与 extract 完全相同**的池 key 取还全部引擎，
+    把冷启动的 TRT 反序列化/建上下文（0.35–0.44s）挪到调用方选定的
+    时机（批量循环之前）。
 
     只对知情调用方生效——不改变 `extract()` 内部行为（C-24 判死的是"自动
     prewarm"：总吞吐不变，只是把成本搬了个位置；本函数的价值是把一次性成本
-    从"首个视频的关键路径"移到"调用方显式选择的时刻"）。PI-10 的 key 稳定性
+    从"首个视频的关键路径"移到"调用方显式选择的时刻"）。池 key 稳定性
     由此函数与 `acquire_engines` 同源保证。返回预热引擎数。
     """
     from video_ocr_engine.ocr.native import checkin_ocr_engine
@@ -212,10 +211,10 @@ def warmup_engines(spec: "SessionSpec") -> int:
 def effective_reorder_window(
     roi_w: int, roi_h: int, floor_px: int, force_aspect: float, window: int
 ) -> int:
-    """S6-f：把"按宽分组"的等待窗口收敛到**它真能起作用**的场合。
+    """把"按宽分组"的等待窗口收敛到**它真能起作用**的场合。
 
     分组（跨批按"裁后内容宽"排序）只可能在 **pad 宽由内容宽决定**时改变
-    子批的 pad 宽（R5 记录的 −23.9% 场景：宽 ROI 字幕）。当 pad 恒由下限
+    子批的 pad 宽（−23.9% 场景：宽 ROI 字幕）。当 pad 恒由下限
     `floor_px / OCR_TARGET_H` 决定时——即 ROI 自身的最大宽高比都够不到下限
     比——任何分组都不可能改变 pad 宽，等待窗口剩下的只有代价：**推迟首次
     flush、拉长关键路径**（实测 `OCR_REORDER_WINDOW` 64 vs 1：热轮 +5.05%，
@@ -293,15 +292,15 @@ class OcrSession:
         self.raw_ready = [False]  # raw 直通可用：worker 引擎就绪后置位（单 TRT）
         # 批量 autocrop 挂点（GPU 管线注入）：autocropper 存在时，raw 项
         # emit 为 5 元组 (owner,ptr,h,w,sharp)，autocrop 推迟到 flush 批量
-        # 执行。None = emit 内逐段裁切。（B4：事后赋值，S3-3c 改构造注入）
+        # 执行。None = emit 内逐段裁切。
         self.autocropper = None
-        # 注入路径（2026-09-19 审查轮）：参数此前只用于判定 _owns_engines，
-        # 从未存入——注入引擎时 worker 恒读空列表 → IndexError，且注入的
-        # 引擎既不使用也不归还（GPU 校准失败回退宿主路径的引擎泄漏）。
+        # 注入路径：参数此前只用于判定 _owns_engines，从未存入——注入引擎时
+        # worker 恒读空列表 → IndexError，且注入的引擎既不使用也不归还
+        # （GPU 校准失败回退宿主路径的引擎泄漏）。
         self._engines: list = list(_ocr_engines) if _ocr_engines else []
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
-        # v8 线程账本登记：OCR worker（宿主预处理+分批的执行者）
+        # 线程账本登记：OCR worker（宿主预处理+分批的执行者）
         from video_ocr_engine.domain.resources import register_thread
 
         register_thread("ocr", self._thread)
@@ -309,7 +308,7 @@ class OcrSession:
     # ── 生产者接口 ──────────────────────────────────────────
 
     def _raise_if_dead(self) -> None:
-        """worker 已死或已报错 → 抛出（2026-09-19 审查轮）。
+        """worker 已死或已报错 → 抛出。
 
         此前三处自旋循环的唯一出口是 `self.err` 非空，而 worker 的
         `except Exception` 接不住 BaseException（KeyboardInterrupt /
@@ -335,7 +334,7 @@ class OcrSession:
                 continue
 
     def finish(self) -> None:
-        """投递哨兵并等待 OCR worker 退出（join 带超时，审查轮加固）。"""
+        """投递哨兵并等待 OCR worker 退出（join 带超时）。"""
         from queue import Full
 
         while True:
@@ -359,7 +358,7 @@ class OcrSession:
 
     @staticmethod
     def _bump_priority() -> None:
-        """Windows：本线程提到 ABOVE_NORMAL（D2，2026-09-10）。
+        """Windows：本线程提到 ABOVE_NORMAL。
 
         hybrid 的 CPU 软解线程（libavcodec 池，NORMAL）吃满物理核时会
         饥饿本线程的 Python 调度：infer 相位随 HYBRID_CPU_THREADS 单调
@@ -392,8 +391,8 @@ class OcrSession:
             if not self._owns_engines:
                 engines = list(self._engines)
                 if not engines:
-                    # 契约违反显式化（2026-09-19 审查轮）：此前空列表直接
-                    # 走 engines[0] → IndexError，错误信息与真实原因无关。
+                    # 契约违反显式化：此前空列表直接走 engines[0] →
+                    # IndexError，错误信息与真实原因无关。
                     raise ValueError("注入引擎路径要求 _ocr_engines 非空（收到空列表）")
                 spec.on_backend_used(
                     "tensorrt+openvino"
@@ -406,7 +405,7 @@ class OcrSession:
                 _names = sorted({e.backend_name for e in engines})
                 spec.on_backend_used("+".join(_names))
                 if engine_type == "tensorrt" and engines[0].backend_name != "tensorrt":
-                    # D3：请求 TRT 但引擎回退 ONNX → 降级原因透出 meta
+                    # 请求 TRT 但引擎回退 ONNX → 降级原因透出 meta
                     spec.on_degraded("TRT 引擎不可用，回退 ONNX")
                 if engine_type == "hybrid" and _names == ["openvino"]:
                     # 双车道里 TRT 臂也不可用 → 全 OV（等价双实例），
@@ -414,10 +413,9 @@ class OcrSession:
                     spec.on_degraded("TRT 引擎不可用，双车道退化为双 OpenVINO")
                 if spec.prof_end is not None:
                     spec.prof_end("ocr", "engine_init", _t_eng)
-            # S6-0（§8.6 N-2）：引擎只在本次会话内被独占使用，指标记录器随
-            # checkout 注入（池归还后下一次 checkout 会重新覆盖；PI-10 的
-            # 热池判定由 acquire 打的 _pool_hit 标记给出）。外部注入引擎
-            # （_ocr_engines 非空）同样接入。
+            # 引擎只在本次会话内被独占使用，指标记录器随 checkout 注入
+            # （池归还后下一次 checkout 会重新覆盖；热池判定由 acquire 打的
+            # _pool_hit 标记给出）。外部注入引擎（_ocr_engines 非空）同样接入。
             _m = spec.metrics
             if _m is not None and _m.enabled:
                 if getattr(engines[0], "_pool_hit", False):
@@ -428,9 +426,9 @@ class OcrSession:
                         _e._trt._metrics = _m
             # 引擎就绪 → 供 GPU 管线 emit 决策（raw 直通需设备帧可被消费；
             # 置位后该会话内代表帧可全程留显存，仅输出/回退时 D2H）。
-            # hybrid OCR v0.5：双车道（TRT+OV）同样置位——设备帧由共享
-            # prep 消费（TRT 车道 call_gpu_raw、OV 车道车道 prep+D2H），
-            # 两侧都不需要宿主代表帧。
+            # 双车道（TRT+OV）同样置位——设备帧由共享 prep 消费
+            # （TRT 车道 call_gpu_raw、OV 车道 prep+D2H），两侧都不需要
+            # 宿主代表帧。
             self.raw_ready[0] = (
                 len(engines) == 1 and getattr(engines[0], "_trt", None) is not None
             ) or (
@@ -439,14 +437,13 @@ class OcrSession:
                 and spec.gpu_pipeline_mode
             )
             B = spec.ocr_batch or _ocr_batch_size()
-            # TRT 批对齐 max_batch（§8.1）：TRT 按 profile max_batch 切
-            # 子批，末批 batch 维变化前必须 cudaStreamSynchronize（TRT
-            # 不允许 in-flight 改 context 形状）——OCR_BATCH=16 在
-            # max_batch=6 下切成 6+6+4，**每个 OCR 批一次全流水同步**
-            # （实测 test5 全片 CPU+TRT：批 16→18 墙钟 -10.3%、
-            # ocr_infer -13%）。单 TRT 引擎时分块对齐到 max_batch 整倍数
-            # 即零 sync；ONNX 路径保持 B（18=16+2 切伤 ONNX_CHUNK=16
-            # 尾批，实测 +3.7%），双实例同理。
+            # TRT 批对齐 max_batch：TRT 按 profile max_batch 切子批，
+            # 末批 batch 维变化前必须 cudaStreamSynchronize（TRT 不允许
+            # in-flight 改 context 形状）——OCR_BATCH=16 在 max_batch=6 下
+            # 切成 6+6+4，**每个 OCR 批一次全流水同步**（实测 test5 全片
+            # CPU+TRT：批 16→18 墙钟 -10.3%、ocr_infer -13%）。单 TRT
+            # 引擎时分块对齐到 max_batch 整倍数即零 sync；ONNX 路径保持 B
+            # （18=16+2 切伤 ONNX_CHUNK=16 尾批，实测 +3.7%），双实例同理。
             _trt_max = (
                 engines[0]._trt.max_batch
                 if (len(engines) == 1 and getattr(engines[0], "_trt", None) is not None)
@@ -465,8 +462,8 @@ class OcrSession:
                         return True
                     except Full:
                         # 推理线程全部退出（异常/正常收尾）而队列仍满：
-                        # 无人再消费，继续自旋 = 挂死（审查轮：与
-                        # put/finish 同族的「等一个永不到来的事件」）。
+                        # 无人再消费，继续自旋 = 挂死（与 put/finish 同族的
+                        # 「等一个永不到来的事件」）。
                         if infer_threads and not any(t.is_alive() for t in infer_threads):
                             return False
                         continue
@@ -478,9 +475,9 @@ class OcrSession:
 
             def infer_worker(eng) -> None:
                 self._bump_priority()
-                # hybrid OCR v0.5：非 TRT 车道（OV）挂**独立流**的设备
-                # prep——见 ocr_lane_prep 的流语义注释。单引擎/双实例
-                # ONNX 路径 _lane_prep 恒 None（行为不变）。
+                # 非 TRT 车道（OV）挂**独立流**的设备 prep——见
+                # ocr_lane_prep 的流语义注释。单引擎/双实例 ONNX 路径
+                # _lane_prep 恒 None（行为不变）。
                 _lane_prep = None
                 if (
                     getattr(eng, "_trt", None) is None
@@ -538,9 +535,9 @@ class OcrSession:
                             if res is not None and pending:
                                 _deliver(pending.popleft(), res)
                         elif item.infos is not None and _lane_prep is not None:
-                            # hybrid OCR v0.5：OV 车道吃设备 prep 共享的
-                            # 已预处理张量——一次 GPU prep（本车道独立流）
-                            # + D2H + call_prepped（跳过宿主 resize）。
+                            # OV 车道吃设备 prep 共享的已预处理张量——一次
+                            # GPU prep（本车道独立流）+ D2H + call_prepped
+                            # （跳过宿主 resize）。
                             res = _lane_infer(_lane_prep, eng, item)
                             _deliver(item, res)
                         else:
@@ -563,9 +560,9 @@ class OcrSession:
                 （B=16/W=224 时 172KB/批），相对宿主 resize 的 1.37ms/段
                 是噪声。
 
-                ⚠️ D2H 必须 **pinned + 异步**（2026-09-20 实测教训）：首版用
-                同步 `cudaMemcpy`（pageable）——它对设备是全局同步，每批都
-                把 TRT 车道的在途推理打断，双车道 infer 忙时从 36.9s 涨到
+                ⚠️ D2H 必须 **pinned + 异步**（实测教训）：首版用同步
+                `cudaMemcpy`（pageable）——它对设备是全局同步，每批都把
+                TRT 车道的在途推理打断，双车道 infer 忙时从 36.9s 涨到
                 69.2s（两车道互相串行化），墙钟只落 −1.6%。pinned 缓冲 +
                 同流异步拷贝 + 事件同步只等本车道 prep，TRT 在途不受影响。
                 """
@@ -602,7 +599,7 @@ class OcrSession:
             ]
             for t in infer_threads:
                 t.start()
-            # v8 线程账本登记：推理线程（每引擎一条）
+            # 线程账本登记：推理线程（每引擎一条）
             from video_ocr_engine.domain.resources import register_thread
 
             for _i, _t in enumerate(infer_threads):
@@ -614,7 +611,7 @@ class OcrSession:
             b_fracs: list = []
 
             def _count_chunks(n: int) -> None:
-                """S6-0：chunk 计数（PI-3 的分母；细档另记 per-chunk span）。"""
+                """chunk 计数（细档另记 per-chunk span）。"""
                 if _m is not None and _m.enabled:
                     _m.counter("ocr.chunks", n)
 
@@ -626,11 +623,11 @@ class OcrSession:
                 # 一批；ONNX/回退引擎全程 crop）→ 拆批投递，不混流。
                 # raw 代表帧：gray = decord gray NDArray 指针；yuv =
                 # _YFramePool 池帧提取的 Y 平面（由 GPU 管线保证）。
-                # hybrid OCR v0.5（2026-09-20）：双车道（TRT+OV）时设备项
-                # 也走 raw——TRT 车道沿用 call_gpu_raw（设备 prep 在引擎
-                # 自己的流上），OV 车道由 infer_worker 用车道独立流的
-                # GpuPreprocessor 做一次 prep + D2H 已预处理张量后调
-                # call_prepped（跳过宿主 resize——v0 的 1.37ms/段回归根因）。
+                # 双车道（TRT+OV）时设备项也走 raw——TRT 车道沿用
+                # call_gpu_raw（设备 prep 在引擎自己的流上），OV 车道由
+                # infer_worker 用车道独立流的 GpuPreprocessor 做一次 prep
+                # + D2H 已预处理张量后调 call_prepped（跳过宿主 resize——
+                # 1.37ms/段回归根因）。
                 _dual = (
                     len(engines) == 2
                     and spec.gpu_pipeline_mode
@@ -673,8 +670,8 @@ class OcrSession:
                     _count_chunks(-(-len(raw_sel) // chunk))
                     for s in range(0, len(raw_sel), chunk):
                         chk = raw_sel[s : s + chunk]
-                        # S9-3：DeviceRef 直接作为 kernel 面载荷
-                        # （取代 4/6 元组——裁切区间经 .span 显式化）
+                        # DeviceRef 直接作为 kernel 面载荷（裁切区间经
+                        # .span 显式化）
                         infos = [b_devs[i] for i in chk]
                         if not _put_infer(
                             InferBatch(
@@ -787,21 +784,20 @@ class OcrSession:
                         if not any(t.is_alive() for t in infer_threads):
                             break
             for t in infer_threads:
-                # 超时对齐 finish() 的 10s 哲学（ocr_stage 头注释）：infer
-                # 线程卡设备调用时不无限等待，超时后由 daemon 兜底 + err
-                # 路径上报（2026-09-20 审计：此前无超时，与 finish 不一致）。
+                # 超时对齐 finish() 的 10s 哲学：infer 线程卡设备调用时不无限
+                # 等待，超时后由 daemon 兜底 + err 路径上报。
                 t.join(10.0)
         except BaseException as e:  # noqa: BLE001
-            # BaseException 而非 Exception（2026-09-19 审查轮）：worker
-            # 逃逸的异常若不被记录，self.err 恒空 → put/finish 的等待
-            # 循环失去唯一出口 = 挂死。此处全接并记录（KeyboardInterrupt
-            # 等仍会被 put/finish 以 self.err[0] 原样抛给调用方）。
+            # BaseException 而非 Exception：worker 逃逸的异常若不被记录，
+            # self.err 恒空 → put/finish 的等待循环失去唯一出口 = 挂死。
+            # 此处全接并记录（KeyboardInterrupt 等仍会被 put/finish 以
+            # self.err[0] 原样抛给调用方）。
             failed = True
             self.err.append(e)
         finally:
             self.wall[0] = time.perf_counter() - t0
             if self._owns_engines and engines:
-                # C5/B5：池来源的引擎归还复用；失败退出 → release
+                # C5：池来源的引擎归还复用；失败退出 → release
                 # （引擎状态可能被污染，不回池）。
                 for eng in engines:
                     try:

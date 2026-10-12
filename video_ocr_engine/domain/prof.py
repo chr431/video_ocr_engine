@@ -1,13 +1,13 @@
-"""ProfSpine —— 分相计时脊柱（v2 §8.6 N-2 的实现体）。
+"""ProfSpine —— 分相计时脊柱。
 
-2026-09-27 R1 自 extractor._prof_end/_metric_from_profile 下放：同一 t0
-同时喂 profile（v1 的 13 相位原始字典，diagnostics.profile）与指标注册表
-（std/full 档，指标名映射表在 domain/metrics.py 单一出处）；P4 trace 的
-t1 复用已算好的 t0+elapsed，不另取时钟。两档全关时 end() 只做两次属性
-判断、连 perf_counter 都不调用——PI-15 的 off 档"一行关闭"靠这里兑现。
+同一 t0 同时喂 profile（ENGINE_PROFILE 的 13 相位原始字典，
+diagnostics.profile）与指标注册表（off/full 档，指标名映射表在
+domain/metrics.py 单一出处）；trace 的 t1 复用已算好的 t0+elapsed，
+不另取时钟。两档全关时 end() 只做两次属性判断、连 perf_counter 都
+不调用——off 档零成本靠这里兑现。
 
-每次 run 新建一个实例（B1 同类重置：profile/totals/maxes 均为 run 内
-状态）；diag 的进展心跳（挂死时可归因到相位）挂在 armed 判定下。
+每次 run 新建一个实例（profile/totals/maxes 均为 run 内状态，防跨
+run 污染）；diag 的进展心跳（挂死时可归因到相位）挂在 armed 判定下。
 """
 
 from __future__ import annotations
@@ -40,8 +40,8 @@ class ProfSpine:
         self._lock = threading.Lock() if profile_enabled else None
         # 单次 run 的累计/单次最长（report 收敛时冲刷进指标，见
         # pipeline/report.finalized_report）。锁：两表由 producer 与各
-        # infer 线程并发读改写（2026-10-12 审查轮：旧版无锁丢更新 →
-        # 报告的累计与单次最长偏低）。两档全关在 end() 早退，锁不进热路径。
+        # infer 线程并发读改写（无锁会丢更新 → 报告的累计与单次最长
+        # 偏低）。两档全关在 end() 早退，锁不进热路径。
         self.totals: dict = {}
         self.maxes: dict = {}
         self._tm_lock = threading.Lock()
@@ -96,7 +96,7 @@ class ProfSpine:
                 m.counter(_n)
             if m.detailed:
                 m.record_span(name, elapsed)  # full 档另留逐次样本
-                # W1：分布形状（full 档专属；每事件 0.165µs，std 预算付不起）
+                # 分布形状（full 档专属；每事件 0.165µs，std 预算付不起）
                 _h = PROFILE_TOTALS_HIST.get((group, key))
                 if _h is not None:
                     m.histogram(_h, elapsed)

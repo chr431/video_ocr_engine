@@ -1,4 +1,4 @@
-"""FrameSource 端口（v2 §6.3 / D2）——解码后端的依赖注入契约。
+"""FrameSource 端口——解码后端的依赖注入契约。
 
 S3-2 起定义；S3-3 起由 decord 适配器（decode/decord_source.py）实现。
 语义要点来自 S0 冻结的 decoder_contract.yaml（DC-01..10）——尤其

@@ -1,18 +1,16 @@
-"""审计哨兵 —— 2026-09-28 审计轮的防复发机制。
+"""审计哨兵 —— 机器化的防复发机制。
 
-该轮审计发现四类静默劣化，各自留下机器哨兵：
+四类静默劣化各自留下机器哨兵：
 
 1. **死代码**（`_decord_format` 委托链、`DEFAULT_*` 孤儿常量）：靠 review
    拦不住——AST 扫描「全仓（包+tests+tools）词法引用计数 ≤ 定义行」
    即红。误报走 ALLOWLIST（逐条写理由）。
 2. **命名与行为不符**（`'onnxruntime'` 标签在 ORT 移除后残留一轮，
-   C-48）：产品码与测试面禁该标识符——改名轮（0.17.0，历史迁移表=git 档案 archive/pre-rework:docs/MIGRATION.md）
-   之后任何回潮即红。
-3. **architecture.svg 版本漂移**（停在 0.13.3 连续三轮）：图内版本标记
-   必须 == `__version__`（AGENTS 规矩「改架构时同步刷新版本号」的
-   机器化——发版忘刷图不再可能静默通过）。
-4. **AGENTS.md 硬编码快照计数**（live/frozen、审计项数——漂移了两轮
-   才被审计发现）：禁止在 AGENTS 里写易漂移的数字快照，指针式表述
+   C-48）：产品码与测试面禁该标识符——改名后任何回潮即红。
+3. **architecture.svg 版本漂移**：图内版本标记必须 == `__version__`
+   （「改架构时同步刷新版本号」的机器化——发版忘刷图不再可能静默通过）。
+4. **AGENTS.md 硬编码快照计数**（live/frozen、审计项数——易漂移）：
+   禁止在 AGENTS 里写易漂移的数字快照，指针式表述
    （「以 INDEX/脚本输出为准」）才是合法形态。
 """
 
@@ -102,12 +100,12 @@ def test_no_dead_definitions_or_constants() -> None:
     )
 
 
-# ── 2. 旧 OCR 标识禁串（0.17.0 改名轮，历史迁移表=git 档案）────────────────
+# ── 2. 旧 OCR 标识禁串（改名轮后任何回潮即红）────────────────────────
 BANNED_TOKENS = ("onnxruntime", "OCR_ONNX_CHUNK", "_init_onnx")
 
 
 def test_no_legacy_ort_labels() -> None:
-    """产品码与测试不得再出现旧 ORT 时代标识（历史叙事在 docs/log）。"""
+    """产品码与测试不得再出现旧 ORT 时代标识。"""
     hits = []
     for base in (PKG, ROOT / "tests"):
         for p in base.rglob("*.py"):
@@ -119,9 +117,7 @@ def test_no_legacy_ort_labels() -> None:
             for tok in BANNED_TOKENS:
                 if tok in src:
                     hits.append(f"{p.relative_to(ROOT)}: {tok}")
-    assert not hits, (
-        f"旧 OCR 标识回潮（0.17.0 起为 openvino/OCR_OV_CHUNK/_init_ov，历史迁移表见 git 档案）: {hits}"
-    )
+    assert not hits, f"旧 OCR 标识回潮（现行为 openvino/OCR_OV_CHUNK/_init_ov）: {hits}"
 
 
 # ── 3. architecture.svg 版本哨兵 ────────────────────────────────────

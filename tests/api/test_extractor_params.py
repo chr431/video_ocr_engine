@@ -44,7 +44,7 @@ def test_extract_sets_frames_and_defaults_keep(monkeypatch):
 
     monkeypatch.setattr(FieldExtractor, "_run_pipelined", fake_run)
     result = ex.extract()
-    # ex.frames 兼容读面已删（0.16.0）：帧号只看 result.frames
+    # ex.frames 兼容读面已删：帧号只看 result.frames
     assert result.frames == [0, 1, 2]
     assert result.segments[0].frames == (0, 1)
     assert result.segments[1].frames == (2,)

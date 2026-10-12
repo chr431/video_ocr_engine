@@ -1,10 +1,10 @@
-"""GPU 设备侧协作流（S4 设备侧拆分，2026-09-20 稳健性轮补做）。
+"""GPU 设备侧协作流。
 
-自 gpu/device.py 机械搬迁（零逻辑改动）：DevHooks（设备函数显式依赖，
+DevHooks（设备函数显式依赖，
 取代 _SpecView 桥接）、_GpuRunCtx（单次运行共享设备状态）、校准
 （_gpu_prepare_calibration）、两条帧流（NVDEC 设备直通 / CPU 解码
 H2D）与部分释放（_gpu_release_partial）。编排在 pipeline/gpu_backend.py；
-池机制在 gpu/pools.py；可用性探测留在 gpu/device.py（§10.4 patch 点）。
+池机制在 gpu/pools.py；可用性探测留在 gpu/device.py（monkeypatch 点）。
 """
 
 import logging
@@ -37,7 +37,7 @@ class DevHooks:
     limited    —— color_range != 1（YUV 的 luma 展开口径）
     batch_luma —— CPU 解码分支的宿主灰度回调 (B,H,W[,C])->(B,h,w)
     bin_ref    —— [th] 单元素盒：校准写入、判定回调读
-    on_bin     —— 阈值即时回写（F-4 流式合并活读；可 None）
+    on_bin     —— 阈值即时回写（流式合并活读；可 None）
     prof       —— 计时脊柱 (group, key, t0)（可 None）
     """
 
@@ -58,7 +58,7 @@ class DevHooks:
 
 
 class _GpuRunCtx:
-    """_run_pipelined_gpu 单次运行的共享设备状态（显式替代闭包捕获，0.11.0）。
+    """_run_pipelined_gpu 单次运行的共享设备状态（显式替代闭包捕获）。
 
     字段由 _gpu_prepare_calibration 填充，帧流生成器与消费循环只读/推进；
     _gpu_release_partial 负责统一释放。"""
@@ -104,7 +104,7 @@ def _gpu_fill_prev(analyzer, prev_buf, base, B, fnb, first_src) -> None:
     第 k 行 = (first_src if k==0 else base+(k-1)*fnb) 的 fnb 字节——
     供 analyze_batch 读"上一帧"；D2D 异步到 analyzer._stream。
 
-    2026-09-10 由逐帧 B 次 cudaMemcpyAsync 收拢为 2 次：行 1..B-1 恰好是
+    逐帧 B 次 cudaMemcpyAsync 收拢为 2 次：行 1..B-1 恰好是
     base 的连续区段（base[0..B-2]），一次大拷贝逐位等价（prev_buf 与
     base 恒为不同缓冲，无别名）。每次 cudaMemcpyAsync 有 ~10-20µs 的
     Python+驱动提交开销，B=64 时每批省 ~1ms——hybrid 引擎口径下解码
@@ -182,7 +182,7 @@ def _gpu_prepare_calibration(
         ctx.prev_holder = ctx.calib_nds  # 保住前一 decord NDArray（防解码池复用）
         ctx.prev_ptr = calib_base  # 灰色模式：上一批/校准末帧 device 指针
     else:
-        # ── CPU 解码（P1-3）：校准批 asnumpy → 宿主灰度 → H2D ──
+        # ── CPU 解码：校准批 asnumpy → 宿主灰度 → H2D ──
         ctx.calib_nds = vr.get_batch(frames[:calib_n], roi=roi)
         crops = ctx.calib_nds.asnumpy()
         if yuv:
@@ -205,7 +205,6 @@ def _gpu_prepare_calibration(
         # 向设备缓冲越界写 18 行 —— 越界破坏同 context 内其他分配（TRT 工作
         # 缓冲），异步错误延迟到 TRT enqueue 才爆（invalid argument），并
         # 污染 analyzer 后续结果（段数漂移）。默认 64 ≥ 50 从未触发。
-        # （2026-09-09 sweep batch=32 复现后定位，见 docs/log 同日叙事。）
         _pool = _DevBatchPool(max(config.GPU_PIPELINE_DECODE_BATCH, calib_n) * ctx.fnb)
         ctx.pool = _pool
         owner = _pool.acquire(crops)
@@ -308,7 +307,7 @@ def _gpu_frame_stream_nvdec(
             for bstart in bstarts:
                 # roi 不随批传：打开 reader 时 SetRoi 已生效；hybrid 原生
                 # 路径每次 get_batch 传 roi 会触发 fork 侧 SetRoi/池深重算
-                # （2026-09-10 实测 hybrid av1 2487→2264 fps，-9%；
+                # （实测 hybrid av1 2487→2264 fps，-9%；
                 # _probe_roi_decode 已证 CPU 路径两种传法等价）。
                 _t_dec = time.perf_counter()
                 nds = vr.get_batch(frames[bstart : bstart + DECODE_BATCH])
@@ -396,7 +395,7 @@ def _gpu_frame_stream_nvdec(
 def _gpu_frame_stream_cpu(
     hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list, *, yuv: bool, roi: tuple, th: int
 ):
-    """CPU 解码（P1-3）帧流：get_batch → 宿主灰度 → H2D → analyze。
+    """CPU 解码帧流：get_batch → 宿主灰度 → H2D → analyze。
 
     每批缓冲从池取（引用归零归还）；上一批末帧作本批 analyze
     的 prev（fill_prev 读取期间由 prev_owner 保活）。analyze
@@ -435,7 +434,7 @@ def _gpu_frame_stream_cpu(
     for bstart in range(calib_n, len(frames), DECODE_BATCH):
         bend = min(bstart + DECODE_BATCH, len(frames))
         B = bend - bstart
-        # P2c 覆盖缺口：CPU 解码分支此前零打桩（decode.*/stream_analyze
+        # 覆盖缺口：CPU 解码分支此前零打桩（decode.*/stream_analyze
         # 只在 NVDEC 分支产出）。键语义与宿主路径对齐：decode_batch =
         # get_batch + asnumpy（宿主同款）；gray_batch = 灰度转换。
         _t_dec = time.perf_counter()

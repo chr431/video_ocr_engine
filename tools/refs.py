@@ -147,11 +147,8 @@ class Index:
 def _substrate_files(extra: list[str]) -> list[Path]:
     """扫描基底：charter + registry + 全仓 py。
 
-    py 的 token 判定（C-/R-/decord@/archive）与 md 同；裸 §N 在 py 里按
-    历史印记豁免（2026-10-12 通读轮：全仓 129 处均为"v2 §8.6/D30/W1"
-    旧改革计划内部编号，定义源不在仓内、不是活引用——逐处改写无收益）。
-    md prose（charter/registry/视图）里的裸 §N 才是不可解析的规范锚点，
-    照旧拦。
+    token 判定（C-/R-/decord@/archive/裸 §N）在 md 与 py 同权——注释轮
+    （2026-10-12）后 py 注释层的旧计划编号存量已清零，判据全量生效。
     """
     files = [CHARTER] + sorted(REGISTRY.glob("*.yaml"))
     if not CHARTER.is_file():
@@ -164,7 +161,12 @@ def _substrate_files(extra: list[str]) -> list[Path]:
 
 
 def scan_file(path: Path, index: Index) -> list[str]:
-    """单文件扫描：token 逐一解析 + md 文本的裸 §N/裸版本检查。"""
+    """单文件扫描：token 逐一解析 + 裸 §N/裸版本检查。
+
+    裸 §N 禁入范围（宪章不变量 2）：md 基底（charter/registry/视图）与
+    py 注释层一视同仁——2026-10-12 注释轮清零旧计划编号后本判据全量
+    生效（存量清零是判据收紧的前提，不是靠容忍期拖过去）。
+    """
     errors: list[str] = []
     text = path.read_text(encoding="utf-8", errors="replace")
     try:
@@ -190,12 +192,15 @@ def scan_file(path: Path, index: Index) -> list[str]:
             if m.group(0) not in index.tags:
                 errors.append(f"{where}  UNKNOWN  {m.group(0)}")
         if path.suffix == ".md":
-            # 裸 §N/裸版本只禁 md prose 基底（charter/registry/视图）。
-            if BARE_SECTION.search(line):
-                errors.append(f"{where}  BARE_SECTION  裸 §N 禁入基底")
+            # 裸版本只禁 md 基底（yaml 数据值与 py 的版本字面量不可判定）。
             vm = BARE_VERSION.search(line)
             if vm:
                 errors.append(f"{where}  BARE_VERSION  {vm.group(0)}（版本须前缀或住 environment）")
+        if BARE_SECTION.search(line):
+            if path.suffix == ".md":
+                errors.append(f"{where}  BARE_SECTION  裸 §N 禁入 md 基底")
+            elif path.suffix == ".py":
+                errors.append(f"{where}  BARE_SECTION  裸 §N 禁入 py 注释层")
     return errors
 
 

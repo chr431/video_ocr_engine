@@ -1,7 +1,7 @@
-"""S9-2 行为契约：D6（构造期冻结）与 Q5（显式参数 > env > 默认）。
+"""行为契约：构造期冻结与"显式参数 > env > 默认"优先级。
 
-v1 语义（README 曾承诺"构造之后再改 env 同样生效"、env 盖过构造参数）
-已按 Q5 裁决废除——历史迁移说明经 git 档案取回（archive/pre-rework:docs/MIGRATION.md）。
+v1 语义（README 曾承诺"构造之后再改 env 同样生效"、env 盖过构造参数）已废除；
+v1 env-wins 逃生门不得复活。
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ def _make(**kw):
     return FieldExtractor("dummy.mp4", (0, 0, 100, 50), **kw)
 
 
-# ── D6：构造期冻结 ──────────────────────────────────────────────
+# ── 构造期冻结 ──────────────────────────────────────────────────
 def test_env_frozen_at_construction(monkeypatch):
     ex = _make()
     assert ex._ocr_autocrop is True  # 默认
@@ -32,7 +32,7 @@ def test_env_frozen_at_construction(monkeypatch):
     assert _make()._ocr_reorder_window == 16
 
 
-# ── Q5：显式参数 > env > 默认（v1 相反）────────────────────────
+# ── 显式参数 > env > 默认（v1 env-wins 语义不得复活）──────────────
 def test_q5_fill_width_param_beats_env(monkeypatch):
     monkeypatch.setenv("OCR_PAD_SMALL", "320")
     ex = _make(fill_width=224)
@@ -62,7 +62,7 @@ def test_session_spec_carries_frozen_rc(monkeypatch):
     spec = ex._build_session_spec()
     assert spec.gamma == 1.8
     assert spec.ocr_batch == 24
-    # S6-f：reorder_window 是**生效值**——本 ROI（101×51）的宽高比 1.98 够不到
+    # reorder_window 是**生效值**——本 ROI（101×51）的宽高比 1.98 够不到
     # pad 下限比 224/48=4.67 → 按宽分组不可能改变 pad 宽 → 收敛到 1
     assert spec.reorder_window == 1
     assert ex._ocr_reorder_window == 64  # 旋钮本身仍解析为 64

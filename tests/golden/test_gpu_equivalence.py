@@ -1,4 +1,4 @@
-"""S4 门禁：宿主 ↔ GPU 双后端在固定窗口上逐位等价（v2 §11 S4 / §8.5）。
+"""宿主 ↔ GPU 双后端在固定窗口上逐位等价门禁。
 
 这正是 v1 的 1083 vs 1042 缺的那道门：v2 起由 pytest -m gpu 承载，
 金标 --verify 之外的可独立运行等价证明。无 GPU/视频环境自动 skip。
@@ -63,9 +63,9 @@ def _extract(pipeline: str):
 
 
 def test_host_gpu_backends_bitwise_equivalent():
-    """S4 等价门禁（F-7 实测口径，2026-09-10 test5/2000 帧）：
+    """等价门禁（实测口径，test5/2000 帧）：
 
-    - 段结构（含 rep_frame）与文本集：**逐位相同**（永不豁免，§8.5）；
+    - 段结构（含 rep_frame）与文本集：**逐位相同**（永不豁免）；
     - 置信度：**中位数差 = 0**（多数段逐位相同），尾部 ≤ 5e-3 天花板
       （实测 worst 4.54e-3@'122'：host(numpy 预处理)↔GPU(设备内核) 的
       resize/gamma 浮点归约差异流经 TRT 的敏感段——文本两侧全同、

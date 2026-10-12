@@ -34,12 +34,11 @@ def _nv12_luma(crop: "np.ndarray") -> "np.ndarray":
     return crop[:h]
 
 
-#: limited→full 展开的 **256 项 LUT**（S6-f′）：Y 是 8-bit，展开是**单字节的
-#: 纯函数**，所以 LUT 与逐元素浮点式**逐位一致**——用同一串 float32 运算
+#: limited→full 展开的 **256 项 LUT**：Y 是 8-bit，展开是**单字节的纯
+#: 函数**，所以 LUT 与逐元素浮点式**逐位一致**——用同一串 float32 运算
 #: 构表（模块导入期一次）：floor((y-16)*(255/219)+0.5) 后 clip 0..255。
 #: 收益（宿主路径 test5 3000 帧 yuv 实测）：`decode.luma_batch` 0.090s →
-#: 0.020s（见 docs/log/2026-09-10-S6性能轮.md §8），且不再每批分配
-#: B×h×w×4 的 float32 临时数组。
+#: 0.020s，且不再每批分配 B×h×w×4 的 float32 临时数组。
 _Y_LIMITED_LUT = np.clip(
     np.floor(
         (np.arange(256, dtype=np.float32) - np.float32(16.0)) * np.float32(255.0 / 219.0)
@@ -78,13 +77,12 @@ def _nv12_batch_luma(crops: "np.ndarray") -> "np.ndarray":
 def nv12_to_rgb(crop: "np.ndarray", color_range: int = 0) -> "np.ndarray":
     """packed NV12 → RGB（uint8，BT.601 矩阵）。
 
-    Y/U/V 均为原始 8-bit，range 展开在本函数完成（DESIGN-REVIEW C9：旧
-    docstring 一度称"Y 已由 decoder 展开"，与同模块 `_nv12_luma_full` 的
-    原始 Y 语义矛盾）：
+    Y/U/V 均为原始 8-bit，range 展开在本函数完成（勿改称"Y 已由
+    decoder 展开"——与同模块 `_nv12_luma_full` 的原始 Y 语义矛盾）：
     - color_range=0（limited/tv，默认）：(y-16)/219 展开 + 1.164/1.596/
-      2.017 矩阵——与 decord improc 系数一致（历史行为，默认不变）；
+      2.017 矩阵——与 decord improc 系数一致（默认不变）；
     - color_range=1（full/pc）：Y 原样 + 1.402/0.344/0.714/1.772 矩阵
-      （旧版缺失该分支，full-range 流预览会偏色）。
+      （缺失该分支时 full-range 流预览会偏色）。
     UV 为原始 4:2:0：chroma 按 2x2 块 nearest 上采样（decord RGB 路径的
     MPEG-2 siting 语义）。
     """
@@ -156,7 +154,7 @@ def _np_resize(img: "np.ndarray", new_w: int, new_h: int) -> "np.ndarray":
     与 cv2 的数值差 <= 1e-5（浮点累加顺序），无实际影响；输出 float32。
     支持 2D 灰度（(H,W)、3D 单通道（(H,W,1)）与 RGB（(H,W,3)）；
     2D/单通道输入输出保持原通道语义（2D 输出 2D）。
-    移除 cv2 依赖后的轻量替代（EXE -83MB）。
+    移除 cv2 依赖后的轻量替代。
     """
     src_h, src_w = img.shape[:2]
     if new_w == src_w and new_h == src_h:
@@ -168,12 +166,12 @@ def _np_resize(img: "np.ndarray", new_w: int, new_h: int) -> "np.ndarray":
         f = f[..., None]
     wx3 = wx[None, :, None]
     wy3 = wy[:, None, None]
-    # 索引方式（2026-09-13）：**逐轴 np.take，不用双轴 fancy-indexing**。
-    # 交错微测 400 轮 646.4 → 461.5 µs（−28.6%）；7/7 尺寸与 dtype 组合
-    # `np.array_equal` 与旧实现**逐位一致**——四项求和的**分组顺序一字未改**，
-    # 只把"取角落"的机制从 2 轴索引网格换成逐轴 take。
-    # 反例留档：分离式两遍（先竖后横）会改分组顺序 → 浮点舍入不同 → 金标必漂；
-    # 「行 take + 列 fancy」实测更慢（714.9 µs）。都不可取。
+    # 索引方式：**逐轴 np.take，不用双轴 fancy-indexing**。交错微测
+    # 400 轮 646.4 → 461.5 µs（−28.6%）；7/7 尺寸与 dtype 组合
+    # `np.array_equal` 逐位一致——四项求和的**分组顺序一字未改**，只把
+    # "取角落"的机制从 2 轴索引网格换成逐轴 take。
+    # 反例留档：分离式两遍（先竖后横）会改分组顺序 → 浮点舍入不同 → 金标
+    # 必漂；「行 take + 列 fancy」实测更慢（714.9 µs）。都不可取。
     g0 = np.take(f, y0, axis=0)
     g1 = np.take(f, y1, axis=0)
     a = np.take(g0, x0, axis=1)

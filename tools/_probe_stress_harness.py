@@ -48,8 +48,8 @@ CASES = {
     "av1-cpu": ("cpu", "test6.mp4", {}),
     "h264-gpu": ("gpu", "test5.mp4", {}),
     "h264-cpu": ("cpu", "test5.mp4", {}),
-    # h264lg = test6 同内容 h264 转码（§12）：快 CPU 臂 + hybrid_gpu 的
-    # 上载天花板路径，32T 档位稳定性对照（§14）
+    # h264lg = test6 同内容 h264 转码：快 CPU 臂 + hybrid_gpu 的
+    # 上载天花板路径，32T 档位稳定性对照
     "h264lg-gpu": ("gpu", "test6_h264.mp4", {}),
 }
 
@@ -65,7 +65,7 @@ def main() -> int:
     ap.add_argument("--trials", type=int, default=4)
     ap.add_argument("--frames", type=int, default=3000)
     ap.add_argument(
-        "--nt", type=int, default=16, help="CPU 臂线程数（§14 起引擎默认 24/32，压测须覆盖新档）"
+        "--nt", type=int, default=16, help="CPU 臂线程数（引擎默认 24/32，压测须覆盖新档）"
     )
     ap.add_argument("--timeout", type=float, default=90.0)
     ap.add_argument("--log", default=str(ROOT / "bench" / "stress_harness.log"))

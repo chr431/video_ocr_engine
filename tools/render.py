@@ -173,7 +173,7 @@ def render_health_md(kpi: dict) -> str:
         lines.append("| %s | %s | %s |" % (row.get("name"), row.get("value"), row.get("target")))
     lines += [
         "",
-        "（生成：%s；口径见 tools/health.py 头注与 S2 §7。）" % kpi.get("generated_at", ""),
+        "（生成：%s；口径见 tools/health.py 头注。）" % kpi.get("generated_at", ""),
         "",
     ]
     return "\n".join(lines)

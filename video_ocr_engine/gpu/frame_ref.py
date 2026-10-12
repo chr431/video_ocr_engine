@@ -1,4 +1,4 @@
-"""DeviceRef —— 设备帧引用（v2 §6.2/D3；S9-3 取代 4/5/6 元组 dev 槽）。
+"""DeviceRef —— 设备帧引用。
 
 v1 的 `dev` 槽依产生路径承载三种形状（4/5/6 元组），消费者靠
 `len(t) >= 6` 分支——本类型把三态显式化：
@@ -6,10 +6,10 @@ v1 的 `dev` 槽依产生路径承载三种形状（4/5/6 元组），消费者�
   - 未裁切：`x_off=None, crop_w=None`（全宽参与缩放）
   - 已裁切：`x_off/crop_w` 就位（区间由 col_ink/autocrop 给出）
   - 延后裁切标记：`sharp` 非空且裁切字段为空（emit 期只打标记，
-    OCR 消费批内一次批量裁切——PI-9 的消费者侧下沉）
+    OCR 消费批内一次批量裁切——消费者侧下沉）
 
 `owner` 保活底层缓冲（decord NDArray / 池帧 / 宿主数组）；
-调用方必须保持 owner 存活直至消费完成（§9 契约 2）。
+调用方必须保持 owner 存活直至消费完成。
 """
 
 from __future__ import annotations

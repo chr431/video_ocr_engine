@@ -1,4 +1,4 @@
-"""S1 骨架测试：指标注册表与 Metrics/NullMetrics（v2 §8.6）。
+"""指标注册表与 Metrics/NullMetrics 测试。
 
 metrics_coverage 的核心断言：未注册名上报 → KeyError（硬失败）；
 NullMetrics 全空调用；v1 现役键全部在注册表（观测不丢）。
@@ -14,7 +14,7 @@ from video_ocr_engine.domain.metrics import METRICS, Metrics, MetricSpec, NullMe
 
 
 def test_registry_covers_v1_keys():
-    # pipeline.producer 已出清（2026-09-17：全仓零产出点），
+    # pipeline.producer 已出清（全仓零产出点），
     # v1 观测键里补一个仍然现役的无界键 consume_feed。
     for name in (
         "pipeline.decode",
@@ -68,7 +68,7 @@ def test_span_records_duration():
 
 
 def test_snapshot_aggregates_spans():
-    """S6-0：drain 语义——多线程样本在 snapshot 合并为 n/sum/p50/p99。"""
+    """drain 语义——多线程样本在 snapshot 合并为 n/sum/p50/p99。"""
     m = Metrics("full")
     m.record_span("decode.batch", 0.1)
     m.record_span("decode.batch", 0.3)
@@ -87,7 +87,7 @@ def test_snapshot_aggregates_spans():
 
 
 def test_off_tier_is_silent_singleton():
-    """PI-15：off 档不触注册表、不计时、不组装快照。"""
+    """off 档不触注册表、不计时、不组装快照。"""
     from video_ocr_engine.domain.metrics import NULL_METRICS, make_metrics
 
     assert make_metrics("off") is NULL_METRICS
@@ -101,7 +101,7 @@ def test_detailed_only_in_full_tier():
 
 
 def test_profile_mapping_targets_are_registered():
-    """§8.6 N-2：单一计时脊柱的映射表只能指向注册名（防映射漂移）。"""
+    """单一计时脊柱的映射表只能指向注册名（防映射漂移）。"""
     from video_ocr_engine.domain.metrics import (
         PROFILE_GAUGES,
         PROFILE_SPANS,
@@ -133,7 +133,7 @@ def test_totals_n_max_cover_all_totals_keys():
 
     assert set(PROFILE_TOTALS_N) == set(PROFILE_TOTALS)
     assert set(PROFILE_TOTALS_MAX) == set(PROFILE_TOTALS)
-    # W1：直方图映射同样全键覆盖
+    # 直方图映射同样全键覆盖
     assert set(PROFILE_TOTALS_HIST) == set(PROFILE_TOTALS)
     # 桶数学：×2 分箱、边界与溢出（桶号 = frexp 指数 + HIST_EXP_BIAS）
     assert hist_bucket(0.0) == 0 and hist_bucket(-1.0) == 0
@@ -150,7 +150,7 @@ def test_totals_n_max_cover_all_totals_keys():
 
 
 def test_hist_bucket_lower_bounds():
-    """桶界表须与 hist_bucket 自洽（2026-10-12 审查轮：旧表整表偏 2×）。
+    """桶界表须与 hist_bucket 自洽（旧表曾整表偏 2×）。
 
     旧式 `2^(i-BIAS)` 把桶的**上界**当下界发布（report.bucket_lower_s
     据此判读会把每个时长放错一倍）。这里逐桶断言 x=下界 落在该桶。
@@ -166,9 +166,9 @@ def test_hist_bucket_lower_bounds():
 
 
 def test_gauge_max_merges_by_max_across_threads():
-    """*_max 型 gauge 跨线程合并取最大（2026-10-12 审查轮：旧为末位写者胜）。
+    """*_max 型 gauge 跨线程合并取最大（末位写者胜会让门禁静默放行）。
 
-    桶序 = 线程首触顺序，故先注册的线程写大值：旧实现被后注册线程的
+    桶序 = 线程首触顺序，故先注册的线程写大值：若被后注册线程的
     小值覆盖（0.9→0.1），报告的单次最长偏低 = 门禁静默放行。
     """
     m = Metrics("full")

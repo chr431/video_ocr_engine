@@ -1,4 +1,4 @@
-"""引擎策略层（R1，2026-09-27）：解码/OCR 后端选择的纯函数集合。
+"""引擎策略层：解码/OCR 后端选择的纯函数集合。
 
 自 extractor 门面下放的**无状态决策**（输入只有配置与后端名，输出可表
 驱动单测）：
@@ -22,7 +22,7 @@ from video_ocr_engine.config import constants as config
 def merge_effective_mode(text_sep: str | None) -> str:
     """merge_similar 使用的分离模式：'binary' | ''（原始灰度比较）。
 
-    contrast 模式已移除（实验证实无净收益，0.9.0 清理）；未知值归一
+    contrast 模式已移除（实验证实无净收益）；未知值归一
     到引擎默认 binary。
     """
     _m = (text_sep or "").strip().lower()
@@ -47,11 +47,11 @@ def ocr_on_gpu(ocr_backend: str | None) -> bool:
 def ocr_engine_type(ocr_backend: str | None) -> str:
     """OCR 推理后端：auto/tensorrt → tensorrt（失败回退 CPU 路径），cpu → openvino。
 
-    hybrid（2026-09-20 hybrid ocr 轮，opt-in）→ 'hybrid'：TRT 设备
-    车道 + OpenVINO CPU 车道各一引擎（ocr_stage.acquire_engines 取双
-    擎、共享 infer_q 工作窃取）。收益面 = OCR-bound 场景（当前实测
-    仅 batch_test 稠密字幕 stride=1 类负载，infer 忙时 92% wall）；
-    decode-bound 的常规负载零收益（L3 本就空等）。
+    hybrid（opt-in）→ 'hybrid'：TRT 设备车道 + OpenVINO CPU 车道各一
+    引擎（ocr_stage.acquire_engines 取双擎、共享 infer_q 工作窃取）。
+    收益面 = OCR-bound 场景（当前实测仅 batch_test 稠密字幕 stride=1
+    类负载，infer 忙时 92% wall）；decode-bound 的常规负载零收益
+    （L3 本就空等）。
     """
     _b = (ocr_backend or "auto").lower()
     if _b == "cpu":
@@ -64,15 +64,14 @@ def ocr_engine_type(ocr_backend: str | None) -> str:
 def gpu_pipeline_enabled(
     rc, decode_backend: str | None, ocr_backend: str | None, video_path: str
 ) -> bool:
-    """GPU 全驻留零拷贝管线：NVDEC 直通或 CPU 解码 + H2D（P1-3）。
+    """GPU 全驻留零拷贝管线：NVDEC 直通或 CPU 解码 + H2D。
 
     默认（GPU_PIPELINE 未设置）启用条件（全部满足）：
     - decode_backend ∈ {auto, nvdec, cpu, hybrid}：auto/nvdec 走 NVDEC
       设备指针直通（NVDEC 打开失败时回退 CPU 解码分支）；cpu 显式
-      选择 CPU 软解 + H2D 进 GPU 分段/OCR（P1-3 解耦——CPU 解码的
-      墙钟收益与零拷贝 OCR 不再互斥）；hybrid 走 CPU 分支消费
-      hybrid 解码器交付的宿主数组（§8.3：双解码收益 + 零拷贝 OCR
-      叠加，原互斥门控已移除）。
+      选择 CPU 软解 + H2D 进 GPU 分段/OCR（CPU 解码的墙钟收益与
+      零拷贝 OCR 不互斥）；hybrid 走 CPU 分支消费 hybrid 解码器交付的
+      宿主数组（双解码收益 + 零拷贝 OCR 叠加，原互斥门控已移除）。
     - TensorRT 可用且 ocr_backend ≠ cpu —— 全程 raw 才有净收益
       （GPU 分段+ONNX 实测无优势，默认走宿主管线，配置面更简）
     - cuda-python（cuda.core / cuda.bindings）可导入
@@ -85,7 +84,7 @@ def gpu_pipeline_enabled(
     from ..gpu import device as _gp
 
     # 经模块属性解析:tests/探针 patch gpu.device.nvdec_available
-    # 等模块级名字(§10.4 patch 点),函数级导入保持该间接性
+    # 等模块级名字,函数级导入保持该间接性
     _cuda = _gp._cuda_python_available
     _val = rc.pipeline_gpu
     if _val is not None:

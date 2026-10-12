@@ -1,6 +1,6 @@
-"""指标注册表与记录器（v2 §8.6 N-1/N-2，S1 骨架 → S6-0 接线）。
+"""指标注册表与记录器。
 
-监测层级单点地图（2026-10-09 精简轮立，各层纪律见各自模块头）：
+监测层级单点地图（各层纪律见各自模块头）：
 
     ProfSpine (domain/prof.py)  相位计时脊柱：同一 t0 喂本注册表/trace/diag
     Metrics    (本模块)         指标注册表 + 资源挂载点（仅有的三个入口）：
@@ -11,21 +11,20 @@
         snapshot()          → report.py 组装 RunReport（schema 只增不改；
                               fork hybrid_stats 经 report.hybrid 直通）
     消费面 = tools/bench.py（ab 判定/归因/周期判读）与 JSON sidecar。
-    档位（0.22.0 两档化，DECISIONS §30）：off（发布默认，零成本）/
-    full（调试与 bench 默认：L1+线程账本+L2+直方图全开）。
-    VOE_TELEMETRY=std 是 full 的受谴责别名（resolve 映射+告警）。
-    ENGINE_PROFILE=1 的 13 相位原始字典（extractor.profile）是独立调试读
-    面，非遥测轨道（R2 定）：别往这里加新观测。
+    档位：off（发布默认，零成本）/ full（调试与 bench 默认：L1+线程账本+
+    L2+直方图全开）。VOE_TELEMETRY=std 是 full 的受谴责别名（resolve 映射+
+    告警）。ENGINE_PROFILE=1 的 13 相位原始字典是独立调试读面，非遥测
+    轨道：别往这里加新观测。
 
-规则（§8.6）：未注册的名字不得上报；注册表上限 64；粗档 span（相位级）
-随 std 档恒开；counter 恒开；telemetry=off 时一切空调用（NullMetrics，
-PI-15 由 bench 三档互比门禁背书）。线程口径：**每线程局部累积、drain 时
-合并**（消灭 v1 的无锁共享写，P1-9 同类）。
+规则：未注册的名字不得上报；注册表上限 64；粗档 span（相位级）随非 off
+档恒开；counter 恒开；telemetry=off 时一切空调用（NullMetrics，由 bench
+三档互比门禁背书）。线程口径：**每线程局部累积、drain 时合并**（无锁
+共享写会丢更新）。
 
-性能口径（S6-0 实测修正）：v1 骨架版在**每次 span 结束都取锁并合并**——
-插桩点一多就变成自伤（PI-15 的 std vs off ≤ +0.1% 会当场失败）。现改为
-本地桶 append + `snapshot()` 一次性合并；线程桶在**首次使用时**登记，
-snapshot 时遍历登记表（每线程一次加锁，之后全无锁）。
+性能口径：在**每次 span 结束都取锁并合并**会自伤——插桩点一多，std vs
+off 的墙钟预算（≤ +0.1%）会当场失败。故改为本地桶 append +
+`snapshot()` 一次性合并；线程桶在**首次使用时**登记，snapshot 时遍历
+登记表（每线程一次加锁，之后全无锁）。
 """
 
 from __future__ import annotations
@@ -42,17 +41,17 @@ from .resources import NvmlSampler, ResourceProbe
 MetricKind = Literal["span", "counter", "gauge", "histogram"]
 METRIC_CAP = 96
 
-#: 直方图分箱（W1，2026-09-17 续）：**按 2 的指数分箱**（×2 分辨率），
-#: 桶号 = `math.frexp(x)[1] + HIST_EXP_BIAS`，一次 frexp 调用即得——
-#: 实测 0.165µs/事件（log 2026-09-17 §W1 桶成本原型），无 per-event 循环。
+#: 直方图分箱：**按 2 的指数分箱**（×2 分辨率），桶号 =
+#: `math.frexp(x)[1] + HIST_EXP_BIAS`，一次 frexp 调用即得——实测
+#: 0.165µs/事件；热路径无 per-event 循环。
 #: 无界 TOTALS 键此前只有 sum/n/max 两端；"偶发长停顿 vs 持续细碎"的
 #: 形状信息需要分布。范围 2^-20≈0.95µs 到 2^11≈2048s。
 HIST_EXP_BIAS = 20
 HIST_N_BUCKETS = 32
 #: 桶 i 的秒级下界（供 report 自述；i=0 覆盖 [0, 2^-20)）
-#: ⚠️ 指数须再减 1（2026-10-12 审查轮纠偏）：桶号 = frexp(x)[1]+BIAS，而
-#: frexp 给 x∈[2^(e-1), 2^e)——旧式 2^(i-BIAS) 实为该桶**上界**，整表
-#: 偏 2×（report.bucket_lower_s 的判读随之错位）。性质测试见
+#: ⚠️ 指数须再减 1：桶号 = frexp(x)[1]+BIAS，而 frexp 给
+#: x∈[2^(e-1), 2^e)——旧式 2^(i-BIAS) 实为该桶**上界**，整表偏 2×
+#: （report.bucket_lower_s 的判读随之错位）。性质测试见
 #: tests/domain/test_metrics.py::test_hist_bucket_lower_bounds。
 HIST_BUCKET_LOWER = tuple(
     (2.0 ** (i - 1 - HIST_EXP_BIAS)) if i > 0 else 0.0 for i in range(HIST_N_BUCKETS)
@@ -67,12 +66,12 @@ def hist_bucket(seconds: float) -> int:
     return 0 if k < 0 else (HIST_N_BUCKETS - 1 if k >= HIST_N_BUCKETS else k)
 
 
-# 注册表（§8.6 N-1）：命名空间 = 阶段；pi_binding 指向 §13.2 不变式。
+# 注册表：命名空间 = 阶段；pi_binding 指向注册不变式。
 # 元组 = (name, kind, unit, stage, pi_binding)。
 _SEED = (
     # ── pipeline：编排三段 + v1 现役键（迁移不丢观测）──
-    # （pipeline.producer 已出清：全仓零产出点，注册不注册都从不出现——
-    #   2026-09-17 勘察确认；死键只稀释报告与 diff 视图。）
+    # （pipeline.producer 已出清：全仓零产出点，注册不注册都从不出现；
+    #   死键只稀释报告与 diff 视图。）
     ("pipeline.run", "span", "s", "pipeline", ""),
     ("pipeline.setup", "span", "s", "pipeline", ""),
     ("pipeline.calibrate", "span", "s", "pipeline", ""),
@@ -82,10 +81,10 @@ _SEED = (
     ("pipeline.ocr_tail", "span", "s", "pipeline", ""),
     ("pipeline.q_get_wait", "gauge", "s", "pipeline", "PI-5"),
     ("pipeline.q_put_block", "gauge", "s", "pipeline", "PI-5"),
-    # 背压分诊（std 档即有）：总时长只说明"堵了多久"，次数与单次最长
+    # 背压分诊（非 off 档即有）：总时长只说明"堵了多久"，次数与单次最长
     # 才区分"偶发长停顿"与"持续细碎互锁"——前者查尾帧，后者查调度。
-    # P2b（2026-09-17）把同一分诊口径推广到**全部无界 TOTALS 键**
-    # （consume_feed/emit.*/merge_pair），映射表在 PROFILE_TOTALS_N/_MAX。
+    # 同一分诊口径推广到**全部无界 TOTALS 键**（consume_feed/emit.*/
+    # merge_pair），映射表在 PROFILE_TOTALS_N/_MAX。
     ("pipeline.q_get_wait_n", "counter", "次", "pipeline", "PI-5"),
     ("pipeline.q_get_wait_max", "gauge", "s", "pipeline", "PI-5"),
     ("pipeline.q_get_wait_hist", "histogram", "次", "pipeline", "PI-5"),
@@ -96,7 +95,7 @@ _SEED = (
     ("pipeline.consume_feed_n", "counter", "次", "pipeline", ""),
     ("pipeline.consume_feed_max", "gauge", "s", "pipeline", ""),
     ("pipeline.consume_feed_hist", "histogram", "次", "pipeline", ""),
-    # ── decode：批级（std 档不含 per-frame）──
+    # ── decode：批级（不含 per-frame）──
     ("decode.batch", "span", "s", "decode", ""),
     ("decode.batches", "counter", "批", "decode", ""),
     ("decode.frames", "counter", "帧", "decode", ""),
@@ -115,21 +114,21 @@ _SEED = (
     ("ocr.engine_init", "gauge", "s", "ocr", "PI-10"),
     ("ocr.engine_reuse", "counter", "次", "ocr", "PI-10"),
     ("ocr.infer", "span", "s", "ocr", ""),
-    # W2 子相位（2026-09-17 续）：`ocr.infer` 的残差此前不可分（host 路径
-    # _other 高达 2.8s）。三键在 **full 档**记录（TRT 调用是热路径，
-    # per-batch × 数十批，std 预算付不起）：trt_enq = execute_async_v3
-    # 提交；trt_reduce = argmax 规约 + D2H（含流同步，即"等 GPU 干完"）；
+    # `ocr.infer` 的残差子相位：此前不可分（host 路径 _other 高达
+    # 2.8s）。三键在 **full 档**记录（TRT 调用是热路径，per-batch ×
+    # 数十批，std 预算付不起）：trt_enq = execute_async_v3 提交；
+    # trt_reduce = argmax 规约 + D2H（含流同步，即"等 GPU 干完"）；
     # trt_concat = 多子批拼接（纯宿主）。
     ("ocr.trt_enq", "span", "s", "ocr", ""),
     ("ocr.trt_reduce", "span", "s", "ocr", ""),
     ("ocr.trt_concat", "span", "s", "ocr", ""),
-    # W9：defer 路径（TRT_DEFER_SYNC=1）的对位子相位——submit=整批异步
+    # defer 路径（TRT_DEFER_SYNC=1）的对位子相位——submit=整批异步
     # 提交（不等待），collect=等上一批完成。与同步路径的 enq/reduce 互补：
     # 两路径每 run 只走其一，relations 里同列（缺席侧记 0）。
     ("ocr.trt_submit", "span", "s", "ocr", ""),
     ("ocr.trt_collect", "span", "s", "ocr", ""),
     ("ocr.preprocess", "span", "s", "ocr", ""),
-    # 预处理三个可分代价（2026-09-13 细分）：糊在一个 span 里无法判断该
+    # 预处理三个可分代价：糊在一个 span 里无法判断该
     # 优化谁——autocrop 在**全分辨率**上做，resize+gamma 在降采样后做。
     ("ocr.preproc_luma", "span", "s", "ocr", ""),
     ("ocr.preproc_autocrop", "span", "s", "ocr", ""),
@@ -139,12 +138,12 @@ _SEED = (
     ("ocr.sub_chunks", "counter", "子批", "ocr", "PI-3"),
     ("ocr.syncs", "counter", "次", "ocr", "PI-3"),
     ("ocr.syncs_per_chunk", "gauge", "次/chunk", "ocr", "PI-3"),
-    # 填充率（R5/S6-f）：pad 宽是 rec 模型的计算宽度，content 是真实内容宽度
+    # 填充率：pad 宽是 rec 模型的计算宽度，content 是真实内容宽度
     ("ocr.rows", "counter", "行", "ocr", ""),
     ("ocr.padded_cols", "counter", "列", "ocr", ""),
     ("ocr.content_cols", "counter", "列", "ocr", ""),
     ("ocr.fill_pct", "gauge", "%", "ocr", ""),
-    # ── emit：消费端提交（第一阶段性能目标，§7.6）──
+    # ── emit：消费端提交 ──
     # （emit.h2d_bytes / emit.launches 已出清：零产出点，同 pipeline.producer）
     ("emit.d2h_bytes", "counter", "B", "emit", "PI-14"),
     ("emit.d2h_calls", "counter", "次", "emit", "PI-9"),
@@ -188,7 +187,7 @@ class MetricRegistry:
 
     def spec(self, name: str) -> MetricSpec:
         if name not in self._by_name:
-            raise KeyError("未注册指标: %s（§8.6：未注册名不得上报）" % name)
+            raise KeyError("未注册指标: %s（未注册名不得上报）" % name)
         return self._by_name[name]
 
     def names(self) -> tuple[str, ...]:
@@ -200,11 +199,11 @@ METRICS = MetricRegistry(
 )
 # row 为普通 tuple，splat 丢 Literal——cast 只还类型不改运行时
 
-# ── 单一计时脊柱（§8.6 N-2）──────────────────────────────────────────
+# ── 单一计时脊柱 ─────────────────────────────────────────────────────
 # 编排三段与 Protocol 边界的既有计时点（`_prof_end(group, key, t0)`）直接
-# 映射为注册指标名——后端不再自建字典，v1 的 13 个细粒度相位零改动迁入。
+# 映射为注册指标名——后端不再自建字典，13 个细粒度相位零改动迁入。
 PROFILE_SPANS = {
-    # 有界（每次 run ≤ ~200 次）：std 档即逐次采样
+    # 有界（每次 run ≤ ~200 次）：非 off 档即逐次采样
     ("producer", "open_and_fps"): "pipeline.setup",
     ("producer", "calib_total"): "pipeline.calibrate",
     ("producer", "consumer_total"): "pipeline.consumer",
@@ -220,10 +219,10 @@ PROFILE_SPANS = {
     ("ocr", "preproc_resize"): "ocr.preproc_resize",
     ("ocr", "ctc_decode"): "ocr.ctc_decode",
 }
-#: 无界（每段/每帧调用）→ std 档只累加总量（`totals` 段）；full 档另采样
-#: TOTALS 的伴随观测（std 档即有）：出现次数 / 单次最长。
-#: P2b：推广到**全部** TOTALS 键（此前只有两个队列键）——无 sum 只有次数
-#: 与最长，才分得出"偶发长停顿 vs 持续细碎"。
+#: 无界（每段/每帧调用）→ 非 off 档只累加总量（`totals` 段）；full 档另
+#: 采样 TOTALS 的伴随观测：出现次数 / 单次最长。
+#: 推广到**全部** TOTALS 键——无 sum 只有次数与最长，才分得出"偶发长
+#: 停顿 vs 持续细碎"。
 PROFILE_TOTALS_N = {
     ("producer", "q_put_block"): "pipeline.q_put_block_n",
     ("ocr", "q_get_wait"): "pipeline.q_get_wait_n",
@@ -251,9 +250,9 @@ PROFILE_TOTALS = {
     ("ocr", "q_get_wait"): "pipeline.q_get_wait",
     ("producer", "merge_pair"): "segment.merge_pair",
 }
-#: W1 分布形状：TOTALS 键的耗时直方图（**full 档专属**——每事件一次
+#: 分布形状：TOTALS 键的耗时直方图（**full 档专属**——每事件一次
 #: frexp + 桶加，6270 事件/run 实测 1.0ms，超 std 预算 0.2% 的份额；
-#: full 档的墙钟预算本来就是 ±1.2% 量级，付得起）。std 档仍有 n/max。
+#: full 档的墙钟预算本来就是 ±1.2% 量级，付得起）。off 档不采样。
 PROFILE_TOTALS_HIST = {
     ("producer", "q_put_block"): "pipeline.q_put_block_hist",
     ("ocr", "q_get_wait"): "pipeline.q_get_wait_hist",
@@ -263,7 +262,7 @@ PROFILE_TOTALS_HIST = {
     ("producer", "emit_d2h"): "emit.d2h_hist",
     ("producer", "merge_pair"): "segment.merge_pair_hist",
 }
-#: 单值量（只保留末次）：engine_init 是 PI-10 的判据本体
+#: 单值量（只保留末次）：engine_init 是 PI-10 门禁的判据本体
 PROFILE_GAUGES = {
     ("ocr", "engine_init"): "ocr.engine_init",
 }
@@ -276,11 +275,11 @@ def _empty_bucket() -> dict:
 class Metrics:
     """线程安全的指标记录器（局部累积 + drain 合并）。
 
-    tier：off/full **两档**（2026-10-09 两档化，DECISIONS §30：std 实测
-    开销与 full 同在噪声内，中间档失去存在理由；`VOE_TELEMETRY=std`
-    经 resolve 映射为 full + 受谴责告警）。off = NullMetrics 全关；
-    full = 相位 span + counter/gauge + 细档（per-batch/per-chunk，见
-    `detailed`）+ L2 NVML + 线程账本 + 直方图。
+    tier：off/full **两档**（std 实测开销与 full 同在噪声内，中间档
+    失去存在理由；`VOE_TELEMETRY=std` 经 resolve 映射为 full + 受谴责
+    告警）。off = NullMetrics 全关；full = 相位 span + counter/gauge +
+    细档（per-batch/per-chunk，见 `detailed`）+ L2 NVML + 线程账本 +
+    直方图。
     """
 
     __slots__ = (
@@ -299,10 +298,10 @@ class Metrics:
     def __init__(
         self, tier: str = "off", registry: MetricRegistry = METRICS, clock=time.perf_counter
     ) -> None:
-        # 显式校验而非 assert（2026-09-19 审查轮）：assert 在 python -O
-        # 下消失，非法档位会静默变成"enabled 但非 detailed"的混合态
-        # （full 档专属直方图静默不产）；且此前无消息的 AssertionError
-        # 对 VOE_TELEMETRY=FULL 这类大小写输入毫无提示。
+        # 显式校验而非 assert：assert 在 python -O 下消失，非法档位会
+        # 静默变成"enabled 但非 detailed"的混合态（full 档专属直方图
+        # 静默不产）；且无消息的 AssertionError 对 VOE_TELEMETRY=FULL
+        # 这类大小写输入毫无提示。
         # "std" 由 resolve 层映射，不在此收——直接构造方必须写两档之一
         # （别名在这里静默通过会让"std 已死"永远查不出来）。
         if tier not in ("off", "full"):
@@ -318,17 +317,18 @@ class Metrics:
         self._buckets: list = []
         self._master: dict = _empty_bucket()
         self._checked: set = set()  # 已校验名（首次上报校验，之后集合命中）
-        # §8.6 r5 资源层：L1 相位边界差分（std+，纯 stdlib 计数，见
-        # domain/resources.py 的成本实测）；L2 设备峰值采样仅 full 档显式启动。
-        # None = off 档永不采样；False = std+ 但本 run 还没到边界（惰性建探针：
-        # 探针构造含 ctypes 结构定义，宿主/短路径不必付这笔钱）。
+        # 资源层：L1 相位边界差分（非 off 档，纯 stdlib 计数，见
+        # domain/resources.py 的成本实测）；L2 设备峰值采样仅 full 档显式
+        # 启动。None = off 档永不采样；False = 非 off 档但本 run 还没到
+        # 边界（惰性建探针：探针构造含 ctypes 结构定义，宿主/短路径不
+        # 必付这笔钱）。
         self._resources: "ResourceProbe | bool | None" = (
             None if tier == "off" else False
         )  # 三态：None=off/False=未建/probe=已建
         self._hw: "NvmlSampler | None" = None
 
     def _check(self, name: str) -> None:
-        """N-1：未注册的名字不得上报（校验结果缓存，热路径只做集合命中）。"""
+        """未注册的名字不得上报（校验结果缓存，热路径只做集合命中）。"""
         if name not in self._checked:
             self._registry.spec(name)
             self._checked.add(name)
@@ -367,10 +367,10 @@ class Metrics:
             self.record_span(name, self._clock() - t0)
 
     def checkpoint(self, phase: str) -> None:
-        """L1 相位边界资源采样（std+；off 一行不执行）。
+        """L1 相位边界资源采样（off 档一行不执行）。
 
-        v8：full 档（detailed）另采线程级周期（ThreadLedger）；
-        std 档不采（AGENTS：遥测新增只进 full 档）。
+        full 档（detailed）另采线程级周期（ThreadLedger）；遥测新增
+        只进 full 档。
         """
         r = self._resources
         if r is None:
@@ -388,7 +388,7 @@ class Metrics:
         return {"sources": r.sources, "per_phase": r.per_phase()}
 
     def start_hardware(self) -> None:
-        """L2 设备峰值采样：**仅 full 档**、仅显式调用时建线程（B6）。"""
+        """L2 设备峰值采样：**仅 full 档**、仅显式调用时建线程。"""
         if self._tier != "full" or self._hw is not None:
             return
         sampler = NvmlSampler()
@@ -406,7 +406,7 @@ class Metrics:
     def record_span(self, name: str, seconds: float) -> None:
         """已计时点的上报口（`_prof_end` 单一时序脊柱走这里，零额外时钟）。"""
         if not self.enabled:
-            return  # off 档：不查注册表、不取桶、不分配（PI-15）
+            return  # off 档：不查注册表、不取桶、不分配
         self._check(name)
         b = self._bucket()
         s = b["spans"]
@@ -431,11 +431,11 @@ class Metrics:
         self._bucket()["gauges"][name] = value
 
     def histogram(self, name: str, seconds: float) -> None:
-        """W1：事件耗时 → 分布桶（**调用方负责只在 detailed 档调**）。
+        """事件耗时 → 分布桶（**调用方负责只在 detailed 档调**）。
 
         热路径形状 = 一次 `math.frexp` + 列表索引加（0.165µs/事件实测）；
-        std 档调用方不进来（`_prof_end` 里 `if m.detailed` 守卫），
-        故此处不再重复判档。
+        off 档调用方不进来（`_prof_end` 里 `if m.detailed` 守卫），故此
+        处不再重复判档。
         """
         if not self.enabled:
             return
@@ -454,11 +454,10 @@ class Metrics:
         "gauges": {...}, "histograms": {name: {n, buckets, lower}}}；
         spans 聚合后丢弃原始样本（报告不需要时间线）。
 
-        ``drain``（2026-09-19 审查轮）：True=排干（run 末一次性调用，
-        默认保持既有语义）；**False=只读快照**——run 中途的消费者
-        （StallWatchdog.dump_stall）必须用它，否则把已累计的桶全部
-        吃掉：停顿后的最终 RunReport 只剩停顿之后的部分样本，
-        PI-3/PI-10 这类阈值指标偏小 → 门禁静默放行。
+        ``drain``：True=排干（run 末一次性调用，默认保持既有语义）；
+        **False=只读快照**——run 中途的消费者（StallWatchdog.dump_stall）
+        必须用它，否则把已累计的桶全部吃掉：停顿后的最终 RunReport 只剩
+        停顿之后的部分样本，阈值指标偏小 → 门禁静默放行。
         """
         with self._lock:
             if drain:
@@ -481,9 +480,9 @@ class Metrics:
                 counters[k] = counters.get(k, 0) + v
             for k, v in b["gauges"].items():
                 if k.endswith("_max"):
-                    # *_max 型跨线程取最大（2026-10-12 审查轮）：桶序=线程
-                    # 首触顺序，"最后写入者胜"会丢弃较大观测——正是本模块
-                    # drain 注释担心的"门禁静默放行"形态。
+                    # *_max 型跨线程取最大：桶序=线程首触顺序，"最后写入
+                    # 者胜"会丢弃较大观测——正是本模块 drain 注释担心的
+                    # "门禁静默放行"形态。
                     cur = gauges.get(k)
                     gauges[k] = v if cur is None or v > cur else cur
                 else:
@@ -514,7 +513,7 @@ class Metrics:
 
 
 class NullMetrics(Metrics):
-    """telemetry=off（§8.6 r5）：全部空调用、不组装快照。"""
+    """telemetry=off：全部空调用、不组装快照。"""
 
     def __init__(self) -> None:
         super().__init__(tier="off")

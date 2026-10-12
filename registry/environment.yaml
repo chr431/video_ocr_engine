@@ -20,6 +20,14 @@ dependencies:
   mypy: "2.3.1"
   openvino: "2026.4.1"
 
+# 外部依赖能力 floors（R-dependency-floors）：产品代码依赖的 fork 最低版本。
+# 注释不再写"需 fork ≥x.y.z"——此处是唯一事实源；CI 校验 pin ≥ 每个 floor。
+dependency_floors:
+  decord_stride_fastpath: "0.7.12"   # 等差步长（sample_stride）快速路径
+  decord_env_passthrough: "0.7.13"   # DECORD_* env 透传支持
+  decord_hybrid_native: "0.7.15"     # hybrid/hybrid_gpu 设备上下文原生支持
+  decord_setroi_deepbank: "0.8.5"    # SetRoi 深银行出 out_cuda_ 门（C-76 配套）
+
 corpus:
   video_dir: "D:/Videos/racelog_test"     # 经 RACELOG_VIDEO_DIR 覆盖；批量集经 RACELOG_BATCH_DIR
   ground_truth: ground_truth_csv/

@@ -1,13 +1,13 @@
-"""RunReport —— 一次 run 的唯一观测出口（v2 §8.6 N-3/N-5，S6-0）。
+"""RunReport —— 一次 run 的唯一观测出口。
 
-设计要点（逐条对 §8.6）：
-- **唯一出口**：所有观测来自注入的 `Metrics`（N-2 单一计时脊柱）+ 编排
-  显式字段，不再有"探针伸手进 ex._*"的第三套键名（M-1/M-3）。
+设计要点：
+- **唯一出口**：所有观测来自注入的 `Metrics`（单一计时脊柱）+ 编排
+  显式字段，不再有"探针伸手进 ex._*"的第三套键名。
 - **schema 版本化**：`REPORT_VERSION` 只增不改；演进必须 bump 并留快照测试。
-- **PI 守卫绑定命名指标**（N-5）：`health` 是机器判定，红旗可被 `bench`
+- **PI 守卫绑定命名指标**：`health` 是机器判定，红旗可被 `bench`
   直接判失败——PI-10（热池 engine_init）、PI-3（syncs/chunk）在此落地。
 - **透出**：`meta['report']`（telemetry≠off）。off 档无此键、不组装报告、
-  不起采样器（PI-15 由 bench 三档互比门禁背书）。
+  不起采样器（由 bench 三档互比门禁背书）。
 - 细档 JSON sidecar 由 `diagnostics.report_file` 显式 opt-in（写文件是副作用）。
 """
 
@@ -19,41 +19,41 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # schema 版本：**只增不改**；任何结构演进必须 bump + 快照测试。
-# v2（S6 续轮）：新增 `resources`（L1 相位边界差分）与 `hardware`（L2 NVML
-# 峰值因子，仅 full 档采样过才出现）——都是**新增键**，按 v1 解析的旧读者不受影响。
-# v3（2026-09-13）：新增 `diagnostics`（看门狗/崩溃日志/停顿落盘），同样**只加键**。
-# v4（2026-09-17 重设计）：新增 `span_relations`（静态父子表 + 路径标记）与
-# 派生 span `<parent>_other`（= parent.sum − Σ在场子项 sum），产品化
+# v2：新增 `resources`（L1 相位边界差分）与 `hardware`（L2 NVML 峰值因子，
+# 仅 full 档采样过才出现）——都是**新增键**，按 v1 解析的旧读者不受影响。
+# v3：新增 `diagnostics`（看门狗/崩溃日志/停顿落盘），同样**只加键**。
+# v4：新增 `span_relations`（静态父子表 + 路径标记）与派生 span
+# `<parent>_other`（= parent.sum − Σ在场子项 sum），产品化
 # "consumer − 已计 span = 缺口"的手工归因算术；spans 表只加键。
-# v5（2026-09-17 续）：新增 `histograms`（无界 TOTALS 键的耗时分布，**full
-# 档专属**——std 档该段缺席，不是空值冒充）+ `histograms_meta`（分箱自述）。
-# v6（2026-09-17 穿透轮）：新增 `hybrid`（decord fork 遥测直通快照——
-# hybrid 解码器才有，经 vr.hybrid_stats() 在 close 前取走；含 fork 侧
-# 计数器/HOL 直方图/可选份额轨迹，缺席≠空值）。
-# v7（2026-10-09 周期账本轮，C-63）：`resources.per_phase` 行新增原始
-# `cycles` 差分与 `cycles_e2e`（A/B 判据用；复用既有边界采样零新增成本，
-# std 档即有；cycles 来源缺席（非 Windows）时无键——缺席≠空值）。
-# v8（2026-10-09 跨线程轮）：full 档新增 `thr`（引擎自有线程的逐线程
-# 周期差分）与 `thr_duty`（占空比 = Δcycles/(f_run×Δwall)，等待不计——
-# C-63 盲区的引擎侧补全；外来线程群仍不可分，见 resources 模块注）；
-# `cycles_e2e.threads` 线程级全程账本。std 档无这些键。
-# v9（2026-10-09 监测精简轮）：`cores_avg` 收敛为回退键——cycles 来源
-# 在场（Windows）时**不再发**，仅非 Windows 回退（两个"平均核数"并存
-# 打架，读者分不清权威）。这是**删键语义**（Windows 报告里消失），
-# 消费者改读 `cores_avg_cycles`（历史迁移表经 git 档案取回）。
-# v10（2026-10-09 争用定位轮）：full 档新增 `thr_foreign`（外来线程簇
-# 逐 TID 周期差分：decord 解码池/OMP/TBB——命名线程之外的全体）与
-# `thr_foreign_n`、`cycles_e2e.threads_foreign`。个体 TID 只用于差分，
-# 结论应下在簇级（外来线程生命周期不由引擎管，TID 会复用）。
+# v5：新增 `histograms`（无界 TOTALS 键的耗时分布，**full 档专属**——
+# std 档该段缺席，不是空值冒充）+ `histograms_meta`（分箱自述）。
+# v6：新增 `hybrid`（decord fork 遥测直通快照——hybrid 解码器才有，
+# 经 vr.hybrid_stats() 在 close 前取走；含 fork 侧计数器/HOL 直方图/
+# 可选份额轨迹，缺席≠空值）。
+# v7：`resources.per_phase` 行新增原始 `cycles` 差分与 `cycles_e2e`
+# （A/B 判据用；复用既有边界采样零新增成本，std 档即有；cycles 来源缺席
+# （非 Windows）时无键——缺席≠空值）。
+# v8：full 档新增 `thr`（引擎自有线程的逐线程周期差分）与 `thr_duty`
+# （占空比 = Δcycles/(f_run×Δwall)，等待不计——C-63 盲区的引擎侧补全；
+# 外来线程群仍不可分，见 resources 模块注）；`cycles_e2e.threads` 线程级
+# 全程账本。std 档无这些键。
+# v9：`cores_avg` 收敛为回退键——cycles 来源在场（Windows）时**不再发**，
+# 仅非 Windows 回退（两个"平均核数"并存打架，读者分不清权威）。
+# 这是**删键语义**（Windows 报告里消失），消费者改读 `cores_avg_cycles`
+# （历史迁移表经 git 档案取回）。
+# v10：full 档新增 `thr_foreign`（外来线程簇逐 TID 周期差分：decord
+# 解码池/OMP/TBB——命名线程之外的全体）与 `thr_foreign_n`、
+# `cycles_e2e.threads_foreign`。个体 TID 只用于差分，结论应下在簇级
+# （外来线程生命周期不由引擎管，TID 会复用）。
 REPORT_VERSION = 10
 
-#: v4：span 嵌套关系（代码级核对，2026-09-17 勘察）。**子项互不重叠**是
-#: 硬约束——嵌套更深的键（如宿主 merge_pair/q_put_block 在 consume_feed
-#: 内部）不得重复列入，否则 _other 会被双重扣减。
+#: v4：span 嵌套关系（代码级核对）。**子项互不重叠**是硬约束——嵌套更深
+#: 的键（如宿主 merge_pair/q_put_block 在 consume_feed 内部）不得重复列入，
+#: 否则 _other 会被双重扣减。
 #: - host：consumer 线程墙钟内串行包含 decode.*（流生成器在 feed 循环内
 #:   被拉动）+ 状态机 feed（consume_feed；merge_pair/q_put_block 嵌套于
-#:   其中，不单列）。0.17.0 起 host 只产 pipeline.consumer 单键（同区间
-#:   的 pipeline.decode 双键已删（历史迁移表见 git 档案）。
+#:   其中，不单列）。host 只产 pipeline.consumer 单键（同区间的
+#:   pipeline.decode 双键已删（历史迁移表见 git 档案）。
 #: - gpu：pipeline.consumer 不产出（生产者线程成本由 pipeline.decode 表达），
 #:   故无 consumer 关系；ocr 两对关系两路径同构。
 SPAN_RELATIONS: dict = {
@@ -70,7 +70,7 @@ SPAN_RELATIONS: dict = {
         "ocr.preprocess": ("ocr.preproc_luma", "ocr.preproc_autocrop", "ocr.preproc_resize"),
     },
     "gpu": {
-        # W2+W9：TRT 子相位（full 档才有值；同步路径=enq/reduce/concat，
+        # TRT 子相位（full 档才有值；同步路径=enq/reduce/concat，
         # defer 路径=submit/collect——每 run 只走其一，缺席侧记 0）
         "ocr.infer": (
             "ocr.ctc_decode",
@@ -107,7 +107,7 @@ def _derive_other_spans(spans: dict, gauges: dict, path: str) -> dict:
     return out
 
 
-#: PI 守卫阈值（§13.2 N-5：散文 → 指标名 + 阈值）
+#: PI 守卫阈值（散文 → 指标名 + 阈值）
 PI_LIMITS = {
     "PI-3": ("ocr.syncs_per_chunk", 3.0, "次/chunk"),
     "PI-10": ("ocr.engine_init", 0.1, "s"),
@@ -117,11 +117,11 @@ _ENV_CACHE: dict | None = None
 
 
 def environment() -> dict:
-    """录制基准字段（与 S0 manifest 同字段，§8.6 N-3）。
+    """录制基准字段（与录制期 manifest 同字段）。
 
     进程内缓存：GPU/驱动查询要 **20–43ms 一次**（本机 NVML 20.8ms、
     nvidia-smi 子进程 43.1ms），落在报告组装路径上——每 run 重查会直接
-    污染 std 档开销（PI-15）。首 run 付一次，之后 ~0。
+    污染 std 档开销。首 run 付一次，之后 ~0。
     """
     global _ENV_CACHE
     if _ENV_CACHE is not None:
@@ -175,10 +175,10 @@ def _num(x):
 
 
 def health(snap: dict, *, counters: dict | None = None) -> dict:
-    """PI 阈值的机器判定（N-5）：只判"本次 run 能自证"的两条。
+    """PI 阈值的机器判定：只判"本次 run 能自证"的两条。
 
     PI-10 只在**池热**时判（同进程第 2 次及以后；`ocr.engine_reuse>0`）——
-    冷启动付 0.31–0.42s 是既有事实（§7.5），不是回归。
+    冷启动付 0.31–0.42s 是既有事实，不是回归。
     """
     gauges = snap.get("gauges", {})
     counters = counters if counters is not None else snap.get("counters", {})
@@ -223,7 +223,7 @@ def build_report(
     if not getattr(metrics, "enabled", False):
         return {}
     snap = metrics.snapshot()
-    # 派生指标：填充率 = 内容列 / pad 列（R5 / S6-f 的判据本体）
+    # 派生指标：填充率 = 内容列 / pad 列（reorder 判据本体）
     _pad = snap["counters"].get("ocr.padded_cols", 0)
     _content = snap["counters"].get("ocr.content_cols", 0)
     if _pad:
@@ -255,7 +255,7 @@ def build_report(
             "note": "_other = parent.sum − Σ在场子项 sum（缺席记 0；子项互不重叠）",
         },
     }
-    # §8.6 r5 资源层（**report_version 2 的新增段，只加不改**）：
+    # 资源层（只加不改）：
     # resources = L1 相位边界差分（std+ 即有）；hardware = L2 NVML 峰值因子
     # （仅 full 档采样过才出现；未采样时**不写该键**，而不是写空值冒充）。
     if hasattr(metrics, "resource_report"):
@@ -306,7 +306,7 @@ def build_report(
 
 @dataclass(frozen=True)
 class RunReport:
-    """RunReport（schema v6）的类型化只读视图（R2，0.16.0）。
+    """RunReport（schema v6）的类型化只读视图。
 
     序列化**唯一形态**是 build_report 产出的 dict（`meta['report']` 与
     JSON sidecar/registry 同源，schema 只增不改、REPORT_VERSION 单点）；
@@ -416,8 +416,8 @@ def finalized_report(
 ) -> dict:
     """把单次 run 的观测收敛成 RunReport（off 档返回 {}）。
 
-    R1（2026-09-27）自 extractor._assemble_report 下放：输入全部显式
-    （Metrics / ProfSpine / timing 字典 / trace 记录器 / 诊断 / 降级列表），
+    自 extractor._assemble_report 下放：输入全部显式（Metrics /
+    ProfSpine / timing 字典 / trace 记录器 / 诊断 / 降级列表），
     不再读门面属性。编排三段（decode/ocr/ocr_tail）由 res.timing 转
     正样本 span；trace 派生段用近似锚点（t1=组装时刻，误差=ocr_tail+
     组装时长，dump note 有说明——真实锚点由脊柱事件提供）。
@@ -433,7 +433,7 @@ def finalized_report(
     # 编排三段的显式计时段（res.timing 由两后端直写；此处转成正样本 span）。
     # pipeline.decode 仅 GPU 路径产出（生产者线程成本的真实相位键）；
     # host 的同区间由脊柱 pipeline.consumer 表达——双键同值稀释报告，
-    # 0.17.0 删除 host 侧发射（历史迁移表见 git 档案）。
+    # host 侧不发射该键。
     _phases = (("decode", "pipeline.decode"),) if gpu_mode else ()
     for _k, _name in (*_phases, ("ocr", "pipeline.ocr"), ("ocr_tail", "pipeline.ocr_tail")):
         _v = timing.get(_k)

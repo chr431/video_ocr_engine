@@ -1,7 +1,7 @@
-"""配置脊柱（v2 §5/D5/D6）：注册表 + 唯一 env 读取点 + 不可变 RunConfig。
+"""配置脊柱：注册表 + 唯一 env 读取点 + 不可变 RunConfig。
 
-字段与默认值由 knobs.py 声明；paths 单一实现仍在 engine_config
-（S2 迁移），此处仅 re-export，避免两份路径逻辑。
+字段与默认值由 knobs.py 声明；paths 单一实现在 constants.py，
+此处仅 re-export，避免两份路径逻辑。
 """
 
 from __future__ import annotations

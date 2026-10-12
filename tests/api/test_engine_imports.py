@@ -11,9 +11,8 @@ import pytest
 
 from _paths import PKG  # tests/_paths.py：与目录深度无关的 video_ocr_engine/ 路径
 
-# 2026-09-19：六个根模块 shim（engine_config / gpu_setup / ocr_native /
-# ocr_trt / segmentation / video_utils）**已删除**（下游 RVTL 完成迁移后）。
-# 本表已换成包内路径——历史迁移表经 git 档案取回（archive/pre-rework:docs/MIGRATION.md）。
+# 六个根模块 shim（engine_config / gpu_setup / ocr_native /
+# ocr_trt / segmentation / video_utils）已删除；本表断言包内路径。
 ENGINE_MODULES = [
     "video_ocr_engine.config.constants",
     "video_ocr_engine.gpu.context",
@@ -62,7 +61,7 @@ def test_extractor_ast_no_app_imports():
     tree = ast.parse(src.read_text(encoding="utf-8"))
     imports: set[str] = set()
     for n in ast.walk(tree):
-        # S9-2:相对导入(包内子模块,如 .config)不是应用层依赖
+        # 相对导入（包内子模块，如 .config）不是应用层依赖
         if isinstance(n, ast.ImportFrom) and n.module and n.level == 0:
             imports.add(n.module.split(".")[0])
         elif isinstance(n, ast.Import):

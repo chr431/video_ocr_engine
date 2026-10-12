@@ -1,13 +1,13 @@
-"""宿主后端（v2 §5/§6.2，S3-3a；P1 起为宿主 lane 策略）。
+"""宿主后端：宿主 lane 策略。
 
-从 extractor._run_pipelined_host 与 _host_pipeline 的三个模块级函数外提
-（2026-09-10）。语义变化：**算法代码只读 HostRunSpec 的显式声明字段**，
-不再穿透 FieldExtractor 的私有属性（P0-1 宿主子集至此有契约）；运行态
-只写入 HostRunResult 与两个显式可变盒（fps 缓存 / backend 标签），
-由门面在调用前后同步。
+从 extractor._run_pipelined_host 与 _host_pipeline 的三个模块级函数外提。
+语义：**算法代码只读 HostRunSpec 的显式声明字段**，不再穿透
+FieldExtractor 的私有属性（宿主子集有契约）；运行态只写入
+HostRunResult 与两个显式可变盒（fps 缓存 / backend 标签），由门面在
+调用前后同步。
 
-P1（宿主/GPU 实现统一轮）：生命周期（open→fps→会话→校准→消费→收尾）
-上收到 _driver.run_segment_pipeline 单出处，本模块只剩宿主侧策略——
+生命周期（open→fps→会话→校准→消费→收尾）上收到
+_driver.run_segment_pipeline 单出处，本模块只剩宿主侧策略——
 校准（_calibrate）、帧流（_frame_stream）、emit/合并判定（_HostLane）。
 像素与判定原语经 spec 回调注入（实现唯一出处 segmentation /
 extractor 薄层）；GPU 路径的回退经 preopened_vr 复用（C10 语义不变）。
@@ -57,18 +57,18 @@ class HostRunSpec:
     progress: Callable = lambda m, p: None
     cancel: Callable = lambda: None
     prof_end: Callable | None = None  # (group, key, t0)
-    # 校准阈值即时回写（F-4：_segments_similar 在流式期间活读宿主的
+    # 校准阈值即时回写（_segments_similar 在流式期间活读宿主的
     # _bin_thresh——回写若延迟到 run 结束，合并判定会用旧值，段数漂移）
     on_bin_thresh: Callable | None = None  # (th) -> None
     # 可变盒（门面持有缓存，后端读写）
-    fps_box: list = field(default_factory=lambda: [None])  # B2：同实例缓存
-    # S6-0：注入的指标记录器（§8.6 N-2；off 档为 NullMetrics 单例）
+    fps_box: list = field(default_factory=lambda: [None])  # 同实例缓存
+    # 注入的指标记录器（off 档为 NullMetrics 单例）
     metrics: Any = NULL_METRICS
 
 
 @dataclass
 class HostRunResult:
-    """宿主驱动的全量输出（v1 裸 5 元组的显式化）。"""
+    """宿主驱动的全量输出。"""
 
     frames: list = field(default_factory=list)
     segs: list = field(default_factory=list)
@@ -211,9 +211,9 @@ def _frame_stream(spec: HostRunSpec, frames, vr, calib, th, *, with_dev: bool):
                 d = DeviceRef(ptr=dev_base + k * src_h * src_w, h=src_h, w=src_w, owner=nds)
             # gray 必须拷贝：payload 灰度会作为代表帧逃逸出批作用域，
             # 而 g_buf 跨批复用——不拷贝则 merge_similar 在后续批读到
-            # 被覆写的帧（2026-09-10 D1 调查：test5 host 45/1089 合并
-            # 判定失真、段数 1042 vs GPU 正确值 1083；sharp/bs 为标量/
-            # 每批新数组不受影响）。拷贝 ~3.5KB/帧，量级可忽略。
+            # 被覆写的帧（test5 host 45/1089 合并判定失真、段数 1042 vs
+            # GPU 正确值 1083；sharp/bs 为标量/每批新数组不受影响）。
+            # 拷贝 ~3.5KB/帧，量级可忽略。
             yield (frames[gi], crops[k], g[k].copy(), float(sharp[k]), bs[k], d)
 
 
@@ -246,8 +246,7 @@ class _HostLane:
         # 直通。fork hybrid（CPU-out）读者实测无害：其 get_batch 返回
         # decord NDArray（有 to_dlpack），采到的是 CPU 指针且仅在 GPU raw
         # OCR 直通时消费——而宿主帧 hybrid 只与 CPU OCR 组合（OCR 在 GPU
-        # 时 extractor 选 hybrid_gpu 走 gpu_backend），该指针无人读
-        # （2026-09-20 起点轮核实；旧 hybrid_begin 化石守卫已删）。
+        # 时 extractor 选 hybrid_gpu 走 gpu_backend），该指针无人读。
         self._with_dev = True
 
     def calibrate(self, spec, vr, frames, ocr_session):
@@ -262,7 +261,7 @@ class _HostLane:
 
     def after_calibrate(self, th, ocr_session) -> None:
         if self._spec.on_bin_thresh is not None:
-            self._spec.on_bin_thresh(th)  # 流式合并判定活读，必须即时回写（F-4）
+            self._spec.on_bin_thresh(th)  # 流式合并判定活读，必须即时回写
 
     def frame_items(self, spec, vr, frames, ocr_session):
         for fi, c, g, sharp, b, d in _frame_stream(

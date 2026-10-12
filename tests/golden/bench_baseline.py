@@ -1,4 +1,4 @@
-"""S0 性能基线录制（v2 ARCHITECTURE.md §11 S0 / D10）。
+"""性能基线录制。
 
 四配置 × 3 轮（同进程顺序跑，第 1 轮含冷启动 init、2–3 轮池热），
 记录墙钟 + timing 分解 + 轮间散布。散布即 D10 双档门禁的**噪声底**依据
@@ -26,7 +26,7 @@ from _measure_lib import ROI, VIDS  # noqa: E402
 
 WIN = (0, 3000)
 
-CONFIGS = {  # §12 三配置展开为 4：h264 gpu/cpu + hevc nvdec + av1 nvdec
+CONFIGS = {  # 三配置展开为 4：h264 gpu/cpu + hevc nvdec + av1 nvdec
     "h264-gpu": dict(video="test5", decode_backend="nvdec"),
     "h264-cpu": dict(video="test5", decode_backend="cpu"),
     "hevc-nvdec": dict(video="test6_hevc", decode_backend="nvdec"),

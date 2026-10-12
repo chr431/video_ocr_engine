@@ -1,10 +1,10 @@
-"""GPU 设备缓冲池机制（S4 设备侧拆分，2026-09-20 稳健性轮补做）。
+"""GPU 设备缓冲池机制。
 
-自 gpu/device.py 机械搬迁（零逻辑改动）：_YFrame/_YFramePool（单帧 Y
-设备缓冲，yuv 零拷贝关键件）与 _DevBatch/_CpuFrameRef/_DevBatchPool
-（CPU 解码批双缓冲 owner）。池契约（复用换壳 C-55 / 放弃路径直释 /
-release_all 置 _released）的完整依据见各类 docstring——本文件是池
-语义的**唯一出处**，消费方只在 gpu/streams.py 与 pipeline/gpu_backend.py。
+_YFrame/_YFramePool（单帧 Y 设备缓冲，yuv 零拷贝关键件）与
+_DevBatch/_CpuFrameRef/_DevBatchPool（CPU 解码批双缓冲 owner）。
+池契约（复用换壳 / 放弃路径直释 / release_all 置 _released）的完整依据
+见各类 docstring——本文件是池语义的**唯一出处**，消费方只在
+gpu/streams.py 与 pipeline/gpu_backend.py。
 """
 
 import logging
@@ -29,8 +29,8 @@ class _YFrame:
         self._recycled = False
 
     def __del__(self):
-        # B6（S4）：优先入列回收（无 CUDA 调用，任意 GC 上下文安全）。
-        # ⚠️ 2026-09-20 泄漏专项：**放弃路径必须直释**。旧语义「列满→告警
+        # 优先入列回收（无 CUDA 调用，任意 GC 上下文安全）。
+        # ⚠️ **放弃路径必须直释**。旧语义「列满→告警
         # 放弃（CUDA 释放只走显式路径）」在两种真实场景下=永久泄漏：
         # ①轮末死亡波（gc.collect 集中析构数百帧，空闲列只有 32）；
         # ②release_all 之后到达的迟到帧（回收入**已 release 的孤儿池**，
@@ -39,7 +39,7 @@ class _YFrame:
         # 因此列满/池已 release 时改走 cudaFree 直释；解释器关闭期 CUDA
         # 已卸载的失败由 except 兜底（单块 fnb，进程退出收）。
         #
-        # ⚠️ 2026-09-19 审查轮二修：**pool 引用必须保留**。上一版让
+        # **pool 引用必须保留**。让
         # recycle() 置空 pool 以"防双入列"，结果破坏了本函数——大量池帧
         # 是随 payload 跨线程传递、**只靠 GC 回收**的（见 gpu_backend
         # _similar_device 注释），pool 一置空，它们的 __del__ 撞 None 被
@@ -56,8 +56,8 @@ class _YFrame:
         if not pooled:
             from cuda.bindings import runtime as cudart
 
-            # cudart 返回 (err,) 元组不抛异常——旧 try/except 永不触发、
-            # 失败静默（2026-10-12 审查轮：放弃路径 cudaFree 失败=静默泄漏）。
+            # cudart 返回 (err,) 元组不抛异常——失败静默
+            # （放弃路径 cudaFree 失败=静默泄漏）。
             (_err,) = cudart.cudaFree(self.ptr)
             if int(_err) != 0:
                 logger.debug("Y 池放弃路径 cudaFree 失败（进程退出兜底）: %s", _err)
@@ -78,15 +78,14 @@ class _YFramePool:
         self._fnb = int(fnb)
         self._free: list = []
         self._lk = threading.Lock()  # acquire/_recycle/release_all 互斥
-        # （2026-09-19 审查轮：此前无锁，
-        #  check-then-act 可 pop 空列表）
+        # （此前无锁，check-then-act 可 pop 空列表）
         self._released = False
 
     def acquire(self) -> _YFrame:
         with self._lk:
             if self._free:
                 parked = self._free.pop()
-                # **复用换壳（2026-09-20 泄漏专项真根因）**：停靠对象是被
+                # **复用换壳（泄漏根因）**：停靠对象是被
                 # __del__ 复活过的（_free 列表持有引用）——CPython 实测
                 # 复活对象的**二次死亡不再触发 __del__**，若直接把它复用
                 # （旧行为），其最终死亡既不入列也不 cudaFree = 每块永久
@@ -105,7 +104,7 @@ class _YFramePool:
         err, ptr = cudart.cudaMalloc(self._fnb)
         if int(err) != 0 or not ptr:
             raise MemoryError(
-                "cudaMalloc(%d B) 失败: %s（审查轮：此前丢弃 _err，"
+                "cudaMalloc(%d B) 失败: %s（此前丢弃 _err，"
                 "int(None) 误报 TypeError）" % (self._fnb, err)
             )
         return _YFrame(self, int(ptr), self._fnb)
@@ -114,7 +113,7 @@ class _YFramePool:
         """入列回收（__del__ 安全路径：无任何 CUDA 调用）。
 
         返回 True=已入列；False=列满或池已 release，调用方须自行
-        cudaFree（2026-09-20 泄漏专项：旧版此处放弃=永久泄漏，见
+        cudaFree（旧版此处放弃=永久泄漏，见
         _YFrame.__del__ 注释）。"""
         with self._lk:
             if not self._released and len(self._free) < self._MAX:
@@ -123,9 +122,9 @@ class _YFramePool:
         return False
 
     def recycle(self, frame: "_YFrame") -> None:
-        """显式归还（S4）：入列 + 置 _recycled 标志防 __del__ 双入列。
+        """显式归还：入列 + 置 _recycled 标志防 __del__ 双入列。
 
-        ⚠️ **不置空 frame.pool**（2026-09-19 审查轮二修）：置空会切断
+        ⚠️ **不置空 frame.pool**：置空会切断
         __del__ 的 GC 兜底——大量池帧只靠 GC 回收（跨线程 payload），
         它们会永久泄漏（实测 253 次 cudaMalloc/轮）。防双入列改用
         _recycled 标志位。列满/已 release 时直释（同 __del__ 放弃路径）。"""
@@ -135,17 +134,17 @@ class _YFramePool:
         if not self._recycle(frame):
             from cuda.bindings import runtime as cudart
 
-            # cudart 返回 (err,) 元组不抛异常——旧 try/except 永不触发、
-            # 失败静默（2026-10-12 审查轮：放弃路径 cudaFree 失败=静默泄漏）。
+            # cudart 返回 (err,) 元组不抛异常——失败静默
+            # （放弃路径 cudaFree 失败=静默泄漏）。
             (_err,) = cudart.cudaFree(frame.ptr)
             if int(_err) != 0:
                 logger.debug("Y 池显式归还列满 cudaFree 失败（进程退出兜底）: %s", _err)
 
     def release_all(self) -> None:
-        """显式释放全部空闲缓冲（extract 结束调用；DESIGN-REVIEW C5：池
+        """显式释放全部空闲缓冲（extract 结束调用）：池
         原本只在超 _MAX 时 cudaFree，extract 返回后池随闭包 GC，已入池块
-        永不释放 → 长进程显存单调增长）。置 _released：此后迟到帧的
-        __del__ 走直释而非回收入孤儿池（2026-09-20 泄漏专项路径②）。"""
+        永不释放 → 长进程显存单调增长。置 _released：此后迟到帧的
+        __del__ 走直释而非回收入孤儿池（孤儿池泄漏路径）。"""
         with self._lk:
             self._released = True
         while True:
@@ -155,15 +154,15 @@ class _YFramePool:
                 frame = self._free.pop()
             from cuda.bindings import runtime as cudart
 
-            # cudart 返回 (err,) 元组不抛异常——旧 try/except 永不触发、
-            # 失败静默（2026-10-12 审查轮：放弃路径 cudaFree 失败=静默泄漏）。
+            # cudart 返回 (err,) 元组不抛异常——失败静默
+            # （放弃路径 cudaFree 失败=静默泄漏）。
             (_err,) = cudart.cudaFree(frame.ptr)
             if int(_err) != 0:
                 logger.debug("cudaFree 失败，忽略（进程退出兜底）: %s", _err)
 
 
 class _DevBatch:
-    """CPU 解码批的双缓冲 owner（P1-3）：device 批缓冲（池化）+ 宿主解码数组。
+    """CPU 解码批的双缓冲 owner：device 批缓冲（池化）+ 宿主解码数组。
 
     分段/OCR 消费的 device 帧指针指向本缓冲；引用归零（GC）归还池。
     复用安全性与 _YFramePool 同一契约：raw OCR（call_gpu_raw 返回前同步）
@@ -180,7 +179,7 @@ class _DevBatch:
         self._recycled = False
 
     def __del__(self):
-        # B6（S4）+ 2026-09-20 泄漏专项：同 _YFrame——优先入列，列满/池已
+        # 同 _YFrame——优先入列，列满/池已
         # release 时直释（放弃=永久泄漏，见 _YFrame.__del__ 注释）。
         if self._recycled:
             return
@@ -193,8 +192,8 @@ class _DevBatch:
         if not pooled:
             from cuda.bindings import runtime as cudart
 
-            # cudart 返回 (err,) 元组不抛异常——旧 try/except 永不触发、
-            # 失败静默（2026-10-12 审查轮：放弃路径 cudaFree 失败=静默泄漏）。
+            # cudart 返回 (err,) 元组不抛异常——失败静默
+            # （放弃路径 cudaFree 失败=静默泄漏）。
             (_err,) = cudart.cudaFree(self.ptr)
             if int(_err) != 0:
                 logger.debug("批池放弃路径 cudaFree 失败（进程退出兜底）: %s", _err)
@@ -238,7 +237,7 @@ class _DevBatchPool:
     def __init__(self, nbytes: int):
         self._nbytes = int(nbytes)
         self._free: list = []
-        self._lk = threading.Lock()  # 同 _YFramePool（审查轮加锁）
+        self._lk = threading.Lock()  # 同 _YFramePool
         self._released = False
 
     def acquire(self, host) -> _DevBatch:
@@ -256,15 +255,15 @@ class _DevBatchPool:
         err, ptr = cudart.cudaMalloc(self._nbytes)
         if int(err) != 0 or not ptr:
             raise MemoryError(
-                "cudaMalloc(%d B) 失败: %s（审查轮：此前误报 TypeError）" % (self._nbytes, err)
+                "cudaMalloc(%d B) 失败: %s（此前误报 TypeError）" % (self._nbytes, err)
             )
         return _DevBatch(self, int(ptr), self._nbytes, host)
 
     def _recycle(self, b: _DevBatch) -> bool:
-        """入列回收（__del__ 安全路径：无任何 CUDA 调用；B6/S4）。
+        """入列回收（__del__ 安全路径：无任何 CUDA 调用）。
 
         返回 True=已入列；False=列满/已 release，调用方须自行 cudaFree
-        （2026-09-20 泄漏专项，同 _YFramePool._recycle）。"""
+        （同 _YFramePool._recycle）。"""
         b.host = None
         with self._lk:
             if not self._released and len(self._free) < self._MAX:
@@ -273,8 +272,8 @@ class _DevBatchPool:
         return False
 
     def recycle(self, b: "_DevBatch") -> None:
-        """显式归还（S4）：入列 + 标志位防双入列（同 _YFramePool.recycle
-        的二修：不置空 pool，保住 __del__ 的 GC 兜底）。列满/已 release
+        """显式归还：入列 + 标志位防双入列（同 _YFramePool.recycle：
+        不置空 pool，保住 __del__ 的 GC 兜底）。列满/已 release
         时直释（同 __del__ 放弃路径）。"""
         if b._recycled:
             return
@@ -282,14 +281,14 @@ class _DevBatchPool:
         if not self._recycle(b):
             from cuda.bindings import runtime as cudart
 
-            # cudart 返回 (err,) 元组不抛异常——旧 try/except 永不触发、
-            # 失败静默（2026-10-12 审查轮：放弃路径 cudaFree 失败=静默泄漏）。
+            # cudart 返回 (err,) 元组不抛异常——失败静默
+            # （放弃路径 cudaFree 失败=静默泄漏）。
             (_err,) = cudart.cudaFree(b.ptr)
             if int(_err) != 0:
                 logger.debug("批池显式归还列满 cudaFree 失败（进程退出兜底）: %s", _err)
 
     def release_all(self) -> None:
-        """显式释放全部空闲缓冲（同 _YFramePool.release_all，C5；
+        """显式释放全部空闲缓冲（同 _YFramePool.release_all；
         置 _released 同理）。"""
         with self._lk:
             self._released = True
@@ -300,8 +299,8 @@ class _DevBatchPool:
                 b = self._free.pop()
             from cuda.bindings import runtime as cudart
 
-            # cudart 返回 (err,) 元组不抛异常——旧 try/except 永不触发、
-            # 失败静默（2026-10-12 审查轮：放弃路径 cudaFree 失败=静默泄漏）。
+            # cudart 返回 (err,) 元组不抛异常——失败静默
+            # （放弃路径 cudaFree 失败=静默泄漏）。
             (_err,) = cudart.cudaFree(b.ptr)
             if int(_err) != 0:
                 logger.debug("cudaFree 失败，忽略（进程退出兜底）: %s", _err)

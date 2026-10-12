@@ -1,23 +1,23 @@
-"""§8.6 r5 资源层：L1 相位边界差分 + L2 NVML 峰值因子采样。
+"""资源层：L1 相位边界差分 + L2 NVML 峰值因子采样。
 
 两层成本结构不同，故意分开：
 
-* **L1（std 档即开）——纯 stdlib + 已加载的 cuda 绑定，零新依赖（D7）**：
+* **L1（非 off 档即开）——纯 stdlib + 已加载的 cuda 绑定，零新依赖**：
   进程 CPU 时间用 `time.process_time()`（含全部线程，Windows 下即
   GetProcessTimes，实测 ~0.05µs）；RSS 与磁盘读写走 kernel32/psapi 的
   ctypes 调用（实测 1–3µs）；线程数用 `threading.active_count()`。
-  → **一次边界 ≈ 5µs**，每 run 8 个边界 ≈ 40µs，对 PI-15 无感。
+  → **一次边界 ≈ 5µs**，每 run 8 个边界 ≈ 40µs，对墙钟预算无感。
 
   两条**实测踩过的坑**（写死在此，防止回退）：
   1. **不要用 `psutil.Process.threads()` / `num_threads()`**：本机实测
-     **43ms / 5.1ms 每次**（Windows 逐线程开句柄），调一次就吃满 PI-15 的
-     0.1% 预算（`_probe_run_setup_cost` 同批数据）。
+     **43ms / 5.1ms 每次**（Windows 逐线程开句柄），调一次就吃满遥测
+     0.1% 的墙钟预算（`_probe_run_setup_cost` 同批数据）。
   2. **不要在宿主路径上探 CUDA**：`cudaMemGetInfo` 本身 0.9µs，但**首次
      调用会隐式建主上下文（100ms 级）**。故只在该进程**已经**导入过
      cuda 绑定时才采 VRAM（GPU 运行必然已导入），否则记为不可用。
 
 * **L2（full 档专属）**：设备侧峰值因子必须独立采样线程（NVML）。产品路径
-  平时不建线程（B6）——线程只在显式 `start()`/`stop()` 之间存在。
+  平时不建线程——线程只在显式 `start()`/`stop()` 之间存在。
 
 诚实性口径：全部读数都是**本机自测**、跨机不可比；PCIe 本机不可直读，只能
 由 counter 字节数 ÷ 相位墙钟**推算**，属 L3 推导区（本模块不产该字段）。
@@ -121,9 +121,9 @@ class ThreadLedger:
     def __init__(self) -> None:
         import ctypes
 
-        # 显式注解（2026-10-12 审查轮）：mypy 面对这两个惰性字段报
-        # "expression has type bool/WinDLL, variable has type None"——
-        # 此前 CI 的 mypy 步在 HEAD 上即为红（3 处，无人察觉）。
+        # 显式注解：mypy 面对这两个惰性字段报 "expression has type
+        # bool/WinDLL, variable has type None"——不注解则 mypy 步在 HEAD
+        # 上即为红。
         self._ntdll: "ctypes.WinDLL | None" = None  # NtQuerySystemInformation 快路径（惰性）
         self._nt_trusted: "bool | None" = None  # None=未对账 / True=NT 转正 / False=永久回退
 
@@ -157,10 +157,10 @@ class ThreadLedger:
         for name, ident in items:
             h = handles.get(name)
             if h is None:
-                # 权限怪癖（2026-10-09 本机 Win11 实证矩阵）：按 0x0400/
-                # 0x1000 打开成功但 QueryThreadCycleTime 报 ACCESS_DENIED=5，
-                # 唯 THREAD_ALL_ACCESS=0x1FFFFF 句柄可查（自家进程线程恒可
-                # 全权打开）；受限环境全权失败时回退试 0x0400，再失败即缺席。
+                # 权限怪癖（本机 Win11 实证）：按 0x0400/0x1000 打开成功
+                # 但 QueryThreadCycleTime 报 ACCESS_DENIED=5，唯
+                # THREAD_ALL_ACCESS=0x1FFFFF 句柄可查（自家进程线程恒可全权
+                # 打开）；受限环境全权失败时回退试 0x0400，再失败即缺席。
                 h = self._k32.OpenThread(0x1FFFFF, False, ident) or self._k32.OpenThread(
                     0x0400, False, ident
                 )
@@ -185,15 +185,14 @@ class ThreadLedger:
         即关（不缓存——外来线程生命周期不由我们管，TID 复用风险靠
         "只在差分里用个体、结论只下在簇级"消化）。
 
-        成本（2026-10-10/11 测试减负轮实测，本机 6047 系统线程）：
-        Toolhelp 路径 = 快照 3.6ms + Thread32Next 逐条系统调用 ~32ms
-        ≈ **39ms/次**（空闲与负载下同量级）；NtGetNextThread ≈
-        **0.11ms/次**（空闲）——**负载下的差异曾达 350×**：信任门一票
-        否决（首跑对账遇线程生灭，TID 集合瞬态不一致 → 永久回退）时
-        每个 checkpoint 39ms × 4 = 158ms/run，PI-15 墙钟门禁实测
-        full−off +4.4%（限 1.2%）——对账改为集合相似度（≥90% 交集）
-        + 3 次重试后恢复 +0.098%。语义（TID 集合、逐次开/关句柄）
-        不变。命名线程的值与 `sample()` 同源可互校。
+        成本（本机 6047 系统线程实测）：Toolhelp 路径 = 快照 3.6ms +
+        Thread32Next 逐条系统调用 ~32ms ≈ **39ms/次**（空闲与负载下同
+        量级）；NtGetNextThread ≈ **0.11ms/次**（空闲）——**负载下的
+        差异可达 350×**：信任门一票否决（首跑对账遇线程生灭，TID 集合
+        瞬态不一致 → 永久回退）时每个 checkpoint 39ms × 4 = 158ms/run，
+        墙钟门禁 full−off +4.4%（限 1.2%）——对账改为集合相似度
+        （≥90% 交集）+ 3 次重试后恢复 +0.098%。语义（TID 集合、逐次
+        开/关句柄）不变。命名线程的值与 `sample()` 同源可互校。
         """
         if self._nt_trusted is not False:
             try:
@@ -204,9 +203,9 @@ class ThreadLedger:
                 if self._nt_trusted is None:
                     # 首次成功：与 Toolhelp 全量快照对账（相似度判据，见
                     # _crosscheck）；连续 3 次不过才永久回退——负载下线程
-                    # 生灭造成的瞬态集合差不该一次判死（2026-10-11 教训：
-                    # 一次不一致 → 永久 Toolhelp 慢路径 39ms/次 → full 档
-                    # 多付 ~158ms/run，PI-15 门禁 4.4% 超预算实测复现）。
+                    # 生灭造成的瞬态集合差不该一次判死（一次不一致即永久
+                    # Toolhelp 慢路径 39ms/次 → full 档多付 ~158ms/run，
+                    # 墙钟门禁 4.4% 超预算实测复现）。
                     if self._crosscheck(out):
                         self._nt_trusted = True
                     else:
@@ -447,15 +446,15 @@ class _HostCounters:
         except Exception as e:  # noqa: BLE001
             self.sources["rss"] = "unavailable:%s" % repr(e)[:60]
         try:
-            # P2a（2026-09-17 §8.4 落地）：process_time 有 15.625ms（1/64s）
-            # tick 量化，短相位（<0.5s）的 dcpu 只有 1~2 tick，cores_avg 是
-            # ±49%~100% 量化伪影；cycle 计数分辨率 ≈ 单周期且语义恰是
-            # "CPU 时间"（sleep 不增、多线程求和，bench/cycle_quant.json）。
+            # process_time 有 15.625ms（1/64s）tick 量化，短相位（<0.5s）
+            # 的 dcpu 只有 1~2 tick，cores_avg 是 ±49%~100% 量化伪影；
+            # cycle 计数分辨率 ≈ 单周期且语义恰是"CPU 时间"（sleep 不增、
+            # 多线程求和，bench/cycle_quant.json）。
             qpc = kernel32.QueryProcessCycleTime
             qpc.restype = ctypes.c_int
             cyc = ctypes.c_ulonglong()
             # 伪句柄 -1 直传：GetCurrentProcess 默认 restype 是 c_int，64 位
-            # 伪句柄被截断后调用静默失败（§8.5 实测坑，绕开而非修复）
+            # 伪句柄被截断后调用静默失败（实测坑，绕开而非修复）
             hproc = ctypes.c_void_p(-1)
 
             def get_cycles(_f=qpc, _h=hproc, _c=cyc):
@@ -471,7 +470,7 @@ class _HostCounters:
     def sample(self) -> dict:
         """一次边界采样：全部字段都是 None 或真值（不可用≠0）。
 
-        `sm_mhz`（W3）：只在 NVML 会话**已经存在**时读（`nvml_handle` 的
+        `sm_mhz`：只在 NVML 会话**已经存在**时读（`nvml_handle` 的
         缓存态判据），绝不因采样而初始化 NVML——GPU 路径必然已初始化
         （环境指纹/采样器），宿主纯 CPU 路径天然为 None。这是"这一相位
         跑在什么时钟上"的直接读数（C-39 边界：NVDEC% 不能当占空比，
@@ -551,7 +550,7 @@ class ResourceProbe:
     """L1 采样器：`checkpoint(phase)` 在粗相位边界调用，`per_phase()` 出差分。
 
     边界差分把"绝对读数"变成"这段时间花了多少"——每相位平均并行核数
-    （Δcpu/Δwall）、RSS/VRAM 增量、磁盘读写速率，正是 §8.6 要的形态。
+    （Δcpu/Δwall）、RSS/VRAM 增量、磁盘读写速率，正是资源层要的形态。
     """
 
     _MAX_PHASES = 32  # 防御性上限：粗相位数远小于此（不是 per-span）
@@ -583,8 +582,8 @@ class ResourceProbe:
                     _ts = led.sample()
                     if _ts:
                         sample["thr"] = _ts
-                    # v10 全线程快照：含外来池（decord/OMP/TBB）逐 TID 周期
-                    # ——争用定位的外来簇归因面（L2，2026-10-09 争用定位轮）
+                    # 全线程快照：含外来池（decord/OMP/TBB）逐 TID 周期
+                    # ——争用定位的外来簇归因面
                     _ta = led.sample_all()
                     if _ta:
                         sample["thr_all"] = _ta
@@ -598,7 +597,7 @@ class ResourceProbe:
     def per_phase(self) -> dict:
         with self._lock:
             rows = list(self._rows)
-        # 自校准频率（P2a）：f_run = 全程 Δcycles / 全程 Δprocess_time，
+        # 自校准频率：f_run = 全程 Δcycles / 全程 Δprocess_time，
         # 即"每 CPU 秒的 cycle 数"。全程墙钟秒级、tick 数上百上千，15.625ms
         # 量化占比可忽略（bench/cycle_quant.json：双窗口一致到 0.017%）。
         # cores_avg_cycles = (Δcycles/Δwall) / f_run —— cycle 口径的平均核数，
@@ -625,18 +624,17 @@ class ResourceProbe:
             dcpu = float(sb["cpu"] - sa["cpu"])
             ca, cb = sa.get("cycles"), sb.get("cycles")
             if ca is not None and cb is not None:
-                # v7 周期账本（C-63）：原始 cycles 差分本体——A/B 判据用。
+                # 周期账本（C-63）：原始 cycles 差分本体——A/B 判据用。
                 # 与 cores_avg_cycles 不同，不除墙钟、不乘频率换算，跨臂
                 # 配对可比；SMT 争用带 ±16% 均值漂移（C-63 前提：交错仍需）。
                 row["cycles"] = max(0, cb - ca)
                 if f_run > 0:
                     row["cores_avg_cycles"] = round(max(0, cb - ca) / dt / f_run, 2)
             else:
-                # v9 精简（2026-10-09 监测层级轮）：cores_avg（process_time
-                # tick 口径，15.6ms 量化伪影）只在 cycles 来源缺席（非
-                # Windows）时作为**唯一回退**发出；在场时不再发——与
-                # cores_avg_cycles 并存=两个"平均核数"打架，读者分不清
-                # 权威（P2a 引入 cycle 口径即为取代它）。
+                # cores_avg（process_time tick 口径，15.6ms 量化伪影）只在
+                # cycles 来源缺席（非 Windows）时作为**唯一回退**发出；
+                # 在场时不再发——与 cores_avg_cycles 并存=两个"平均核数"
+                # 打架，读者分不清权威。
                 row["cores_avg"] = round(max(0.0, dcpu) / dt, 2)
             # v8 线程账本：逐线程周期差分 + 占空比（duty = Δcycles/
             # (f_run×Δwall)，被换下等待的线程不积累周期——即忙碌份额）。
@@ -675,7 +673,7 @@ class ResourceProbe:
                 if foreign:
                     row["thr_foreign"] = foreign
                     row["thr_foreign_n"] = len(foreign)
-            # W3：相位**终点**的 SM 时钟（GPU 路径相位差分才有；起点读数
+            # 相位**终点**的 SM 时钟（GPU 路径相位差分才有；起点读数
             # 用于人工对齐——时钟爬坡期一个相位内前后差上千 MHz 是常态）
             if sb.get("sm_mhz") is not None:
                 row["sm_mhz_at_end"] = sb["sm_mhz"]
@@ -697,7 +695,7 @@ class ResourceProbe:
             if first["vram"] is not None:
                 base["vram_used_mib"] = round(first["vram"][0] / 1048576.0, 1)
             out["_at_first_checkpoint"] = base
-            # v7：全程周期账本 = 末边界 − 首边界（覆盖 calibrate+decode+ocr；
+            # 全程周期账本 = 末边界 − 首边界（覆盖 calibrate+decode+ocr；
             # 首边界在 open 相位结束处）。两臂同代码路径下配对可比。
             fa_c, fb_c = rows[0][1].get("cycles"), rows[-1][1].get("cycles")
             if fa_c is not None and fb_c is not None:
@@ -705,10 +703,10 @@ class ResourceProbe:
                     "total": max(0, fb_c - fa_c),
                     "span": "%s..%s" % (rows[0][0], rows[-1][0]),
                 }
-                # v8：线程级全程账本 = 逐相位差分求和。不能直接用首末两次
-                # 采样相减——进程级账本跨 run 存活，首采样可能持有上一轮
-                # 已死线程的陈旧句柄（同名不同线程），差值无意义（实测
-                # 'ocr':0 伪影，2026-10-09）。
+                # 线程级全程账本 = 逐相位差分求和。不能直接用首末两次采样
+                # 相减——进程级账本跨 run 存活，首采样可能持有上一轮已死
+                # 线程的陈旧句柄（同名不同线程），差值无意义（实测
+                # 'ocr':0 伪影）。
                 thr_sum: dict = {}
                 for row in out.values():
                     if isinstance(row, dict) and isinstance(row.get("thr"), dict):
@@ -716,7 +714,7 @@ class ResourceProbe:
                             thr_sum[k] = thr_sum.get(k, 0) + v
                 if thr_sum:
                     out["cycles_e2e"]["threads"] = thr_sum
-                # v10：外来簇全程合计（跨相位求和会把中途生灭的线程
+                # 外来簇全程合计（跨相位求和会把中途生灭的线程
                 # 各自的贡献累上——比首末直减更符合"池总开销"语义）
                 foreign_sum = sum(
                     v

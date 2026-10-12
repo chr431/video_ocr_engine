@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 # DtoH 提交 / stream 同步等待的耗时与批数，用于定位共存负载下 TRT 批延迟
 # 的膨胀点（提交调用变慢 = 宿主被饥饿；同步等待变长 = GPU 侧/排队问题）。
 # 导入期读一次（进程级）：本档默认关；调用期活读需改十余处内联读点，
-# 热路径成本不值（2026-10-12 审查轮裁决，knob note 已同步）。
+# 热路径成本不值。
 SUBPROBE_ON = config.env_bool(config.TRT_SUBPROBE_ENV)
 SUBPROBE: dict = {"htod": 0.0, "enqueue": 0.0, "dtoh": 0.0, "sync": 0.0, "n": 0}
 
@@ -41,7 +41,7 @@ def _sp_tick(key: str, t0: float) -> None:
         SUBPROBE[key] += time.perf_counter() - t0
 
 
-# 模型资产目录解析统一走 engine_config.models_dir（0.11.0 收敛）；
+# 模型资产目录解析统一走 config.models_dir；
 # 保留旧名兼容既有导入。TRT 引擎缓存候选目录基于同一解析结果。
 _models_dir = config.models_dir
 
@@ -76,7 +76,7 @@ def engine_sm() -> str:
     except Exception:  # noqa: BLE001,S110 — 容忍（见上下文）
         pass  # 容忍（见上下文）
     if not probed:
-        # 只缓存成功的探测（2026-09-19 审查轮）：此前失败也写缓存——
+        # 只缓存成功的探测：此前失败也写缓存——
         # 首次调用若撞上 CUDA 瞬态不可用（独显刚从省电态唤醒，
         # _wait_cuda_ready 处理的同一实测现象），常量后缀会被缓存整个
         # 进程 → 引擎缓存名与真实架构不符 → 后续可能触发 68~72s 全量
@@ -101,7 +101,7 @@ class TrtEngine:
         # tensorrt_bindings.find_lib() 只搜 os.environ["PATH"]：
         # 首次使用前注册 CUDA/TensorRT DLL 目录（幂等）。
         ensure_gpu_initialized()
-        # cuda.core 导入 ~220ms/进程，藏进反序列化背后（R4，2026-09-10）。
+        # cuda.core 导入 ~220ms/进程，藏进反序列化背后。
         try:
             from video_ocr_engine._gpu_kernels import prewarm_cuda_core
 
@@ -124,7 +124,7 @@ class TrtEngine:
                 log.info("TensorRT 引擎已加载: %s", self.engine_path)
                 break
             except Exception as e:
-                # S6：**先重试（带退避）再决定**。加载失败有两类——
+                # **先重试（带退避）再决定**。加载失败有两类——
                 # ①产物真损坏 / 架构不匹配（TRT 版本升级、换卡）：重试无用；
                 # ②瞬时 CUDA 初始化失败：实测 `createInferRuntime ...
                 #    cudaError 35 (InsufficientDriver)`，出现在**独显刚从
@@ -216,7 +216,7 @@ class TrtEngine:
         - [0] 模型目录（打包只读，通常不存在）
         - [1] 本目录缓存（可写，构建目标 —— 免安装设计，不写 %LOCALAPPDATA%）
 
-        **S6：文件名带 batch profile 标记**（`_b{TRT_PROFILE_BATCH}`）——
+        **文件名带 batch profile 标记**（`_b{TRT_PROFILE_BATCH}`）——
         profile 是引擎产物的一部分（batch 越大，每子批提交开销摊得越薄，
         实测 batch 6→18 快 16%）。不带标记会让"改 profile"被旧缓存静默掩盖：
         用户仍跑 batch=6 的旧引擎，改动只在少数新机器上生效（最难发现的一类
@@ -232,7 +232,7 @@ class TrtEngine:
         return cands
 
     def _wait_cuda_ready(self, attempts: int = 4) -> None:
-        """TRT 之前的 CUDA 就绪等待（S6 实测的瞬态失败面）。
+        """TRT 之前的 CUDA 就绪等待（瞬态失败面）。
 
         现象：短时间连续起进程（A/B 交错、批量驱动）时，`trt.Runtime(...)`
         会以 `createInferRuntime ... cudaError 35 (InsufficientDriver)` 失败
@@ -294,8 +294,8 @@ class TrtEngine:
         builder = trt.Builder(logger)  # type: ignore[attr-defined]
         # TRT 11 移除了 EXPLICIT_BATCH（隐式 batch 自 10 起已删，显式为默认），
         # getattr 回退保持 10/11 双兼容；TRT 11 下 flags=0 语义即显式 batch。
-        # 2026-09-14 起 canonical 模型即 fp16 权重版（log 同日「OV读fp16模型
-        # 评估」：30664 帧真值代价 1 帧边界，换 10.5MB 体积）——fp16 构建
+        # canonical 模型即 fp16 权重版
+        # （30664 帧真值代价 1 帧边界，换 10.5MB 体积）——fp16 构建
         # 直接用 canonical（本就是 convert_float_to_float16(keep_io_types)
         # 的产物），onnx/onnxconverter_common 依赖在所有路径归零。
         onnx_path = models / f"PP-OCRv6_rec_{size}.onnx"
@@ -348,9 +348,9 @@ class TrtEngine:
     def _ensure_stream(self) -> int:
         """创建专用 CUDA stream（TRT async 必须用非默认流）。
 
-        高优先级流曾试过（2026-09-10）：hybrid 解码与 TRT 并发的 infer
-        膨胀不受流优先级影响（瓶颈在 fork 池互斥/DMA 带宽，非 SM 调度），
-        e2e 无可测收益，已回退普通流。
+        高优先级流无收益（hybrid 解码与 TRT 并发的 infer
+        膨胀不受流优先级影响——瓶颈在 fork 池互斥/DMA 带宽，非 SM 调度），
+        用普通流。
         """
         if self._stream is None:
             from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
@@ -521,7 +521,7 @@ class TrtEngine:
         idx_parts = []
         prob_parts = []
         _m = getattr(self, "_metrics", None)
-        # W2 子相位：只在 full 档记录（per-子批 × 数十批的热路径；
+        # 子相位：只在 full 档记录（per-子批 × 数十批的热路径；
         # std 预算付不起，且 std 档的 ocr.infer 值本来就够用）。
         _subdetail = bool(_m is not None and _m.enabled and _m.detailed)
         _n_sync = 0
@@ -548,10 +548,10 @@ class TrtEngine:
             self.context.execute_async_v3(stream)
             if _subdetail:
                 _m.record_span("ocr.trt_enq", time.perf_counter() - _t_enq)
-            # S6-c：reduce 的 D2H 走异步 + 每子批一次流同步（原为 2 次
-            # 阻塞 cudaMemcpy = 隐式设备级同步，PI-14 守卫 GPU_CTC=0/1
-            # 文本 sha 一致；此处计数供 PI-3 的 syncs/chunk 判定）。
-            # W2：reduce 内含流同步等待（"等 GPU 干完"），作为子相位记录。
+            # reduce 的 D2H 走异步 + 每子批一次流同步（原为 2 次
+            # 阻塞 cudaMemcpy = 隐式设备级同步，GPU_CTC=0/1
+            # 文本 sha 一致守卫；此处计数供 syncs/chunk 判定）。
+            # reduce 内含流同步等待（"等 GPU 干完"），作为子相位记录。
             _t_red = time.perf_counter() if _subdetail else 0.0
             idx, prob = reducer.reduce(self._dev_out, out_shape)
             if _subdetail:
@@ -656,7 +656,7 @@ class TrtEngine:
         reducer.reduce_into(self._dev_out, out_shape, slot["ptr"][0], slot["ptr"][1])
         cudart.cudaEventRecord(slot["event"], stream)
         if _subdetail:
-            # W9 复查补桩：defer 路径与同步路径（execute_device_argmax 的
+            # 补桩：defer 路径与同步路径（execute_device_argmax 的
             # trt_enq/trt_reduce）同权可见——否则 defer 臂的 trt_* 全缺，
             # 归因会把"结构转移"误读成残差膨胀。
             _m.record_span("ocr.trt_submit", time.perf_counter() - _t_sub)

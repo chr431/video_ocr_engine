@@ -1,36 +1,35 @@
-"""PI-15 的**确定性**成本守卫（µs 级分辨力）。
+"""遥测插桩的**确定性**成本守卫（µs 级分辨力）。
 
 为什么要有这个文件：墙钟口径的两档互比（`bench.py telemetry-check`）在本机
 A/A 实测只能分辨到 ~0.85%（同一段代码两槽差可达 4%），而遥测插桩的**真实
-成本**是 0.1% 量级——用分辨力不够的量去当硬门禁，只会产生误报（r11 用户裁决
-放松了那条门禁）。所以严格性搬到这里：**直接量插桩路径本身的执行时间**，
-分辨力比墙钟高约 10⁴ 倍，且不受 GPU 热降/后台负载影响。
-（0.22.0 两档化：口径从"std 档预算"改为"full 基础面预算"——直方图仍
-单列 8ms 宽上限，两者合计 = full 档确定性成本下界，对应 full_pct 限。）
+成本**是 0.1% 量级——用分辨力不够的量去当硬门禁，只会产生误报。所以严格性
+搬到这里：**直接量插桩路径本身的执行时间**，分辨力比墙钟高约 10⁴ 倍，且
+不受 GPU 热降/后台负载影响。
+（两档化：口径为"full 基础面预算"——直方图仍单列 8ms 宽上限，两者合计 =
+full 档确定性成本下界，对应 full_pct 限。）
 
-口径与真实 run 对齐（实测 3000 帧 run，2026-09-17 重设计 + 续轮）：
+口径与真实 run 对齐（实测 3000 帧 run）：
 9 个 span 键 / **138 个 span 样本** / 14 个 counter 键 / 10 个 gauge /
-**6270 个 TOTALS 逐事件计数**（P2b/P2c/W1：consume_feed 3000 +
-q_put_block 1090 + q_get_wait 1091 + merge_pair 1089）/ **4 个 L1 资源
-边界** + 一次 `snapshot()` + 一次 `build_report()`。
+**6270 个 TOTALS 逐事件计数**（consume_feed 3000 + q_put_block 1090 +
+q_get_wait 1091 + merge_pair 1089）/ **4 个 L1 资源边界** + 一次
+`snapshot()` + 一次 `build_report()`。
 
-预算结构（2026-10-10 测试减负轮重推导，三项合计 = D30 墙钟预算 1.2%）：
+预算结构（三项合计 = 墙钟预算 1.2%）：
   · 记录面增量（spans+totals+counters+gauges+report，full−off）≤ 2.0ms；
-  · 相位采样面（4×checkpoint，v10 含线程账本全线程快照）≤ 2.0ms；
-  · W1 直方图按事件计费 ≤ 8.0ms（单列，见下）。
+  · 相位采样面（4×checkpoint，含线程账本全线程快照）≤ 2.0ms；
+  · 直方图按事件计费 ≤ 8.0ms（单列，见下）。
 ⚠️ 本文件的重放口径在**GPU 空闲**进程里跑，测不到负载上下文的停顿
-（实例：v10 的全线程快照在 Toolhelp 回退下每次 39ms 只在真实 GPU 负载
-出现——空闲重放 0.1ms。该类回归由 PI-15 墙钟门禁兜底：
-`bench.py telemetry-check --inner 1`，2026-10-11 实配对 +0.098%，
-此前 +4.4% 即此病灶）。重放抓"恒定病理"，墙钟抓"负载病理"，两层互补。
+（实例：全线程快照在 Toolhelp 回退下每次 39ms 只在真实 GPU 负载出现
+——空闲重放 0.1ms。该类回归由墙钟门禁兜底：
+`bench.py telemetry-check --inner 1`）。重放抓"恒定病理"，墙钟抓"负载
+病理"，两层互补。
 
-v10 曾把 39ms/次的全系统线程快照挂进每个 checkpoint（回退态 154ms/run，
-超 D30 预算一个数量级），而本文件的增量口径因 `_median_cost` 循环硬编码
-档位**自诞生起形同虚设**（full-vs-full 自比）——两个 bug 互相掩护，
-2026-10-10/11 一并修复（快路径 NtGetNextThread + 信任门容差 + tier
-参数恢复生效）。
+若把 39ms/次的全系统线程快照挂进每个 checkpoint（回退态 154ms/run，超墙钟
+预算一个数量级），而增量口径又因 `_median_cost` 循环硬编码档位**自诞生起
+形同虚设**（full-vs-full 自比）——两个 bug 会互相掩护。当前实现：快路径
+枚举 + 信任门容差 + tier 参数真实生效。
 
-W1 直方图**不进基础重放**：它按事件量计费（0.165µs/事件，真实事件量
+直方图**不进基础重放**：它按事件量计费（0.165µs/事件，真实事件量
 ≈ 1.0ms），单列在 `test_full_tier_histogram_cost_is_bounded`（8ms 宽
 上限）——不与基础面预算混算，各自的回退各自抓。
 """
@@ -87,9 +86,9 @@ def _one_run_base(m: Metrics) -> None:
 def _median_cost(fn, repeats: int, tier: str = "full") -> float:
     """每 run 中位成本；**每轮新建实例**（产品语义：每 run 一个 Metrics）。
 
-    2026-10-10 修复：循环此前硬编码 `Metrics("full")`，tier 参数只影响
-    预热——"增量口径"实际是 full-vs-full 自比，永远测不出插桩膨胀
-    （正是本文件存在的目的）。恢复 `Metrics(tier)` 后增量才真实。
+    循环必须用 `Metrics(tier)`：若硬编码档位，tier 参数只影响预热，
+    "增量口径"实际是 self-vs-self 自比，永远测不出插桩膨胀
+    （正是本文件存在的目的）。
     """
     _warm_env_fingerprint()
     fn(Metrics(tier))  # 预热（首次含集合/字典建立）
@@ -148,31 +147,24 @@ def test_full_recording_path_cost_per_run():
     而机器噪声不会。（直方图成本单列在 8ms 宽上限那条；相位采样面
     （checkpoint）单列在下一条。）
     """
-    # 增量口径（2026-09-18 CI 清红）：绝对预算在慢 CPU runner 上必超
-    # （GitHub 实测 2.3-2.6ms）。插桩膨胀的判据=full 相对 off 的增量
-    # ——同一重放循环，off 档 record 调用全走 no-op，差值即纯插桩
-    # 成本，机器速度基本对消。
-    # 2026-10-10：增量口径此前形同虚设（_median_cost 循环硬编码 full，
-    # 实际 full-vs-full 自比）——修复后本测试才真正测增量；预算维持
-    # 2.0ms（实测增量 0.93ms，余量 53%；bootstrap n=30 时 P(误报)已为 0，
-    # REPLAYS=300 纯属白拿的稳定性，见 bench/replay_cost_samples.json）。
+    # 增量口径：绝对预算在慢 CPU runner 上必超（GitHub 实测 2.3-2.6ms）。
+    # 插桩膨胀的判据=full 相对 off 的增量——同一重放循环，off 档 record
+    # 调用全走 no-op，差值即纯插桩成本，机器速度基本对消。
+    # 预算 2.0ms（实测增量 0.93ms，余量 53%；REPLAYS=300 为稳定性余量）。
     base = _median_cost(_one_run_base, REPLAYS, tier="off")
     ms = _median_cost(_one_run_base, REPLAYS) - base
     assert ms <= 2.0, "full 记录面遥测增量成本 %.3fms/run，超预算 2ms" % ms
 
 
 def test_full_tier_checkpoint_sampling_cost_is_bounded():
-    """full 相位采样面（4×checkpoint，含 v10 线程账本全线程快照）≤ 2ms/run。
+    """full 相位采样面（4×checkpoint，含线程账本全线程快照）≤ 2ms/run。
 
-    off 档 checkpoint 全 no-op（=0），绝对值即增量。v10（2026-10-09）把
-    全系统线程快照挂进每个 checkpoint：Toolhelp 枚举实测 39ms/次 →
-    154ms/run，超 D30 预算（1.2%≈12ms）一个数量级——彼时本文件增量
-    口径恰好失效（见 _median_cost 注），两个 bug 互相掩护未被抓住。
-    2026-10-10/11 三修复：枚举改 NtGetNextThread（空闲实测 0.11ms/次）+
-    信任门对账改集合相似度（负载下首跑线程生灭曾致一票否决 → 永久
-    Toolhelp 回退 158ms/run，PI-15 +4.4% 复现后修复）+ 本测试 tier
-    参数恢复生效。采样面预算 2.0ms（空闲重放实测 ~0.5ms，余量 ~74%；
-    负载上下文成本由 PI-15 墙钟门禁兜底，见模块 docstring）。
+    off 档 checkpoint 全 no-op（=0），绝对值即增量。全系统线程快照若用
+    Toolhelp 枚举（实测 39ms/次 → 154ms/run，超墙钟预算 1.2%≈12ms 一个
+    数量级）而增量口径又失效，两个 bug 会互相掩护。现实现用快路径枚举
+    （空闲实测 0.11ms/次）+ 信任门对账集合相似度 + tier 参数生效。
+    采样面预算 2.0ms（空闲重放实测 ~0.5ms，余量 ~74%；负载上下文成本由
+    墙钟门禁兜底，见模块 docstring）。
     """
     m = Metrics("full")
     for ph in ("open", "calibrate", "decode", "ocr"):
@@ -208,7 +200,7 @@ def test_off_tier_records_nothing():
 
 
 def test_full_tier_histogram_cost_is_bounded():
-    """W1：full 档直方图成本（真实事件量）——宽松上限，防病理回退。
+    """full 档直方图成本（真实事件量）——宽松上限，防病理回退。
 
     口径：6270 个 TOTALS 事件全部落桶（host 路径实测事件量）+ 收尾快照。
     实测 ~1.0ms（0.165µs/事件 + snapshot 合并 7 键）；上限 8ms 是实测的

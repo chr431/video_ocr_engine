@@ -1,4 +1,4 @@
-"""S3-3d/R1 骨架测试：端口协议 + SegmentEngine 注入式编排 + RunOutcome。
+"""骨架测试：端口协议 + SegmentEngine 注入式编排 + RunOutcome。
 
 R1（2026-09-27 门面拆解轮）起引擎吃 `EngineInputs` 显式契约（不再
 duck-type 门面）；分发断言改为 patch engine 模块的两条 lane 入口

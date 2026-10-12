@@ -45,7 +45,7 @@ POINTS: dict[str, tuple[str, str]] = {
     # 分段状态机：P1 驱动合一后唯一构造点在 _driver（旧两后端各自的
     # 构造点已上收；STATE_MACHINE_GPU 随之失效删除——不再有第二个点）
     "STATE_MACHINE": ("video_ocr_engine.pipeline._driver", "SegmentStateMachine"),
-    # 宿主分段接线（原 _host_pipeline._host_segment_frames，S9 迁入并改名）：
+    # 宿主分段接线（domain.segmentation 的入口）：
     # P1 后机器接线内联进 _driver.run_segment_pipeline，无函数边界可打；
     # 需要宿主帧流/消费侧取数时用 _HostLane.frame_items（SEGMENT_FRAMES
     # 条目随之删除，2026-09-20 无消费方核实）

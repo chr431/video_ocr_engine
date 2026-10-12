@@ -6,7 +6,7 @@ segmentation / video_utils 与引擎外的上层应用直接引用。
 `import config` 兼容），应用侧专属常量（颜色/窗口/图表/领域后处理参数）
 留在应用侧。
 
-自拆仓（v0.1.0）起：本文件随 video_ocr_engine 独立仓库发布、独立版本线。
+本文件随 video_ocr_engine 独立仓库发布、独立版本线。
 """
 
 from __future__ import annotations
@@ -91,22 +91,18 @@ ENGINE_PROFILE_ENV: str = "ENGINE_PROFILE"  # 1 开启引擎级性能剖面
 TRT_SUBPROBE_ENV: str = "TRT_SUBPROBE"  # 1 开启 TRT 子相位探针
 DEBUG_BOUNDS_ENV: str = "DEBUG_BOUNDS"  # 1 打印分段边界调试信息
 # CPU+NVDEC 混合解码（decode_backend="hybrid"）：实现完全在 decord fork 内
-# （hybrid / hybrid_gpu 设备上下文，v0.7.15+），引擎只透传解码参数：
-#   C-76（0.26.0）起 TRT 也恒选 hybrid 宿主输出（gpu-out 上载中转 −13%
-#   流交付）；hybrid_gpu ctx 保留在 fork 侧供显存驻留管线；
+# （hybrid / hybrid_gpu 设备上下文），引擎只透传解码参数：
+#   C-76：TRT 也恒选 hybrid 宿主输出（gpu-out 上载中转 −13% 流交付）；
+#   hybrid_gpu ctx 保留在 fork 侧供显存驻留管线；
 #   hybrid     —— OCR on CPU：输出宿主帧（与 cpu() 同布局）。
-# 历史参数（项目层 HybridDecoder 的 SCHED/MIGRATE/SOLO_GUARD/CALIB/折扣等）
-# 已随该实现一并删除；调度由 decord 内部的生产速率实测 + min-max 积压贪心承担。
 HYBRID_CPU_THREADS_ENV: str = "HYBRID_CPU_THREADS"  # CPU reader 线程数；
-# 0=自动时与 cpu 后端同一 codec 感知策略（extractor._decode_num_threads，
-# §14 定档）；旧的 [8,16] clamp 常量已随该定档删除。
+# 0=自动时与 cpu 后端同一 codec 感知策略（extractor._decode_num_threads）。
 # ═══════════════════ CPU 软解线程预算（按 OCR 是否在 GPU 分档）═══════════════
 # 背景：引擎不显式传 num_threads 时，CPU 解码线程数由 decord fork 的
-# DECORD_FFMPEG_THREAD_COUNT 决定（fork 源码 src/video/video_reader.cc，
-# 0.8.x = clamp(hw/2, 2, 16)；历史版本曾为 clamp(hw/4, 2, 8)，随 fork 版本
-# 变化——引擎侧不依赖该默认值，全部路径都显式传 num_threads）。显式分档的
-# 由来："OCR 跑 ONNX 占满物理核"的时代 fork 默认把软解钉在低线程；TensorRT
-# 成为默认后 host CPU 在解码阶段基本空闲，旧上限反而成为瓶颈。
+# DECORD_FFMPEG_THREAD_COUNT 决定（fork 源码 src/video/video_reader.cc）——
+# 引擎侧不依赖该默认值，全部路径都显式传 num_threads。显式分档的由来：
+# "OCR 跑 ONNX 占满物理核"的时代 fork 默认把软解钉在低线程；TensorRT 成为
+# 默认后 host CPU 在解码阶段基本空闲，旧上限反而成为瓶颈。
 # 实测（7945HX 16C32T + RTX 4060 Laptop，TRT；段数/唯一文本逐位一致）：
 #   test5 1080p h264 全片 7223 帧  ：8 线程 6.452s → 16 线程 4.875s
 #   新三国01 标清整集 73430 帧 s8  ：8 线程 15.897s → 32 线程 10.812s
@@ -129,9 +125,8 @@ DECODE_THREADS_GPU_OCR_MAX: int = 32
 # stride1 最优 12（8 差 2.8%）—— 取下面公式后误差 ≤5%，两端都不劣化。
 DECODE_THREADS_CPU_OCR_MAX: int = 24  # stride>1：逻辑核 3/4，上限 24
 DECODE_THREADS_CPU_OCR_STRIDE1_MAX: int = 12  # stride==1：逻辑核 1/3，上限 12
-# h264 纯 CPU 路径独档（2026-10-10 争用配平轮 C-67）：解码轻码吃满
-# 超线程（逻辑核 3/2 钳 24）——10 档下解码饿、全长 +17%；hevc/av1
-# 解码重保持 12 档（24/12 反降，同轮实测）
+# h264 纯 CPU 路径独档（C-67）：解码轻码吃满超线程（逻辑核 3/2 钳 24）
+# ——10 档下解码饿、全长 +17%；hevc/av1 解码重保持 12 档（24/12 反降）
 DECODE_THREADS_CPU_OCR_H264_MAX: int = 24
 # 并行双 ONNX 实例的启动门限（OCR 线程数 ≥ 此值才默认拆两个实例）
 OCR_INSTANCES_MIN_THREADS: int = 8
@@ -149,8 +144,7 @@ def app_data_dir() -> Path:
     """
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
-    # 模块自根目录迁入 config/ 后（S9）：parents[2] 在源码树=仓库根、
-    # wheel=site-packages，与旧根模块时代的解析结果逐位一致
+    # parents[2] 在源码树=仓库根、wheel=site-packages
     return Path(__file__).resolve().parents[2]
 
 
@@ -177,7 +171,7 @@ def models_dir() -> Path:
     candidates = [
         here / "assets" / "ocr_models",  # 包内资源（未来 package-data 布局）
         here.parent / "assets" / "ocr_models",  # video_ocr_engine/ 包内布局
-        here.parent.parent / "assets" / "ocr_models",  # 源码树（config/ → 仓库根，S9）
+        here.parent.parent / "assets" / "ocr_models",  # 源码树（config/ → 仓库根）
         Path(sys.prefix) / "assets" / "ocr_models",  # data-files 安装位置
     ]
     marker = "PP-OCRv6_rec_small.onnx"
@@ -199,9 +193,6 @@ DEFAULT_BUFFER_SIZE: int = 128  # 解码∥OCR 流水线队列缓冲（段数）
 # 解码线程 q.put 阻塞等待（GPU+CPU wall
 # -0.3s；256 无进一步收益）
 DEFAULT_DECODE_BACKEND: str = "auto"  # 解码后端 (auto / cpu / nvdec / hybrid)
-# （S2 删除 DECODE_BACKEND_KEYS/LABELS 与 OCR_BACKEND_KEYS/LABELS——四个
-# "校验键集"全仓零引用，实际校验散在内联元组；B3 的构造期校验在 S3 落地时
-# 以 config/ 注册表为单一事实源重建，不再复活这四个常量。）
 # GPU 全驻留管线（_gpu_pipeline）解码批大小：64 为 GPU 分段实验最优（更大批
 # 减少 kernel/同步次数），与宿主 DECODE_BATCH_SIZE=16 刻意不同——两条路径
 # 独立调参，勿统一为一个常量。
@@ -209,12 +200,12 @@ GPU_PIPELINE_DECODE_BATCH: int = 64
 DEFAULT_OCR_BACKEND: str = "auto"  # OCR 推理后端 (auto / cpu / tensorrt)
 DEFAULT_FORCE_ASPECT: float = 0.0  # 强制横向宽高比（0=不启用；>0 时宽度
 # 强制 = 48×此值，纠正扁宽字体）
-# **2026-08-29 回退：160 → 224**（与 OCR_PAD_WIDTH_MIN 同步，详见下方
-# §"OCR 输入 pad 宽度下限"的对照表）。extractor 默认把它传给
+# **已回退：160 → 224**（与 OCR_PAD_WIDTH_MIN 同步，详见下方
+# "OCR 输入 pad 宽度下限"的对照表）。extractor 默认把它传给
 # OcrEngine(fill_width=...)，因此这**才是实际生效的默认值**。
-# 上一轮下调到 160 是错的：只测了 force_aspect=0，而生产用 force_aspect>0，
-# 那里 160 使原始误读 7→26。旧值 224 的依据（320 raw 最优 0.53% vs 224
-# 0.67%，但端到端 224 最优 13 vs 16）**依然成立，不该推翻**。
+# 下调到 160 是错的：只测了 force_aspect=0，而生产用 force_aspect>0，那里
+# 160 使原始误读 7→26。224 的依据（320 raw 最优 0.53% vs 224 0.67%，但
+# 端到端 224 最优 13 vs 16）**依然成立，不该推翻**。
 DEFAULT_FILL_WIDTH: int = 224  # OCR 输入 pad 宽度下限（引擎 _resize_norm
 # pad 到该总宽）。GUI 可调 160-320，
 # 默认 224。取值依赖 force_aspect：
@@ -223,7 +214,7 @@ DEFAULT_FILL_WIDTH: int = 224  # OCR 输入 pad 宽度下限（引擎 _resize_no
 DEFAULT_SAMPLE_STRIDE: int = 1  # 分频采样步长（默认 1 = 逐帧）。>1 时只
 # 解码/分段/OCR 每个第 N 帧（字幕等慢更新
 # 内容显著降低处理压力，时间戳仍取真实帧号）。
-# 需 decord fork ≥0.7.12 的等差步长快速路径，
+# 需 fork 的等差步长快速路径（floors 见 registry/environment.yaml），
 # 否则退化为逐索引 seek
 OCR_GAMMA: float = 2.0  # OCR 预处理灰度 gamma 增强指数（正式预处理：
 # 白字黄底等背景色块场景放大高段分离；灰度
@@ -243,20 +234,19 @@ SEG_MERGE_SIMILAR_THRESHOLD: float = 3.0
 # 相似段合并的“显著变化像素”上限（ROI 面积比例）：即使平均绝对差很小，若
 # 变化像素占比超过该比例，仍视为真实内容变化（防止宽 ROI 中单字短字幕被误合并）。
 SEG_MERGE_MAX_CHANGED_RATIO: float = 0.01
-# 稠密簇门（2026-09-12 准确项）：合并判定的差异图若含 win3 ≥ 此值的 3×3
+# 稠密簇门（C-38）：合并判定的差异图若含 win3 ≥ 此值的 3×3
 # 稠密簇，恒判不相似。动机：末位单数字变化只动 12-14px（< 1% 面积上限），
 # 被 merge 吞掉 2 帧短状态（test5 33/33、test6 94/94 合并全为此类，
 # _probe_merge_log）；断段判据用同一 win3 定义“内容变了”，合并放行稠密簇
 # 等于自相矛盾。**这是单侧安全闸而非分类器**：实测 test5/test6 的合并全部
 # win3=9（在那里等于关闭合并）——仍稳定增益是因为代价不对称（挡无害合并
 # 只多一次 OCR 调用，挡有害合并回收帧），详见 segmentation.similar_decision
-# 与 docs/log/2026-09-12-准确项.md §3。旋钮 segment.merge_dense_gate 经
-# resolve() 生效（D6）；0=关，>0=阈值。
+# 与 C-38。旋钮 segment.merge_dense_gate 经 resolve() 生效；0=关，>0=阈值。
 SEG_MERGE_DENSE_GATE_ENV: str = "SEG_MERGE_DENSE_GATE"
 SEG_MERGE_DENSE_GATE: int = 5  # 默认 = SEG_C，与断段判据同源
 
 # ═══════════════════ OCR 输入 pad 宽度下限 ═══════════════════
-# **2026-08-29 回退：160 → 224。上一轮的"下调到 160"是错的，勿再改。**
+# **已回退：160 → 224。"下调到 160"是错的，勿再改。**
 #
 # 出错原因：我全程用 `force_aspect=0.0`（引擎默认）评估，而生产（RaceVideoToLog
 # 2.17.x）传 `force_aspect=mw`（真值头里 test5 = 1.5）。**两者下 pad 下限的
@@ -288,7 +278,7 @@ OCR_PAD_WIDTH_MIN_BY_MODEL: dict[str, int] = {
     "v6_small": 224,
 }
 
-# ═══════════════════ 运行参数（v2.15.1 起从代码中收敛） ═══════════════════
+# ═══════════════════ 运行参数 ═══════════════════
 # OCR 模型固定输入高度（rapidocr resize_norm_img 语义，训练尺寸）
 OCR_TARGET_H: int = 48
 # ═══════════════════ OCR 输入宽度自适应裁切 ═══════════════════
@@ -332,7 +322,7 @@ OCR_TARGET_H: int = 48
 # test5/test6 左留白是右留白的约 4 倍 —— 数字右对齐、ROI 按最长状态取，
 # 短数字时空白全堆在左侧。留白越多，裁掉的收益越大、切到笔画的风险越小。
 # 测量工具：`tools/_probe_roi_whitespace.py`。
-# 余量 = ROI 宽的百分比（每侧）。**2026-08-30 由 10 改为 20**，依据见下。
+# 余量 = ROI 宽的百分比（每侧），默认 10，依据见下。
 #
 # 余量是「裁掉空白」与「切到笔画」之间的权衡，两侧都错得起：
 #   · 太小 → 切掉字符边缘笔画（紧凑 ROI 上明显）
@@ -397,13 +387,13 @@ OCR_OV_CHUNK: int = 16
 OCR_CTC_CHUNK: int = 64
 # TensorRT 引擎构建：默认 batch profile、输入宽 profile 与 workspace
 #
-# TRT_PROFILE_BATCH = 18（S6 轮实测，2026-09-10；原值 6）：
+# TRT_PROFILE_BATCH = 18（实测；原值 6）：
 #   OCR 推理的**每子批提交开销**（launch + 归约 kernel + D2H + 形状 sync）
 #   与 profile batch 成反比：同一批 1116 张 48×224 走同一条 TRT 提交路径，
 #   batch=6（186 子批，每次同步）0.663s → batch=18（62 子批）0.557s = **−16.0%**
 #   （tools/_probe_trt_maxbatch.py；两个引擎由同一份 ONNX 构建，仅 profile 不同）。
 #   真实管线口径：ocr.infer 1.006s/1083 张（batch=6）→ 消费端提交开销按
-#   子批数等比缩小；对齐后 chunk = B 的整倍数（PI-3）且每 chunk 仅 1 次同步。
+#   子批数等比缩小；对齐后 chunk = B 的整倍数且每 chunk 仅 1 次同步。
 #   ⚠️ 该值进**引擎文件名**（见 trt._engine_candidates）：改它 = 换引擎产物，
 #   首次使用会重建（本机 68s，一次性；不做静默复用旧 profile 的缓存）。
 TRT_PROFILE_BATCH: int = 18
@@ -420,17 +410,17 @@ TRT_FP16_ENV: str = "TRT_FP16"
 TRT_DEFER_SYNC_ENV: str = "TRT_DEFER_SYNC"
 TRT_PROFILE_MIN_W: int = 32
 TRT_PROFILE_OPT_W: int = 320
-# 2026-09-15 实测：opt=320 对生产 W=224 输入是最优 tactics（p50 9.01ms）；
+# 实测：opt=320 对生产 W=224 输入是最优 tactics（p50 9.01ms）；
 # "对齐" opt=224 反而慢 32%（11.93ms，原生重建验证）——宽 opt 点选出的
 # kernel 覆盖 224 更快。勿按直觉对齐 opt 与实际形状（负优化案例留档）。
 TRT_PROFILE_MAX_W: int = 2048
 TRT_WORKSPACE_BYTES: int = 1 << 30
 # TRT 引擎缓存文件的 SM 后缀（引擎与 GPU 架构绑定）。
-# 2026-09-14 起运行期探测（cudaDeviceGetAttribute compute capability），
+# 运行期探测（cudaDeviceGetAttribute compute capability），
 # 探测失败（无 CUDA 绑定/无设备）回落本常量。探测在 trt.py 的
 # engine_sm() 实现——constants 不 import CUDA（保持无副作用 import）。
 TRT_ENGINE_SM: str = "sm89"  # 回落值（本机 RTX 4060 = Ada = sm89）
-# ═══════════════════ 少核 CPU 解码线程分核预算（v2.15.2 实验） ═══════════════════
+# ═══════════════════ 少核 CPU 解码线程分核预算 ═══════════════════
 # CPU 软解 + 物理核 ≤ CPU_CORES_SPLIT_THRESHOLD 时，OCR 线程与 decord
 # FFmpeg 线程各分 cores//2（显式分核），避免 FFmpeg 2 帧线程（fork 默认，
 # 只用 2 核）+ OCR 全核的过订阅。实测（test5，affinity 模拟，venv）：

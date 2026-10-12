@@ -209,7 +209,7 @@ class DecordFrameSource:
         # CPU+NVDEC 混合解码（decode_backend="hybrid" 显式选择，与 auto/cpu/nvdec
         # 并列）：速率比例分界 + 两端连续扫掠（fork 原生 hybrid ctx）。
         # NVDEC 可用即包装（GPU 全驻留管线开启时由其 CPU 分支消费宿主数组，
-        # §8.3 合并；关闭时走宿主管线，行为不变）。
+        # 与 NVDEC 路径合并编排；关闭时走宿主管线，行为不变）。
         # **stride>1 已解禁**（原门控要求 stride==1，理由是 next_roi 的
         # 顺序交付语义）：next_roi 现按 sample_stride 推进，且 stride>1 时
         # 宿主校准与主循环都走 get_batch 等差快速路径、不碰 next_roi。
@@ -218,11 +218,11 @@ class DecordFrameSource:
         # h264 场景显著更快；尊重用户显式选择。NVDEC 不可用时上面已回退
         # CPU 并警告；初始化失败回退纯 GPU 不致命。
         if backend == "hybrid" and label == "GPU":
-            # ── decord 原生混合解码（fork ≥ v0.7.15，2026-09）──────────
+            # ── decord 原生混合解码（fork 原生 hybrid ctx）──────────────
             # 单 demux 流在解码器内部按关键帧 chunk 路由 CPU 软解 + NVDEC，
             # 引擎只需把 ctx 换成 hybrid，参数面（output_format /
             # roi / num_threads）与 cpu/gpu 完全一致 —— 零适配透传。
-            # C-76（0.26.0）：恒选宿主输出（与 cpu() 同布局）——gpu-out
+            # 恒选宿主输出（依据 C-76；与 cpu() 同布局）——gpu-out
             # （hybrid_gpu，帧驻留显存）的解码器内上载中转实测 −13% 流
             # 交付；宿主帧 + OCR 会话上传 crop 走 cpu 后端同通路。
             # R4 契约协商（DC-03）：hybrid ctx 是显式 decode_backend 选择，
@@ -242,20 +242,20 @@ class DecordFrameSource:
 
                 _ct = self._hybrid_cpu_threads
                 if _ct <= 0:
-                    # §14 定档（2026-09-12，引擎全片 e2e 配对 A/B，三码文本
-                    # 集逐位一致）：hybrid CPU 臂与 cpu 后端共用同一 codec
+                    # 定档依据：引擎全片 e2e 配对 A/B，三码文本集逐位一致——
+                    # hybrid CPU 臂与 cpu 后端共用同一 codec
                     # 感知策略（decode_num_threads）——本机 h264+TRT=32 /
                     # hevc=32 / av1=24，恰为各码实测最优：h264lg 16→24
                     # −5.9%（3/3）、24→32 再 −4.8%（3/3）；hevc 16→24
                     # −4.4%（3/3）、24→32 持平；av1 16→24 −12.8%（3/3）但
                     # 32 反向 +5.1%（dav1d 过订阅）。旧"逻辑核//2 钳 [8,16]"
-                    # 是项目层 hybrid 时代残留（S6 续只测到 16 为止），三码
+                    # 是项目层 hybrid 时代残留（早轮只测到 16 为止），三码
                     # 全劣 4~13%。decode-only 口径 24T 已饱和、32T 无增益，
                     # 但引擎消费节奏（OCR/分段线程与解码共存）顶点更高——
                     # 档位以引擎口径为准。复评触发：decord 再换代 / 核数
                     # 格局变化。
                     _ct = self._decode_threads(codec=self.codec or None) or 16
-                # C-76（2026-10-11）：hybrid 恒选宿主输出（hybrid(0)），GPU-OCR
+                # hybrid 恒选宿主输出（依据 C-76；hybrid(0)），GPU-OCR
                 # 也不例外。gpu-out（hybrid_gpu）的 CPU 臂帧需经解码器内
                 # 上载线程中转（H2D 攒批/同步）——全片实测引擎流交付
                 # 3252fps vs 宿主输出直读 3805fps（fork 口径 A/B，−13%，
@@ -264,19 +264,18 @@ class DecordFrameSource:
                 # 输出与 cpu() 逐位一致（fork hybrid 文档口径）。
                 _hctx = _hy(0)
                 vr = self._open_reader(_hctx, roi_kw, num_threads=_ct)
-                # 硬窗界（2026-09-17 越窗修复）：短窗时声明消费上限，fork
+                # 硬窗界（越窗修复）：短窗时声明消费上限，fork
                 # 的 demux 与 GOP 派工在窗缘硬停——窗口外一个包都不读
                 # （实测 w3000 曾把全片 7761 包喂进两臂）。设窗条件 = 窗口
                 # < 全长，且（start < 窗长 **或** fork 契约面带
                 # `window_seek_safe`）。
-                # 晚起点谓词（start < 窗长）是 C-57 的历史防线：fork 曾有两
+                # 晚起点谓词（start < 窗长）是历史防线：fork 曾有两
                 # 个晚起点+seek_acc+硬窗缺陷——①GOP 粒度 × 锚点前缀预算
                 # 算术（尾帧截断）；②seek 首锚会话的僵尸 kick 跨 reset 存活
                 # （ResetRouting 漏清 pending_kicks_，单 GOP 首帧重复/末帧
-                # 被挤）。两者均已修复（fork p3-window-prefix 分支，夜间轮
-                # 2026-09-28 根因链与矩阵 12/12 证据见 log 同日叙事），
-                # 契约键 `window_seek_safe` = ②的机器宣告；旧 fork（含
-                # 0.8.5 wheel）无此键 → 谓词保留，行为不变。
+                # 被挤）。两者均已修复（根因链与矩阵 12/12 证据见 git 档案），
+                # 契约键 `window_seek_safe` = ②的机器宣告；旧 fork 无此键
+                # → 谓词保留，行为不变。
                 _sdw = getattr(vr, "set_decode_window", None)
                 if _contract is not None and not _contract.has("hard_decode_window"):
                     # R4：契约面在而硬窗能力缺 → 显式记降级（getattr 裸探测

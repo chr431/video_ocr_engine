@@ -41,7 +41,7 @@ def _ck(ret, what: str) -> None:
         raise RuntimeError("%s 失败: %s" % (what, err))
 
 
-# NVRTC 编译缓存（DESIGN-REVIEW B5）：编译产物（Program/Module）进程级共享
+# NVRTC 编译缓存：编译产物（Program/Module）进程级共享
 # ——无状态、线程安全（kernel launch 只读）；Buffer/stream 等可变状态仍归
 # 各实例。没有这层缓存时，每次 extract 新建 GpuFrameAnalyzer/GpuPreprocessor
 # 都会重付一次 NVRTC 编译（长进程批量的固定开销）。

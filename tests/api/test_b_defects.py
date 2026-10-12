@@ -1,8 +1,8 @@
-"""S3 行为缺陷修复测试（Q8 裁决的 B1/B3，v2 §13.3）。
+"""行为缺陷修复测试。
 
 B1：同实例第二次 extract 不再带上一次的降级原因/计时/剖面。
 B3：未知 decode_backend / ocr_backend 构造期 ValueError（v1 静默兜底）。
-两个修复都是**有意行为变更**（历史记录见 git 档案）。
+两个修复都是**有意行为变更**。
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def test_b1_second_extract_resets_run_state(monkeypatch):
     ex._ocr_backend_used = "tensorrt"
     ex._bin_thresh = 77
     ex._n_segments = 5
-    # _fps 不在重置范围（B2：同实例同视频的文档化缓存）
+    # _fps 不在重置范围（同实例同视频的文档化缓存）
 
     monkeypatch.setattr(FieldExtractor, "_run_pipelined", lambda self: RunOutcome())
     r = ex.extract()

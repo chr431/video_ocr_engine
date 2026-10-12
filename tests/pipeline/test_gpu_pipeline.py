@@ -75,7 +75,7 @@ def test_gpu_pipeline_ocr_cpu_host_by_default(gpu_ok):
 
 
 def test_gpu_pipeline_cpu_decode_enabled_p13(gpu_ok, monkeypatch):
-    # P1-3 解耦：decode_backend="cpu"（显式 CPU 软解）+ TRT → GPU 管线
+    # decode_backend="cpu"（显式 CPU 软解）+ TRT → GPU 管线
     # （每批 H2D 进 GPU 分段/raw OCR，CPU 解码收益与零拷贝 OCR 叠加）
     ex = _make(rep_crop_format="gray", decode_backend="cpu")
     assert ex._gpu_pipeline_enabled() is True
@@ -169,7 +169,7 @@ def test_gpu_pipeline_force_aspect_supported(gpu_ok):
 
 
 def test_merge_effective_mode_resolution(monkeypatch):
-    """S9-2(D6)：env 在**构造期**解析冻结；构造后改 env 不再生效
+    """env 在**构造期**解析冻结；构造后改 env 不再生效
     （v1 语义已废除，历史迁移表经 git 档案取回）。"""
     ex = _make()
     assert ex._merge_effective_mode() == "binary"

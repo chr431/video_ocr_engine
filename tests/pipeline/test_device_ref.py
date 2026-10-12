@@ -1,4 +1,4 @@
-"""S9-3 载荷单测：DeviceRef 三态语义 + SegmentTask/InferBatch/OcrResult。"""
+"""载荷单测：DeviceRef 三态语义 + SegmentTask/InferBatch/OcrResult。"""
 
 from __future__ import annotations
 

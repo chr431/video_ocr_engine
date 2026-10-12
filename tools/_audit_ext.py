@@ -1,13 +1,11 @@
-"""结构化审计（按名注册；Phase C 制度重构后为独立入口）。
+"""结构化审计（按名注册；每项失败即违规，事实源 registry/）。
 
-每项失败即违规。旧 _probe_discipline_audit（26 项合流入口）随旧制度退役，
-本文件保留下列仍有效的检查并改接新事实源（registry/）：
-  layering / no_shim_duplication / dead_code / knob_coverage /
-  no_import_side_effects / metrics_coverage / rules_schema /
-  probe_hooks_resolve / render_consistency / decord_pin
-消亡项（目标已删或被新守卫取代）：docs_budget（预算制废）、baseline_liveness
-（豁免账本废）、no_deprecated_shim_usage（shims 已物理删除）。
-引用检查项一律按名——编号会重排，名字不会。
+检查项：layering / no_shim_duplication / dead_code / knob_coverage /
+no_import_side_effects / metrics_coverage / rules_schema /
+probe_hooks_resolve / render_consistency / decord_pin /
+deprecation_due / dependency_floors / gate_manifest / injection_budget。
+未设检查：docs_budget / baseline_liveness / deprecated_shim_usage——
+对应制度对象已不存在。引用检查项一律按名（编号会重排，名字不会）。
 """
 
 from __future__ import annotations
@@ -30,7 +28,7 @@ def _product_files():
 
 
 def check_layering() -> str | None:
-    """[14] 模块级导入图无环（P0-1b：v1 本就是 DAG，测试守住）。"""
+    """模块级导入图无环（测试守住）。"""
 
     names = {p.stem: p for p in _product_files()}
     graph = {}
@@ -74,7 +72,7 @@ def check_layering() -> str | None:
 
 
 def check_no_shim_duplication() -> str | None:
-    """[15] 转发壳/重复符号回归守卫（S2 已清除的名字不得复活）。"""
+    """转发壳/重复符号回归守卫（已清除的名字不得复活）。"""
     banned = (
         "_otsu_from_hist",
         "_otsu_median_threshold",
@@ -94,7 +92,7 @@ def check_no_shim_duplication() -> str | None:
 
 
 def check_dead_code_regression() -> str | None:
-    """[16] 已删死代码不得复活（TrtEngine.execute*/四个键集常量）。"""
+    """已删死代码不得复活（TrtEngine.execute*/四个键集常量）。"""
     trt = ROOT / "ocr_trt.py"
     if trt.exists():
         t = io.open(trt, encoding="utf-8").read()
@@ -116,7 +114,7 @@ def check_dead_code_regression() -> str | None:
 
 
 def check_knob_coverage() -> str | None:
-    """[17] 每个旋钮有依据锚点；注册表不超上限。"""
+    """每个旋钮有依据锚点；注册表不超上限。"""
     from video_ocr_engine.config import KNOBS
     from video_ocr_engine.config.registry import _REGISTRY_CAP
 
@@ -129,7 +127,7 @@ def check_knob_coverage() -> str | None:
 
 
 def check_no_import_side_effects() -> str | None:
-    """[18] 产品模块 import 期不得改写 os.environ（D7）。"""
+    """产品模块 import 期不得改写 os.environ。"""
     for p in _product_files():
         try:
             tree = ast.parse(io.open(p, encoding="utf-8").read())
@@ -148,7 +146,7 @@ def check_no_import_side_effects() -> str | None:
 
 
 def check_metrics_coverage() -> str | None:
-    """[20] 指标注册表：上限 + v1 现役键不丢。
+    """指标注册表：上限 + 关键现役键不丢。
 
     v1 清单更新（2026-09-17）：pipeline.producer 已出清（全仓零产出点，
     死键只稀释报告），以同代现役键 pipeline.consumer 顶替守卫位。
@@ -200,11 +198,11 @@ def check_rules_schema() -> str | None:
 
 
 def check_probe_hooks_resolve() -> str | None:
-    """[24] 探针打桩点表全部可解析（L1）。
+    """探针打桩点表全部可解析。
 
-    探针靠 monkeypatch 私有符号取数，重构会让点位失效。L1 把全部点位收敛到
-    `tools/_probe_hooks.py:POINTS` —— 于是"哪些点位坏了"只需在本项报出来，
-    而不是靠逐个探针跑来发现（2026-09-13 实测：S9 模块化一次打破 4 个探针）。
+    探针靠 monkeypatch 私有符号取数，重构会让点位失效。全部点位收敛到
+    `tools/_probe_hooks.py:POINTS`——"哪些点位坏了"由本项报出，不必逐个
+    探针跑才发现。
     """
     import sys as _sys
 
@@ -223,7 +221,7 @@ def check_probe_hooks_resolve() -> str | None:
 
 
 def check_render_consistency() -> str | None:
-    """[25] 渲染产物一致性 + 结论路径活性（折入统一审计入口，2026-10-10）。
+    """渲染产物一致性 + 结论路径活性。
 
     此前 render --check 是独立第三条命令，容易被忘（纪律段只列了两个
     审计入口）；折进来后全量审计一次跑齐。render 顺带校验结论字段里的
@@ -318,7 +316,7 @@ def check_deprecation_due() -> str | None:
 
 
 def check_gate_manifest() -> str | None:
-    """门禁 manifest 时效（S2 §4.3）：engine_version=当前版本、decord=钉版。
+    """门禁 manifest 时效：engine_version=当前版本、decord=钉版。
 
     manifest 由 tools/version_advice.py gate-manifest 跑金标后落盘并随仓提交；
     bump 后未重跑金标即在此报红（本机门禁的异地对账底线）。
@@ -355,7 +353,7 @@ def check_gate_manifest() -> str | None:
 
 
 def check_injection_budget() -> str | None:
-    """注入核与宪章预算（宪章不变量 5；S1 裁决 3）。
+    """注入核与宪章预算（宪章不变量 5）。
 
     AGENTS ≤6144B（6KB）、charter ≤2048B。触碰=制度失效警报：查什么内容
     泄漏进注入核，禁止上调数值（上调须走宪章程序并附失效复盘）。
@@ -366,15 +364,47 @@ def check_injection_budget() -> str | None:
         return "charter.md %dB 超 2048（手写制度文本应极小）" % charter.stat().st_size
     if agents.stat().st_size > 6144:
         return (
-            "AGENTS.md %dB 超 6144——失效警报：查注入内容泄漏（裁决 3：不上调）"
-            % agents.stat().st_size
+            "AGENTS.md %dB 超 6144——失效警报：查注入内容泄漏（不上调数值）" % agents.stat().st_size
         )
+    return None
+
+
+def check_dependency_floors() -> str | None:
+    """外部依赖能力 floors（R-dependency-floors）：钉版 ≥ 每个 floor。
+
+    产品依赖的 fork 最低版本唯一住 registry/environment.yaml；注释不写
+    "需 fork ≥x.y.z"（那会与钉版构成双事实源）。pin < floor=配置矛盾
+    （钉版低于产品所需）→ 红；floor 高于 pin 也是矛盾（floor 声明了不
+    存在的能力）→ 红。
+    """
+    import yaml
+
+    env = (
+        yaml.safe_load(io.open(ROOT / "registry" / "environment.yaml", encoding="utf-8").read())
+        or {}
+    )
+    pin = str((env.get("dependencies") or {}).get("decord_pin", ""))
+    floors = env.get("dependency_floors") or {}
+    if not pin:
+        return "registry/environment.yaml 缺 dependencies.decord_pin"
+    if not floors:
+        return "registry/environment.yaml 缺 dependency_floors（R-dependency-floors）"
+
+    def vt(s: str) -> tuple[int, ...]:
+        return tuple(int(x) for x in s.split("."))
+
+    pin_v = vt(pin)
+    for name, floor in sorted(floors.items()):
+        fv = vt(str(floor))
+        if fv > pin_v:
+            return "floor %s=%s 高于钉版 %s（声明了钉版不具备的能力）" % (name, floor, pin)
     return None
 
 
 CHECKS_EXT = {
     "dead_code_regression": ("dead_code 死代码回归", check_dead_code_regression),
     "decord_pin": ("decord_pin 两仓版本口径", check_decord_pin),
+    "dependency_floors": ("dependency_floors 依赖能力 floors", check_dependency_floors),
     "deprecation_due": ("deprecation_due 弃用到期", check_deprecation_due),
     "gate_manifest": ("gate_manifest 门禁时效", check_gate_manifest),
     "injection_budget": ("injection_budget 注入预算", check_injection_budget),

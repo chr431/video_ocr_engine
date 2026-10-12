@@ -12,7 +12,7 @@ from video_ocr_engine.domain.video_utils import (
     nv12_to_rgb,
 )
 
-# S2：_preprocess_standard 转发壳已删，实现唯一出处 segmentation
+# _preprocess_standard 转发壳不得复活；实现唯一出处=domain/segmentation.py
 from video_ocr_engine.domain.segmentation import preprocess_standard as _preprocess_standard
 
 
@@ -33,7 +33,7 @@ def test_luma_full_limited_and_full():
 
 
 def test_luma_limited_lut_is_bitwise_exact():
-    """S6-f′：256 项 LUT 必须与逐元素 float32 公式**逐位一致**。
+    """256 项 LUT 必须与逐元素 float32 公式**逐位一致**。
 
     LUT 是性能优化（每批免去 float32 临时数组），但 correctness 完全依赖
     "展开是单字节纯函数"这一事实——本测试把 256 个输入全枚举，任何构表
@@ -176,7 +176,7 @@ def test_nv12_to_rgb_full_range():
 
 
 def test_extraction_result_rep_crop_rgb():
-    """rep_crop_rgb helper（DESIGN-REVIEW D4）：按 meta 自动选格式/色域。"""
+    """rep_crop_rgb helper：按 meta 自动选格式/色域。"""
     from video_ocr_engine._result_types import ExtractedSegment, ExtractionResult
 
     h, w = 4, 6

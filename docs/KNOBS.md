@@ -17,16 +17,16 @@
 | `ocr.trt_fp16` | `TRT_FP16` | bool | `False` | ocr/trt.py:_fp16_on |
 | `ocr.trt_defer_sync` | `TRT_DEFER_SYNC` | bool | `False` | ocr/trt.py 延迟收集环 |
 | `segment.text_sep_merge` | `TEXT_SEP_MERGE` | str | `binary` | ec:229 |
-| `segment.merge_dense_gate` | `SEG_MERGE_DENSE_GATE` | int | `5` | log:2026-09-12-准确项-§2 |
+| `segment.merge_dense_gate` | `SEG_MERGE_DENSE_GATE` | int | `5` | C-38 |
 | `pipeline.gpu` | `GPU_PIPELINE` | bool|none | `None` | ec:81 |
 | `pipeline.gpu_stream` | `GPU_PIPELINE_STREAM` | bool | `False` | ec:82 |
 | `pipeline.gpu_drainer` | `GPU_PIPELINE_DRAINER` | bool | `False` | gpu/device.py:_batch_iter |
 | `diag.profile` | `ENGINE_PROFILE` | bool | `False` | ec:84 |
 | `diag.subprobe` | `TRT_SUBPROBE` | bool | `False` | ec:85 |
 | `diag.bounds_debug` | `DEBUG_BOUNDS` | bool | `False` | ec:86 |
-| `diag.telemetry` | `VOE_TELEMETRY` | str | `off` | log:2026-10-09-遥测两档化 |
-| `diag.report_file` | `VOE_REPORT_FILE` | str | `` | v2:8.6-N3 |
-| `diag.trace_file` | `VOE_TRACE_FILE` | str | `` | log:2026-09-17-性能监测系统重设计 |
+| `diag.telemetry` | `VOE_TELEMETRY` | str | `off` | diag.telemetry |
+| `diag.report_file` | `VOE_REPORT_FILE` | str | `` | pipeline/report.py:RunReport |
+| `diag.trace_file` | `VOE_TRACE_FILE` | str | `` | domain/trace.py |
 
 （语义备注与解析细节见 config/knobs.py 各 Knob 的 note 字段。）
 

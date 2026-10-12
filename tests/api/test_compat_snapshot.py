@@ -1,24 +1,21 @@
-"""S0 API 兼容快照（v2 ARCHITECTURE.md §10.1 冻结表的可执行形式）。
+"""公开 API 兼容快照。
 
-v1 的公共面在这里**逐字冻结**：v2 strangler 迁移（S1–S5）期间任何 PR
-改动这些快照即测试失败——除非走金标重录流程并同步本文件的
-冻结字面量与 CHANGELOG。
+v1 的公共面在这里**逐字冻结**：任何 PR 改动这些快照即测试失败——除非走
+金标重录流程并同步本文件的冻结字面量与 CHANGELOG。
 
-冻结内容（全部为 r7 基线 7ba1c3a 实测捕获）：
+冻结内容（基线实测捕获）：
   1. FieldExtractor.__init__ 签名：2 位置参数 + 17 仅关键字参数（名/序/默认值 repr）
   2. 默认值的 **对象同一性**：sample_stride / merge_similar 的默认值是
-     engine_config 常量本身（import 期求值的表达式）——v2 若改成字面量，
-     monkeypatch engine_config 后行为会变，此断言直接拦下（§10.1 警告）。
+     engine_config 常量本身（import 期求值的表达式）——若改成字面量，
+     monkeypatch engine_config 后行为会变，此断言直接拦下。
   3. ExtractedSegment 7 字段 / ExtractionResult 5 字段（含顺序，允许位置构造）
   4. meta 9 键 + params 16 子键 + timing 3 键（键集合；实际值由金标向量冻结）
   5. 包导出面与 6 个根模块可顶层导入
   6. engine_config 的 19 个 *_ENV 常量名（含 SEG_MERGE_DENSE_GATE_ENV）
   7. 已删除名字保持不存在（硬失败，不得静默复活）
 
-本文件**有意**走已废弃的六个根模块路径——第 5/6 项冻结的正是 shim 的
-可导入性与常量面。0.14.0 删除 shim 时，本文件与
-`tests/api/test_engine_imports.py` 的 ENGINE_MODULES 必须同步改为包内路径
-（历史迁移表经 git 档案取回：archive/pre-rework:docs/MIGRATION.md）。
+根模块 shim 已删除：本文件与 `tests/api/test_engine_imports.py` 的
+ENGINE_MODULES 断言的是包内路径的可导入性与常量面。
 """
 
 from __future__ import annotations
@@ -71,8 +68,7 @@ def test_signature_frozen():
 def test_defaults_are_engine_config_objects():
     """默认值必须是常量对象的同一对象，不是抄写的字面量。
 
-    2026-09-19：常量唯一出处 = video_ocr_engine.config.constants
-    （根 shim 已删除）。"""
+    常量唯一出处 = video_ocr_engine.config.constants。"""
     from video_ocr_engine import FieldExtractor
     import video_ocr_engine.config.constants as config
 
@@ -136,7 +132,7 @@ TIMING_KEYS = {"decode", "ocr", "ocr_tail"}
 
 
 def test_meta_param_timing_key_sets_frozen():
-    """键集合冻结（r7 勘误 D-15：meta 实为 9 键，v2 文档原写 10）。"""
+    """键集合冻结（meta 实为 9 键）。"""
     assert len(META_KEYS) == 9 and len(PARAMS_KEYS) == 16
     assert len(TIMING_KEYS) == 3
 
@@ -150,7 +146,7 @@ def test_package_exports_and_root_modules():
     assert pkg.__version__ == _const.__version__
     import importlib
 
-    # 2026-09-19：六个根模块 shim 已删除 → 断言包内路径可导入
+    # 六个根模块 shim 已删除 → 断言包内路径可导入
     for mod in (
         "video_ocr_engine.config.constants",
         "video_ocr_engine.domain.segmentation",
@@ -166,7 +162,7 @@ def test_env_name_constants_frozen():
     import video_ocr_engine.config.constants as config
 
     names = sorted(n for n in dir(config) if n.endswith("_ENV"))
-    assert len(names) == 22  # OCR_CPU_BACKEND 随 ORT 移除删除（2026-09-14）
+    assert len(names) == 22  # OCR_CPU_BACKEND 随 ORT 移除删除
     # 名字快照（附录 C 全表的键集合 + SEG_MERGE_DENSE_GATE_ENV）
     assert names == sorted(
         [
@@ -206,7 +202,7 @@ DELETED_NAMES = {
     ),
     "video_ocr_engine.config.constants": ("TEXT_SEP_MERGE_CONTRAST",),
     "video_ocr_engine.gpu.context": ("select_backend", "get_engine_type", "get_setup_advice"),
-    # 0.16.0（R2 删除轮）：v1 逃生门与跨视频并发池
+    # v1 env-wins 逃生门不得复活
     "video_ocr_engine.config.resolve": ("ENV_WINS",),
 }
 
@@ -228,7 +224,7 @@ def test_deleted_names_stay_deleted():
 
 
 def test_pool_module_stays_deleted():
-    """ExtractionPool（0.15 废弃 → 0.16.0 删除）不得静默复活。"""
+    """ExtractionPool 不得静默复活。"""
     import importlib
 
     with pytest.raises(ImportError):

@@ -1,4 +1,4 @@
-"""S0 金标向量录制器（v2 ARCHITECTURE.md §8.5 / §11 S0）。
+"""金标向量录制器。
 
 对固定视频窗口跑 v1 全链提取，把**阶段输出摘要**（段结构 / 文本 / 置信度 /
 校准阈值 / 降级原因 + 哈希）落成机器可读 JSON——不存像素。这些向量是 v2
@@ -11,7 +11,7 @@ strangler 迁移（S3/S4/S5）的逐位对账参照系。
   python tests/golden/record.py --verify --case A2
 
 比对口径：timing 仅供参考不比对；其余字段（段结构 / 文本 / 置信度全精度 /
-阈值 / 降级 / crop sha）必须逐位一致。分歧处理遵循 §8.5：默认当 bug。
+阈值 / 降级 / crop sha）必须逐位一致。分歧处理默认当 bug。
 """
 
 from __future__ import annotations
@@ -88,7 +88,7 @@ MATRIX.append(
     )
 )
 # B-aspect：force_aspect 是宽高比（w/h，>0 压窄内容），输入宽 = 48×ratio。
-# S0 发现#1：ratio=320 时输入宽 15360 超出 TRT profile 上限 2048，且 v1 报错
+# 已知边界：ratio=320 时输入宽 15360 超出 TRT profile 上限 2048
 # 路径有缺陷（setInputShape 报错后崩在 reshape ValueError，见 tests/golden/FINDINGS.md）。
 MATRIX.append(
     _mk(
@@ -125,10 +125,10 @@ for vid in ("test6_av1", "test6_h264", "test6_hevc"):
 # D：晚起点硬窗（2026-10-08 窗口架构重做补录；关闭金标盲区——09-19 缺陷
 # 正是从"金标只有 [0,3000) 早起点"的盲区穿透的，C-57 两缺陷形态同为
 # 晚起点）。hybrid + seek(5000) + 窗：引擎谓词在 window_seek_safe 键在
-# 场下设窗（0.8.5 wheel 无键走无窗路径，输出应逐位同——窗语义=供给
+# 场下设窗（旧 wheel 无键走无窗路径，输出应逐位同——窗语义=供给
 # 边界，不是输出语义）。test5 尾格 (5000, 7761) 顺带覆盖片尾窗。
 # ⚠️ D-h264-w1000 曾录入后撤销：rep 帧像素逐位稳定但 seg[7] 置信度
-# 运行间翻动（0.99561↔0.99609，3 轮 1 翻；F-12，OCR 侧批形状效应），
+# 运行间翻动（0.99561↔0.99609，3 轮 1 翻；OCR 侧批形状效应），
 # 逐位门禁对它恒红——h264 晚起点由 w2761-tail 格覆盖。
 MATRIX.append(
     _mk(
@@ -205,7 +205,7 @@ def environment() -> dict:
             ["git", "rev-parse", "HEAD"], cwd=str(ROOT), capture_output=True, text=True
         ).stdout.strip()
     }
-    # S6（F-11）：**把 OCR 引擎产物指纹记进 manifest**。TRT 每次重建的
+    # **把 OCR 引擎产物指纹记进 manifest**：TRT 每次重建的
     # tactic 选择不保证一致 → 同一 profile 的两次构建也会让置信度在第 4 位
     # 漂移（文本/段结构不变）。不记指纹就无法区分"代码回归"与"引擎重建"。
     try:

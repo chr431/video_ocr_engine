@@ -1,19 +1,19 @@
-"""统一驱动骨架（P1 宿主/GPU 实现统一轮）：两后端同构生命周期的单出处。
+"""统一驱动骨架：两后端同构生命周期的单出处。
 
-v1 的 run_host_pipeline / run_gpu_pipeline 生命周期逐段同构（open →
-fps/帧区间 → begin_reading → OCR 会话 → 校准 → 帧流消费 → 收尾），
-差异只在「帧从哪来、统计在哪算、代表帧怎么交付」——这正是 v2 §6.3
-预留的 lane 注入点（FrameSource/SegmentBackend 端口的驱动侧对偶）。
-本骨架收同构段（_run_common 只收了 setup 的纯函数段，这里收完整
-生命周期），两后端退化为 lane 策略：calibrate / frame_items / emit /
-similar / abort / fallback / stop_consume / after_stream / release
-（宿主侧多为 no-op）。算法原语唯一出处仍在 segmentation.py
-（C-32 不变）；「P2c 对齐」式的两路径相位集漂移自此结构性消失
-（键集一致性由 tests/pipeline/test_phase_key_registry.py 守护）。
+两后端 run 的生命周期逐段同构（open → fps/帧区间 → begin_reading →
+OCR 会话 → 校准 → 帧流消费 → 收尾），差异只在「帧从哪来、统计在哪
+算、代表帧怎么交付」——这正是 lane 注入点（FrameSource/SegmentBackend
+端口的驱动侧对偶）。本骨架收同构段（_run_common 只收了 setup 的纯
+函数段，这里收完整生命周期），两后端退化为 lane 策略：calibrate /
+frame_items / emit / similar / abort / fallback / stop_consume /
+after_stream / release（宿主侧多为 no-op）。算法原语唯一出处仍在
+segmentation.py（C-32 不变）；「P2c 对齐」式的两路径相位集漂移自此
+结构性消失（键集一致性由 tests/pipeline/test_phase_key_registry.py
+守护）。
 
 计时口径统一（只影响遥测 span、不影响产物）：calibrate span 的 t0
 取在 OCR 会话启动**之后**（旧宿主口径；旧 GPU 口径含会话启动）——
-两路径自此同义，L1 per_phase 差分可比。
+两路径同义，L1 per_phase 差分可比。
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None, preopened_vr=None):
     from ._run_common import begin_reading, compute_frames, ensure_fps
 
     _MET = spec.metrics
-    # v8 线程账本登记：consumer=本（调用方）线程——宿主路径直接拉动解码
+    # 线程账本登记：consumer=本（调用方）线程——宿主路径直接拉动解码
     # 生成器，GPU 路径从生产者队列消费（两路径同名同义，键集一致由
     # test_phase_key_registry 守护）。
     from ..domain.resources import register_thread
@@ -69,7 +69,7 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None, preopened_vr=None):
         raise
     if spec.prof_end is not None:
         spec.prof_end("producer", "open_and_fps", _t_open)
-    # L1 资源边界（§8.6 r5）：粗相位结束处各采一次，差分见 run report。
+    # L1 资源边界：粗相位结束处各采一次，差分见 run report。
     # 记的是**进程级**用量，OCR 与解码并发时核数会互相计入——这是"该相位
     # 平均并行核数"的本意（不是单相位隔离）。off 档此调用为空操作。
     _MET.checkpoint("open")
@@ -108,11 +108,11 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None, preopened_vr=None):
         # 的 reader（get_batch 随机访问无消费状态，免二次打开/解码器悬挂）。
         return lane.fallback(res, ocr_session, ocr_engines, vr)
     res.bin_thresh = _th
-    lane.after_calibrate(_th, ocr_session)  # F-4：阈值即时回写等收尾装配
+    lane.after_calibrate(_th, ocr_session)  # 阈值即时回写等收尾装配
     if spec.prof_end is not None:
         # 键统一为 calib_total（旧 GPU 路径的 gpu_calib_total 与其映射
         # 同一指标 pipeline.calibrate——双键是两驱动各自调用点的历史
-        # 残留，P1 合一后单调用点单键）
+        # 残留，统一后单调用点单键）
         spec.prof_end("producer", "calib_total", _t_calib)
     _MET.checkpoint("calibrate")
 
@@ -156,7 +156,7 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None, preopened_vr=None):
         except BaseException:
             logger.debug("ocr_session.finish 清理忽略异常", exc_info=True)
         res.timing["ocr_tail"] = time.perf_counter() - _t_consume_end
-        # fork 遥测穿透（2026-09-17）：close 前取快照（原子计数器，此后
+        # fork 遥测穿透：close 前取快照（原子计数器，此后
         # 解码器将销毁）；非 hybrid 解码器方法缺席 → 保持 None。
         _fs = getattr(vr, "hybrid_stats", None)
         if _fs is not None:
@@ -164,10 +164,10 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None, preopened_vr=None):
                 res.fork_stats = _fs() or None
             except Exception:
                 logger.debug("fork 遥测抓取失败忽略", exc_info=True)
-            # av1 停滞根治轮（fork f071146）监视哨：gpu_arm_stall > 0 =
-            # CU 臂启动竞态冻结发生过且已被自愈重掷（fork 侧为统计根治，
-            # 非消除竞态）。报告 hybrid 段全量穿透此值；真值生产中计数
-            # 持续增长时按 fork tools/ 取证链续钻（DEPENDENCIES decord 节）。
+            # av1 停滞监视哨：gpu_arm_stall > 0 = CU 臂启动竞态冻结发生过且
+            # 已被自愈重掷（fork 侧为统计根治，非消除竞态）。报告 hybrid 段全量
+            # 穿透此值；真值生产中计数持续增长时按 fork tools/ 取证链续钻
+            # （DEPENDENCIES decord 节）。
             _stall = int((res.fork_stats or {}).get("gpu_arm_stall") or 0)
             if _stall:
                 logger.warning(
@@ -184,7 +184,7 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None, preopened_vr=None):
     if ocr_err:
         # C4：补"OCR worker 失败"上下文并保留原始异常链
         raise RuntimeError(f"OCR worker 失败: {ocr_err[0]!r}") from ocr_err[0]
-    # PI-15：逐段计数一律在此一次性上报（run 内不再逐段调 Python）
+    # 逐段计数一律在此一次性上报（run 内不再逐段调 Python）
     _MET.counter("segment.segments", len(segs))
     lane.report_counters()
     res.timing["ocr"] = ocr_wall[0]

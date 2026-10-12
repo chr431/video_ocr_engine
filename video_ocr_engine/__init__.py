@@ -12,8 +12,8 @@
         print(seg.text, seg.confidence)
 """
 
-# DECORD_SKIP_LOOP_FILTER 为**显式 opt-in**（DESIGN-REVIEW D1：库 import 不得
-# 静默改写同进程其他 decord 使用方的解码输出）。需要 CPU 软解加速时在使用方
+# DECORD_SKIP_LOOP_FILTER 为**显式 opt-in**（库 import 不得静默改写同进程
+# 其他 decord 使用方的解码输出）。需要 CPU 软解加速时在使用方
 # 自行设置（必须在打开解码器前）：
 #     os.environ["DECORD_SKIP_LOOP_FILTER"] = "all"
 # 收益（2026-08-29 实测，六片真值 + test4 逐帧视觉裁定确认对 OCR 无负面
@@ -22,7 +22,7 @@
 # （仅 CPU 软解；NVDEC 由硬件管不受影响）；AV1 无效。
 # 行为提示：显示为 2 位数字时（如 "020"）OCR 输出会带前导零（更忠实于显示），
 # 下游做字符串匹配需注意；rep_crop 预览在关滤波下有块状伪影。
-# 需要 decord fork ≥v0.7.13 的透传支持（旧版忽略该 env，行为不变）。
+# 需要 fork 的 env 透传支持（能力 floors 见 registry/environment.yaml；旧版忽略该 env，行为不变）。
 
 from video_ocr_engine.extractor import (  # noqa: F401
     FieldExtractor,
@@ -33,9 +33,8 @@ from video_ocr_engine import _version  # noqa: F401
 
 import logging
 
-# 包根 NullHandler（S1，P1-6）：未配置日志的使用方不再经 lastResort 泄
-# WARNING 到 stderr。根模块（ocr_native 等）的 logger 名统一在 S3 模块
-# 迁移时并入本命名空间。
+# 包根 NullHandler：未配置日志的使用方不再经 lastResort 泄 WARNING 到
+# stderr。各模块的 logger 名统一在本命名空间。
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __version__ = _version.__version__

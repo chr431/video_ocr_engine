@@ -1,4 +1,4 @@
-"""_open_vr 降级路径表驱动测试（P2，2026-09-20 稳健性轮）。
+"""_open_vr 降级路径表驱动测试。
 
 7 条 ``_degraded`` 路径此前零门面层断言（C10 回退/abort 已由
 tests/pipeline/test_driver_fallback.py 覆盖驱动层）。本文件用假 decord
@@ -199,9 +199,8 @@ def test_hard_window_set_when_start_before_window(fake_decord):
 def test_hard_window_skipped_for_late_start(fake_decord):
     """晚起点（start ≥ 窗长）且 fork 无 `window_seek_safe` 契约键 → 不设窗。
 
-    C-57 的历史防线（fork 两个晚起点硬窗缺陷：前缀预算算术 + 僵尸 kick，
-    均已修于 p3-window-prefix 分支）。键缺席 = 旧 fork（含 0.8.5 wheel）
-    → 谓词保留；本测试锚定该保守分支（2026-09-20 审计修复轮 §4）。
+    谓词锚定 fork 两个晚起点硬窗缺陷的防线（前缀预算算术 + 僵尸 kick）。
+    键缺席 = 旧 fork（含 0.8.5 wheel）→ 谓词保留；本测试锚定该保守分支。
     """
     ex = _make(decode_backend="hybrid", frame_start=5000, frame_end=6000)
     vr = ex._open_vr()
@@ -211,7 +210,7 @@ def test_hard_window_skipped_for_late_start(fake_decord):
 
 def test_hard_window_late_start_with_seek_safe_contract(fake_decord):
     """晚起点 + 契约键 `window_seek_safe`（fork 僵尸 kick 修复的机器宣告）
-    → 谓词解除，晚起点也设窗（夜间轮 2026-09-28，矩阵 12/12 证据）。
+    → 谓词解除，晚起点也设窗。
     """
     import decord as _d  # 夹具注入的假模块
 

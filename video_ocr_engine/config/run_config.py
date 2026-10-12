@@ -1,9 +1,8 @@
-"""RunConfig —— 一次 run 的不可变配置（frozen，D6）。
+"""RunConfig —— 一次 run 的不可变配置（frozen）。
 
-S1 阶段承载 resolve() 产出的**旋钮层**（18 个 v1 env 旋钮 + telemetry）；
-S3 起扩展为完整 RunConfig（video_path / roi / decode_backend 等每次调用
-参数并入对应子域，v2 §6.1）。config_digest 覆盖全部生效值并写进 meta，
-供 A/B 对账（v1 的 meta.params 只有 16 字段、env-only 旋钮不在其中）。
+承载 resolve() 产出的**旋钮层**（每次调用参数如 video_path / roi /
+decode_backend 并入对应子域）。config_digest 覆盖全部生效值并写进
+meta，供 A/B 对账。
 """
 
 from __future__ import annotations
@@ -40,8 +39,8 @@ class RunConfig:
     diag_profile: bool = False
     diag_subprobe: bool = False
     diag_bounds_debug: bool = False
-    diag_telemetry: str = "off"  # off/full 两档（0.22.0 起；std=受谴责别名经 resolve 映射 full）
-    diag_report_file: str = ""  # RunReport sidecar 路径（§8.6 N-3）
+    diag_telemetry: str = "off"  # off/full 两档；std=受谴责别名经 resolve 映射 full
+    diag_report_file: str = ""  # RunReport sidecar 路径
     diag_trace_file: str = ""  # P4 实验性时间线路径（默认关）
     # ── 指纹 ──
     config_digest: str = ""

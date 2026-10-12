@@ -1,4 +1,4 @@
-"""分段 + OCR 预处理统一实现（宿主管线与 GPU 全驻留管线共用，0.11.0）。
+"""分段 + OCR 预处理统一实现（宿主管线与 GPU 全驻留管线共用）。
 
 为什么是这个文件：分段判定（校准/二值/断段/相似合并）、裁切（内容列范围 →
 余量 → 最小收益门槛）与预处理（resize + gamma）的算法实现此前散在
@@ -10,7 +10,7 @@ GPU 各有一份同构逻辑。本文件是**唯一实现地**：
     逐位镜像（像素级操作无法跨 numpy/CUDA 共享），但其判定阈值、裁切余量
     数学、相似合并判据统一引用这里 —— 两侧语义只有一个出处。
 
-章节：§1 像素原语 §2 校准与判定 §3 分段状态机 §4 裁切与预处理
+章节：1. 像素原语 2. 校准与判定 3. 分段状态机 4. 裁切与预处理
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from video_ocr_engine.domain.video_utils import (
 )
 
 
-# ═══════════════════ §1 像素原语 ═══════════════════
+# ═══════════════════ 1. 像素原语 ═══════════════════
 
 
 def _gray_batch(crops: np.ndarray) -> np.ndarray:
@@ -78,9 +78,9 @@ def _gray_seg_yuv_batch(crops: np.ndarray, color_range: int = 0) -> np.ndarray:
 def _nv12_batch_luma_full_out(crops: np.ndarray, color_range: int, out: np.ndarray) -> np.ndarray:
     """批量 Y 平面 + range 展开，写入预分配 out（形状必须匹配）。
 
-    数值路径与 _nv12_batch_luma_full 逐位一致（S6-f′ 起两者共用同一张
-    256 项 LUT：Y 是 8-bit，展开是单字节纯函数）；省每批 float32 临时数组
-    与结果分配（主流水线每批形状恒定，缓冲可跨批复用）。
+    数值路径与 _nv12_batch_luma_full 逐位一致（两者共用同一张 256 项
+    LUT：Y 是 8-bit，展开是单字节纯函数）；省每批 float32 临时数组与
+    结果分配（主流水线每批形状恒定，缓冲可跨批复用）。
     """
     from ..domain.video_utils import _Y_LIMITED_LUT
 
@@ -132,7 +132,7 @@ def _cluster_win3(diff: np.ndarray) -> float:
     语义：真实数字变化必然产生 ≥5 像素连成 3×3 的密集簇（实测变帧恒=9）；
     噪声孤立像素的最大窗口和 < 5。C=5 下 test/test5/test6 0 漏检且段数更少。
 
-    **2026-08-30 改用 uint8**（原 int32）：窗口和的数学上界 = 9（3×3 全 1），
+    **用 uint8**（非 int32）：窗口和的数学上界 = 9（3×3 全 1），
     uint8 足够且不会溢出；又因 `np.bool_` 与 `np.uint8` 同为 1 字节，
     `diff.view(np.uint8)` 是**零拷贝**（连类型转换都省掉），切片加法的内存
     带宽降到 1/4。实测（`tools/_probe_cluster_dtype.py`，63 组随机掩码 +
@@ -150,9 +150,9 @@ def _cluster_win3(diff: np.ndarray) -> float:
     """
     if not diff.any():
         return 0.0
-    # bool 与 uint8 同为 1 字节 → view 零拷贝（快路径仅对 bool 成立，
-    # 2026-10-12 审查轮：本函数是宿主/GPU 共用判定原语，对 float32 等
-    # dtype 做 view 会得到原始字节图案——分数恒 ≥C = 逐帧断段且无声）。
+    # bool 与 uint8 同为 1 字节 → view 零拷贝（快路径仅对 bool 成立：
+    # 本函数是宿主/GPU 共用判定原语，对 float32 等 dtype 做 view 会得到
+    # 原始字节图案——分数恒 ≥C = 逐帧断段且无声）。
     if diff.dtype == np.bool_ and diff.flags.c_contiguous:
         s: np.ndarray = diff.view(np.uint8)
     else:
@@ -168,7 +168,7 @@ def _cluster_win3(diff: np.ndarray) -> float:
     return float(w3.max())
 
 
-# ═══════════════════ §2 校准与判定 ═══════════════════
+# ═══════════════════ 2. 校准与判定 ═══════════════════
 def _otsu(g: np.ndarray) -> int:
     """灰度图 Otsu 阈值：做直方图后委托 _otsu_from_hist（算法单一实现）。"""
     hist, _ = np.histogram(g, bins=256, range=(0, 256))
@@ -186,7 +186,7 @@ def dense_gate_hit(win3: float, gate: int) -> bool:
     """稠密簇门判定（宿主 numpy 与 GPU sim_pair 标量共用同一式）。
 
     `gate` 由调用方从 RunConfig 传入（`segment.merge_dense_gate`）——
-    本函数不读 env（D6：resolve() 是全仓库唯一 env 读取点）。
+    本函数不读 env（resolve() 是全仓库唯一 env 读取点）。
     """
     return gate > 0 and win3 >= gate
 
@@ -199,7 +199,7 @@ def similar_decision(
     只看平均绝对差会把宽 ROI 中的单字短字幕（如"在""不"）误判为噪声：
     大部分区域未变，均值被稀释 —— 因此附加"显著变化像素数"上限。
 
-    dense（2026-09-12 准确项加固）：差异图内存在 win3 ≥ 分段阈值 C 的
+    dense（C-38 加固）：差异图内存在 win3 ≥ 分段阈值 C 的
     3×3 稠密簇时恒判**不相似**。动机：末位单数字变化（198→196）在
     108×32 ROI 上只动 12-14px，低于像素数上限（ROI 面积 1%≈35px）被
     误合并，2 帧短状态整个被吞（test5 33/33、test6 94/94 合并全为此类，
@@ -212,10 +212,10 @@ def similar_decision(
     合并全部 win3=9，即在那里退化为「关闭合并」）。之所以仍然稳定增益，
     是因为两类错误的代价不对称：挡掉**无害**合并只多花一次 OCR 调用
     （两段文本本就相同，准确率不变），挡掉**有害**合并才回收帧。于是净
-    收益由回收帧主导（实测 6 片 +226 帧）。这与 §14.1/§14.2 的问法不同：
-    那两轮问「能否收紧判据既压误合并又保住安全合并（OCR 调用仍下降）」，
-    答案否；本轮问「能否以失去合并为代价压掉误合并」，答案是能，且代价
-    可承受（段数 +1.2~3.6%；这些视频 decode-bound，墙钟不变）。
+    收益由回收帧主导（实测 6 片 +226 帧）。注意这与另一问法不同：
+    「能否收紧判据既压误合并又保住安全合并（OCR 调用仍下降）」答案否；
+    本门问「能否以失去合并为代价压掉误合并」，答案是能，且代价可承受
+    （段数 +1.2~3.6%；这些视频 decode-bound，墙钟不变）。
     """
     if dense:
         return False
@@ -233,7 +233,7 @@ def _text_sep_binary(gray: np.ndarray, th: int) -> np.ndarray:
     return np.where(g > th, 255.0, 0.0).astype(np.float32)
 
 
-# ═══════════════════ §3 分段状态机（双管线共用编排） ═══════════════════
+# ═══════════════════ 3. 分段状态机（双管线共用编排） ═══════════════════
 
 
 class SegmentStateMachine:
@@ -261,7 +261,7 @@ class SegmentStateMachine:
         debug_tag: str | None = None,
         debug_bounds: "bool | None" = None,
     ):
-        self._debug_bounds = debug_bounds  # S9-2(D6):None=feed 期读 env(直连用户兼容)
+        self._debug_bounds = debug_bounds  # None=feed 期读 env（直连用户兼容）
         """on_emit(seg, rep_payload, frac) — 段闭合投递（frac = k/total）。
         on_similar(a_payload, b_payload) -> bool — 相邻发射段代表帧相似判定；
             仅在已有发射段时被调用（空段列表不调用，等价宿主原 `segs and` 短路）。
@@ -348,7 +348,7 @@ class SegmentStateMachine:
             self._on_emit(seg, self._rep_payload, 1.0)
 
 
-# ═══════════════════ §4 裁切与预处理 ═══════════════════
+# ═══════════════════ 4. 裁切与预处理 ═══════════════════
 
 
 def content_range_to_crop(first: int, last: int, w: int, *, margin_pct: int, min_gain: float):

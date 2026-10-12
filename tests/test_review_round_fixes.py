@@ -1,6 +1,6 @@
-"""审查轮（2026-09-19）修复的回归钉子：每个缺陷一个最小用例。
+"""缺陷修复回归钉子：每个缺陷一个最小用例。
 
-覆盖的缺陷（详见 docs/log/2026-09-19-代码审查轮.md）：
+覆盖的缺陷：
 - 池 recycle 顺序（置空 pool 后入列 → 复用时 __del__ 撞 None 被吞 = 显存泄漏）
 - 池 acquire 无锁 check-then-act（并发 pop 空列表）
 - cudaMalloc 失败误报 TypeError（应 MemoryError）
@@ -40,7 +40,7 @@ def _fake_pool():
             self._fnb = 1024
             self._free = []
             self._lk = threading.Lock()
-            self._released = False  # 2026-09-20 泄漏专项新增字段
+            self._released = False  # release_all 置位标记
             self.malloc_calls = 0
 
         def _malloc_frame(self):
@@ -53,7 +53,7 @@ def _fake_pool():
 def test_pool_recycle_keeps_pool_alive_for_reuse():
     """recycle 后缓冲被 acquire 复用；pool 引用必须保留（GC 兜底依赖它）。
 
-    2026-09-20 泄漏专项改判据：复用的是**缓冲**（ptr 相同），**不是对象**
+    判据：复用的是**缓冲**（ptr 相同），**不是对象**
     （`f2 is not f`）——停靠对象是被 __del__ 复活过的，CPython 对复活对象
     的二次死亡不再触发 __del__，直接复用对象 = 最终死亡永久泄漏。"""
     import gc
@@ -61,7 +61,7 @@ def test_pool_recycle_keeps_pool_alive_for_reuse():
     pool = _fake_pool()
     f = pool.acquire()
     pool.recycle(f)
-    # 关键断言（审查轮二修）：pool 引用**不得**被置空——置空会切断
+    # 关键断言：pool 引用**不得**被置空——置空会切断
     # __del__ 的 GC 兜底，只靠 GC 回收的池帧将永久泄漏。
     assert f.pool is pool, "recycle 不得置空 pool（会切断 GC 回收路径）"
     assert f._recycled is True, "须置 _recycled 标志防双入列"
@@ -79,9 +79,9 @@ def test_pool_recycle_keeps_pool_alive_for_reuse():
 
 
 def test_pool_reuse_after_resurrection_frees_on_final_death():
-    """2026-09-20 泄漏专项（真根因）钉子：复用帧的最终死亡必须可回收。
+    """泄漏根因钉子：复用帧的最终死亡必须可回收。
 
-    旧实现 acquire 直接复活停靠对象 → 其最终死亡（__del__ 已用过，复活
+    若 acquire 直接复活停靠对象 → 其最终死亡（__del__ 已用过，复活
     对象二次死亡不触发）既不入列也不 cudaFree = +2 MiB/轮永久泄漏。
     锁定判据：复用 → 死亡 → release_all 后该缓冲恰好被释放一次。"""
     import gc
@@ -109,10 +109,9 @@ def test_pool_reuse_after_resurrection_frees_on_final_death():
 def test_pool_recycle_reuse_does_not_leak_via_gc():
     """回归钉子：acquire→recycle 循环 N 次不新增 cudaMalloc。
 
-    ⚠️ 这条钉子经历了两次修正：初版断言"置空 pool 防双入列"，
-    实测证明置空切断了 __del__ 的 GC 兜底（跨线程 payload 帧只靠 GC
-    回收）→ 253 次 cudaMalloc/轮永久泄漏。现语义：标志位防双入列 +
-    pool 保留。本用例锁定"循环复用不新增分配"这一**最终判据**。
+    判据：标志位防双入列 + pool 保留（置空 pool 会切断 __del__ 的 GC
+    兜底，只靠 GC 回收的池帧将永久泄漏）。本用例锁定"循环复用不新增
+    分配"这一**最终判据**。
     """
     pool = _fake_pool()
     for _ in range(5):
@@ -146,9 +145,9 @@ def test_pool_concurrent_acquire_no_indexerror():
 
 
 def test_pool_overflow_recycle_direct_frees():
-    """2026-09-20 泄漏专项钉子：空闲列满时的归还**必须 cudaFree 直释**。
+    """泄漏钉子：空闲列满时的归还**必须 cudaFree 直释**。
 
-    旧语义「列满→告警放弃（CUDA 释放只走显式路径）」在轮末死亡波
+    「列满→告警放弃（CUDA 释放只走显式路径）」的旧语义在轮末死亡波
     （gc 集中析构数百帧、空闲列仅 _MAX）下每块永久泄漏——实测
     +2.0 MiB/轮（600 块 × 3498B）。锁定判据：列满后多余块走直释。"""
     pytest.importorskip("cuda")
@@ -170,9 +169,9 @@ def test_pool_overflow_recycle_direct_frees():
 
 
 def test_pool_released_late_frame_direct_frees():
-    """2026-09-20 泄漏专项钉子：release_all 之后迟到帧的归还必须直释。
+    """泄漏钉子：release_all 之后迟到帧的归还必须直释。
 
-    旧语义把迟到帧回收入**已 release 的孤儿池**（池↔帧互引成环，GC 收
+    把迟到帧回收入**已 release 的孤儿池**（池↔帧互引成环，GC 收
     环时 _recycled=True 跳过释放）= 第二条永久泄漏路径。"""
     pytest.importorskip("cuda")
     from cuda.bindings import runtime as cudart
@@ -306,7 +305,7 @@ def test_metrics_invalid_tier_raises_valueerror():
 
 
 def test_resolve_std_alias_maps_to_full_with_warning():
-    """两档化（0.22.0）：VOE_TELEMETRY=std 是 full 的受谴责别名。"""
+    """两档化：VOE_TELEMETRY=std 是 full 的受谴责别名。"""
     import warnings as _w
     from video_ocr_engine.config.resolve import resolve
 

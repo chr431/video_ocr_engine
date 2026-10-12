@@ -1,12 +1,11 @@
-"""resolve() —— 全仓库唯一的 env 读取点（D6：构造期一次冻结，r3 裁决）。
+"""resolve() —— 全仓库唯一的 env 读取点（构造期一次冻结）。
 
-优先级（Q5 裁决）：**显式参数 > env > 注册表默认**。
-v1 相反（env 盖过构造参数，README 自称排查陷阱）；过渡逃生门
-`VOE_ENV_WINS=1` 已于 0.16.0 删除——v1 语义不再可恢复（历史行为变更记录见 git 档案）。
+优先级：**显式参数 > env > 注册表默认**。v1 相反（env 盖过构造参数，
+是排查陷阱）；过渡逃生门 `VOE_ENV_WINS=1` 已删除，v1 语义不可恢复。
 
 本模块不读 os.environ 之外的任何环境状态；测试传入显式 env 映射。
-解析语义与 engine_config.env_* 逐位一致（由 tests/config/test_resolve.py
-的等价性测试锁死，防止两套解析器漂移）。
+解析语义由 tests/config/test_resolve.py 的等价性测试锁死，防止两套
+解析器漂移。
 """
 
 from __future__ import annotations
@@ -23,9 +22,9 @@ from .run_config import RunConfig
 _TRUTHY = ("1", "true", "yes", "on")
 _FALSY = ("0", "false", "no", "off")
 
-# 枚举型 str 旋钮的已知取值（2026-09-19 审查轮）：_parse 对 str 做
-# 「忽略大小写后命中」归一，避免 VOE_TELEMETRY=FULL 这类输入被当成
-# 非法档位（此前撞无消息 assert；-O 下静默降级）。
+# 枚举型 str 旋钮的已知取值：_parse 对 str 做「忽略大小写后命中」归一，
+# 避免 VOE_TELEMETRY=FULL 这类输入被当成非法档位（此前撞无消息 assert；
+# -O 下静默降级）。
 _STR_CHOICES = {
     # std 仅为兼容保留的受谴责别名（resolve 映射为 full + 告警）
     "diag.telemetry": ("off", "std", "full"),
@@ -49,7 +48,7 @@ def _parse(knob, raw: str) -> Any:
     if t == "bool":
         return _parse_bool(raw, bool(knob.default))
     if t == "bool|none":
-        # v1 _gpu_pipeline.py:566-570：设置了但非法 → False（显式关），≠未设 None
+        # 设置了但非法 → False（显式关），≠未设 None
         return _parse_bool(raw, False)
     if not s:
         return knob.default
@@ -59,11 +58,11 @@ def _parse(knob, raw: str) -> Any:
         except ValueError:
             return knob.default
     if t == "str":
-        # 大小写/空白归一（2026-09-19 审查轮）：v1 裸 get 原样返回，
-        # 于是 VOE_TELEMETRY=FULL（大写）会以非法档位进 Metrics——此前
-        # 撞 assert（无消息的崩溃）、-O 下静默降级。这里只在「忽略大小写
-        # 后恰好等于某个已知取值」时归一，其余仍原样返回（保持 v1 对
-        # 自由文本旋钮的宽松语义，非法值由消费方显式报错）。
+        # 大小写/空白归一：裸 get 原样返回时，VOE_TELEMETRY=FULL（大写）
+        # 会以非法档位进 Metrics——撞 assert（无消息的崩溃）、-O 下静默
+        # 降级。这里只在「忽略大小写后恰好等于某个已知取值」时归一，其余
+        # 仍原样返回（保持对自由文本旋钮的宽松语义，非法值由消费方显式
+        # 报错）。
         low = s.lower()
         for cand in _STR_CHOICES.get(knob.name, ()):
             if cand == s:
@@ -96,7 +95,7 @@ def resolve(
         if ov is not None and getattr(k, "env_live_only", False):
             # env-live 旋钮由消费者调用期直读 env（子进程 A/B 逐臂切换用），
             # RunConfig 字段不决定行为——收下 override 只会造出"字段说改了、
-            # 行为没变"的静默谎言（2026-10-12 审查轮）。要改走 env。
+            # 行为没变"的静默谎言。要改走 env。
             raise ValueError(
                 "override 不支持 env-live 旋钮 %r：其行为由调用期 env 决定，"
                 "请设 %s 后重建实例" % (k.name, k.env)
@@ -109,23 +108,23 @@ def resolve(
                 continue
         values[k.name] = ov if ov is not None else k.default
 
-    # 遥测两档化（2026-10-09，DECISIONS §30）：std 是 full 的受谴责
-    # 别名——env/overrides 给 std 一律映射为 full 并告警（两个版本后
-    # 从 _STR_CHOICES 删除即彻底拒收）。默认值已是 off（产品=发布全关）。
+    # 遥测两档化：std 是 full 的受谴责别名——env/overrides 给 std 一律
+    # 映射为 full 并告警（两个版本后从 _STR_CHOICES 删除即彻底拒收）。
+    # 默认值已是 off（产品=发布全关）。
     if values.get("diag.telemetry") == "std":
         warnings.warn(
-            "VOE_TELEMETRY=std 已于 0.22.0 两档化弃用（std 实测开销与 "
-            "full 同在噪声内）——已按 full 处理；0.24.0 起将拒绝该值",
+            "VOE_TELEMETRY=std 已弃用（std 实测开销与 full 同在噪声内）"
+            "——已按 full 处理；后续版本将拒绝该值",
             DeprecationWarning,
             stacklevel=2,
         )
         values["diag.telemetry"] = "full"
 
-    # digest 覆盖**全部生效值**（2026-10-12 审查轮纠偏）：env-live 旋钮的
-    # 实际行为由调用期 env 决定，而标准 A/B 协议正是"设 env → 构造 → run"，
-    # resolve 期的 env 值即行为值——排除它们曾让指纹无法区分 fp16/延迟收集
-    # 两臂（实测 TRT_FP16=0/1 同 digest）。代价：构造后再改 env 会让 digest
-    # 与行为失配（env-live 旋钮本就破坏 D6 冻结，见 registry 字段注）。
+    # digest 覆盖**全部生效值**：env-live 旋钮的实际行为由调用期 env 决定，
+    # 而标准 A/B 协议正是"设 env → 构造 → run"，resolve 期的 env 值即行为
+    # 值——排除它们会让指纹无法区分 fp16/延迟收集两臂（实测 TRT_FP16=0/1
+    # 同 digest）。代价：构造后再改 env 会让 digest 与行为失配（env-live
+    # 旋钮本就不冻结，见 registry 字段注）。
     digest_src = json.dumps(values, sort_keys=True, ensure_ascii=True, default=str)
     values["config_digest"] = hashlib.sha256(digest_src.encode("utf-8")).hexdigest()[:16]
     return RunConfig.from_values(values)

@@ -2,9 +2,9 @@
 
 ⛔ **不要写** `Path(__file__).resolve().parent.parent` 这种按**目录深度**猜根的写法。
 
-`tests/` 于 2026-08-31 拆成 decode/ pipeline/ segment/ api/ utils/ 五个子目录后，
-测试文件的深度从 2 层变成 3 层，上面那类写法会静默指向 `tests/` 而不是仓库根
-——表现为 `FileNotFoundError` 或"资产不存在"断言失败，而不是明显的路径错误。
+`tests/` 下分多个子目录（decode/ pipeline/ segment/ api/ utils/ …），测试文件的深度
+因所在子目录而异，上面那类写法会静默指向 `tests/` 而不是仓库根——表现为
+`FileNotFoundError` 或"资产不存在"断言失败，而不是明显的路径错误。
 
 本模块改为**向上遍历找标记文件**，与调用者所在深度无关，今后再加子目录也不会坏。
 

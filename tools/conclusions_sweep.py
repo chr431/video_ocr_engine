@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import io
+from pathlib import Path
 import os
 import re
 import sys
@@ -37,6 +38,7 @@ if isinstance(sys.stdout, _io.TextIOWrapper):
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+ROOT_PATH = Path(ROOT)
 sys.path.insert(0, ROOT)
 
 # 钉版=显式命名空间（fork/decord/wheel→decord；引擎/engine→engine）
@@ -63,6 +65,49 @@ def _load_entries() -> list[dict]:
             # yaml 渲染值可能带单引号包裹，钉版扫描前剥掉
             cur[m.group(1)] = m.group(2).strip().strip("'")
     return entries
+
+
+def _print_tombstone_refs() -> None:
+    """墓碑引用清单（adv-comment-present-tense 的 note：出源引用复核同循该原则）。
+
+    出源结论 id 的全部引用位置（结论源内互引 + 全仓 py 注释）——出源轮
+    逐点复核：改为现在时、改指继承结论、或删除。refs.resolve 保证墓碑
+    id 本身永远可解析；本清单管"还有谁在引用死者"。
+    """
+    sys.path.insert(0, str(ROOT))
+    from refs import Index
+
+    ix = Index()
+    if not ix.historical:
+        return
+    pat = re.compile("|".join(re.escape(c) for c in sorted(ix.historical)))
+    hits: dict[str, list[str]] = {}
+    for d in (ROOT_PATH / "video_ocr_engine", ROOT_PATH / "tools", ROOT_PATH / "tests"):
+        for p in sorted(d.rglob("*.py")):
+            if "__pycache__" in p.parts:
+                continue
+            try:
+                text = io.open(p, encoding="utf-8").read()
+            except OSError:
+                continue
+            for m in pat.finditer(text):
+                ln = text.count("\n", 0, m.start()) + 1
+                hits.setdefault(m.group(0), []).append(
+                    "%s:%d" % (p.relative_to(ROOT_PATH).as_posix(), ln)
+                )
+    src = io.open(os.path.join(ROOT, "registry", "conclusions.yaml"), encoding="utf-8").read()
+    src_hits = sorted(set(pat.findall(src)))
+    if not hits and not src_hits:
+        return
+    print("\n墓碑引用清单（出源结论的现存引用——逐点复核：现在时化/改指继承/删）：")
+    for cid in sorted(hits):
+        locs = hits[cid]
+        print(
+            "  %s → %s%s"
+            % (cid, ", ".join(locs[:6]), "（+%d 处）" % (len(locs) - 6) if len(locs) > 6 else "")
+        )
+    if src_hits:
+        print("  注：结论源内互引 %s（结论字段引用死者=需复核）" % ", ".join(src_hits))
 
 
 def main() -> int:
@@ -125,6 +170,7 @@ def main() -> int:
         print("\n触发词命中（换代/换卡类，信息性）：")
         for cid, t in trigger_info:
             print("  %-6s %s" % (cid, t))
+    _print_tombstone_refs()
 
     print(
         "\n处理：确认失效→状态翻 superseded/dead 并出源（全文随出源提交进"

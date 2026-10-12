@@ -1,8 +1,8 @@
-"""S1 门禁测试：env 契约 + resolve() 与 v1 读取点逐位等价（v2 §11 S1）。
+"""env 契约 + resolve() 与 v1 读取点逐位等价测试。
 
-等价性手法（文档 S1"验证手法"）：对随机 (env, 参数) 组合，断言
-resolve() 的解析结果 == v1 engine_config.env_* 解析器在同一 env 下的
-返回值——两套解析器任何一侧漂移都会在此被抓到。
+等价性手法：对随机 (env, 参数) 组合，断言 resolve() 的解析结果 ==
+v1 engine_config.env_* 解析器在同一 env 下的返回值——两套解析器任何
+一侧漂移都会在此被抓到。
 """
 
 from __future__ import annotations
@@ -15,25 +15,24 @@ from video_ocr_engine.config import KNOBS, resolve
 ENV_NAMES = KNOBS.env_names()
 
 
-# ── env 契约：19 个 v1 风格旋钮名 + v2 新增 ─────────────────────────
+# ── env 契约：v1 风格旋钮名 + 新增旋钮 ───────────────────────────
 def test_env_contract_covers_all_v1_knobs():
     v1_names = {getattr(config, n) for n in dir(config) if n.endswith("_ENV")}
     assert len(v1_names) == 22  # OCR_CPU_BACKEND 随 ORT 移除删除
     assert set(ENV_NAMES) >= v1_names  # v1 全部迁入，一个不丢
-    # v2 新增三个：r5 telemetry 三档 + S6-0 报告 sidecar（§8.6 N-3）
-    # + P4 实验性时间线（2026-09-17 重设计，log 同名章节）
+    # 新增三个：telemetry 三档 + 报告 sidecar + 实验性时间线
     assert set(ENV_NAMES) - v1_names == {"VOE_TELEMETRY", "VOE_REPORT_FILE", "VOE_TRACE_FILE"}
 
 
 def test_knob_registry_shape():
     # 18 v1 + merge_dense_gate + telemetry + report_file + trt_defer_sync
-    # + trace_file（P4）
+    # + trace_file
     assert len(KNOBS.knobs) == 25
     for k in KNOBS.knobs:
-        assert k.rationale_id, k.name  # 每个旋钮有依据锚点（D5）
+        assert k.rationale_id, k.name  # 每个旋钮有依据锚点
 
 
-# ── 优先级：显式参数 > env > 默认（Q5/r3；v1 逃生门 VOE_ENV_WINS 已删）──
+# ── 优先级：显式参数 > env > 默认（v1 env-wins 语义不得复活）─────────
 def test_priority_param_beats_env_beats_default():
     rc = resolve(env={"OCR_GAMMA": "2.5"}, overrides={"ocr.gamma": 2.2})
     assert rc.ocr_gamma == 2.2
@@ -49,7 +48,7 @@ def test_override_none_means_not_given():
 
 
 def test_voe_env_wins_stays_deleted(monkeypatch):
-    """v1 逃生门（0.16.0 删除）不得静默复活：设了也不改优先级。"""
+    """v1 env-wins 逃生门不得静默复活：设了也不改优先级。"""
     monkeypatch.setenv("VOE_ENV_WINS", "1")
     rc = resolve(env={"VOE_ENV_WINS": "1", "OCR_GAMMA": "2.5"}, overrides={"ocr.gamma": 2.2})
     assert rc.ocr_gamma == 2.2  # 显式参数仍然锁定
@@ -101,7 +100,7 @@ def test_gpu_pipeline_tri_state():
     assert resolve(env={}).pipeline_gpu is None  # 未设 → 规则
     assert resolve(env={"GPU_PIPELINE": "0"}).pipeline_gpu is False
     assert resolve(env={"GPU_PIPELINE": "1"}).pipeline_gpu is True
-    # v1 细节：设置了但非法 → False（显式关），≠ 未设（_gpu_pipeline.py:566-570）
+    # v1 细节：设置了但非法 → False（显式关），≠ 未设
     assert resolve(env={"GPU_PIPELINE": "banana"}).pipeline_gpu is False
 
 
@@ -109,12 +108,12 @@ def test_text_sep_merge_raw_string_semantics():
     assert resolve(env={}).segment_text_sep_merge == "binary"
     assert (
         resolve(env={"TEXT_SEP_MERGE": "contrast"}).segment_text_sep_merge == "contrast"
-    )  # 原样透传（校验是 S3 B3 的事）
+    )  # 原样透传（校验由构造期完成）
     rc = resolve(env={"TEXT_SEP_MERGE": "x"}, overrides={"segment.text_sep_merge": "y"})
     assert rc.segment_text_sep_merge == "y"
 
 
-# ── config_digest（§6.1：两次同配置必同 digest；改一档必变）──────────
+# ── config_digest（两次同配置必同 digest；改一档必变）────────────────
 def test_config_digest_stable_and_sensitive():
     a = resolve(env={"OCR_GAMMA": "2.0", "OCR_THREADS": "4"})
     b = resolve(env={"OCR_GAMMA": "2.0", "OCR_THREADS": "4"})

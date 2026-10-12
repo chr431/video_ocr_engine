@@ -1,4 +1,4 @@
-"""bench 周期账本接线（C-63 产品化，2026-10-09）的单测。
+"""bench 周期账本的单测。
 
 `_flatten` 提取 resources.per_phase 的原始 cycles / cycles_e2e；
 `_cycle_verdict` 的判读门槛（CI 排零 ∧ 符号多数）——纯 dict 口径，

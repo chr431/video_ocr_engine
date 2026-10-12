@@ -1,9 +1,8 @@
 """在线自诊断：挂死 / 崩溃时**也能**拿到现场（不依赖额外探针）。
 
-问题（本轮实测确认）：RunReport 只在 `extract()` 正常返回时组装——
-**挂死或硬崩溃时什么都不输出**。历史代价：§16 host 路径 hybrid+ONNX 环死锁
-只能靠 fork 侧 `[hybrid-stats]` 打印 + 一次性探针定位；decord 析构 UAF 崩溃
-同样无现场。
+问题：RunReport 只在 `extract()` 正常返回时组装——**挂死或硬崩溃时什么都不
+输出**。代价：host 路径 hybrid+ONNX 环死锁只能靠 fork 侧 `[hybrid-stats]`
+打印 + 一次性探针定位；decord 析构 UAF 崩溃同样无现场。
 
 本模块给出两条互补通道，共用**一个**守护线程与**一个**输出前缀：
 
@@ -15,7 +14,7 @@
    队列深度、指标快照、Python 栈、decord hybrid stats 若可用），可选
    faulthandler 原生栈 / 中止进程。
 
-成本纪律（PI-15）：
+成本纪律（遥测墙钟预算内）：
 - 心跳 = 一次 int 自增 + 一次 `threading.local` 属性赋值（`tick`）。
 - 深度探针**只在停顿发生时**才调用（`qsize()` 不进稳态路径）。
 - 默认关闭（铁律 10）；`auto` 档随既有 `VOE_REPORT_FILE` opt-in 开启，
@@ -82,8 +81,8 @@ class RunJournal:
         self._lock = threading.Lock()
         self._n_written = 0
         self._n_dropped = 0
-        self._last_err: str = ""  # 2026-09-19 审查轮：此前只在 except
-        # 分支赋值，report() 读它会 AttributeError
+        self._last_err: str = ""  # 构造期即定义：只在 except 分支赋值时，
+        # report() 读它会 AttributeError
         self._fh: "TextIO | None" = None
 
     def add(self, event: str, **fields) -> None:
@@ -125,8 +124,8 @@ class RunJournal:
             self._fh = None
 
     def report(self) -> dict:
-        # last_error（2026-09-19 审查轮）：_last_err 此前只写不读——落盘
-        # 持续失败（磁盘满/权限）时报告里只有计数，失败原因永远不可见。
+        # last_error：只写不读时，落盘持续失败（磁盘满/权限）下报告里只有
+        # 计数，失败原因永远不可见。
         return {
             "path": str(self.path),
             "written": self._n_written,
@@ -268,7 +267,7 @@ class StallWatchdog:
 
     @staticmethod
     def _hybrid_stats() -> dict:
-        """fork 侧 [hybrid-stats] 计数（E1 草案：fork 暴露 native 快照）。
+        """fork 侧 [hybrid-stats] 计数（fork 暴露的 native 快照）。
 
         取不到就返回空——本模块不因缺它而降级。
         """
@@ -350,10 +349,9 @@ def open_diagnostics(
     journal = RunJournal(base + ".journal.jsonl")
     snap = None
     if metrics is not None:
-        # 只读快照（drain=False，2026-09-19 审查轮）：看门狗在 run 中途
-        # 落盘停顿现场，此前用 drain 语义的 snapshot 会把已累计的桶全部
-        # 吃掉——停顿之后的最终 RunReport 只剩停顿后的样本，PI-3/PI-10
-        # 等阈值指标偏小 → 门禁静默放行。
+        # 只读快照（drain=False）：看门狗在 run 中途落盘停顿现场，用
+        # drain 语义的 snapshot 会把已累计的桶全部吃掉——停顿之后的最
+        # 终 RunReport 只剩停顿后的样本，阈值指标偏小 → 门禁静默放行。
         def snap():
             return metrics.snapshot(drain=False)
 

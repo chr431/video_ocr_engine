@@ -1,7 +1,8 @@
 """配置常量一致性 + 模型资产存在性（引擎可运行的基础）。
 
-常量唯一出处 = `video_ocr_engine.config.constants`（根 `engine_config` 是
-0.14.0 待删 shim；文件名沿用历史名）。"""
+常量唯一出处 = `video_ocr_engine.config.constants`（根 `engine_config` shim
+已删除；本测试文件名沿用历史名，断言的是包内路径）。
+"""
 
 from __future__ import annotations
 

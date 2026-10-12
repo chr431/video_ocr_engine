@@ -1,15 +1,15 @@
-"""全部旋钮声明（v1 engine_config 18 个 env 旋钮的等价物 + r5 telemetry）。
+"""全部旋钮声明。
 
-默认值与解析语义**逐项对齐 v1 实测**（附录 C 全表 / engine_config.py:28-64）：
+默认值与解析语义：
   bool —— 真集 1/true/yes/on、假集 0/false/no/off（strip+lower），其余回退默认；
   int/float —— 缺省/空/非法回退默认；
-  str  —— 原样（TEXT_SEP_MERGE 在 v1 是裸 os.environ.get，未知值由消费端回落 binary）。
+  str  —— 原样（TEXT_SEP_MERGE 未知值由消费端回落 binary）。
 
 特殊语义（note 字段如实记录）：
   decode.num_threads / decode.hybrid_cpu_threads / ocr.threads —— 0 = 自动
-  （派生计算留在消费端，resolve 只产出原始值，与 v1 读取点逐位等价）；
+  （派生计算留在消费端，resolve 只产出原始值）；
   pipeline.gpu —— 三态：未设 None（规则判定）/ falsy False / **非法值也 False**
-  （v1 _gpu_pipeline.py:566-570：经 env_bool(default=False)，非法≠未设）；
+  （经 env_bool(default=False)，非法≠未设）；
   ocr.pad_small —— 0 = 不生效，链路 0→fill_width→模型下限（消费端 ocr_native）。
 """
 
@@ -65,7 +65,7 @@ KNOBS = Registry(
             "ocr",
             _ALL,
             "ec:366",
-            note="v1 默认取 OCR_BATCH_SIZE=16",
+            note="默认取 OCR_BATCH_SIZE=16",
         ),
         Knob("ocr.gamma", "OCR_GAMMA_ENV", "OCR_GAMMA", "float", 2.0, "ocr", _ALL, "ec:216-219"),
         Knob(
@@ -118,7 +118,7 @@ KNOBS = Registry(
             "ocr",
             _ALL,
             "ec:360",
-            note="v1 消费端 max(1,·)；0 也抬到 1",
+            note="消费端 max(1,·)；0 也抬到 1",
         ),
         Knob(
             "ocr.instances",
@@ -154,7 +154,7 @@ KNOBS = Registry(
             note="fp16 ONNX（keep_io_types）+ STRONGLY_TYPED 引擎（层内 half、"
             "IO fp32）；准确率门禁 _probe_acc_ab --knob TRT_FP16=0,1",
             env_live_only=True,
-        ),  # env-live-only（2026-10-12 契约收紧）：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
+        ),  # env-live-only：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
         Knob(
             "ocr.trt_defer_sync",
             "TRT_DEFER_SYNC_ENV",
@@ -168,7 +168,7 @@ KNOBS = Registry(
             "提交序交付）；治 launch 裸奔（运行期 SM ~40%）；"
             "门禁=文本 sha 逐位+段数+bench ab",
             env_live_only=True,
-        ),  # env-live-only（2026-10-12 契约收紧）：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
+        ),  # env-live-only：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
         # ── segment ──
         Knob(
             "segment.text_sep_merge",
@@ -179,7 +179,7 @@ KNOBS = Registry(
             "segment",
             _ALL,
             "ec:229",
-            note="v1 裸 get 非布尔；未知值消费端回落 binary（B3 将改构造期校验）",
+            note="裸 get 非布尔；未知值消费端回落 binary",
         ),
         Knob(
             "segment.merge_dense_gate",
@@ -189,10 +189,10 @@ KNOBS = Registry(
             5,
             "segment",
             _ALL,
-            "log:2026-09-12-准确项-§2",
+            "C-38",
             note="0=关；>0=差异图最大 3×3 窗口和（win3）阈值：≥ 此值判「内容已"
             "变」恒不合并。默认 = SEG_C（与断段判据共用同一 win3 定义，两处"
-            "自洽）；判据/实测/与被否决判据的差别见 docs/log/ 准确项章节",
+            "自洽）；判据/实测见 C-38",
         ),
         # ── pipeline ──
         Knob(
@@ -217,7 +217,7 @@ KNOBS = Registry(
             "ec:82",
             note="C-10 判零收益，opt-in",
             env_live_only=True,
-        ),  # env-live-only（2026-10-12 契约收紧）：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
+        ),  # env-live-only：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
         Knob(
             "pipeline.gpu_drainer",
             "GPU_PIPELINE_DRAINER_ENV",
@@ -230,7 +230,7 @@ KNOBS = Registry(
             note="层4 排空线程（get_batch 独占线程预取深 4 批）；实测零收益"
             "默认关（引擎税=线程争用而非排空阻塞，同 C-10 判例）",
             env_live_only=True,
-        ),  # env-live-only（2026-10-12 契约收紧）：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
+        ),  # env-live-only：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
         # ── diag ──
         Knob(
             "diag.profile",
@@ -241,7 +241,7 @@ KNOBS = Registry(
             "diag",
             _ALL,
             "ec:84",
-            note="v1 读于构造期；v2 统一构造期一次（历史行为变更）",
+            note="构造期一次读取（resolve 冻结）",
         ),
         Knob(
             "diag.subprobe",
@@ -254,7 +254,7 @@ KNOBS = Registry(
             "ec:85",
             note="TRT_SUBPROBE 在 trt.py 导入期读一次（进程级；诊断档，不做调用期活读）",
             env_live_only=True,
-        ),  # env-live-only（2026-10-12 契约收紧）：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
+        ),  # env-live-only：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
         Knob(
             "diag.bounds_debug",
             "DEBUG_BOUNDS_ENV",
@@ -265,7 +265,7 @@ KNOBS = Registry(
             _ALL,
             "ec:86",
             env_live_only=True,
-        ),  # env-live-only（2026-10-12 契约收紧）：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
+        ),  # env-live-only：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
         Knob(
             "diag.telemetry",
             "VOE_TELEMETRY",
@@ -274,9 +274,8 @@ KNOBS = Registry(
             "off",
             "diag",
             _ALL,
-            "log:2026-10-09-遥测两档化",
-            note="off/full 两档（0.22.0；发布=off 全关，调试=full）；"
-            "std=受谴责别名→full，0.24.0 起拒收",
+            "diag.telemetry",
+            note="off/full 两档（发布=off 全关，调试=full）；std=受谴责别名→full",
         ),
         Knob(
             "diag.report_file",
@@ -286,7 +285,7 @@ KNOBS = Registry(
             "",
             "diag",
             _ALL,
-            "v2:8.6-N3",
+            "pipeline/report.py:RunReport",
             note="RunReport 细档 JSON sidecar 输出路径；空=不写（写文件是副作用，须显式 opt-in）",
         ),
         Knob(
@@ -297,8 +296,8 @@ KNOBS = Registry(
             "",
             "diag",
             _ALL,
-            "log:2026-09-17-性能监测系统重设计",
-            note="P4 实验性全事件时间线 JSON 路径；空=关（关闭零成本：_prof_end "
+            "domain/trace.py",
+            note="实验性全事件时间线 JSON 路径；空=关（关闭零成本：_prof_end "
             "一次 is-not-None 判断）；需 VOE_TELEMETRY!=off；开启时自带 "
             "NVML 0.2s 点列",
         ),

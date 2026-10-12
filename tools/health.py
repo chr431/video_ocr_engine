@@ -1,4 +1,4 @@
-"""制度健康度（KPI）——S1 §5 自我约束的执行体。
+"""制度健康度（KPI）计算。
 
 compute → registry/kpi.yaml（数据事实源）；docs/HEALTH.md 由 render.py 渲染。
 --check 重算比对（release 链步骤）；口径：

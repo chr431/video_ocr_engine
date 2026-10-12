@@ -23,7 +23,7 @@ for _p in (str(ROOT), str(TESTS), str(ROOT / "tools")):
         sys.path.insert(0, _p)
 
 
-# ── 测量原语复用层（2026-10-11）：资源守卫 fixtures ─────────────────────
+# ── 资源守卫 fixtures ──────────────────────────────────────────────────
 # 新测试不再各自实现"视频在不在/GPU 可不可用"的检查——用这两个 fixture。
 # 视频注册表单一事实源 = tools/_measure_lib.py（VIDS/ROI）。
 import pytest  # noqa: E402

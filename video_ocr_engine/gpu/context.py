@@ -11,18 +11,18 @@ import logging
 import os as _os
 import threading
 
-logger = logging.getLogger(__name__)  # S1：与其他根模块一致（P1-6）
+logger = logging.getLogger(__name__)  # 与其他根模块一致
 
 # ═══════════════════ 内部状态 ═══════════════════
 _gpu_initialized: bool = False
-_gpu_init_lock = threading.Lock()  # 2026-09-19 审查轮：见下
+_gpu_init_lock = threading.Lock()  # 见 ensure_gpu_initialized
 _dll_dir_cookies: list = []  # 保持 os.add_dll_directory() 返回值存活
 
 
 def ensure_gpu_initialized() -> None:
     """延迟初始化 GPU：首次调用时扫描并加载 CUDA/cuDNN/TensorRT DLL。
 
-    加锁（2026-09-19 审查轮）：此前是无锁 check-then-act——批量场景
+    加锁：此前是无锁 check-then-act——批量场景
     （pool.run 多 worker）并发首次构建 TRT 时两线程同进
     `_register_gpu_dlls()`，后者 `_dll_dir_cookies.clear()` 会把前者
     注册的 `os.add_dll_directory` cookie 释放（返回值必须保活）→

@@ -62,7 +62,7 @@ PHASE_KEYS_BY_MODULE: dict[str, set[tuple[str, str]]] = {
     },
 }
 
-# L1 资源边界 checkpoint（§8.6 r5）：P1 驱动合一后由 _driver.py 单点发出
+# L1 资源边界 checkpoint：驱动合一后由 _driver.py 单点发出
 # （旧两后端各发一份时的「宿主缺 open」漂移即 P2c 所修）。
 CHECKPOINTS_BY_MODULE: dict[str, set[str]] = {
     "video_ocr_engine/pipeline/_driver.py": {"open", "calibrate", "decode", "ocr"},

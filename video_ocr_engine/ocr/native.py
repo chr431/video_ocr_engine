@@ -22,21 +22,18 @@ import numpy as np
 from video_ocr_engine.config import constants as config
 from video_ocr_engine.ocr.trt import TrtEngine
 
-# （S8/D7：原 import 期 os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
-# 已删——库 import 不得改写同进程其他 OpenMP 使用方的环境（P0-3：与
-# DECORD_SKIP_LOOP_FILTER 的 DESIGN-REVIEW D1 同一原则）。需要该优化的
+# 库 import 不得改写同进程其他 OpenMP 使用方的环境。需要该优化的
 # 使用方自行在导入前设置 env（历史行为变更记录见 git 档案，金标不受影响）。
 
 log = logging.getLogger(__name__)
 
 
-# 模型资产目录解析统一走 engine_config.models_dir（0.11.0 收敛，
-# 原双份拷贝见 C-32 同轮清理）；保留旧名兼容既有导入。
+# 模型资产目录解析统一走 config.models_dir；保留旧名兼容既有导入。
 _models_dir = config.models_dir
 
 
 def cpu_physical_cores() -> int:  # noqa: F401  # re-export
-    """物理核数——2026-09-18 迁 config.decode_caliber（单一事实源）。"""
+    """物理核数（单一事实源：config.decode_caliber）。"""
     from video_ocr_engine.config.decode_caliber import cpu_physical_cores as _c
 
     return _c()
@@ -67,13 +64,13 @@ def ocr_pad_floor(variant: str, fill_width: int, pad_floor_env: "int | None" = N
     """OCR 输入 pad 宽度下限（**唯一出处**：批识别与 GPU 直通两条路径共用）。
 
     优先级：env `OCR_PAD_SMALL` > 用户 `fill_width` > 模型下限。
-    `fill_width` 取值语义（2026-09-13 改）：
+    `fill_width` 取值语义：
       · None / 未指定 → 模型下限（原行为）
       · > 0           → 该值即下限
       · 0             → 关闭填充：不设下限，批宽只由批内最大内容宽
                         决定（0 读作「关」比负数直观）
-    ⚠️ 方向依赖 force_aspect（2026-09-13 复测修正）：**真值同配置
-    （force_aspect=1.5，生产口径）下 224 是完美档、降到 0 反而变差**
+    ⚠️ 方向依赖 force_aspect：**真值同配置（force_aspect=1.5，生产口径）
+    下 224 是完美档、降到 0 反而变差**
     （test5 0→29 误读、test6 0→210 误读，各 7223 / 23441 帧）；仅在
     force_aspect=0（内容按原宽高比）时关闭填充更准。与 `config.
     DEFAULT_FILL_WIDTH` 既有注释一致：force_aspect>0 时下限越大越准。
@@ -114,7 +111,7 @@ def ocr_lane_prep(eng, stream: int | None = None):
     if pre is None:
         from video_ocr_engine.ocr.trt import GpuPreprocessor
 
-        # gamma 取引擎冻结值（2026-10-12 审查轮）：None 的语义是逐批重读
+        # gamma 取引擎冻结值：None 的语义是逐批重读
         # OCR_GAMMA env，与宿主路径/引擎自带 prep 的冻结 gamma 不同源——
         # env 中途变更或经 overrides 构造时，同一帧因车道归属不同而
         # 预处理不一致（文本可能不同）。_gamma 已在池 key 内。
@@ -160,8 +157,8 @@ class OcrEngine:
         gamma: "float | None" = None,
         gpu_ctc: "bool | None" = None,
     ) -> None:
-        # S9-2(D6):三个 env 旋钮可由上层一次性解析后注入;None=沿用
-        # 本模块的调用期 env 读取(直接构造 OcrEngine 的旧用法不变)
+        # 三个 env 旋钮可由上层一次性解析后注入；None=沿用
+        # 本模块的调用期 env 读取（直接构造 OcrEngine 的旧用法不变）
         self._variant = variant
         self._progress_cb = progress_cb
         self._fill_width = fill_width
@@ -186,8 +183,8 @@ class OcrEngine:
         self._ov = None  # OpenVINO CPU 编译模型（_init_ov 按需创建）
         # 显存全驻留 CTC：TRT 输出在 GPU 完成 vocab 维 argmax/max，输出
         # 不落 RAM。host 输入（`_call_trt_gpu`）与 NVDEC 直通
-        # （`call_gpu_raw`）两条路径都生效，语义等价、结果逐位一致
-        # （见 docs/PERFORMANCE.md §16.2 P0-2）；GPU_CTC=0 显式关闭。
+        # （`call_gpu_raw`）两条路径都生效，语义等价、结果逐位一致；
+        # GPU_CTC=0 显式关闭。
         self._gpu_ctc_mode = engine_type == "tensorrt" and (
             gpu_ctc if gpu_ctc is not None else config.env_bool(config.GPU_CTC_ENV, default=True)
         )
@@ -232,10 +229,9 @@ class OcrEngine:
 
     def _init_ov(self, models: Path, size: str) -> None:
         # CPU 推理引擎 = OpenVINO（模型级 2.1× 于已移除的 ORT 后端，
-        # 真值门禁三内容族零差，见 log 2026-09-14-OpenVINO模型级A-B/集成
-        # 轮/移除轮）。输入/输出同构（(B,3,48,W)→(B,S,C) float32），
-        # 预处理/CTC/批切沿用 ONNX 路径。engine_type 字符串 0.17.0 起
-        # 为 "openvino"（旧 ORT 时代标识已于 0.17.0 退役，历史迁移表见 git 档案）。
+        # 真值门禁三内容族零差）。输入/输出同构（(B,3,48,W)→(B,S,C) float32），
+        # 预处理/CTC/批切沿用 ONNX 路径。engine_type 字符串必须为
+        # "openvino"（旧 ORT 时代标识已退役）。
         # 直接构造 OcrEngine（未传 num_threads）时默认物理核/2：避免推理
         # 占满全部逻辑核并与解码器抢核。生产管线 SegmentPipeline.
         # _ocr_num_threads 显式传 auto_ocr_thread_count()（全物理核），
@@ -253,8 +249,7 @@ class OcrEngine:
             import openvino as ov  # type: ignore[import-not-found]
         except ImportError as e:
             raise RuntimeError(
-                "CPU OCR 需要 openvino（pip install openvino）；"
-                "ORT 后端已于 2026-09-14 移除（log 2026-09-14-OpenVINO移除轮）"
+                "CPU OCR 需要 openvino（pip install openvino）；ORT 后端已移除"
             ) from e
         model_path = models / f"PP-OCRv6_rec_{size}.onnx"
         self._ov = ov.Core().compile_model(
@@ -354,7 +349,7 @@ class OcrEngine:
 
     def _ctc_decode(self, pred: np.ndarray) -> RecOut:
         """单帧 (seq, vocab) → (文本, 置信度)。统一委托 _ctc_decode_batch
-        （0.11.0 收敛：三处 CTC 实现合一，按行应用同一归约，逐位一致）。"""
+        （三处 CTC 实现合一，按行应用同一归约，逐位一致）。"""
         return self._ctc_decode_batch(pred[None, ...])[0]
 
     def _ctc_decode_batch(self, preds: np.ndarray) -> list:
@@ -387,7 +382,7 @@ class OcrEngine:
     def call_prepped(self, batch_nchw: "np.ndarray") -> list:
         """消费**已预处理**批（NCHW float32，(B,3,48,W)，已归一化/pad）。
 
-        hybrid OCR v0.5（2026-09-20）：设备 prep 共享后 OV 车道的输入——
+        hybrid OCR 双车道：设备 prep 共享后 OV 车道的输入——
         预处理由共享 GpuPreprocessor 在 GPU 上完成，本入口跳过
         `_resize_norm`（v0 的宿主 resize 1.37ms/段是双车道回归的根因）。
         仅 CPU 引擎（OV）有意义；TRT 引擎走 call_gpu_raw/_gpu_raw_submit。
@@ -466,7 +461,7 @@ class OcrEngine:
         GPU_CTC=1（默认）时与 `call_gpu_raw` 一致：TRT 输出在 GPU 上完成
         vocab 维 argmax/max，DtoH 只有 (B,S) 的 idx+prob（B=16/S≈80 时
         ~12KB），而不是整批 (B,S,18710) float32（~95MB/批，约 1300×）。
-        见 P0-2：OCR 侧 -39%，墙钟 -8%~-14%，结果逐位一致。
+        OCR 侧 -39%，墙钟 -8%~-14%，结果逐位一致。
         """
         self._get_gpu_pre()
         out_width = int(h0 * max_wh)
@@ -487,9 +482,9 @@ class OcrEngine:
         """TRT：直接消费 GPU 灰度帧（decord NDArray / 引擎 H2D 批），
         跳过 D2H 代表帧拷贝。
 
-        infos: [DeviceRef, ...]（S9-3：取代 4/6 元组；裁切区间见 .span）
+        infos: [DeviceRef, ...]（裁切区间见 .span）
         (dev_ptr, src_h, src_w, owner, x_off, crop_w) —— 该帧只把源列区间
-        [x_off, x_off+crop_w) 参与 OCR（P0-4 宽度自适应裁切的 GPU 直通，
+        [x_off, x_off+crop_w) 参与 OCR（宽度自适应裁切的 GPU 直通，
         区间来自 GPU col_ink + 宿主同一余量规则）。
         force_aspect > 0：强制 OCR 输入宽 = OCR_TARGET_H × force_aspect
         （与宿主 _preprocess_standard 的 force_aspect 语义一致；此时忽略
@@ -511,7 +506,7 @@ class OcrEngine:
             _ratio = max(float(t.span[1]) for t in infos) / float(src_h)
         max_wh = max(_floor / config.OCR_TARGET_H, _ratio)
         out_width = int(config.OCR_TARGET_H * max_wh)
-        # S6-f：填充率计量（pad 宽是 rec 的计算宽度；content 是真实内容宽）
+        # 填充率计量（pad 宽是 rec 的计算宽度；content 是真实内容宽）
         _m = getattr(self, "_metrics", None)
         if _m is not None and getattr(_m, "enabled", False):
             _rows = len(infos)
@@ -632,7 +627,7 @@ class OcrEngine:
         return preds
 
 
-# ═══════════════ 进程级 OCR 引擎池（跨视频复用，DESIGN-REVIEW B5/C5）═══════════════
+# ═══════════════ 进程级 OCR 引擎池（跨视频复用）═══════════════
 # 每个 extract() 新建 OcrEngine 意味着长进程批量每个视频都重付 TRT 反序列化
 # + 设备缓冲分配。本池按构造键缓存**空闲**引擎：checkout/checkin 互斥，同一
 # 引擎同一时刻只被一个流水线使用（TRT context 串行语义与旧的"每会话独立
@@ -657,14 +652,14 @@ def acquire_ocr_engine(
 ) -> OcrEngine:
     """从池取空闲引擎；无空闲则新建。构造 key 记录在引擎上供 checkin 归位。
 
-    S9-2：pad/gamma/gpu_ctc 为 D6 注入口（None=引擎内调用期读 env）。
+    pad/gamma/gpu_ctc 为注入口（None=引擎内调用期读 env）。
     仅当注入值非 None 时才参与池 key——同一解析结果的引擎共享池位
-    （PI-10 key 稳定性不变：引擎路径的注入值对同一实例恒定）。
+    （key 稳定性不变：引擎路径的注入值对同一实例恒定）。
 
-    ⚠️ gamma/gpu_ctc 入 key（2026-09-19 审查轮）：两者在引擎构造期冻结
-    （`GpuPreprocessor(gamma=...)`），此前不在 key 里——同进程内改
+    ⚠️ gamma/gpu_ctc 入 key：两者在引擎构造期冻结
+    （`GpuPreprocessor(gamma=...)`）——同进程内改
     `OCR_GAMMA` 后重跑会命中旧 key 拿到旧 gamma 的引擎 = 旋钮静默失效。
-    key 维度增加对稳态 PI-10 无影响（同 run 内注入值恒定）。"""
+    key 维度增加对稳态无影响（同 run 内注入值恒定）。"""
     key = (
         variant,
         engine_type,
@@ -679,7 +674,7 @@ def acquire_ocr_engine(
         if idle:
             eng = idle.pop()
             _POOL_IDLE_ORDER.pop(id(eng), None)
-            eng._pool_hit = True  # S6-0：PI-10 热池判定（RunReport 计数）
+            eng._pool_hit = True  # 热池判定（RunReport 计数）
             return eng
     eng = OcrEngine(
         variant,
@@ -701,7 +696,7 @@ def checkin_ocr_engine(engine: OcrEngine) -> None:
     # 下一个 checkout 者会在未知在途状态上续跑。
     if getattr(engine, "_defer_sync", False):
         engine.drain_deferred()
-    # hybrid OCR v0.5：车道 prep 是**每次 extract 现场挂载**的（独立流，
+    # hybrid OCR 双车道：车道 prep 是**每次 extract 现场挂载**的（独立流，
     # 随车道会话存亡）——归还池前释放，防池内引擎钉住设备缓冲/流。
     release_lane_prep(engine)
     key = getattr(engine, "_pool_key", None)
@@ -717,7 +712,7 @@ def checkin_ocr_engine(engine: OcrEngine) -> None:
             idle.append(engine)
             _POOL_IDLE_ORDER[id(engine)] = engine
             while len(_POOL_IDLE_ORDER) > _POOL_MAX_TOTAL:
-                # 淘汰最旧的**其他 key** 条目（2026-09-19 审查轮）：直接
+                # 淘汰最旧的**其他 key** 条目：直接
                 # popitem 会取到刚 append 的同一 key 引擎（同 key 的 bucket
                 # 就是 idle 本身）→ 刚归还的引擎被 del 后又 release()，
                 # 池净减 + 白付一次 TRX 反序列化（下次 checkout 重建
