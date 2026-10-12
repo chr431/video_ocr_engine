@@ -19,7 +19,7 @@
 | C-14 | skip_loop_filter 1.11–1.36× 但改变像素；默认 opt-in | — | 下游证实对像素不敏感且需提速率 | c5d64eb:docs/log/DECISIONS.md#P0-6 翻案 |
 | C-15 | **OCR 输入侧参数都不是杠杆**。pad 下限 224 保持；预处理六变体仅一非负；翻转系实例级判决 | v6_small+racelog | pad/预处理架构变更；换模型或字体/ROI 形态 | e956d3a:docs/log/2026-09-12-准确项.md#准确项 §4.1 |
 | C-16 | OCR 裁切余量 10% 优于 0%；裁切提准确率（旧"守卫"前提错） | — | ROI 形态 / 分辨率大变 | c5d64eb:docs/log/DECISIONS.md#第四轮 |
-| C-32 | 实现唯一出处=domain/segmentation.py（0.14.0 前在根级）：宿主直调，GPU kernel 逐位镜像；无插件抽象 | 引擎 0.26.1；两侧行为由真值用例逐位守护 | 真实 GPU 侧插件需求出现 | log 2026-09-09 引擎四方向（5d27201） |
+| C-32 | 实现唯一出处=domain/segmentation.py（0.14.0 前在根级）：宿主直调，GPU kernel 逐位镜像；无插件抽象 | 引擎 0.26.2；两侧行为由真值用例逐位守护 | 真实 GPU 侧插件需求出现 | log 2026-09-09 引擎四方向（5d27201） |
 | C-36 | 冷启动=cuda.core 0.22+NVRTC 0.09+TRT 0.4s；warmup 移出 −33% | 热池；首 extract | 换后端/引擎格式 | log §3（5d27201）；tests/pipeline/test_warmup.py |
 | C-37 | 消费端可批量化：D2H 异步+同流同步 −5.19%、keep_crops 并批 −2.45%；按宽分组无收益 | 本机 4060；交错 A/B | 段密度翻倍 / ROI 形态翻转 | log §4-§6（5d27201） |
 | C-38 | **合并判定稠密簇门**（win3≥SEG_C 默认开）；段数 +1.2~3.6% | 六片真值；宿主/GPU 逐位一致 | 大字号字体 / OCR-bound 部署 | e956d3a:docs/log/2026-09-12-准确项.md#准确项 §3 |
@@ -50,8 +50,8 @@
 | C-74 | **hybrid 供给线三修**——①顶饱门=NeedsPackets（计账虚高→每帧 1 包枯竭）；②fork@C-77 批量泵（512 量子）；③fork@C-78 供料线程（demux+泵专线程；seek 停泊；请求制；TickPump；WaitFrame 落账/消账谓词）。两坑：sleep_for 最小 ~1-2ms（量子化 550fps→须 notify+谓词）；EOF 预算墙钟节流 | 4060M/32LP；fork 0.9.8；全片 23970 | demux 线程化 / 消费驱动模型变化 | log 同日 §14/§17（d184d5c） |
 | C-75 | **CPU 臂联合税非调度型（null）**——辅助降优先/提交升优先/亲和/线程 24-32/kick 关/上载批 16-32 全 A/B 平；频率两态同；C-76 后残差 ~5% | 4060M/32LP；fork 0.9.8 | 换机 / SMT 格局变化 | log 同日 §15（d184d5c） |
 | C-79 | **线程矩阵竞态审计（fork@C-78 后）**——真 bug：fallback 泵请求无服务者（消费 retry 补内联）；side_pending_ 原子化；eof-starve 动门前锁内复核；诊断打印入锁。窗界/kf/SetRoi 靠停泊+启动序保证。CU 冻结休眠（27 次零触发）；相位探针入冻结打印=复发即定位 | 4060M/32LP；fork 0.9.8 | 泵线程模型再动 / CU 冻结复发看 phase | log 同日 §18（3ab4499） |
-| C-76 | **引擎 hybrid 传输恒选宿主输出（hybrid(0)）**——gpu-out 上载中转（H2D 攒批/同步）−13% 流交付（A/B 3805→3252）；宿主帧+OCR 上传 crop=cpu 后端同通路；配套 SetRoi 深银行出 out_cuda_ 门（否则 GPU 置速码 CPU 臂冲 1536 帽，av1 82.9→94.1%）。三码验收 92.6-95.4%（0.9.8） | 4060M/32LP；fork 0.9.8；引擎 0.26.1；TRT OCR | fork 传输重设计 / 显存驻留管线换代 | log 同日 §16（d184d5c） |
-| C-80 | **第一性审查轮（P0+P1 修复）**——守卫空转×2（sweep --strict，11钉版由不可见转门禁可见；路径正则引号漏配）；digest 收 env-live 实值+override 拒收（指纹语义变更）；CUDA 错误落检查（原弃置=热路径垃圾数）；hist 桶界 2×；crop 形状硬失败；warmup 假 skip 转真门禁；余修与积压=log 同日 | 引擎 0.26.1 | CUDA/驱动换代复评错误面；新守卫/新旋钮按同判据自检 | log 同日（c5d64eb） |
+| C-76 | **引擎 hybrid 传输恒选宿主输出（hybrid(0)）**——gpu-out 上载中转（H2D 攒批/同步）−13% 流交付（A/B 3805→3252）；宿主帧+OCR 上传 crop=cpu 后端同通路；配套 SetRoi 深银行出 out_cuda_ 门（否则 GPU 置速码 CPU 臂冲 1536 帽，av1 82.9→94.1%）。三码验收 92.6-95.4%（0.9.8） | 4060M/32LP；fork 0.9.8；引擎 0.26.2；TRT OCR | fork 传输重设计 / 显存驻留管线换代 | log 同日 §16（d184d5c） |
+| C-80 | **第一性审查轮（P0+P1 修复）**——守卫空转×2（sweep --strict，11钉版由不可见转门禁可见；路径正则引号漏配）；digest 收 env-live 实值+override 拒收（指纹语义变更）；CUDA 错误落检查（原弃置=热路径垃圾数）；hist 桶界 2×；crop 形状硬失败；warmup 假 skip 转真门禁；余修与积压=log 同日 | 引擎 0.26.2 | CUDA/驱动换代复评错误面；新守卫/新旋钮按同判据自检 | log 同日（c5d64eb） |
 
 （复评/清扫：python tools/conclusions_sweep.py --strict，发版必跑。）
 

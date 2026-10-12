@@ -129,7 +129,7 @@
 - id: C-32
   conclusion: 实现唯一出处=domain/segmentation.py（0.14.0 前在根级）：宿主直调，GPU kernel 逐位镜像；无插件抽象
   status: active
-  premises: 引擎 0.26.1；两侧行为由真值用例逐位守护
+  premises: 引擎 0.26.2；两侧行为由真值用例逐位守护
   revisit: 真实 GPU 侧插件需求出现
   evidence:
   - commit: 5d27201
@@ -419,7 +419,7 @@
   conclusion: '**引擎 hybrid 传输恒选宿主输出（hybrid(0)）**——gpu-out 上载中转（H2D 攒批/同步）−13% 流交付（A/B 3805→3252）；宿主帧+OCR
     上传 crop=cpu 后端同通路；配套 SetRoi 深银行出 out_cuda_ 门（否则 GPU 置速码 CPU 臂冲 1536 帽，av1 82.9→94.1%）。三码验收 92.6-95.4%（0.9.8）'
   status: active
-  premises: 4060M/32LP；fork 0.9.8；引擎 0.26.1；TRT OCR
+  premises: 4060M/32LP；fork 0.9.8；引擎 0.26.2；TRT OCR
   revisit: fork 传输重设计 / 显存驻留管线换代
   evidence:
   - commit: d184d5c
@@ -428,7 +428,7 @@
   conclusion: '**第一性审查轮（P0+P1 修复）**——守卫空转×2（sweep --strict，11钉版由不可见转门禁可见；路径正则引号漏配）；digest 收 env-live 实值+override
     拒收（指纹语义变更）；CUDA 错误落检查（原弃置=热路径垃圾数）；hist 桶界 2×；crop 形状硬失败；warmup 假 skip 转真门禁；余修与积压=log 同日'
   status: active
-  premises: 引擎 0.26.1
+  premises: 引擎 0.26.2
   revisit: CUDA/驱动换代复评错误面；新守卫/新旋钮按同判据自检
   evidence:
   - commit: c5d64eb

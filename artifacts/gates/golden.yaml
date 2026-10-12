@@ -1,9 +1,9 @@
 kind: golden
-engine_version: 0.26.1
+engine_version: 0.26.2
 decord: 0.9.8
 cases: 33
 exit: 0
 last_line: 'verify: 33/33 一致（翻动 0）'
-seconds: 685.7
-ran_at: '2026-10-12T12:48:55'
+seconds: 78.5
+ran_at: '2026-10-12T19:22:53'
 note: freshness 判据=engine_version/decord 与当前一致（_audit_ext gate_manifest）

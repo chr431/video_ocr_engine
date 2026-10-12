@@ -146,12 +146,11 @@ def check() -> int:
     fresh = compute()
 
     # 时点敏感指标（shares/generated_at）不比对，只比对状态类
+    # 时点敏感指标（随每次提交漂移）不比对：占比类 + p90
+    VOLATILE = ("治理类提交占比（全史）", "纯治理轮占比（全史）", "提交信息行 p90（字符）")
+
     def stable(m: dict) -> list:
-        return [
-            r
-            for r in m["metrics"]
-            if r["name"] not in ("治理类提交占比（全史）", "纯治理轮占比（全史）")
-        ]
+        return [r for r in m["metrics"] if r["name"] not in VOLATILE]
 
     if stable(stored) != stable(fresh):
         print(
