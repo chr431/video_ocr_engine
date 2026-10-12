@@ -1,0 +1,50 @@
+# 架构注册表——现役链路的唯一事实源（AGENTS 现役架构段的渲染源）
+#
+# historical: true 的条目仅供翻查（渲染时折叠），不构成现役承诺。
+
+pipeline: 解码 → 像素分段 → 代表帧 → OCR → 相似段合并
+
+stages:
+  - name: 解码
+    entry: video_ocr_engine/decode/decord_source.py
+    note: decord.VideoReader.get_batch 唯一入口；hybrid 走 decord 原生 ctx（引擎只透传参数）
+  - name: 分段
+    entry: video_ocr_engine/domain/segmentation.py
+  - name: 编排引擎
+    entry: video_ocr_engine/pipeline/engine.py
+    note: SegmentEngine 唯一入口；EngineInputs 显式 run 契约；生命周期单出处 _driver.py；策略纯函数 pipeline/policy.py
+  - name: 宿主后端
+    entry: video_ocr_engine/pipeline/host_backend.py
+  - name: GPU 后端
+    entry: video_ocr_engine/pipeline/gpu_backend.py
+    note: gray+NVDEC+TRT 默认；设备侧拆分 gpu/ 包（pools/streams/device）
+  - name: OCR 会话
+    entry: video_ocr_engine/pipeline/ocr_stage.py
+    note: SessionSpec 契约；CPU 引擎=OpenVINO 唯一（C-48）
+  - name: OCR 调度/引擎池
+    entry: video_ocr_engine/ocr/native.py
+    note: 池上限 _POOL_MAX_PER_KEY=4 / _POOL_MAX_TOTAL=16，key=(model,type,fill_width,threads)
+  - name: TRT
+    entry: video_ocr_engine/ocr/trt.py
+    also: video_ocr_engine/_gpu_kernels.py
+  - name: 配置常量/旋钮
+    entry: video_ocr_engine/config/constants.py
+    also: video_ocr_engine/config/
+  - name: 运行报告
+    entry: video_ocr_engine/pipeline/report.py
+    note: RunReport schema v10（REPORT_VERSION 单源于代码；指标注册表 domain/metrics.py；资源层 domain/resources.py）
+  - name: 分相打桩
+    entry: video_ocr_engine/domain/prof.py
+    note: ProfSpine 单一计时脊柱；门面 _prof_end 薄委托
+  - name: 性能 A/B
+    entry: tools/bench.py
+    note: run/diff/show/ab/telemetry-check；账本 bench/registry.jsonl（滚动，不入库）
+
+facts:
+  - 并行维度唯一：decode_backend="hybrid" 的 CPU+NVDEC 双解码，已由 decord fork 原生实现；无 dual pipeline、无 DUAL_* 环境变量（历史提及均为旧档案）
+  - 引擎内部恒单通道灰度：decord 只输出 yuv420（keep_crops 且 rep_crop_format="yuv"）或 gray
+  - 相似段合并在分离图上进行，默认 binary（TEXT_SEP_MERGE=binary|off，稠密簇门见 C-38）
+  - GPU 管线门控：gray + decode∈{auto,nvdec,cpu} + ocr≠cpu + NVDEC/TRT 可用时自动启用；GPU+ONNX 无净收益（C-09）
+  - auto 恒 NVDEC 优先=刻意决策（C-08）；批量吞吐=逐文件顺序跑（C-53，pool 已删）
+  - 遥测两档（D30）：off=发布默认；full=调试/bench 默认；std 别名已拒收
+  - fp16 已产品化（TRT_FP16=1，opt-in）；CUDA Graph 无收益已移除

@@ -1,0 +1,35 @@
+# 环境注册表——本机与外部事实的唯一事实源（宪章不变量 7）
+#
+# 规则与宪章不得含机器特定内容；本表是 AGENTS"环境节"与 DEPENDENCIES 视图的源。
+# 换机 = 改本表 + 重标定（benchmarks.yaml 的标定段），不改任何规则文本。
+
+machine:
+  name: racelog-dev
+  cpu: AMD 7945HX（16C32T，Zen4）
+  memory: 2×16GB DDR5-6000（流式实测 55.8 GB/s）
+  gpu: RTX 4060 Laptop 8GB（单 NVDEC 单元；driver 610.88）
+  os: Windows 11
+
+python:
+  interpreter: "c:/Users/eric chen/AppData/Local/Programs/Python/python313/python.exe"
+  note: PATH 中 python 即它；换环境先自证 numpy 再跑链
+
+dependencies:
+  decord_pin: "0.9.8"        # 本地构建部署；R-decord-pin 与本行对账；PyPI 官方版缺 fork 能力
+  cuda_python: "13.x"
+  mypy: "2.3.1"
+  openvino: "2026.4.1"
+
+corpus:
+  video_dir: "D:/Videos/racelog_test"     # 经 RACELOG_VIDEO_DIR 覆盖；批量集经 RACELOG_BATCH_DIR
+  ground_truth: ground_truth_csv/
+  gt_header_note: 头行是 "# roi=..."，必须用正则取四个整数（按逗号切只拿到第一个）
+  stride_rule: 该目录全部视频一律 sample_stride=1（防漏信息；stride>1 仅字幕场景）
+
+console:
+  utf8_note: 中文输出需 sys.stdout.reconfigure(encoding="utf-8")（GBK 控制台会崩）
+  tools_path_note: tools/ 子目录下 sys.path[0] 是 tools/，探针须 sys.path.insert(0, 上级目录)
+
+build:
+  decord_rebuild: rebuild_dev.bat   # 改完 decord C++ 后构建即部署，md5 自动校验
+  env_doctor: tools/env_doctor.py   # 环境异常先跑它

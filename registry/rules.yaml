@@ -1,0 +1,256 @@
+# 规则注册表（唯一事实源）——S1 精神"可执行"的落点
+#
+# 字段：
+#   id          命名 id（R- 前缀=可执行规则；adv- 前缀=方向性提醒，硬上限 10 席）
+#   statement   规则一句话
+#   enforcement ci（线上 CI 步骤）| local-gate（本机门禁）| advisory（无执行体）
+#   executor    执行体（文件路径或 CI 步骤名；advisory 为空）
+#   prevents    所防事故（S0 痛点 id 或历史 commit/事件），举证义务
+#   since       生效日期
+#
+# 生命周期：executor 消失即删；12 个月无命中提示复评。advisory 满额须"自动化或删除"。
+# 过渡说明（2026-10-12 Phase A）：标注 (Phase D) 的 ci 执行体尚未建步骤，落成前其
+# executor 文件已存在的按文件计，不存在的在 Phase D 建。旧制度规则的逐条去向见
+# 文末"收编记录"。
+#
+# ── ci：线上 CI（机器无关） ────────────────────────────────────────────
+
+- id: R-lint-format
+  statement: 代码风格单一执行面——ruff format（双引号、行宽 100）+ lint 精选集；面=产品代码+全部 standing 工具+tests（probes/ 除外）
+  enforcement: ci
+  executor: .github/workflows/ci.yml#lint
+  prevents: S0-I1（52 天无风格约束、42 文件返工、tools/tests 豁免）
+  since: 2026-10-10
+
+- id: R-mypy
+  statement: 类型面=产品代码+standing 工具（probes/ 除外）；以 pyproject files 为唯一描述源
+  enforcement: ci
+  executor: .github/workflows/ci.yml#mypy
+  prevents: S0-I1（工具层无类型面）
+  since: 2026-10-12
+
+- id: R-pytest-offline
+  statement: 测试不依赖真实视频/GPU 时必须可离线跑；依赖者带 skip 守卫或 -m gpu 标记
+  enforcement: ci
+  executor: .github/workflows/ci.yml#pytest
+  prevents: 旧 rules.yaml 离线纪律（无 GPU CI 上假绿）
+  since: 2026-09-16
+
+- id: R-refs-resolve
+  statement: 跨文件引用一律注册名且必须可解析（refs check）——C-NN/R-名/decord@/archive/<tag>；禁裸 §N 与裸 0.x
+  enforcement: ci
+  executor: tools/refs.py
+  prevents: S0-D2（§10.2 悬空）、S0-D3（D30 无定义）、S0-J1（编号重排）
+  since: 2026-10-12
+
+- id: R-render-consistency
+  statement: 视图（AGENTS/CONCLUSIONS/KNOBS/DEPENDENCIES/INDEX/HEALTH）全渲染且与源一致，人不得手写
+  enforcement: ci
+  executor: tools/render.py --check（Phase C/E 随视图切换落成）
+  prevents: S0-B1/B2/C2（三处表示互漂）
+  since: 2026-10-10
+
+- id: R-registry-schema
+  statement: 注册表 schema 校验 + enforcement↔executor 一一对应 + advisory ≤10 + probe 住 tools/probes/
+  enforcement: ci
+  executor: tools/registry_lint.py (Phase D)
+  prevents: S0-J1（守卫清单自漂）、S0-G3（散文规则堆积）
+  since: 2026-10-12
+
+- id: R-deprecation-due
+  statement: 弃用表 remove_in 到期而符号仍可导入即红——弃用承诺机器兑现
+  enforcement: ci
+  executor: .github/workflows/ci.yml#deprecation-due (Phase D)
+  prevents: S0-G5（VOE_ENV_WINS"两版本"实走四版本）
+  since: 2026-10-12
+
+- id: R-version-tag
+  statement: bump↔同名 tag↔constants 三者一致，缺失即红
+  enforcement: ci
+  executor: .github/workflows/ci.yml#version-tag (Phase D)
+  prevents: S0-G6（0.9.1/0.9.2 补打、v0.17.2 有提交无 tag）
+  since: 2026-10-12
+
+- id: R-version-advice
+  statement: bump 档位=确定性判据（公开 API 面或金标 manifest diff 非空→minor，否则 patch），CI 对账，初期零逃生
+  enforcement: ci
+  executor: tools/version_advice.py (Phase D)
+  prevents: S0-G7（0.25.0 产品面仅版本号 1 行却升 minor）
+  since: 2026-10-12
+
+- id: R-injection-budget
+  statement: 渲染后注入核 ≤6KB——触碰即失效警报（查泄漏，不上调；见宪章不变量 5）
+  enforcement: ci
+  executor: .github/workflows/ci.yml#injection-budget (Phase E)
+  prevents: S0-A1（AGENTS 贴死 14KB 三周）、S0-A2（同日两次措辞压缩）
+  since: 2026-10-12
+
+- id: R-guard-negative
+  statement: 每个守卫必须带负测样例（它抓得住的坏例）进 CI——不能失败的守卫是装饰
+  enforcement: ci
+  executor: tests/guards/ (Phase D)
+  prevents: S0-C1（四类假绿：sweep 永绿/正则盲区/baseline 余量/真缺陷转 skip）
+  since: 2026-10-12
+
+- id: R-path-no-hardcode
+  statement: 仓内路径一律 __file__ 推导或环境变量；外部视频经 RACELOG_*；ffmpeg/decord 经 env_probe 解析
+  enforcement: ci
+  executor: tools/env_doctor.py --audit
+  prevents: S0-C1（正则引号盲区恒绿三处硬编码）、2026-09-19 纪律轮 4 处失效
+  since: 2026-09-19
+
+- id: R-bare-cr
+  statement: 治理文本裸 CR=0（\r 不跟 \n）
+  enforcement: ci
+  executor: .github/workflows/ci.yml#bare-cr (Phase D)
+  prevents: 2026-08-31 一次性清 934 处的事故
+  since: 2026-08-31
+
+- id: R-except-annotated
+  statement: except…pass 必须带 noqa S110 + 行内理由——豁免内联化，无登记账本
+  enforcement: ci
+  executor: .github/workflows/ci.yml#lint（S110 规则集，Phase D 起）
+  prevents: S0-G4（baseline 豁免账本腐化为 23 处被动余量）
+  since: 2026-10-12
+
+- id: R-knob-registry
+  statement: 旋钮进 config/ 注册表，未注册名不得读取；默认值依据 rationale 可解析（指 R-/C- id）
+  enforcement: ci
+  executor: tools/_audit_ext.py
+  prevents: S0-C3（18/25 rationale_id 指向已删文件）
+  since: 2026-09-17
+
+- id: R-probe-hooks-points
+  statement: 探针打桩点必须经 _probe_hooks POINTS 表取点，不直接 import 产品私有符号——重构只改一张表
+  enforcement: ci
+  executor: tools/_audit_ext.py#probe_hooks_resolve
+  prevents: 2026-09-17 L1 打桩事故
+  since: 2026-09-17
+
+- id: R-decord-pin
+  statement: registry/environment.yaml 的 decord 钉版与 import decord 实测版本一致（两仓口径）
+  enforcement: ci
+  executor: tools/_audit_ext.py#decord_pin
+  prevents: S0-C2（DEPENDENCIES 写 0.8.5 实为 0.9.2）
+  since: 2026-10-10
+
+# ── local-gate：本机门禁（GPU/视频依赖） ──────────────────────────────
+
+- id: R-golden
+  statement: 正确性门禁=金标（段数+唯一文本集+按帧对齐真值准确率），--verify 失败不许合入；金标变更=行为变更（触发 version-advice）
+  enforcement: local-gate
+  executor: tests/golden/bench_baseline.py
+  prevents: 旧铁律 2/3（"看起来没问题"判错）
+  since: 2026-08-20
+
+- id: R-check-tiers
+  statement: 两级合规链——daily（pytest+快检+金标 smoke，迭代默认）/ release（全量+金标 full+清扫 --strict）；SKIP 显式报 partial
+  enforcement: local-gate
+  executor: tools/check.py
+  prevents: S0-C1（sweep 不带 strict、SKIP 计通过）
+  since: 2026-10-11
+
+- id: R-ab-interleave
+  statement: 性能 A/B 必须交错——bench ab 臂序逐对轮转+GPU 时钟门禁+--aa 标定阈值；hybrid 对照臂=目标码最快纯解码臂（C-53 口径）
+  enforcement: local-gate
+  executor: tools/bench.py
+  prevents: S0-C5（同码两跑差 7.7%）、C-53 错基线判 -46.5%
+  since: 2026-09-17
+
+- id: R-threshold-resolvable
+  statement: 门禁阈值 ≥ 本机可分辨下限——先 --aa 标定（阈值=|均值偏差|+3×SE）；µs 级严格性交确定性成本守卫
+  enforcement: local-gate
+  executor: tools/bench.py#telemetry-check
+  prevents: 低于分辨力的阈值只产误报（PI-15 教训）
+  since: 2026-09-17
+
+- id: R-conclusions-sweep
+  statement: 发版清扫——列钉版落后/触发命中清单逐条复核翻状态；--strict 默认，发版必跑
+  enforcement: local-gate
+  executor: tools/conclusions_sweep.py
+  prevents: S0-C4（11/48 钉版欠账首跑即红）
+  since: 2026-10-10
+
+- id: R-window-gate
+  statement: 窗口矩阵门禁=12/12 × --repeat 5 连续协议 + win_subs==0（单轮通过不作数）
+  enforcement: local-gate
+  executor: tools/_probe_window_matrix.py
+  prevents: 2026-10-08 flake（单轮 12/12 曾作通过线）
+  since: 2026-10-08
+  # 注：脚本默认 --repeat 1 与本规则不一致（第一性审查 §4 P3），Phase C 迁移时改默认值 5。
+
+- id: R-telemetry-cost
+  statement: 遥测插桩成本守卫（记录/采样/直方图分面预算，重放法）——改遥测必跑
+  enforcement: local-gate
+  executor: tests/config/test_telemetry_cost.py
+  prevents: full 档成本回归 +4.385% 超限事故（0.24.1 轮归因）
+  since: 2026-09-17
+
+# ── advisory：方向性提醒（10 席，现用 9 席、留 1 席备用） ─────────────
+# 无执行体的文化条款住这里；满额即"自动化或删除"。每条 prevent 仍是真实事故。
+
+- id: adv-measure-first
+  statement: 先量后做——结论必须带实测数字（evidence schema 强制），禁止凭直觉推断下结论
+  enforcement: advisory
+  prevents: 旧铁律 1
+  since: 2026-08-20
+
+- id: adv-frame-align
+  statement: 准确率必须按帧对齐真值测，勿用置信度代理（"羸弱→赢弱"退化而置信度反升 0.9433→0.9700）
+  enforcement: advisory
+  prevents: 旧铁律 3
+  since: 2026-09-12
+
+- id: adv-per-slice
+  statement: 逐片核查，均值不作唯一判据（5 片均值 ±0.01pp 曾支持"无负面影响"，第 6 片翻案）
+  enforcement: advisory
+  prevents: 旧铁律 4
+  since: 2026-09-12
+
+- id: adv-gt-audit
+  statement: 真值本身要抽查——版本、剥零、哨兵、时间基准都可能错（P0-6 翻案）
+  enforcement: advisory
+  prevents: 旧铁律 5
+  since: 2026-09-10
+
+- id: adv-no-numeric-reshuffle
+  statement: 数值不重排——重构不改任何算法数值/阈值语义；行为变更走金标重录
+  enforcement: advisory
+  prevents: 旧 rules.yaml prose 条
+  since: 2026-09-16
+
+- id: adv-reuse-primitives
+  statement: 测量原语复用——先 import tools/_measure_lib.py（VIDS/ROI/capture_shas/paired_ab）；同一原语第 3 份实现必须下沉入库
+  enforcement: advisory
+  prevents: S0-I2（paired_ab 零调用者、ROI 正则 7 份拷贝）
+  since: 2026-10-11
+
+- id: adv-record-via-existing
+  statement: 录金标/跑 A/B 用既有脚本（bench_baseline/bench ab），不自写对照探针
+  enforcement: advisory
+  prevents: S0-I2（5 探针各写 AB/BA 轮转）
+  since: 2026-09-16
+
+- id: adv-stress-harness
+  statement: 压测/复现子进程必须带硬超时且进度逐行落文件——管道吞 stdout 会把挂死伪装成在跑（735s/1543s 两坑）
+  enforcement: advisory
+  prevents: 旧 rules.yaml 压测条（同款坑三次）
+  since: 2026-09-17
+
+- id: adv-commit-slim
+  statement: 提交信息=结果一句话+指针（结论进注册表、叙事进当轮 log），正文建议 ≤600 字符
+  enforcement: advisory
+  prevents: S0-E4（提交正文均长 523 字符、max 792）
+  since: 2026-10-12
+
+# ── 收编记录（2026-10-12 Phase A：旧规则去向，防"为什么没了"型翻查） ──
+# 旧 AGENTS 铁律 6"别按看起来旧删脚本" → 删除，被生命周期政策取代（宪章 4）
+#   （探针/结论的删除是正常操作，数字先进 benchmarks、档案在 git）。
+# 旧 rules.yaml"大文档禁整读"（hook 档） → 删除，裁决 9（harness 无关）+大档案出树。
+# 旧 rules.yaml"历史文档 append-only" → 删除，被生命周期政策取代（log 发版出树）。
+# 旧 rules.yaml"不引用废弃根模块 shim" → 删除（shims 已于 0.14.1 物理删除，规则随之失效）。
+# 旧 rules.yaml"数值不重排/测量原语复用/压测规格"（prose 档） → 收编为上方 advisory。
+# 旧铁律 1/3/4/5（测量文化） → 收编为 adv-measure-first/frame-align/per-slice/gt-audit。
+# 旧铁律 7"探针放 tools/_probe_*.py" → 演化为 R-registry-schema 的路径约定（tools/probes/）。
+# 旧铁律 8/9/10 → R-version-tag/R-version-advice/R-deprecation-due（纸面协议机器化）。
+# 旧纪律审计 26 项 → 逐项折入上方 ci 规则；编号体系废弃（按名引用）。

@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **156 个 `.py`**（26,325 行），其中 138 个是探针
+`tools/` 现有 **157 个 `.py`**（26,506 行），其中 138 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -25,6 +25,7 @@
 
 | 文件 | 行 | 用途 | 引用 |
 |---|---:|---|---|
+| `refs.py` | 181 | 引用解析器（新制 R-refs-resolve 执行体）：注册名 token 解析+substrate 校验；负测 tests/registry/test_refs.py | charter.md；registry/ | 
 | `e2e_smoke.py` | 368 | 端到端冒烟 / 真值验证（真实视频） | README「测试」节 |
 | `bench_hybrid.py` | 171 | hybrid 解码基准 | PERF §4 |
 | `probe_decode_rates.py` | 125 | 各后端解码速率探测 | — |
