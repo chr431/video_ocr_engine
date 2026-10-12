@@ -145,7 +145,7 @@ def _compile_module(src: str, name_expressions: tuple):
                 tmp = f.with_name(f.name + ".tmp")
                 tmp.write_bytes(code)
                 tmp.replace(f)
-            except OSError:
+            except OSError:  # noqa: S110 缓存盘不可写：功能不受影响，仅失去跨进程复用
                 pass  # 缓存盘不可写：功能不受影响，仅失去跨进程复用
         _KERNEL_MODULE_CACHE[key] = mod
     return mod

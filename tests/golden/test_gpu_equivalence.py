@@ -3,13 +3,13 @@
 这正是 v1 的 1083 vs 1042 缺的那道门：v2 起由 pytest -m gpu 承载，
 金标 --verify 之外的可独立运行等价证明。无 GPU/视频环境自动 skip。
 """
+
 from __future__ import annotations
 
 import os
 
 import pytest
 
-from _paths import ROOT
 
 # 视频注册表单一事实源 = tools/_measure_lib.py（2026-10-11 收敛硬编码 ROI）
 from _measure_lib import ROI, VIDS  # noqa: E402
@@ -25,6 +25,7 @@ def _gpu_available() -> bool:
     try:
         import video_ocr_engine.gpu.device as gp  # noqa: F401
         from decord import gpu  # noqa: F401
+
         return True
     except Exception:
         return False
@@ -32,25 +33,33 @@ def _gpu_available() -> bool:
 
 pytestmark = [
     pytest.mark.gpu,
-    pytest.mark.skipif(not _gpu_available(),
-                       reason="需要 GPU + decord fork + 真值视频"),
+    pytest.mark.skipif(not _gpu_available(), reason="需要 GPU + decord fork + 真值视频"),
 ]
 
 
 def _extract(pipeline: str):
     from video_ocr_engine import FieldExtractor
+
     os.environ["GPU_PIPELINE"] = pipeline
     try:
-        ex = FieldExtractor(VID, ROI, frame_start=WIN[0], frame_end=WIN[1],
-                            decode_backend="nvdec", ocr_backend="tensorrt",
-                            keep_crops=False)
+        ex = FieldExtractor(
+            VID,
+            ROI,
+            frame_start=WIN[0],
+            frame_end=WIN[1],
+            decode_backend="nvdec",
+            ocr_backend="tensorrt",
+            keep_crops=False,
+        )
         r = ex.extract()
     finally:
         os.environ.pop("GPU_PIPELINE", None)
-    return ([[s.start, s.end, s.rep_frame] for s in r.segments],
-            [s.text for s in r.segments],
-            [s.confidence for s in r.segments],
-            r.meta.get("degraded_reason"))
+    return (
+        [[s.start, s.end, s.rep_frame] for s in r.segments],
+        [s.text for s in r.segments],
+        [s.confidence for s in r.segments],
+        r.meta.get("degraded_reason"),
+    )
 
 
 def test_host_gpu_backends_bitwise_equivalent():

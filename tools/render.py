@@ -18,7 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 ROOT = Path(__file__).resolve().parent.parent
 REGISTRY = ROOT / "registry"
@@ -209,6 +209,9 @@ def check() -> list[str]:
             continue
         if want[key].strip() != path.read_text(encoding="utf-8").strip():
             errors.append(f"{path.relative_to(ROOT)}: 与源不一致（--write 重渲染）")
+    errors.extend(bare_cr("charter.md"))
+    for p in sorted(REGISTRY.glob("*.yaml")):
+        errors.extend(bare_cr(p.relative_to(ROOT).as_posix()))
     errors.extend(path_liveness(_load(REGISTRY / "conclusions.yaml")))
     return errors
 
@@ -222,11 +225,11 @@ def write() -> int:
 
 
 def _utf8_stdout() -> None:
+    import io
+
     for s in (sys.stdout, sys.stderr):
-        try:
+        if isinstance(s, io.TextIOWrapper):  # 重定向/包裹流无需重配
             s.reconfigure(encoding="utf-8")
-        except (AttributeError, ValueError, OSError):
-            pass  # 非 TextIOWrapper（重定向）时无需重配
 
 
 if __name__ == "__main__":

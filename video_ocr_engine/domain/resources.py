@@ -497,7 +497,7 @@ class _HostCounters:
                 c = ctypes.c_uint()
                 if int(nvml.nvmlDeviceGetClockInfo(h, 1, ctypes.byref(c))) == 0:
                     s["sm_mhz"] = int(c.value)
-            except Exception:
+            except Exception:  # noqa: S110 单次时钟读数失败：留 None（不可用≠0），不上抛
                 pass  # 单次时钟读数失败：留 None（不可用≠0），不上抛
         if self._get_cycles is not None:
             s["cycles"] = self._get_cycles()

@@ -24,12 +24,10 @@ fps/codec），数据行 frame,text,...。--roi-from-truth 自动读头；--veri
 
 退出码：0=通过；1=功能/性能校验失败（墙钟异常）；2=参数错误。
 """
+
 from __future__ import annotations
 
 import argparse
-import csv
-import json
-import math
 import os
 import statistics
 import sys
@@ -38,7 +36,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import numpy as np  # noqa: E402
 
 from video_ocr_engine import FieldExtractor  # noqa: E402
 from video_ocr_engine.domain.video_utils import nvdec_available, tensorrt_available  # noqa: E402
@@ -46,12 +43,9 @@ from video_ocr_engine.domain.video_utils import nvdec_available, tensorrt_availa
 CONFIGS = {
     "gpu_yuv": dict(ocr_backend="auto", rep_crop_format="yuv"),
     "gpu_gray": dict(ocr_backend="auto", rep_crop_format="gray"),
-    "gpu_keepoff": dict(ocr_backend="auto", rep_crop_format="gray",
-                        keep_crops=False),
-    "host_trt": dict(ocr_backend="auto", rep_crop_format="yuv",
-                     force_aspect=1.5),
-    "host_cpu": dict(decode_backend="cpu", ocr_backend="cpu",
-                     rep_crop_format="yuv"),
+    "gpu_keepoff": dict(ocr_backend="auto", rep_crop_format="gray", keep_crops=False),
+    "host_trt": dict(ocr_backend="auto", rep_crop_format="yuv", force_aspect=1.5),
+    "host_cpu": dict(decode_backend="cpu", ocr_backend="cpu", rep_crop_format="yuv"),
     "hybrid": dict(decode_backend="hybrid", rep_crop_format="yuv"),
     "gpu_onnx": dict(ocr_backend="cpu", rep_crop_format="yuv"),
 }
@@ -85,14 +79,13 @@ def parse_truth(path: Path):
     2026-09-10 在 --roi-from-truth 实测踩中并修复）。
     """
     import re
+
     meta, rows = {}, []
     with open(path, encoding="utf-8-sig") as f:
         for line in f:
             line = line.rstrip("\n").rstrip("\r")
             if line.startswith("#"):
-                m = re.search(
-                    r"roi\s*=\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)",
-                    line)
+                m = re.search(r"roi\s*=\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", line)
                 if m:
                     meta["roi"] = tuple(int(g) for g in m.groups())
                 for kv in line.strip().lstrip("#").split(","):
@@ -125,17 +118,24 @@ def run_once(video, roi, frames, stride, cfg, truth_meta):
     if truth_meta and cfg.startswith("host_trt") and "force_aspect" not in kwargs:
         pass  # host_trt 固定 force_aspect=1.5
     # gpu_onnx：默认门控只允许 NVDEC+TRT，实验组合需强制开关
-    forced_env = (cfg == "gpu_onnx")
+    forced_env = cfg == "gpu_onnx"
     old_env = os.environ.get("GPU_PIPELINE")
     if forced_env:
         os.environ["GPU_PIPELINE"] = "1"
     try:
         ex = FieldExtractor(
-            video, roi,
+            video,
+            roi,
             frame_start=truth_meta.get("frame_start", 0),
-            frame_end=(truth_meta.get("frame_start", 0) + frames
-                       if truth_meta.get("frame_start") is not None else frames),
-            sample_stride=stride, keep_frames=True, **kwargs)
+            frame_end=(
+                truth_meta.get("frame_start", 0) + frames
+                if truth_meta.get("frame_start") is not None
+                else frames
+            ),
+            sample_stride=stride,
+            keep_frames=True,
+            **kwargs,
+        )
         t0 = time.perf_counter()
         result = ex.extract()
         wall = time.perf_counter() - t0
@@ -171,12 +171,15 @@ def check_result(ex, res, cfg, roi, stride):
             if ex._yuv_output:
                 h, w = roi[3] - roi[1] + 1, roi[2] - roi[0] + 1
                 if c.ndim != 2 or c.shape[0] != h + (h + 1) // 2 or c.shape[1] != w:
-                    errs.append(f"{cfg}: yuv rep_crop 形状异常 {c.shape} 期望 "
-                                f"({h + (h + 1) // 2},{w})")
+                    errs.append(
+                        f"{cfg}: yuv rep_crop 形状异常 {c.shape} 期望 ({h + (h + 1) // 2},{w})"
+                    )
                     break
-            elif c.ndim not in (2, 3) or c.shape[-3:-1] != (
-                    roi[3] - roi[1] + 1, roi[2] - roi[0] + 1) and c.shape[:2] != (
-                    roi[3] - roi[1] + 1, roi[2] - roi[0] + 1):
+            elif (
+                c.ndim not in (2, 3)
+                or c.shape[-3:-1] != (roi[3] - roi[1] + 1, roi[2] - roi[0] + 1)
+                and c.shape[:2] != (roi[3] - roi[1] + 1, roi[2] - roi[0] + 1)
+            ):
                 errs.append(f"{cfg}: gray rep_crop 形状异常 {c.shape}")
                 break
     return errs
@@ -190,8 +193,7 @@ def verify_truth(res, meta, rows, min_match):
     for s in segs:
         t = truth_by_frame.get(s.start)
         if t is None:
-            t = min(truth_by_frame.items(),
-                    key=lambda kv: abs(kv[0] - s.start))[1]
+            t = min(truth_by_frame.items(), key=lambda kv: abs(kv[0] - s.start))[1]
         if _text_match(s.text, t):
             matched += 1
         elif len(examples) < 6:
@@ -205,19 +207,23 @@ def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--video", required=True)
     ap.add_argument("--roi", help="x1,y1,x2,y2（缺省从 --truth 头读）")
     ap.add_argument("--truth", type=Path)
     ap.add_argument("--roi-from-truth", action="store_true")
     ap.add_argument("--frames", type=int, default=3000, help="采样源帧窗口长")
-    ap.add_argument("--stride", type=int, default=1,
-                    help="采样步长（默认 1；⚠️ racelog_test 全部视频一律 "
-                         "stride=1 防漏信息——2026-09-10 用户重申；stride>1 "
-                         "仅用于字幕场景：字幕更新频率慢，允许稀疏采样）")
-    ap.add_argument("--configs", default=",".join(CONFIGS),
-                    help="功能矩阵配置名，逗号分隔")
+    ap.add_argument(
+        "--stride",
+        type=int,
+        default=1,
+        help="采样步长（默认 1；⚠️ racelog_test 全部视频一律 "
+        "stride=1 防漏信息——2026-09-10 用户重申；stride>1 "
+        "仅用于字幕场景：字幕更新频率慢，允许稀疏采样）",
+    )
+    ap.add_argument("--configs", default=",".join(CONFIGS), help="功能矩阵配置名，逗号分隔")
     ap.add_argument("--probe", action="store_true", help="只打印视频元数据")
     ap.add_argument("--verify", action="store_true", help="与 --truth 对比匹配率")
     ap.add_argument("--perf", action="store_true", help="性能测试")
@@ -234,18 +240,23 @@ def main():
     truth_meta, truth_rows = ({}, [])
     if args.truth:
         truth_meta, truth_rows = parse_truth(args.truth)
-        print(f"truth 元数据: roi={truth_meta.get('roi')} "
-              f"frames={truth_meta.get('frame_start')}.."
-              f"{truth_meta.get('frame_end')} codec={truth_meta.get('codec')} "
-              f"fps={truth_meta.get('fps')} 行数={len(truth_rows)}")
+        print(
+            f"truth 元数据: roi={truth_meta.get('roi')} "
+            f"frames={truth_meta.get('frame_start')}.."
+            f"{truth_meta.get('frame_end')} codec={truth_meta.get('codec')} "
+            f"fps={truth_meta.get('fps')} 行数={len(truth_rows)}"
+        )
 
     roi = None
     if args.roi:
         roi = tuple(int(v) for v in args.roi.split(","))
     elif args.roi_from_truth and truth_meta.get("roi"):
         _roi = truth_meta["roi"]
-        roi = tuple(_roi) if isinstance(_roi, (tuple, list)) else tuple(
-            int(v) for v in str(_roi).split(","))
+        roi = (
+            tuple(_roi)
+            if isinstance(_roi, (tuple, list))
+            else tuple(int(v) for v in str(_roi).split(","))
+        )
     if len(roi or ()) != 4:
         print("需要 --roi 'x1,y1,x2,y2' 或 --roi-from-truth")
         return 2
@@ -253,42 +264,44 @@ def main():
     # ── probe：解码器元数据 + 后端可用性 ──
     if args.probe:
         from decord import VideoReader, cpu
+
         vr = VideoReader(str(video), ctx=cpu(0), num_threads=4)
         print(f"视频: {video.name}")
-        print(f"  frames={len(vr)} codec={vr.get_codec()} "
-              f"avg_fps={vr.get_avg_fps()} ")
+        print(f"  frames={len(vr)} codec={vr.get_codec()} avg_fps={vr.get_avg_fps()} ")
         try:
             import decord.video_reader as _vrm
+
             print("  roi_api=", hasattr(_vrm, "_CAPI_VideoReaderSetRoi"))
-        except Exception:
-            pass
-        print(f"  nvdec_available={nvdec_available(str(video))} "
-              f"tensorrt_available={tensorrt_available()}")
+        except Exception:  # noqa: S110 探测性属性清理无副作用
+            pass  # 探测性属性清理无副作用
+        print(
+            f"  nvdec_available={nvdec_available(str(video))} "
+            f"tensorrt_available={tensorrt_available()}"
+        )
         return 0
 
     cfgs = [c.strip() for c in args.configs.split(",") if c.strip() in CONFIGS]
-    unknown = [c.strip() for c in args.configs.split(",")
-               if c.strip() and c.strip() not in CONFIGS]
+    unknown = [c.strip() for c in args.configs.split(",") if c.strip() and c.strip() not in CONFIGS]
     if unknown:
         print(f"未知配置: {unknown}（可选 {list(CONFIGS)}）")
         return 2
 
     frame_start = int(truth_meta.get("frame_start", 0))
-    frame_end = min(frame_start + args.frames,
-                    int(truth_meta.get("frame_end", 1 << 60)))
-    print(f"\n== 功能矩阵 ==  roi={roi} frames=[{frame_start},{frame_end}) "
-          f"stride={args.stride}")
+    frame_end = min(frame_start + args.frames, int(truth_meta.get("frame_end", 1 << 60)))
+    print(f"\n== 功能矩阵 ==  roi={roi} frames=[{frame_start},{frame_end}) stride={args.stride}")
 
     all_ok = True
     base_texts = None
     results = {}
     for cfg in cfgs:
         try:
-            ex, res, wall = run_once(str(video), roi, frame_end - frame_start,
-                                     args.stride, cfg, truth_meta)
+            ex, res, wall = run_once(
+                str(video), roi, frame_end - frame_start, args.stride, cfg, truth_meta
+            )
         except Exception as e:
             all_ok = False
             import traceback
+
             traceback.print_exc()
             print(f"  [{cfg}] 失败: {type(e).__name__}: {e}")
             if not args.keep_going:
@@ -296,10 +309,12 @@ def main():
             continue
         errs = check_result(ex, res, cfg, roi, args.stride)
         texts = sorted({s.text for s in res.segments if s.text})
-        print(f"  [{cfg}] 段={len(res.segments)} 文本={len(texts)} "
-              f"墙钟={wall:.2f}s 后端={res.meta.get('backend')} "
-              f"OCR={res.meta.get('ocr_backend')} "
-              f"空文本={sum(1 for s in res.segments if not s.text)}")
+        print(
+            f"  [{cfg}] 段={len(res.segments)} 文本={len(texts)} "
+            f"墙钟={wall:.2f}s 后端={res.meta.get('backend')} "
+            f"OCR={res.meta.get('ocr_backend')} "
+            f"空文本={sum(1 for s in res.segments if not s.text)}"
+        )
         for e in errs:
             all_ok = False
             print(f"      ✗ {e}")
@@ -317,31 +332,33 @@ def main():
     # ── verify：与 ground truth 逐段对比 ──
     if args.verify and truth_rows:
         print("\n== 文本验证 vs ground truth ==")
-        for cfg in (cfgs or [list(results)[0]]):
+        for cfg in cfgs or [list(results)[0]]:
             if cfg not in results:
                 continue
-            ratio, ok, examples = verify_truth(results[cfg], truth_meta,
-                                               truth_rows, args.min_match)
+            ratio, ok, examples = verify_truth(results[cfg], truth_meta, truth_rows, args.min_match)
             all_ok &= ok
-            print(f"  [{cfg}] 匹配率={ratio:.1%}"
-                  f"{' ✓' if ok else ' ✗ (<' + str(args.min_match) + ')'}")
+            print(
+                f"  [{cfg}] 匹配率={ratio:.1%}{' ✓' if ok else ' ✗ (<' + str(args.min_match) + ')'}"
+            )
             for fr, got, want in examples:
                 print(f"      帧{fr}: 提取={got!r} 真值={want!r}")
 
     # ── perf：重复跑 + 分相剖面 ──
     if args.perf:
         perf_cfg = args.configs.split(",")[0] if not cfgs else cfgs[0]
-        print(f"\n== 性能测试 ==  配置={perf_cfg} runs={args.runs} "
-              f"frames={frame_end - frame_start} stride={args.stride}")
+        print(
+            f"\n== 性能测试 ==  配置={perf_cfg} runs={args.runs} "
+            f"frames={frame_end - frame_start} stride={args.stride}"
+        )
         walls, timings = [], []
         for i in range(args.runs):
             enve = os.environ.get("ENGINE_PROFILE")
             if i == args.runs - 1:
                 os.environ["ENGINE_PROFILE"] = "1"
             try:
-                ex, res, wall = run_once(str(video), roi,
-                                         frame_end - frame_start, args.stride,
-                                         perf_cfg, truth_meta)
+                ex, res, wall = run_once(
+                    str(video), roi, frame_end - frame_start, args.stride, perf_cfg, truth_meta
+                )
             finally:
                 if enve is None:
                     os.environ.pop("ENGINE_PROFILE", None)
@@ -349,15 +366,21 @@ def main():
                     os.environ["ENGINE_PROFILE"] = enve
             walls.append(wall)
             timings.append(dict(res.timing))
-            print(f"  run{i + 1}: 墙钟={wall:.3f}s "
-                  f"分段={len(res.segments)} 时序={ {k: round(v, 3) for k, v in res.timing.items()} }")
-        print(f"  中位数墙钟={statistics.median(walls):.3f}s "
-              f"min={min(walls):.3f}s max={max(walls):.3f}s")
+            print(
+                f"  run{i + 1}: 墙钟={wall:.3f}s "
+                f"分段={len(res.segments)} 时序={ {k: round(v, 3) for k, v in res.timing.items()} }"
+            )
+        print(
+            f"  中位数墙钟={statistics.median(walls):.3f}s "
+            f"min={min(walls):.3f}s max={max(walls):.3f}s"
+        )
         base = float(truth_meta.get("fps") or 0) or max(1.0, res.fps)
         n_src = frame_end - frame_start
-        print(f"  采样帧={n_src // args.stride} 等效源帧吞吐≈"
-              f"{n_src / statistics.median(walls):.0f} fps(源帧) "
-              f"@视频 {base:.1f} fps")
+        print(
+            f"  采样帧={n_src // args.stride} 等效源帧吞吐≈"
+            f"{n_src / statistics.median(walls):.0f} fps(源帧) "
+            f"@视频 {base:.1f} fps"
+        )
     print("\n== 结论 ==")
     print("  PASS" if all_ok else "  FAIL")
     return 0 if all_ok else 1

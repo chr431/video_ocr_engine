@@ -34,12 +34,12 @@ W1 直方图**不进基础重放**：它按事件量计费（0.165µs/事件，�
 ≈ 1.0ms），单列在 `test_full_tier_histogram_cost_is_bounded`（8ms 宽
 上限）——不与基础面预算混算，各自的回退各自抓。
 """
+
 from __future__ import annotations
 
 import statistics
 import time
 
-import pytest
 
 from video_ocr_engine.domain.metrics import METRICS, Metrics
 from video_ocr_engine.pipeline.report import build_report
@@ -52,12 +52,9 @@ GAUGE_KEYS = 10
 CHECKPOINTS = 4
 REPLAYS = 300
 
-_SPANS = [n for n in METRICS.names()
-          if METRICS.spec(n).kind == "span"][:9]
-_COUNTERS = [n for n in METRICS.names()
-             if METRICS.spec(n).kind == "counter"][:COUNTER_KEYS]
-_GAUGES = [n for n in METRICS.names()
-           if METRICS.spec(n).kind == "gauge"][:GAUGE_KEYS]
+_SPANS = [n for n in METRICS.names() if METRICS.spec(n).kind == "span"][:9]
+_COUNTERS = [n for n in METRICS.names() if METRICS.spec(n).kind == "counter"][:COUNTER_KEYS]
+_GAUGES = [n for n in METRICS.names() if METRICS.spec(n).kind == "gauge"][:GAUGE_KEYS]
 
 
 def _one_run(m: Metrics) -> None:
@@ -72,13 +69,19 @@ def _one_run_base(m: Metrics) -> None:
     for i in range(SPAN_SAMPLES):
         m.record_span(_SPANS[i % len(_SPANS)], 0.001)
     for _ in range(TOTALS_EVENTS):
-        m.counter("pipeline.consume_feed_n")   # TOTALS 逐事件的 n 计数
+        m.counter("pipeline.consume_feed_n")  # TOTALS 逐事件的 n 计数
     for name in _COUNTERS:
         m.counter(name, 3)
     for i, name in enumerate(_GAUGES):
         m.gauge(name, float(i))
-    build_report(m, wall=1.0, config_digest="x" * 8, n_segments=1083,
-                 backend="decord/CPU", ocr_backend="tensorrt")
+    build_report(
+        m,
+        wall=1.0,
+        config_digest="x" * 8,
+        n_segments=1083,
+        backend="decord/CPU",
+        ocr_backend="tensorrt",
+    )
 
 
 def _median_cost(fn, repeats: int, tier: str = "full") -> float:
@@ -89,7 +92,7 @@ def _median_cost(fn, repeats: int, tier: str = "full") -> float:
     （正是本文件存在的目的）。恢复 `Metrics(tier)` 后增量才真实。
     """
     _warm_env_fingerprint()
-    fn(Metrics(tier))                        # 预热（首次含集合/字典建立）
+    fn(Metrics(tier))  # 预热（首次含集合/字典建立）
     out = []
     for _ in range(repeats):
         m = Metrics(tier)
@@ -111,7 +114,8 @@ def _warm_env_fingerprint() -> None:
 def test_environment_fingerprint_is_cached():
     """首 run 付一次指纹成本，之后必须接近零（否则每 run +20–43ms）。"""
     from video_ocr_engine.pipeline import report as R
-    R._ENV_CACHE = None                       # 模拟新进程
+
+    R._ENV_CACHE = None  # 模拟新进程
     t = time.perf_counter()
     R.environment()
     first = time.perf_counter() - t
@@ -159,7 +163,7 @@ def test_full_tier_checkpoint_sampling_cost_is_bounded():
     """
     m = Metrics("full")
     for ph in ("open", "calibrate", "decode", "ocr"):
-        m.checkpoint(ph)                      # 预热：NVML 单例/psutil 首调
+        m.checkpoint(ph)  # 预热：NVML 单例/psutil 首调
     out = []
     for _ in range(REPLAYS):
         m = Metrics("full")
@@ -168,13 +172,16 @@ def test_full_tier_checkpoint_sampling_cost_is_bounded():
             m.checkpoint(ph)
         out.append((time.perf_counter() - t) * 1000.0)
     ms = statistics.median(out)
-    assert ms <= 2.0, "full 相位采样面 %.3fms/run（4×checkpoint，含线程" \
+    assert ms <= 2.0, (
+        "full 相位采样面 %.3fms/run（4×checkpoint，含线程"
         "账本快照），超预算 2ms——checkpoint 路径被塞入昂贵调用了" % ms
+    )
 
 
 def test_off_tier_records_nothing():
     """off 档一行关闭：NULL_METRICS 全部 no-op，且拿不到探针。"""
     from video_ocr_engine.domain.metrics import NULL_METRICS
+
     assert NULL_METRICS.tier == "off" and not NULL_METRICS.enabled
     for name in _SPANS:
         NULL_METRICS.record_span(name, 0.1)
@@ -196,8 +203,7 @@ def test_full_tier_histogram_cost_is_bounded():
     （两者合计 = full 档确定性成本下界，对应 full_pct 1.2% 限）。
     """
     _warm_env_fingerprint()
-    keys = [n for n in METRICS.names()
-            if METRICS.spec(n).kind == "histogram"]
+    keys = [n for n in METRICS.names() if METRICS.spec(n).kind == "histogram"]
     assert len(keys) == 7, "TOTALS 直方图键数变了：%s" % keys
 
     def one(m):
@@ -223,7 +229,7 @@ def test_l1_checkpoint_is_microsecond_scale():
     真把昂贵调用塞进边界会立刻被这里抓到。
     """
     m = Metrics("full")
-    for i in range(32):                     # 先把探针建出来（惰性）
+    for i in range(32):  # 先把探针建出来（惰性）
         m.checkpoint("warm%d" % i)
     probes = m._resources
     t = time.perf_counter()
@@ -238,7 +244,7 @@ def test_snapshot_and_report_scale_with_records():
     """收尾快照/报告组装随**记录键数**而非样本数增长（drain 一次合并）。"""
     _warm_env_fingerprint()
     m = Metrics("full")
-    for i in range(SPAN_SAMPLES * 4):       # 4× 真实样本量
+    for i in range(SPAN_SAMPLES * 4):  # 4× 真实样本量
         m.record_span(_SPANS[i % len(_SPANS)], 0.001)
     t = time.perf_counter()
     rep = build_report(m, wall=1.0)

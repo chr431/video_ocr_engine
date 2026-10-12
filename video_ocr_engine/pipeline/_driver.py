@@ -53,7 +53,7 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None, preopened_vr=None):
     if not frames:
         try:
             vr.close()
-        except Exception:
+        except Exception:  # noqa: S110 清理路径：close 失败无需上抛（资源由进程回收）
             pass  # 清理路径：close 失败无需上抛（资源由进程回收）
         raise ValueError(
             f"帧区间为空: frame_start={spec.frame_start}, frame_end={spec.frame_end}, total={total}"
@@ -64,7 +64,7 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None, preopened_vr=None):
         logger.debug("begin_reading 失败进入回退清理", exc_info=True)
         try:
             vr.close()
-        except Exception:
+        except Exception:  # noqa: S110 清理路径：close 失败无需上抛
             pass  # 清理路径：close 失败无需上抛
         raise
     if spec.prof_end is not None:
@@ -81,7 +81,7 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None, preopened_vr=None):
         logger.debug("OCR 会话启动失败进入清理", exc_info=True)
         try:
             vr.close()
-        except Exception:
+        except Exception:  # noqa: S110 清理路径：close 失败无需上抛（资源由进程回收）
             pass  # 清理路径：close 失败无需上抛（资源由进程回收）
         raise
     results = ocr_session.results
@@ -99,7 +99,7 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None, preopened_vr=None):
         lane.abort(ocr_session)
         try:
             vr.close()
-        except Exception:
+        except Exception:  # noqa: S110 清理路径：close 失败无需上抛（资源由进程回收）
             pass  # 清理路径：close 失败无需上抛（资源由进程回收）
         raise
     if not _calib_ok:
@@ -178,7 +178,7 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None, preopened_vr=None):
                 )
         try:
             vr.close()  # hybrid 探针/资源释放：显式停止生产者线程
-        except Exception:
+        except Exception:  # noqa: S110 清理路径：close 失败无需上抛（资源由进程回收）
             pass  # 清理路径：close 失败无需上抛（资源由进程回收）
         lane.release()
     if ocr_err:

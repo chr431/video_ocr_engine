@@ -53,8 +53,9 @@ PERFORMACE_REPORT.txt
 gpu_kernels/
 ocr_engines/*.engine
 
-# bench run registry（append-only 本地证据，§8.6 N-4）
-bench/
+# bench run registry（append-only 本地滚动证据）；发版快照除外（version_advice snapshot-bench，树内留近两版）
+bench/*
+!bench/snapshots/
 
 # 探针/基准运行日志与一次性调试 dump（run 产物，非源码；与 bench/ 同政策）
 # 例：tools/_bench_mig*_*.log（22 个，零引用）、/_spy_{new,old}.json

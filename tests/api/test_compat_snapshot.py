@@ -20,6 +20,7 @@ v1 的公共面在这里**逐字冻结**：v2 strangler 迁移（S1–S5）期�
 `tests/api/test_engine_imports.py` 的 ENGINE_MODULES 必须同步改为包内路径
 （见 docs/MIGRATION.md §1），这是删除动作的完整清单。
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -30,14 +31,16 @@ import pytest
 
 def _snapshot_signature():
     from video_ocr_engine import FieldExtractor
+
     sig = inspect.signature(FieldExtractor.__init__)
     pos, kw = [], []
     for name, p in sig.parameters.items():
         if name == "self":
             continue
         d = "<required>" if p.default is p.empty else repr(p.default)
-        (pos if p.default is p.empty and p.kind is p.POSITIONAL_OR_KEYWORD
-         else kw).append("%s=%s" % (name, d))
+        (pos if p.default is p.empty and p.kind is p.POSITIONAL_OR_KEYWORD else kw).append(
+            "%s=%s" % (name, d)
+        )
     return pos, kw
 
 
@@ -45,12 +48,23 @@ def test_signature_frozen():
     pos, kw = _snapshot_signature()
     assert pos == ["video_path=<required>", "roi=<required>"]
     assert kw == [
-        "frame_start=None", "frame_end=None", "force_aspect=0.0",
-        "decode_backend='auto'", "ocr_backend='auto'",
-        "buffer_size=None", "fill_width=None", "C=None", "sample_stride=1",
-        "progress_cb=None", "cancel_check=None", "rep_crop_format=None",
-        "keep_crops=True", "keep_frames=True", "merge_similar=True",
-        "merge_similar_threshold=None", "merge_text_sep=None",
+        "frame_start=None",
+        "frame_end=None",
+        "force_aspect=0.0",
+        "decode_backend='auto'",
+        "ocr_backend='auto'",
+        "buffer_size=None",
+        "fill_width=None",
+        "C=None",
+        "sample_stride=1",
+        "progress_cb=None",
+        "cancel_check=None",
+        "rep_crop_format=None",
+        "keep_crops=True",
+        "keep_frames=True",
+        "merge_similar=True",
+        "merge_similar_threshold=None",
+        "merge_text_sep=None",
     ]
 
 
@@ -61,6 +75,7 @@ def test_defaults_are_engine_config_objects():
     （根 shim 已删除）。"""
     from video_ocr_engine import FieldExtractor
     import video_ocr_engine.config.constants as config
+
     sig = inspect.signature(FieldExtractor.__init__)
     assert sig.parameters["sample_stride"].default is config.DEFAULT_SAMPLE_STRIDE
     assert sig.parameters["merge_similar"].default is config.DEFAULT_MERGE_SIMILAR
@@ -68,22 +83,55 @@ def test_defaults_are_engine_config_objects():
 
 def test_dataclass_fields_frozen():
     from video_ocr_engine import ExtractedSegment, ExtractionResult
+
     assert [f.name for f in dataclasses.fields(ExtractedSegment)] == [
-        "start", "end", "frames", "rep_frame", "text", "confidence",
-        "rep_crop"]
+        "start",
+        "end",
+        "frames",
+        "rep_frame",
+        "text",
+        "confidence",
+        "rep_crop",
+    ]
     assert [f.name for f in dataclasses.fields(ExtractionResult)] == [
-        "segments", "frames", "fps", "timing", "meta"]
+        "segments",
+        "frames",
+        "fps",
+        "timing",
+        "meta",
+    ]
     assert callable(getattr(ExtractionResult, "rep_crop_rgb", None))
 
 
-META_KEYS = {"backend", "ocr_backend", "codec", "n_segments",
-             "engine_version", "color_range", "rep_crop_format",
-             "degraded_reason", "params"}
-PARAMS_KEYS = {"roi", "frame_start", "frame_end", "decode_backend",
-               "ocr_backend", "sample_stride", "fill_width", "force_aspect",
-               "rep_crop_format", "keep_crops", "keep_frames",
-               "merge_similar", "merge_similar_threshold", "merge_text_sep",
-               "buffer_size", "C"}
+META_KEYS = {
+    "backend",
+    "ocr_backend",
+    "codec",
+    "n_segments",
+    "engine_version",
+    "color_range",
+    "rep_crop_format",
+    "degraded_reason",
+    "params",
+}
+PARAMS_KEYS = {
+    "roi",
+    "frame_start",
+    "frame_end",
+    "decode_backend",
+    "ocr_backend",
+    "sample_stride",
+    "fill_width",
+    "force_aspect",
+    "rep_crop_format",
+    "keep_crops",
+    "keep_frames",
+    "merge_similar",
+    "merge_similar_threshold",
+    "merge_text_sep",
+    "buffer_size",
+    "C",
+}
 TIMING_KEYS = {"decode", "ocr", "ocr_tail"}
 
 
@@ -96,44 +144,68 @@ def test_meta_param_timing_key_sets_frozen():
 def test_package_exports_and_root_modules():
     import video_ocr_engine as pkg
     import video_ocr_engine.config.constants as _const
+
     for name in ("FieldExtractor", "ExtractedSegment", "ExtractionResult"):
         assert getattr(pkg, name) is not None
     assert pkg.__version__ == _const.__version__
     import importlib
+
     # 2026-09-19：六个根模块 shim 已删除 → 断言包内路径可导入
-    for mod in ("video_ocr_engine.config.constants",
-                "video_ocr_engine.domain.segmentation",
-                "video_ocr_engine.domain.video_utils",
-                "video_ocr_engine.ocr.native",
-                "video_ocr_engine.ocr.trt",
-                "video_ocr_engine.gpu.context"):
+    for mod in (
+        "video_ocr_engine.config.constants",
+        "video_ocr_engine.domain.segmentation",
+        "video_ocr_engine.domain.video_utils",
+        "video_ocr_engine.ocr.native",
+        "video_ocr_engine.ocr.trt",
+        "video_ocr_engine.gpu.context",
+    ):
         assert importlib.import_module(mod) is not None
 
 
 def test_env_name_constants_frozen():
     import video_ocr_engine.config.constants as config
+
     names = sorted(n for n in dir(config) if n.endswith("_ENV"))
-    assert len(names) == 22   # OCR_CPU_BACKEND 随 ORT 移除删除（2026-09-14）
+    assert len(names) == 22  # OCR_CPU_BACKEND 随 ORT 移除删除（2026-09-14）
     # 名字快照（附录 C 全表的键集合 + SEG_MERGE_DENSE_GATE_ENV）
-    assert names == sorted([
-        "OCR_THREADS_ENV", "OCR_BATCH_ENV", "OCR_GAMMA_ENV",
-        "OCR_PAD_SMALL_ENV", "OCR_ROI_AUTOCROP_ENV",
-        "OCR_ROI_AUTOCROP_MARGIN_ENV", "OCR_ROI_AUTOCROP_MIN_GAIN_ENV",
-        "OCR_REORDER_WINDOW_ENV", "OCR_INSTANCES_ENV", "TEXT_SEP_MERGE_ENV",
-        "SEG_MERGE_DENSE_GATE_ENV",
-        "DECODE_THREADS_ENV", "GPU_PIPELINE_ENV", "GPU_PIPELINE_STREAM_ENV",
-        "GPU_CTC_ENV", "ENGINE_PROFILE_ENV", "TRT_SUBPROBE_ENV",
-        "DEBUG_BOUNDS_ENV", "HYBRID_CPU_THREADS_ENV",
-        "GPU_PIPELINE_DRAINER_ENV",
-        "TRT_FP16_ENV", "TRT_DEFER_SYNC_ENV"])
+    assert names == sorted(
+        [
+            "OCR_THREADS_ENV",
+            "OCR_BATCH_ENV",
+            "OCR_GAMMA_ENV",
+            "OCR_PAD_SMALL_ENV",
+            "OCR_ROI_AUTOCROP_ENV",
+            "OCR_ROI_AUTOCROP_MARGIN_ENV",
+            "OCR_ROI_AUTOCROP_MIN_GAIN_ENV",
+            "OCR_REORDER_WINDOW_ENV",
+            "OCR_INSTANCES_ENV",
+            "TEXT_SEP_MERGE_ENV",
+            "SEG_MERGE_DENSE_GATE_ENV",
+            "DECODE_THREADS_ENV",
+            "GPU_PIPELINE_ENV",
+            "GPU_PIPELINE_STREAM_ENV",
+            "GPU_CTC_ENV",
+            "ENGINE_PROFILE_ENV",
+            "TRT_SUBPROBE_ENV",
+            "DEBUG_BOUNDS_ENV",
+            "HYBRID_CPU_THREADS_ENV",
+            "GPU_PIPELINE_DRAINER_ENV",
+            "TRT_FP16_ENV",
+            "TRT_DEFER_SYNC_ENV",
+        ]
+    )
 
 
 DELETED_NAMES = {
-    "video_ocr_engine": ("gray_output", "yuv_output", "SegmentPipeline",
-                         "extract_speed_value", "correct_segments"),
+    "video_ocr_engine": (
+        "gray_output",
+        "yuv_output",
+        "SegmentPipeline",
+        "extract_speed_value",
+        "correct_segments",
+    ),
     "video_ocr_engine.config.constants": ("TEXT_SEP_MERGE_CONTRAST",),
-    "video_ocr_engine.gpu.context": ("select_backend", "get_engine_type",
-                                     "get_setup_advice"),
+    "video_ocr_engine.gpu.context": ("select_backend", "get_engine_type", "get_setup_advice"),
     # 0.16.0（R2 删除轮）：v1 逃生门与跨视频并发池
     "video_ocr_engine.config.resolve": ("ENV_WINS",),
 }
@@ -144,6 +216,7 @@ def test_deleted_names_stay_deleted():
     import video_ocr_engine.config.constants as cfg
     import video_ocr_engine.gpu.context as gctx
     import video_ocr_engine.config.resolve as rsv
+
     for name in DELETED_NAMES["video_ocr_engine"]:
         assert not hasattr(pkg, name), name
     for name in DELETED_NAMES["video_ocr_engine.config.constants"]:
@@ -157,6 +230,7 @@ def test_deleted_names_stay_deleted():
 def test_pool_module_stays_deleted():
     """ExtractionPool（0.15 废弃 → 0.16.0 删除）不得静默复活。"""
     import importlib
+
     with pytest.raises(ImportError):
         importlib.import_module("video_ocr_engine.pipeline.pool")
 
@@ -164,6 +238,7 @@ def test_pool_module_stays_deleted():
 def test_models_dir_alias():
     import video_ocr_engine.ocr.native as ocr_native
     import video_ocr_engine.ocr.trt as ocr_trt
+
     assert hasattr(ocr_native, "_models_dir")
     assert hasattr(ocr_trt, "_models_dir")
 

@@ -6,6 +6,7 @@ C10 回退（GPU 校准形状不符 → 宿主）与校准异常清理在 P1 前
 fallback 分支 **reader 不 close**（宿主路径复用，fallback_vr 移交）、
 会话收尾、设备释放；abort 分支全量清理后原异常上抛。
 """
+
 from __future__ import annotations
 
 import pytest
@@ -45,9 +46,9 @@ def _spec(vr, session):
         frame_end = 10
         sample_stride = 1
         C = 12.0
-        yuv_output = False        # _GpuLane.__init__ 读取
+        yuv_output = False  # _GpuLane.__init__ 读取
         color_range = 0
-        bin_thresh_ref = [0]      # after_calibrate 读写（F-4 盒）
+        bin_thresh_ref = [0]  # after_calibrate 读写（F-4 盒）
         on_bin_thresh = None
         fps_box = [None]
         metrics = NULL_METRICS
@@ -72,10 +73,10 @@ class _StubLane(_GpuLane):
         self._ctx = None
 
     def after_open(self, vr) -> None:
-        pass   # 免 gpu.device 装配（无 GPU 环境可跑）
+        pass  # 免 gpu.device 装配（无 GPU 环境可跑）
 
     def calibrate(self, spec, vr, frames, ocr_session):
-        return False, 0    # 强制走 C10 回退分支
+        return False, 0  # 强制走 C10 回退分支
 
 
 class _RaisingLane(_StubLane):
@@ -93,9 +94,9 @@ def test_fallback_branch_preserves_reader_and_releases_device():
     res = run_segment_pipeline(spec, GpuRunResult(), lane, None, None)
     assert res.fell_back_to_host is True
     assert res.fallback_vr is vr
-    assert vr.closed is False        # reader 移交宿主路径，不 close
+    assert vr.closed is False  # reader 移交宿主路径，不 close
     assert session.finished == 1
-    assert len(lane.releases) == 1   # 设备侧临时缓冲已释放
+    assert len(lane.releases) == 1  # 设备侧临时缓冲已释放
 
 
 def test_calibrate_exception_cleans_up_and_reraises():
@@ -112,6 +113,7 @@ def test_calibrate_exception_cleans_up_and_reraises():
 
 
 # ═════════════ P3：中途失败语义（流中断 / cancel / OCR worker 死）═════════════
+
 
 class _OKLane(_StubLane):
     """全成功路径桩：校准 (True, th)、帧流可注入行为、emit/similar 空转。"""
@@ -130,7 +132,7 @@ class _OKLane(_StubLane):
         self._put_ocr = ocr_session.put
 
     def after_stream(self) -> None:
-        pass   # 桩无生产者线程
+        pass  # 桩无生产者线程
 
     def stop_consume(self) -> None:
         pass
@@ -170,7 +172,7 @@ def test_cancel_mid_stream_cleans_up():
         raise KeyboardInterrupt("用户取消模拟")
 
     spec.cancel = staticmethod(_cancel)
-    lane = _OKLane(spec, n_items=150)   # k=100 处触发 on_cancel
+    lane = _OKLane(spec, n_items=150)  # k=100 处触发 on_cancel
     with pytest.raises(KeyboardInterrupt):
         run_segment_pipeline(spec, GpuRunResult(), lane, None, None)
     assert calls["n"] >= 1

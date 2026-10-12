@@ -4,13 +4,13 @@
 正常返回时组装，挂死/硬崩溃时**什么都不输出**——本模块给两条独立通道，
 这里逐条钉死其行为（全部合成，不需要视频/GPU）。
 """
+
 from __future__ import annotations
 
 import json
 import time
 
-from video_ocr_engine.domain.diagnostics import (
-    NULL_DIAG, Progress, RunJournal, StallWatchdog, open_diagnostics)
+from video_ocr_engine.domain.diagnostics import NULL_DIAG, Progress, RunJournal, open_diagnostics
 
 
 def test_null_diag_is_a_noop():
@@ -18,7 +18,7 @@ def test_null_diag_is_a_noop():
     assert NULL_DIAG.armed is False
     assert NULL_DIAG.progress is None
     assert NULL_DIAG.tick("any.phase") is None
-    NULL_DIAG.watch_depth("q", lambda: 0)      # 不抛、不记录
+    NULL_DIAG.watch_depth("q", lambda: 0)  # 不抛、不记录
     assert NULL_DIAG.report() == {}
     assert NULL_DIAG.stop() == {}
     assert open_diagnostics(None) is NULL_DIAG
@@ -47,10 +47,10 @@ def test_watchdog_does_not_start_until_first_tick(tmp_path):
 def test_watchdog_dumps_stall_scene(tmp_path):
     """核心行为：无进展超过阈值 → 自动落现场，且现场可读、含线程栈。"""
     diag = open_diagnostics(str(tmp_path / "r.json"))
-    diag.watchdog._stall_s = 0.25          # 测试内收紧（不改模块默认）
+    diag.watchdog._stall_s = 0.25  # 测试内收紧（不改模块默认）
     diag.watchdog._poll_s = 0.05
     try:
-        diag.tick("pipeline.decode")       # 只打一次心跳，然后"挂住"
+        diag.tick("pipeline.decode")  # 只打一次心跳，然后"挂住"
         deadline = time.monotonic() + 3.0
         dumps = []
         while time.monotonic() < deadline and not dumps:
@@ -129,7 +129,7 @@ def test_journal_is_bounded(tmp_path):
     j = RunJournal(tmp_path / "b.jsonl")
     for i in range(5000):
         j.add("bulk", i=i)
-    assert len(j._buf) <= 4096           # 环形缓冲上限
+    assert len(j._buf) <= 4096  # 环形缓冲上限
     j.flush()
     assert j.report()["written"] == 4096
     assert j.report()["dropped"] >= 904
@@ -151,6 +151,7 @@ def test_report_gains_diagnostics_key_only_when_armed():
     """schema 演进只加键、且未 arming 时不写空值冒充。"""
     from video_ocr_engine.domain.metrics import make_metrics
     from video_ocr_engine.pipeline.report import REPORT_VERSION, build_report
+
     m = make_metrics("full")
     m.record_span("pipeline.run", 1.0)
     plain = build_report(m, wall=1.0)

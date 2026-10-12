@@ -13,6 +13,7 @@
   python tools/env_doctor.py --audit    # 硬编码路径审计（CI/纪律审计调用）
   python tools/env_doctor.py --json     # 机器可读（探针/CI 消费）
 """
+
 from __future__ import annotations
 
 import argparse
@@ -29,7 +30,11 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 from env_probe import (  # noqa: E402
-    decord_fact, ffmpeg_fact, fork_build_dll, video_dir)
+    decord_fact,
+    ffmpeg_fact,
+    fork_build_dll,
+    video_dir,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -45,12 +50,20 @@ _ABS_PATH_RE = re.compile(r"""(?<![\w#])[A-Za-z]:[\\/](?:[\w.\- ]+[\\/])*[\w.\- 
 _PATH_REGEX_SELFTEST_BAD = r'VIDS = {"k": r"D:\Videos\racelog_test\x.mp4"}'
 #: 无路径行不得命中（防正则过宽）。
 _PATH_REGEX_SELFTEST_CLEAN = "out = compute(frames[0], n=3)"
-_AUDIT_SKIP_DIRS = {".git", "build", "dist", "__pycache__", ".venv", "node_modules",
-                    "bench", "docs"}          # docs/log 的历史叙事可提及路径
+_AUDIT_SKIP_DIRS = {
+    ".git",
+    "build",
+    "dist",
+    "__pycache__",
+    ".venv",
+    "node_modules",
+    "bench",
+    "docs",
+}  # docs/log 的历史叙事可提及路径
 _AUDIT_EXTS = {".py", ".bat", ".ps1", ".cmd"}
-# 允许的例外：环境事实源本身（它就是放默认路径的地方）+ 文档生成器
-# （_split_claude_md.py 把 AGENTS.md 内容作为字符串数据持有，非代码路径）
-_AUDIT_ALLOW_FILES = {"tools/env_probe.py", "tools/_split_claude_md.py"}
+# 允许的例外：环境事实源本身（它就是放默认路径/正则自检样例的地方）。
+# 行级豁免：命中行行尾注释含 `hardcode-ok:` 即放行（内联豁免，无登记账本）。
+_AUDIT_ALLOW_FILES = {"tools/env_probe.py", "tools/env_doctor.py"}
 
 
 def _iter_audit_files():
@@ -64,8 +77,9 @@ def _iter_audit_files():
                 yield Path(dirpath) / f
 
 
-_DISCIPLINE_BASELINE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                    "_discipline_baseline.json")
+_DISCIPLINE_BASELINE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "_discipline_baseline.json"
+)
 
 
 def _load_baseline_abs() -> dict[str, int]:
@@ -94,8 +108,11 @@ def _env_default_lines(tree) -> set[int]:
         if not isinstance(node, ast.Call):
             continue
         f = node.func
-        name = getattr(f, "attr", "") if isinstance(f, ast.Attribute) else (
-            f.id if isinstance(f, ast.Name) else "")
+        name = (
+            getattr(f, "attr", "")
+            if isinstance(f, ast.Attribute)
+            else (f.id if isinstance(f, ast.Name) else "")
+        )
         if name not in ("get", "setdefault", "getenv"):
             continue
         val = getattr(f, "value", None)
@@ -151,19 +168,22 @@ def _abs_path_hits_raw() -> list[tuple[str, int, str]]:
                 body = getattr(node, "body", None)
                 if isinstance(body, list) and body:
                     first = body[0]
-                    if (isinstance(first, ast.Expr)
-                            and isinstance(first.value, ast.Constant)
-                            and isinstance(first.value.value, str)):
-                        end = getattr(first.value, "end_lineno",
-                                      first.value.lineno)
+                    if (
+                        isinstance(first, ast.Expr)
+                        and isinstance(first.value, ast.Constant)
+                        and isinstance(first.value.value, str)
+                    ):
+                        end = getattr(first.value, "end_lineno", first.value.lineno)
                         doc_lines.update(range(first.value.lineno, end + 1))
             env_lines = _env_default_lines(tree)
         for i, line in enumerate(text.splitlines(), 1):
             if i in doc_lines:
                 continue
             if line.lstrip().startswith("#"):
-                continue          # 整行注释
-            code_part = line.split("#", 1)[0]   # 行尾注释也剔除
+                continue  # 整行注释
+            if "# hardcode-ok:" in line:
+                continue  # 行级内联豁免（带理由）
+            code_part = line.split("#", 1)[0]  # 行尾注释也剔除
             if not _ABS_PATH_RE.search(code_part):
                 continue
             # 例外：env 默认值（可被覆盖）——纪律允许的形态（整段豁免：
@@ -185,7 +205,7 @@ def audit_hardcoded_paths() -> list[str]:
     """
     fail = _abs_path_selftest_failed()
     if fail:
-        return [fail]       # 自检失败（伪命中）原样上报，不做存量过滤
+        return [fail]  # 自检失败（伪命中）原样上报，不做存量过滤
     hits = _abs_path_hits_raw()
     # 存量豁免、增量严格（判据同 except_pass_by_file）：按文件计数，
     # 超出登记数的部分才算新增违规。
@@ -208,14 +228,17 @@ def deploy_fork_dll(dry: bool = False) -> int:
     # 并锁住，--deploy 随即无法覆盖它——实测"目标 DLL 被占用"）。find_spec
     # 只解析路径不执行包代码。
     import importlib.util
+
     spec = importlib.util.find_spec("decord")
     if spec is None or not spec.submodule_search_locations:
         print("✗ decord 未安装（site-packages 无该包）")
         return 2
     src = fork_build_dll()
     if src is None:
-        print("✗ 找不到 fork 构建产物（decord 仓 build-*\\decord.dll）\n"
-              "  先构建：cd /d <decord repo> && rebuild_dev.bat")
+        print(
+            "✗ 找不到 fork 构建产物（decord 仓 build-*\\decord.dll）\n"
+            "  先构建：cd /d <decord repo> && rebuild_dev.bat"
+        )
         return 2
     dst = Path(list(spec.submodule_search_locations)[0]) / "decord.dll"
     if not dst.parent.is_dir():
@@ -234,8 +257,7 @@ def deploy_fork_dll(dry: bool = False) -> int:
     try:
         shutil.copy2(src, dst)
     except PermissionError:
-        print("✗ 目标 DLL 被占用——先关掉所有 python 进程再试：\n"
-              "  taskkill /F /IM python.exe")
+        print("✗ 目标 DLL 被占用——先关掉所有 python 进程再试：\n  taskkill /F /IM python.exe")
         return 3
     now_md5 = _md5(dst)
     if now_md5 != src_md5:
@@ -269,6 +291,7 @@ def _sync_libinfo(src: Path, dst: Path) -> int:
 
 def _md5(p: Path) -> str:
     import hashlib
+
     h = hashlib.md5()
     try:
         with open(p, "rb") as f:
@@ -286,24 +309,31 @@ def health_report() -> dict:
     dc = decord_fact(expect_dll=build)
     vd = video_dir()
     return {
-        "ffmpeg": {"path": str(ff.path) if ff.ok else None,
-                   "source": ff.source, "version": ff.version,
-                   "ok": ff.ok, "note": ff.note},
-        "decord": {"path": str(dc.path) if dc.ok else None,
-                   "version": dc.version, "md5": dc.md5,
-                   "ok": dc.ok and not dc.note, "note": dc.note},
-        "fork_build": {"path": str(build) if build else None,
-                       "md5": _md5(build) if build else ""},
+        "ffmpeg": {
+            "path": str(ff.path) if ff.ok else None,
+            "source": ff.source,
+            "version": ff.version,
+            "ok": ff.ok,
+            "note": ff.note,
+        },
+        "decord": {
+            "path": str(dc.path) if dc.ok else None,
+            "version": dc.version,
+            "md5": dc.md5,
+            "ok": dc.ok and not dc.note,
+            "note": dc.note,
+        },
+        "fork_build": {"path": str(build) if build else None, "md5": _md5(build) if build else ""},
         "video_dir": {"path": str(vd), "exists": vd.is_dir()},
     }
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--deploy", action="store_true",
-                    help="把 fork 构建产物同步到 site-packages（md5 校验）")
-    ap.add_argument("--audit", action="store_true",
-                    help="硬编码绝对路径审计（违规→非零退出）")
+    ap.add_argument(
+        "--deploy", action="store_true", help="把 fork 构建产物同步到 site-packages（md5 校验）"
+    )
+    ap.add_argument("--audit", action="store_true", help="硬编码绝对路径审计（违规→非零退出）")
     ap.add_argument("--json", action="store_true", help="机器可读输出")
     ap.add_argument("--dry-run", action="store_true", help="只报告不落地")
     args = ap.parse_args()
@@ -314,15 +344,18 @@ def main() -> int:
     if args.audit:
         bad = audit_hardcoded_paths()
         if args.json:
-            print(json.dumps({"hardcoded_paths": bad}, ensure_ascii=False,
-                             indent=1))
+            print(json.dumps({"hardcoded_paths": bad}, ensure_ascii=False, indent=1))
         elif bad:
-            print("✗ 发现 %d 处硬编码绝对路径（纪律：外部依赖路径须经 "
-                  "tools/env_probe.py 解析）：" % len(bad))
+            print(
+                "✗ 发现 %d 处硬编码绝对路径（纪律：外部依赖路径须经 "
+                "tools/env_probe.py 解析）：" % len(bad)
+            )
             for b in bad:
                 print("   " + b)
-            print("\n修法：from env_probe import ffmpeg_bin; "
-                  "ffmpeg_bin('ffmpeg')（或 os.environ.get 带默认值）")
+            print(
+                "\n修法：from env_probe import ffmpeg_bin; "
+                "ffmpeg_bin('ffmpeg')（或 os.environ.get 带默认值）"
+            )
         else:
             print("✓ 无硬编码绝对路径")
         return 1 if bad else 0
@@ -336,26 +369,25 @@ def main() -> int:
     print("环境体检（env_doctor）")
     print("=" * 68)
     ff = rep["ffmpeg"]
-    print("  %-10s %s  %s" % ("ffmpeg", "✓" if ff["ok"] else "✗",
-                              ff["path"] or ff["note"]))
+    print("  %-10s %s  %s" % ("ffmpeg", "✓" if ff["ok"] else "✗", ff["path"] or ff["note"]))
     if ff["version"]:
         print("            版本 %s（来源 %s）" % (ff["version"], ff["source"]))
     dc = rep["decord"]
-    print("  %-10s %s  %s" % ("decord", "✓" if dc["ok"] else "✗",
-                              dc["path"] or dc["note"]))
+    print("  %-10s %s  %s" % ("decord", "✓" if dc["ok"] else "✗", dc["path"] or dc["note"]))
     if dc["version"]:
         print("            版本 %s  md5 %s" % (dc["version"], dc["md5"][:12]))
     fb = rep["fork_build"]
-    print("  %-10s %s  %s" % ("fork构建", "✓" if fb["path"] else "✗",
-                              fb["path"] or "未找到（未构建？）"))
+    print(
+        "  %-10s %s  %s"
+        % ("fork构建", "✓" if fb["path"] else "✗", fb["path"] or "未找到（未构建？）")
+    )
     if fb["md5"]:
         print("            md5 %s" % fb["md5"][:12])
     if dc["note"]:
         print("\n  ⚠️ %s" % dc["note"])
         print("  修复：python tools/env_doctor.py --deploy")
     vd = rep["video_dir"]
-    print("  %-10s %s  %s" % ("视频目录", "✓" if vd["exists"] else "✗",
-                              vd["path"]))
+    print("  %-10s %s  %s" % ("视频目录", "✓" if vd["exists"] else "✗", vd["path"]))
     ok = ff["ok"] and dc["ok"]
     print("\n%s" % ("✓ 环境就绪" if ok else "✗ 环境有问题（见上）"))
     return 0 if ok else 1

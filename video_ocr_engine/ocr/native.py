@@ -129,7 +129,7 @@ def release_lane_prep(eng) -> None:
     if pre is not None:
         try:
             pre.release()
-        except Exception:
+        except Exception:  # noqa: S110 释放失败仅余进程退出兜底
             pass  # 释放失败仅余进程退出兜底
         eng._gpu_pre_lane = None
 
@@ -218,14 +218,14 @@ class OcrEngine:
                 # GpuPreprocessor 借用 TRT stream，必须先释放其缓冲，
                 # 再由 TrtEngine 销毁共享 stream。
                 self._gpu_pre.release()
-            except Exception:
-                pass
+            except Exception:  # noqa: S110 清理路径尽力而为（引擎可能已失效）
+                pass  # 清理路径尽力而为（引擎可能已失效）
             self._gpu_pre = None
         if self._trt is not None:
             try:
                 self._trt.release()
-            except Exception:
-                pass
+            except Exception:  # noqa: S110 清理路径尽力而为（引擎可能已失效）
+                pass  # 清理路径尽力而为（引擎可能已失效）
             self._trt = None
 
     # ═══════════════ CPU 后端（OpenVINO 唯一，ORT 已移除）═══════════════
@@ -745,8 +745,8 @@ def checkin_ocr_engine(engine: OcrEngine) -> None:
     for eng in evicted:
         try:
             eng.release()
-        except Exception:
-            pass
+        except Exception:  # noqa: S110 清理路径尽力而为（引擎可能已失效）
+            pass  # 清理路径尽力而为（引擎可能已失效）
 
 
 def release_ocr_pool() -> None:
@@ -768,5 +768,5 @@ def release_ocr_pool() -> None:
     for eng in idle_all:
         try:
             eng.release()
-        except Exception:
-            pass
+        except Exception:  # noqa: S110 清理路径尽力而为（引擎可能已失效）
+            pass  # 清理路径尽力而为（引擎可能已失效）

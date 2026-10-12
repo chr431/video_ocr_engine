@@ -14,16 +14,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      # 精选集 E4/E7/E9/F（2026-09-20 稳健性轮立的零违规基线）+
-      # mypy（S4 拆分轮落地）；配置都在 pyproject
-      # numpy：R2 起 mypy 面含 import numpy 的文件——本地装了 numpy 而此
-      # job 没装，CI 自 0.16.0 起持续 import-not-found 假红
-      # format --check：2026-10-10 风格轮一次性归位后挡增量（双引号/
-      # line-length 100 的单一执行面，政策见 pyproject [tool.ruff]）
-      - run: pip install ruff mypy numpy
-      - run: ruff check video_ocr_engine/
-      - run: ruff format --check video_ocr_engine/
+      # 面扩展（S3 Phase D，裁决 18）：产品 + standing 工具 + tests；
+      # tools/probes/ 由 pyproject extend-exclude 排除（轮内证据）。
+      # S110（2026-10-12 内联化，裁决 16）：豁免=行内 noqa+理由，无登记账本。
+      # numpy/pyyaml：mypy/refs/render 面的依赖（refs/render 读 registry yaml）。
+      - run: pip install ruff mypy numpy pyyaml
+      - run: ruff check video_ocr_engine/ tools/ tests/
+      - run: ruff format --check video_ocr_engine/ tools/ tests/
       - run: mypy
+
+  institution:
+    # 制度面（S1 分层 L2）：引用可解析 + 视图一致 + 注册表/弃用/manifest 审计。
+    # fetch-depth: 0——refs 的墓碑索引与 render 的证据锚点要读全历史与 tag。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -e ".[dev]" pyyaml
+      - run: python tools/refs.py check
+      - run: python tools/render.py --check
+      - run: python tools/_audit_ext.py
+        env:
+          PYTHONIOENCODING: utf-8
 
   test:
     strategy:
@@ -38,7 +54,7 @@ jobs:
           python-version: '3.11'
       - name: Install engine
         run: |
-          pip install -e ".[dev]"
+          pip install -e ".[dev]" pyyaml
       - name: Run unit tests (CPU, no video / no decord / no GPU)
         run: python -m pytest tests/ -v
         env:

@@ -1,13 +1,17 @@
 """NV12 Y 展开 / RGB 转换 / resize / 标准预处理（`video_ocr_engine.domain.video_utils`）。"""
+
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from video_ocr_engine.domain.video_utils import (
-    _gray, _np_resize, _nv12_luma, _nv12_luma_full,
+    _gray,
+    _np_resize,
+    _nv12_luma,
+    _nv12_luma_full,
     nv12_to_rgb,
 )
+
 # S2：_preprocess_standard 转发壳已删，实现唯一出处 segmentation
 from video_ocr_engine.domain.segmentation import preprocess_standard as _preprocess_standard
 
@@ -35,8 +39,8 @@ def test_luma_limited_lut_is_bitwise_exact():
     "展开是单字节纯函数"这一事实——本测试把 256 个输入全枚举，任何构表
     时的 dtype/舍入偏差都会当场红。
     """
-    from video_ocr_engine.domain.video_utils import (
-        _Y_LIMITED_LUT, _nv12_batch_luma_full)
+    from video_ocr_engine.domain.video_utils import _Y_LIMITED_LUT, _nv12_batch_luma_full
+
     allv = np.arange(256, dtype=np.uint8)
     v = (allv.astype(np.float32) - 16.0) * (255.0 / 219.0)
     expect = np.clip(np.floor(v + 0.5), 0, 255).astype(np.uint8)
@@ -44,15 +48,15 @@ def test_luma_limited_lut_is_bitwise_exact():
 
     # 批量路径（NV12 packed：前 h 行 = Y）与单帧路径共用同一张表
     rng = np.random.default_rng(0)
-    crops = rng.integers(0, 256, (5, 48, 107), dtype=np.uint8)   # h=32
+    crops = rng.integers(0, 256, (5, 48, 107), dtype=np.uint8)  # h=32
     y = crops[:, :32]
-    want = np.clip(np.floor((y.astype(np.float32) - 16.0) * (255.0 / 219.0)
-                            + 0.5), 0, 255).astype(np.uint8)
+    want = np.clip(np.floor((y.astype(np.float32) - 16.0) * (255.0 / 219.0) + 0.5), 0, 255).astype(
+        np.uint8
+    )
     assert np.array_equal(_nv12_batch_luma_full(crops, 0), want)
-    assert np.array_equal(_nv12_batch_luma_full(crops, 1), y)   # full-range 原样
+    assert np.array_equal(_nv12_batch_luma_full(crops, 1), y)  # full-range 原样
     single = rng.integers(0, 256, (51, 32), dtype=np.uint8)
-    assert np.array_equal(_nv12_luma_full(single, 0),
-                          _Y_LIMITED_LUT[single[:34]])
+    assert np.array_equal(_nv12_luma_full(single, 0), _Y_LIMITED_LUT[single[:34]])
 
 
 def test_nv12_to_rgb_shape_even_and_odd():
@@ -147,9 +151,9 @@ def test_nvdec_available_failure_not_cached(monkeypatch):
     monkeypatch.setitem(sys.modules, "decord", fake)
 
     path = "nonexistent_transient_probe_video.mp4"
-    assert nvdec_available(path) is False    # 第一次：瞬态失败
-    assert nvdec_available(path) is True     # 失败未缓存 → 重探成功
-    assert nvdec_available(path) is True     # 成功已缓存 → 不再探测
+    assert nvdec_available(path) is False  # 第一次：瞬态失败
+    assert nvdec_available(path) is True  # 失败未缓存 → 重探成功
+    assert nvdec_available(path) is True  # 成功已缓存 → 不再探测
     assert calls["gpu"] == 2
 
 
@@ -159,7 +163,7 @@ def test_nv12_to_rgb_full_range():
     rows = h + (h + 1) // 2
     crop = np.zeros((rows, w), dtype=np.uint8)
     crop[:h] = 180
-    crop[h:] = 128            # 中性色度
+    crop[h:] = 128  # 中性色度
     rgb = nv12_to_rgb(crop, color_range=1)
     assert rgb.shape == (h, w, 3)
     # full：Y 原样 → 180；limited：(180-16) 展开 → 190，两语义必须不同
@@ -173,8 +177,7 @@ def test_nv12_to_rgb_full_range():
 
 def test_extraction_result_rep_crop_rgb():
     """rep_crop_rgb helper（DESIGN-REVIEW D4）：按 meta 自动选格式/色域。"""
-    from video_ocr_engine._result_types import (ExtractedSegment,
-                                                ExtractionResult)
+    from video_ocr_engine._result_types import ExtractedSegment, ExtractionResult
 
     h, w = 4, 6
     rows = h + (h + 1) // 2
@@ -185,10 +188,9 @@ def test_extraction_result_rep_crop_rgb():
     r = ExtractionResult(meta={"rep_crop_format": "yuv", "color_range": 0})
     rgb = r.rep_crop_rgb(seg)
     assert rgb.shape == (h, w, 3)
-    assert np.all(rgb[..., 0] == rgb[..., 1])     # 中性色度 → 灰
+    assert np.all(rgb[..., 0] == rgb[..., 1])  # 中性色度 → 灰
 
-    gray_seg = ExtractedSegment(start=0, end=1,
-                                rep_crop=np.full((h, w, 1), 77, np.uint8))
+    gray_seg = ExtractedSegment(start=0, end=1, rep_crop=np.full((h, w, 1), 77, np.uint8))
     r2 = ExtractionResult(meta={"rep_crop_format": "gray"})
     rgb2 = r2.rep_crop_rgb(gray_seg)
     assert rgb2.shape == (h, w, 3)

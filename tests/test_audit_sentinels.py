@@ -15,6 +15,7 @@
    才被审计发现）：禁止在 AGENTS 里写易漂移的数字快照，指针式表述
    （「以 INDEX/脚本输出为准」）才是合法形态。
 """
+
 from __future__ import annotations
 
 import ast
@@ -55,17 +56,14 @@ def _dead_candidates() -> list[str]:
             continue
         tree = ast.parse(src)
         for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
-                                 ast.ClassDef)):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 pkg_names.add(node.name)
             elif isinstance(node, ast.Assign):
                 # 模块级 UPPER_CASE 常量（死常量类：DEFAULT_* 孤儿即此类）
                 for t in node.targets:
-                    if (isinstance(t, ast.Name)
-                            and re.fullmatch(r"[A-Z][A-Z0-9_]{3,}", t.id)):
+                    if isinstance(t, ast.Name) and re.fullmatch(r"[A-Z][A-Z0-9_]{3,}", t.id):
                         pkg_names.add(t.id)
-    pkg_names = {n for n in pkg_names
-                 if not n.startswith("__") and n not in ALLOWLIST}
+    pkg_names = {n for n in pkg_names if not n.startswith("__") and n not in ALLOWLIST}
     if not pkg_names:
         return []
     pat = re.compile(r"\b(" + "|".join(sorted(re.escape(n) for n in pkg_names)) + r")\b")
@@ -81,13 +79,11 @@ def _dead_candidates() -> list[str]:
         tree = ast.parse(src)
         for node in ast.walk(tree):
             names: list[str] = []
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
-                                 ast.ClassDef)):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 names.append(node.name)
             elif isinstance(node, ast.Assign):
                 for t in node.targets:
-                    if (isinstance(t, ast.Name)
-                            and re.fullmatch(r"[A-Z][A-Z0-9_]{3,}", t.id)):
+                    if isinstance(t, ast.Name) and re.fullmatch(r"[A-Z][A-Z0-9_]{3,}", t.id):
                         names.append(t.id)
             for name in names:
                 if name.startswith("__") or name in ALLOWLIST:
@@ -99,11 +95,11 @@ def _dead_candidates() -> list[str]:
 
 def test_no_dead_definitions_or_constants() -> None:
     """产品包内定义（函数/类/模块级常量）在全仓词法引用 ≤1 即死代码。"""
-    findings = [f for f in _dead_candidates()
-                if f.split("  ")[0] not in ALLOWLIST]
+    findings = [f for f in _dead_candidates() if f.split("  ")[0] not in ALLOWLIST]
     assert not findings, (
         "疑似死代码（全仓零引用；动态面请登记 tests/test_audit_sentinels.py"
-        f" 的 ALLOWLIST 并写理由）: {findings}")
+        f" 的 ALLOWLIST 并写理由）: {findings}"
+    )
 
 
 # ── 2. 旧 OCR 标识禁串（0.17.0 改名轮，MIGRATION §6）────────────────
@@ -118,24 +114,26 @@ def test_no_legacy_ort_labels() -> None:
             if "__pycache__" in p.parts:
                 continue
             if p.name == "test_audit_sentinels.py":
-                continue   # 哨兵自身定义禁串表，不算回潮
+                continue  # 哨兵自身定义禁串表，不算回潮
             src = p.read_text(encoding="utf-8", errors="replace")
             for tok in BANNED_TOKENS:
                 if tok in src:
                     hits.append(f"{p.relative_to(ROOT)}: {tok}")
     assert not hits, (
-        f"旧 OCR 标识回潮（0.17.0 起为 openvino/OCR_OV_CHUNK/_init_ov，"
-        f"见 MIGRATION §6）: {hits}")
+        f"旧 OCR 标识回潮（0.17.0 起为 openvino/OCR_OV_CHUNK/_init_ov，见 MIGRATION §6）: {hits}"
+    )
 
 
 # ── 3. architecture.svg 版本哨兵 ────────────────────────────────────
 def test_architecture_svg_version_matches() -> None:
     """README 配图版本标记必须 == 当前版本（AGENTS「改架构同步刷版本号」）。"""
     import video_ocr_engine
+
     svg = (ROOT / "docs" / "architecture.svg").read_text(encoding="utf-8")
     assert f"（{video_ocr_engine.__version__}）" in svg, (
         f"docs/architecture.svg 版本标记未随 {video_ocr_engine.__version__} "
-        "刷新（标题文本内更新版本号）")
+        "刷新（标题文本内更新版本号）"
+    )
 
 
 # ── 4. AGENTS.md 禁硬编码快照计数 ───────────────────────────────────
@@ -152,4 +150,5 @@ def test_agents_has_no_stale_snapshot_counts() -> None:
         m = pat.search(agents)
         assert m is None, (
             f"AGENTS.md 含易漂移的硬编码计数 {m.group()!r}——"
-            "改为指针式（「以 tools/INDEX.md / 脚本输出为准」）")
+            "改为指针式（「以 tools/INDEX.md / 脚本输出为准」）"
+        )

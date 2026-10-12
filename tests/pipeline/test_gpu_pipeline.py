@@ -1,9 +1,11 @@
 """GPU 全驻留管线默认门控与合并模式的单元测试（无需视频/GPU）。"""
+
 from __future__ import annotations
 
 import pytest
 
 from video_ocr_engine import FieldExtractor
+
 # GPU 门控方法在 _gpu_pipeline mixin 模块；模拟可用性需 patch 该模块的
 # nvdec_available / tensorrt_available（split 后不再位于 extractor 命名空间）。
 from video_ocr_engine.gpu import device as _gpu
@@ -100,7 +102,7 @@ def test_content_range_to_crop_margin_math():
     w = 100
     m = max(1, int(round(w * ex._ocr_autocrop_margin_pct / 100.0)))
 
-    assert ex._content_range_to_crop(0, w - 1, w) is None        # 满宽
+    assert ex._content_range_to_crop(0, w - 1, w) is None  # 满宽
     # 内容离边界不足 m → 加余量后仍满宽 → 不裁
     assert ex._content_range_to_crop(m - 1, w - m, w) is None
     # 内容离边界足够远 → 裁到 [first-m, last+1+m)
@@ -172,7 +174,7 @@ def test_merge_effective_mode_resolution(monkeypatch):
     ex = _make()
     assert ex._merge_effective_mode() == "binary"
     monkeypatch.setenv("TEXT_SEP_MERGE", "off")
-    assert ex._merge_effective_mode() == "binary"   # 冻结
+    assert ex._merge_effective_mode() == "binary"  # 冻结
     monkeypatch.setenv("TEXT_SEP_MERGE", "contrast")
     assert _make()._merge_effective_mode() == "binary"  # 构造前生效:归一
     monkeypatch.setenv("TEXT_SEP_MERGE", "2")

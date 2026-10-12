@@ -1,4 +1,5 @@
 """sample_stride（分频采样）参数测试：构造校验（解码路径需 decord，不在此测）。"""
+
 from __future__ import annotations
 
 from video_ocr_engine import FieldExtractor

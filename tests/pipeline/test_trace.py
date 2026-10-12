@@ -8,6 +8,7 @@
 2. **开启成本宽上限**（用户裁决放宽，非 std 预算）：~2.3k 事件的记录
    必须毫秒级；上限取防病理回退的宽松值。
 """
+
 from __future__ import annotations
 
 import json
@@ -35,6 +36,7 @@ def test_record_and_dump_roundtrip(tmp_path):
 
 def test_multithread_buckets_merge(tmp_path):
     import threading
+
     tr = TraceRecorder()
     t = threading.Thread(target=lambda: tr.record("ocr.infer", 10.0, 10.1))
     t.start()
@@ -44,7 +46,7 @@ def test_multithread_buckets_merge(tmp_path):
     info = tr.dump(str(out), wall=1.0)
     d = json.loads(out.read_text(encoding="utf-8"))
     assert info["n_events"] == 2
-    assert d["events"][0][0] == "decode.batch"    # t0 排序跨线程桶
+    assert d["events"][0][0] == "decode.batch"  # t0 排序跨线程桶
 
 
 def test_record_cost_loose_cap():
@@ -54,7 +56,7 @@ def test_record_cost_loose_cap():
     回退——本路径的严格成本不归 std 档 2ms 预算管（用户裁决放宽）。
     """
     cost = 0.0
-    for _ in range(4):                       # 首轮预热，取末轮
+    for _ in range(4):  # 首轮预热，取末轮
         tr = TraceRecorder()
         t0 = time.perf_counter()
         for i in range(2300):
@@ -67,7 +69,9 @@ def test_knob_defaults_off(monkeypatch):
     """旋钮默认空（关闭）；diag 链路把它带进 RunConfig。"""
     monkeypatch.delenv("VOE_TRACE_FILE", raising=False)
     from video_ocr_engine.config.resolve import resolve
+
     rc = resolve()
     assert rc.diag_trace_file == ""
     from video_ocr_engine.config.knobs import KNOBS
+
     assert "diag.trace_file" in {k.name for k in KNOBS.knobs}

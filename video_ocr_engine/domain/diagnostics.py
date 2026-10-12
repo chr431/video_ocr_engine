@@ -120,7 +120,7 @@ class RunJournal:
         if self._fh is not None:
             try:
                 self._fh.close()
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001,S110 — 关闭失败无需上抛：进程即将回收 fd
                 pass  # 关闭失败无需上抛：进程即将回收 fd
             self._fh = None
 
@@ -180,7 +180,7 @@ class StallWatchdog:
             try:
                 fh = open(str(self._prefix) + ".faulthandler.txt", "a")
                 faulthandler.enable(file=fh, all_threads=True)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001,S110 — 原生栈是尽力而为：拿不到也不影响 Python 侧通道
                 pass  # 原生栈是尽力而为：拿不到也不影响 Python 侧通道
         self._th = threading.Thread(target=self._loop, name="voe-watchdog", daemon=True)
         self._th.start()
@@ -221,7 +221,7 @@ class StallWatchdog:
                 payload["metrics_error"] = repr(e)
         try:
             payload["hybrid_stats"] = self._hybrid_stats()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001,S110 — fork 侧统计为可选增强，缺失不影响现场价值
             pass  # fork 侧统计为可选增强，缺失不影响现场价值
         if self._journal is not None:
             self._journal.add("stall", age_s=round(float(age), 3), stall_index=self._stalls)

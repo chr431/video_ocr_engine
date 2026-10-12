@@ -4,6 +4,7 @@ manifest.yaml 记录的期望哈希必须与盘上 case 文件逐字一致——
 忘了 manifest"或反之。录制/复核的真实对账在 `record.py --verify`（须本机
 GPU），本测试只锁"清单与文件不漂移"。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -31,7 +32,9 @@ def _parse_manifest():
 
 def test_manifest_exists_and_complete():
     cases = _parse_manifest()
-    assert len(cases) == 33, "S0 基线应为 33 用例（28+D 组晚起点窗 5，2026-10-08），实际 %d" % len(cases)
+    assert len(cases) == 33, "S0 基线应为 33 用例（28+D 组晚起点窗 5，2026-10-08），实际 %d" % len(
+        cases
+    )
     assert all("sha" in c for c in cases)
 
 
@@ -41,4 +44,8 @@ def test_case_files_match_manifest():
         for fname, want in zip(("stage-calib.json", "stage-ocr.json"), c["sha"]):
             got = hashlib.sha256((d / fname).read_bytes()).hexdigest()[:16]
             assert got == want, "%s/%s 哈希漂移（manifest=%s 盘上=%s）——重录须走 record.py" % (
-                c["id"], fname, want, got)
+                c["id"],
+                fname,
+                want,
+                got,
+            )

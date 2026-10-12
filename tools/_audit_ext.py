@@ -31,7 +31,6 @@ def _product_files():
 
 def check_layering() -> str | None:
     """[14] 模块级导入图无环（P0-1b：v1 本就是 DAG，测试守住）。"""
-    import importlib.util
 
     names = {p.stem: p for p in _product_files()}
     graph = {}
@@ -49,7 +48,8 @@ def check_layering() -> str | None:
                     if a.name in names:
                         deps.add(a.name)
         graph[name] = deps
-    seen, stack = set(), []
+    seen: set[str] = set()
+    stack: list[str] = []
 
     def dfs(n):
         if n in stack:
@@ -175,7 +175,7 @@ def check_rules_schema() -> str | None:
     enforcement ∈ {ci, local-gate, advisory}；非 advisory 须有 executor；
     advisory ≤10（宪章不变量）；每条必有 prevents（举证义务）。
     """
-    import yaml
+    import yaml  # type: ignore[import-untyped]
 
     p = ROOT / "registry" / "rules.yaml"
     if not p.exists():
@@ -275,9 +275,90 @@ def check_decord_pin() -> str | None:
     return None
 
 
+def check_deprecation_due() -> str | None:
+    """弃用到期即红（R-deprecation-due）：remove_in ≤ 当前版本而符号仍活着。
+
+    符号活性按 kind 判：env → config 旋钮注册表 env 名；api → import 链取属性。
+    已移除的到期项自然通过（S0-G5 的 VOE_ENV_WINS 顺延事故由此机器兑现）。
+    """
+    import yaml
+
+    deps = (
+        yaml.safe_load(io.open(ROOT / "registry" / "deprecations.yaml", encoding="utf-8").read())
+        or []
+    )
+    if not deps:
+        return None
+    from video_ocr_engine.config.constants import __version__ as ver
+
+    def vt(s: str) -> tuple[int, ...]:
+        return tuple(int(x) for x in s.split("."))
+
+    for d in deps:
+        m = re.search(r"(\d+\.\d+\.\d+)", str(d.get("remove_in", "")))
+        if not m or vt(ver) < vt(m.group(1)):
+            continue
+        name = str(d.get("name", ""))
+        alive = False
+        if d.get("kind") == "env":
+            from video_ocr_engine.config import KNOBS
+
+            alive = any(k.env == name for k in KNOBS.knobs)
+        else:
+            mod, _, attr = name.rpartition(".")
+            try:
+                import importlib
+
+                alive = bool(attr) and hasattr(importlib.import_module(mod), attr)
+            except Exception:  # noqa: BLE001 — 模块不存在=已删
+                alive = False
+        if alive:
+            return "弃用到期未删：%s（remove_in %s ≤ 当前 %s）" % (name, m.group(1), ver)
+    return None
+
+
+def check_gate_manifest() -> str | None:
+    """门禁 manifest 时效（S2 §4.3）：engine_version=当前版本、decord=钉版。
+
+    manifest 由 tools/version_advice.py gate-manifest 跑金标后落盘并随仓提交；
+    bump 后未重跑金标即在此报红（本机门禁的异地对账底线）。
+    """
+    import yaml
+
+    p = ROOT / "artifacts" / "gates" / "golden.yaml"
+    if not p.is_file():
+        return "artifacts/gates/golden.yaml 缺失（python tools/version_advice.py gate-manifest）"
+    m = yaml.safe_load(io.open(p, encoding="utf-8").read()) or {}
+    from video_ocr_engine.config.constants import __version__ as ver
+
+    if str(m.get("engine_version")) != ver:
+        return "金标 manifest 版本滞后：%s ≠ 当前 %s（bump 后须重跑 gate-manifest）" % (
+            m.get("engine_version"),
+            ver,
+        )
+    try:
+        import decord  # type: ignore[import-not-found]
+    except Exception:  # noqa: BLE001 — CI 无 decord=环境事实
+        return None
+    env = (
+        yaml.safe_load(io.open(ROOT / "registry" / "environment.yaml", encoding="utf-8").read())
+        or {}
+    )
+    pin = str((env.get("dependencies") or {}).get("decord_pin", ""))
+    if str(m.get("decord")) != decord.__version__ or decord.__version__ != pin:
+        return "金标 manifest decord 口径不一致：manifest=%s 本机=%s 钉版=%s" % (
+            m.get("decord"),
+            decord.__version__,
+            pin,
+        )
+    return None
+
+
 CHECKS_EXT = {
     "dead_code_regression": ("dead_code 死代码回归", check_dead_code_regression),
     "decord_pin": ("decord_pin 两仓版本口径", check_decord_pin),
+    "deprecation_due": ("deprecation_due 弃用到期", check_deprecation_due),
+    "gate_manifest": ("gate_manifest 门禁时效", check_gate_manifest),
     "knob_coverage": ("knob_coverage 旋钮依据", check_knob_coverage),
     "layering": ("layering 分层无环", check_layering),
     "metrics_coverage": ("metrics_coverage 指标注册表", check_metrics_coverage),
@@ -289,7 +370,10 @@ CHECKS_EXT = {
 }
 
 if __name__ == "__main__":
-    sys.stdout.reconfigure(encoding="utf-8")
+    import io as _io
+
+    if isinstance(sys.stdout, _io.TextIOWrapper):
+        sys.stdout.reconfigure(encoding="utf-8")
     bad = 0
     for k, (name, fn) in sorted(CHECKS_EXT.items()):
         try:

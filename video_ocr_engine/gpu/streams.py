@@ -137,7 +137,7 @@ def _gpu_release_partial(ctx: _GpuRunCtx) -> None:
     if ctx.analyzer is not None:
         try:
             ctx.analyzer.release()
-        except Exception:
+        except Exception:  # noqa: S110 清理路径：release 失败无需上抛（进程退出兜底）
             pass  # 清理路径：release 失败无需上抛（进程退出兜底）
         ctx.analyzer = None
 

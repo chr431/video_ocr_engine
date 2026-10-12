@@ -181,7 +181,7 @@ def acquire_engines(spec: "SessionSpec") -> "tuple[list, str]":
         while engines:
             try:
                 checkin_ocr_engine(engines.pop())
-            except Exception:
+            except Exception:  # noqa: S110 归池失败无更好的回收路径（原存量语义）
                 pass  # 归池失败无更好的回收路径（原存量语义）
         raise
     return engines, engine_type
@@ -204,7 +204,7 @@ def warmup_engines(spec: "SessionSpec") -> int:
     for eng in engines:
         try:
             checkin_ocr_engine(eng)
-        except Exception:
+        except Exception:  # noqa: S110 归池失败：引擎仍可用，仅失去复用（best-effort 预热）
             pass  # 归池失败：引擎仍可用，仅失去复用（best-effort 预热）
     return n
 
@@ -375,7 +375,7 @@ class OcrSession:
             k32 = ctypes.windll.kernel32
             if not k32.SetThreadPriority(k32.GetCurrentThread(), 1):
                 pass  # 设置失败（句柄/权限）：维持 NORMAL，无正确性影响
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001,S110 — ctypes 缺失/调用失败：维持 NORMAL，无正确性影响（见上 docstring）
             pass  # ctypes 缺失/调用失败：维持 NORMAL，无正确性影响（见上 docstring）
 
     def _worker(self) -> None:
@@ -809,5 +809,5 @@ class OcrSession:
                             eng.release()
                         else:
                             checkin_ocr_engine(eng)
-                    except Exception:
+                    except Exception:  # noqa: S110 归还/释放失败只能忽略：worker 退出路径（存量语义）
                         pass  # 归还/释放失败只能忽略：worker 退出路径（存量语义）

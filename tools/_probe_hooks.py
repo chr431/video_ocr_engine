@@ -22,6 +22,7 @@
 - 重构改了内部布局 → 只改 `POINTS`，然后跑 `python tools/_probe_hooks.py`
   自检（它逐个解析表项，任一项失效即非 0 退出）。
 """
+
 from __future__ import annotations
 
 import importlib
@@ -43,8 +44,7 @@ if _ROOT not in sys.path:
 POINTS: dict[str, tuple[str, str]] = {
     # 分段状态机：P1 驱动合一后唯一构造点在 _driver（旧两后端各自的
     # 构造点已上收；STATE_MACHINE_GPU 随之失效删除——不再有第二个点）
-    "STATE_MACHINE": ("video_ocr_engine.pipeline._driver",
-                      "SegmentStateMachine"),
+    "STATE_MACHINE": ("video_ocr_engine.pipeline._driver", "SegmentStateMachine"),
     # 宿主分段接线（原 _host_pipeline._host_segment_frames，S9 迁入并改名）：
     # P1 后机器接线内联进 _driver.run_segment_pipeline，无函数边界可打；
     # 需要宿主帧流/消费侧取数时用 _HostLane.frame_items（SEGMENT_FRAMES
@@ -52,11 +52,9 @@ POINTS: dict[str, tuple[str, str]] = {
     # 分段原语（调用点即 segmentation 内的模块全局）
     "CLUSTER_WIN3": ("video_ocr_engine.domain.segmentation", "_cluster_win3"),
     "OTSU": ("video_ocr_engine.domain.segmentation", "_otsu"),
-    "TEXT_SEP_BINARY": ("video_ocr_engine.domain.segmentation",
-                        "_text_sep_binary"),
+    "TEXT_SEP_BINARY": ("video_ocr_engine.domain.segmentation", "_text_sep_binary"),
     # 相似段判定（FieldExtractor 方法，按实例打桩）
-    "SEGMENTS_SIMILAR_METHOD": ("video_ocr_engine.extractor",
-                                "FieldExtractor"),
+    "SEGMENTS_SIMILAR_METHOD": ("video_ocr_engine.extractor", "FieldExtractor"),
 }
 
 
@@ -73,7 +71,8 @@ class _Hooks:
             raise KeyError(
                 "未知打桩点 %r；已登记：%s（如需新点位请改 "
                 "tools/_probe_hooks.py 的 POINTS，不要在探针里直接 import "
-                "私有符号）" % (name, ", ".join(sorted(POINTS)))) from None
+                "私有符号）" % (name, ", ".join(sorted(POINTS)))
+            ) from None
 
     def module(self, name: str):
         mod, _sym = self.point(name)
@@ -119,12 +118,11 @@ class _Hooks:
         for name, (mod, sym) in sorted(POINTS.items()):
             try:
                 m = importlib.import_module(mod)
-            except Exception as e:              # noqa: BLE001
+            except Exception as e:  # noqa: BLE001
                 bad.append("%s: 模块 %s 不可导入（%s）" % (name, mod, e))
                 continue
             if not hasattr(m, sym):
-                bad.append("%s: %s 里已无符号 %s —— 请更新 POINTS 表"
-                           % (name, mod, sym))
+                bad.append("%s: %s 里已无符号 %s —— 请更新 POINTS 表" % (name, mod, sym))
         return bad
 
 

@@ -19,6 +19,7 @@
 
 纪律：新增第 3 个重复实现前必须下沉到这里（rules.yaml「测量原语复用」）。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -37,7 +38,7 @@ from env_probe import video_dir  # noqa: E402  环境事实源（RACELOG_VIDEO_D
 
 # ── 视频注册表（单一事实源；bench.py / record.py 均 import 自此）────────
 VIDS: dict[str, str] = {
-    "test5": os.path.join(video_dir(), "test5.mp4"),      # h264, 7761 帧
+    "test5": os.path.join(video_dir(), "test5.mp4"),  # h264, 7761 帧
     "test6_av1": os.path.join(video_dir(), "test6.mp4"),  # av1, 23970 帧
     "test6_h264": os.path.join(video_dir(), "test6_h264.mp4"),
     "test6_hevc": os.path.join(video_dir(), "test6_hevc.mp4"),
@@ -53,40 +54,44 @@ def quick_guard(reason: str = "需要真值视频（RACELOG_VIDEO_DIR）") -> No
     if not has_real_videos:
         try:
             import pytest
+
             pytest.skip(reason)
-        except ImportError:
+        except ImportError:  # noqa: S110 探针上下文：调用方自行判 has_real_videos
             pass  # 探针上下文：调用方自行判 has_real_videos
 
 
 # ── 提取结果指纹（record.py 的 sha 摘要逻辑收敛于此）───────────────────
 def capture_shas(result, keep_crops: bool = False) -> dict:
     """ExtractionResult → 指纹摘要（段结构 / 文本 / 裁切字节）。"""
-    segs = [[s.start, s.end, s.rep_frame, s.text, s.confidence]
-            for s in result.segments]
+    segs = [[s.start, s.end, s.rep_frame, s.text, s.confidence] for s in result.segments]
     out = {
         "n_segments": len(segs),
-        "seg_struct_sha": hashlib.sha256(json.dumps(
-            [[s[0], s[1], s[2]] for s in segs]).encode()).hexdigest(),
-        "text_sha": hashlib.sha256(
-            "".join(s[3] for s in segs).encode()).hexdigest(),
+        "seg_struct_sha": hashlib.sha256(
+            json.dumps([[s[0], s[1], s[2]] for s in segs]).encode()
+        ).hexdigest(),
+        "text_sha": hashlib.sha256("".join(s[3] for s in segs).encode()).hexdigest(),
     }
     if keep_crops:
-        out["crop_sha"] = [hashlib.sha256(
-            (s.rep_crop.tobytes() if s.rep_crop is not None else b"")
-        ).hexdigest()[:16] for s in result.segments]
+        out["crop_sha"] = [
+            hashlib.sha256((s.rep_crop.tobytes() if s.rep_crop is not None else b"")).hexdigest()[
+                :16
+            ]
+            for s in result.segments
+        ]
     return out
 
 
 # ── 配对交错 A/B 计时（臂序轮转 + 同轮配对差分）────────────────────────
-def paired_ab(run_a: Callable[[], float], run_b: Callable[[], float],
-              pairs: int = 6, warmup: int = 1) -> dict:
+def paired_ab(
+    run_a: Callable[[], float], run_b: Callable[[], float], pairs: int = 6, warmup: int = 1
+) -> dict:
     """交错执行两臂（AB/BA 逐对轮转），返回配对差分与带宽摘要。
 
     先各跑 warmup 次预热（引擎池/时钟），再 pairs 对 AB/BA 轮转。
     返回 {"a": [...], "b": [...], "diffs_pct": [...], "band": {...}}；
     band 复用 bench._band（均值 + 3×SE 判据的单一实现）。
     """
-    from bench import _band                      # 惰性 import 防环
+    from bench import _band  # 惰性 import 防环
 
     for _ in range(warmup):
         run_a()
@@ -94,11 +99,17 @@ def paired_ab(run_a: Callable[[], float], run_b: Callable[[], float],
     a: list[float] = []
     b: list[float] = []
     for i in range(pairs):
-        if i % 2 == 0:                           # AB/BA 臂序逐对轮转
-            a.append(run_a()); b.append(run_b())
+        if i % 2 == 0:  # AB/BA 臂序逐对轮转
+            a.append(run_a())
+            b.append(run_b())  # noqa: E702 — 交错对紧凑写法
         else:
-            b.append(run_b()); a.append(run_a())
+            b.append(run_b())
+            a.append(run_a())  # noqa: E702
     diffs = [(y - x) / x * 100.0 for x, y in zip(a, b)]
-    return {"a": a, "b": b, "diffs_pct": diffs,
-            "band": _band(diffs),
-            "median": (statistics.median(a), statistics.median(b))}
+    return {
+        "a": a,
+        "b": b,
+        "diffs_pct": diffs,
+        "band": _band(diffs),
+        "median": (statistics.median(a), statistics.median(b)),
+    }

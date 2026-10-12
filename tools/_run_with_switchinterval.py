@@ -22,10 +22,11 @@ def main() -> int:
         return 1
     interval = float(sys.argv[1])
     sys.setswitchinterval(interval)
-    del sys.argv[1]                      # 剥掉 interval，其余透传
+    del sys.argv[1]  # 剥掉 interval，其余透传
     sys.argv[0] = "bench_hybrid.py"
 
     from bench_hybrid import main as bench_main
+
     return int(bench_main() or 0)
 
 

@@ -30,7 +30,10 @@ import os
 import re
 import sys
 
-sys.stdout.reconfigure(encoding="utf-8")
+import io as _io
+
+if isinstance(sys.stdout, _io.TextIOWrapper):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -74,7 +77,7 @@ def main() -> int:
         import decord
 
         decord_ver = decord.__version__
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001,S110 — decord 未装=环境事实（CI 只装引擎），该列跳过、不判失败
         pass  # decord 未装=环境事实（CI 只装引擎），该列跳过、不判失败
 
     print("=" * 70)

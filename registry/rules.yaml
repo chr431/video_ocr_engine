@@ -53,28 +53,28 @@
 - id: R-registry-schema
   statement: 注册表 schema 校验 + enforcement↔executor 一一对应 + advisory ≤10 + probe 住 tools/probes/
   enforcement: ci
-  executor: tools/_audit_ext.py#rules_schema（lite 版已上；全量 lint Phase D）
+  executor: tools/_audit_ext.py#rules_schema
   prevents: S0-J1（守卫清单自漂）、S0-G3（散文规则堆积）
   since: 2026-10-12
 
 - id: R-deprecation-due
   statement: 弃用表 remove_in 到期而符号仍可导入即红——弃用承诺机器兑现
   enforcement: ci
-  executor: .github/workflows/ci.yml#deprecation-due (Phase D)
+  executor: tools/_audit_ext.py#deprecation_due
   prevents: S0-G5（VOE_ENV_WINS"两版本"实走四版本）
   since: 2026-10-12
 
 - id: R-version-tag
   statement: bump↔同名 tag↔constants 三者一致，缺失即红
   enforcement: ci
-  executor: .github/workflows/ci.yml#version-tag (Phase D)
+  executor: tools/version_advice.py#verify
   prevents: S0-G6（0.9.1/0.9.2 补打、v0.17.2 有提交无 tag）
   since: 2026-10-12
 
 - id: R-version-advice
   statement: bump 档位=确定性判据（公开 API 面或金标 manifest diff 非空→minor，否则 patch），CI 对账，初期零逃生
   enforcement: ci
-  executor: tools/version_advice.py (Phase D)
+  executor: tools/version_advice.py
   prevents: S0-G7（0.25.0 产品面仅版本号 1 行却升 minor）
   since: 2026-10-12
 
@@ -88,7 +88,7 @@
 - id: R-guard-negative
   statement: 每个守卫必须带负测样例（它抓得住的坏例）进 CI——不能失败的守卫是装饰
   enforcement: ci
-  executor: tests/guards/ (Phase D)
+  executor: tests/test_guards.py + tests/registry/*（pytest 内）
   prevents: S0-C1（四类假绿：sweep 永绿/正则盲区/baseline 余量/真缺陷转 skip）
   since: 2026-10-12
 
@@ -102,7 +102,7 @@
 - id: R-bare-cr
   statement: 治理文本裸 CR=0（\r 不跟 \n）
   enforcement: ci
-  executor: .github/workflows/ci.yml#bare-cr (Phase D)
+  executor: tools/render.py --check（视图+charter+registry 裸 CR）
   prevents: 2026-08-31 一次性清 934 处的事故
   since: 2026-08-31
 

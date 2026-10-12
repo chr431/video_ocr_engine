@@ -13,6 +13,7 @@ strangler 迁移（S3/S4/S5）的逐位对账参照系。
 比对口径：timing 仅供参考不比对；其余字段（段结构 / 文本 / 置信度全精度 /
 阈值 / 降级 / crop sha）必须逐位一致。分歧处理遵循 §8.5：默认当 bug。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -31,12 +32,19 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 # 视频注册表单一事实源 = tools/_measure_lib.py（2026-10-11 收敛，与 bench 同源）
 from _measure_lib import ROI, VIDS  # noqa: E402
+
 WIN = (0, 3000)
+
 
 # ── 覆盖矩阵（先做全：解码×管线×OCR 网格 + 编码族 + 格式/标志位）──────
 def _mk(cid, vid, *, env=None, win=WIN, **kw):
-    base = dict(video=vid, roi=ROI["test5" if vid == "test5" else "test6"],
-                frame_start=win[0], frame_end=win[1], keep_crops=False)
+    base = dict(
+        video=vid,
+        roi=ROI["test5" if vid == "test5" else "test6"],
+        frame_start=win[0],
+        frame_end=win[1],
+        keep_crops=False,
+    )
     base.update(kw)
     return {"id": cid, "kwargs": base, "env": env or {}}
 
@@ -46,34 +54,74 @@ MATRIX = []
 for dec in ("cpu", "nvdec", "hybrid"):
     for pipe in (0, 1):
         for ocr in ("cpu", "tensorrt"):  # S3-1 勘误:"onnx"非合法值,v1 静默当 TRT(B3 活案例)
-            MATRIX.append(_mk("A-%s-p%d-%s" % (dec, pipe, ocr), "test5",
-                              decode_backend=dec, ocr_backend=ocr,
-                              env={"GPU_PIPELINE": str(pipe)}))
+            MATRIX.append(
+                _mk(
+                    "A-%s-p%d-%s" % (dec, pipe, ocr),
+                    "test5",
+                    decode_backend=dec,
+                    ocr_backend=ocr,
+                    env={"GPU_PIPELINE": str(pipe)},
+                )
+            )
 # B：格式与标志位（基底 = nvdec + GPU 管线 + TRT）
 for fmt in ("gray", "yuv"):
     for kc in (True, False):
-        MATRIX.append(_mk("B-fmt-%s-kc%d" % (fmt, int(kc)), "test5",
-                          decode_backend="nvdec", ocr_backend="tensorrt",
-                          rep_crop_format=fmt, keep_crops=kc,
-                          env={"GPU_PIPELINE": "1"}))
-MATRIX.append(_mk("B-stride8", "test5", decode_backend="nvdec",
-                  ocr_backend="tensorrt", sample_stride=8,
-                  env={"GPU_PIPELINE": "1"}))
+        MATRIX.append(
+            _mk(
+                "B-fmt-%s-kc%d" % (fmt, int(kc)),
+                "test5",
+                decode_backend="nvdec",
+                ocr_backend="tensorrt",
+                rep_crop_format=fmt,
+                keep_crops=kc,
+                env={"GPU_PIPELINE": "1"},
+            )
+        )
+MATRIX.append(
+    _mk(
+        "B-stride8",
+        "test5",
+        decode_backend="nvdec",
+        ocr_backend="tensorrt",
+        sample_stride=8,
+        env={"GPU_PIPELINE": "1"},
+    )
+)
 # B-aspect：force_aspect 是宽高比（w/h，>0 压窄内容），输入宽 = 48×ratio。
 # S0 发现#1：ratio=320 时输入宽 15360 超出 TRT profile 上限 2048，且 v1 报错
 # 路径有缺陷（setInputShape 报错后崩在 reshape ValueError，见 tests/golden/FINDINGS.md）。
-MATRIX.append(_mk("B-aspect4", "test5", decode_backend="nvdec",
-                  ocr_backend="tensorrt", force_aspect=4.0,
-                  env={"GPU_PIPELINE": "1"}))
-MATRIX.append(_mk("B-nomerge", "test5", decode_backend="nvdec",
-                  ocr_backend="tensorrt", merge_similar=False,
-                  env={"GPU_PIPELINE": "1"}))
+MATRIX.append(
+    _mk(
+        "B-aspect4",
+        "test5",
+        decode_backend="nvdec",
+        ocr_backend="tensorrt",
+        force_aspect=4.0,
+        env={"GPU_PIPELINE": "1"},
+    )
+)
+MATRIX.append(
+    _mk(
+        "B-nomerge",
+        "test5",
+        decode_backend="nvdec",
+        ocr_backend="tensorrt",
+        merge_similar=False,
+        env={"GPU_PIPELINE": "1"},
+    )
+)
 # C：test6 同内容三编码族 × 解码后端（9）
 for vid in ("test6_av1", "test6_h264", "test6_hevc"):
     for dec in ("cpu", "nvdec", "hybrid"):
-        MATRIX.append(_mk("C-%s-%s" % (vid.split("_")[1], dec), vid,
-                          decode_backend=dec, ocr_backend="tensorrt",
-                          env={"GPU_PIPELINE": "1"}))
+        MATRIX.append(
+            _mk(
+                "C-%s-%s" % (vid.split("_")[1], dec),
+                vid,
+                decode_backend=dec,
+                ocr_backend="tensorrt",
+                env={"GPU_PIPELINE": "1"},
+            )
+        )
 # D：晚起点硬窗（2026-10-08 窗口架构重做补录；关闭金标盲区——09-19 缺陷
 # 正是从"金标只有 [0,3000) 早起点"的盲区穿透的，C-57 两缺陷形态同为
 # 晚起点）。hybrid + seek(5000) + 窗：引擎谓词在 window_seek_safe 键在
@@ -82,21 +130,56 @@ for vid in ("test6_av1", "test6_h264", "test6_hevc"):
 # ⚠️ D-h264-w1000 曾录入后撤销：rep 帧像素逐位稳定但 seg[7] 置信度
 # 运行间翻动（0.99561↔0.99609，3 轮 1 翻；F-12，OCR 侧批形状效应），
 # 逐位门禁对它恒红——h264 晚起点由 w2761-tail 格覆盖。
-MATRIX.append(_mk("D-h264-w2761-tail", "test5", win=(5000, 7761),
-                  decode_backend="hybrid", ocr_backend="tensorrt",
-                  env={"GPU_PIPELINE": "1"}))
-MATRIX.append(_mk("D-hevc-w1000", "test6_hevc", win=(5000, 6000),
-                  decode_backend="hybrid", ocr_backend="tensorrt",
-                  env={"GPU_PIPELINE": "1"}))
-MATRIX.append(_mk("D-hevc-w3000", "test6_hevc", win=(5000, 8000),
-                  decode_backend="hybrid", ocr_backend="tensorrt",
-                  env={"GPU_PIPELINE": "1"}))
-MATRIX.append(_mk("D-av1-w1000", "test6_av1", win=(5000, 6000),
-                  decode_backend="hybrid", ocr_backend="tensorrt",
-                  env={"GPU_PIPELINE": "1"}))
-MATRIX.append(_mk("D-av1-w3000", "test6_av1", win=(5000, 8000),
-                  decode_backend="hybrid", ocr_backend="tensorrt",
-                  env={"GPU_PIPELINE": "1"}))
+MATRIX.append(
+    _mk(
+        "D-h264-w2761-tail",
+        "test5",
+        win=(5000, 7761),
+        decode_backend="hybrid",
+        ocr_backend="tensorrt",
+        env={"GPU_PIPELINE": "1"},
+    )
+)
+MATRIX.append(
+    _mk(
+        "D-hevc-w1000",
+        "test6_hevc",
+        win=(5000, 6000),
+        decode_backend="hybrid",
+        ocr_backend="tensorrt",
+        env={"GPU_PIPELINE": "1"},
+    )
+)
+MATRIX.append(
+    _mk(
+        "D-hevc-w3000",
+        "test6_hevc",
+        win=(5000, 8000),
+        decode_backend="hybrid",
+        ocr_backend="tensorrt",
+        env={"GPU_PIPELINE": "1"},
+    )
+)
+MATRIX.append(
+    _mk(
+        "D-av1-w1000",
+        "test6_av1",
+        win=(5000, 6000),
+        decode_backend="hybrid",
+        ocr_backend="tensorrt",
+        env={"GPU_PIPELINE": "1"},
+    )
+)
+MATRIX.append(
+    _mk(
+        "D-av1-w3000",
+        "test6_av1",
+        win=(5000, 8000),
+        decode_backend="hybrid",
+        ocr_backend="tensorrt",
+        env={"GPU_PIPELINE": "1"},
+    )
+)
 
 TIMING_ONLY = ("timing",)  # verify 时跳过的字段（非确定性）
 
@@ -117,15 +200,18 @@ def sha_video(path: str) -> str:
 
 
 def environment() -> dict:
-    env = {"commit": subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(ROOT),
-        capture_output=True, text=True).stdout.strip()}
+    env = {
+        "commit": subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=str(ROOT), capture_output=True, text=True
+        ).stdout.strip()
+    }
     # S6（F-11）：**把 OCR 引擎产物指纹记进 manifest**。TRT 每次重建的
     # tactic 选择不保证一致 → 同一 profile 的两次构建也会让置信度在第 4 位
     # 漂移（文本/段结构不变）。不记指纹就无法区分"代码回归"与"引擎重建"。
     try:
         import hashlib
         from video_ocr_engine.ocr.trt import TrtEngine
+
         for cand in TrtEngine._engine_candidates("small"):
             if cand.exists():
                 h = hashlib.sha256(cand.read_bytes()).hexdigest()[:16]
@@ -137,14 +223,17 @@ def environment() -> dict:
         env["ocr_engine"] = None
     try:
         import decord
+
         env["decord"] = decord.__version__
     except Exception:
         env["decord"] = None
     try:
         out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,driver_version",
-             "--format=csv,noheader"], capture_output=True, text=True,
-            timeout=10).stdout.strip()
+            ["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
         env["gpu"], env["driver"] = [x.strip() for x in out.split(",")]
     except Exception:
         env["gpu"] = env["driver"] = None
@@ -158,6 +247,7 @@ def summarize(case: dict) -> tuple[dict, dict]:
     v1 的 env 是调用期读取（README:236-238），因此按用例临时改写再复原。
     """
     from video_ocr_engine import FieldExtractor
+
     saved = {k: os.environ.get(k) for k in case["env"]}
     os.environ.update(case["env"])
     try:
@@ -175,31 +265,41 @@ def summarize(case: dict) -> tuple[dict, dict]:
             else:
                 os.environ[k] = v
 
-    segs = [[s.start, s.end, s.rep_frame, s.text, s.confidence]
-            for s in r.segments]
+    segs = [[s.start, s.end, s.rep_frame, s.text, s.confidence] for s in r.segments]
     crop_sha = None
     if case["kwargs"].get("keep_crops"):
-        crop_sha = [hashlib.sha256(
-            (s.rep_crop.tobytes() if s.rep_crop is not None else b"")
-        ).hexdigest()[:16] for s in r.segments]
+        crop_sha = [
+            hashlib.sha256((s.rep_crop.tobytes() if s.rep_crop is not None else b"")).hexdigest()[
+                :16
+            ]
+            for s in r.segments
+        ]
 
     # 指纹摘要单一实现 = tools/_measure_lib.capture_shas（2026-10-11 收敛）
     from _measure_lib import capture_shas
+
     fp = capture_shas(r, keep_crops=bool(case["kwargs"].get("keep_crops")))
     struct = fp["seg_struct_sha"]
     text = fp["text_sha"]
 
-    calib = {"bin_thresh": getattr(ex, "_bin_thresh", None),
-             "degraded_reason": r.meta.get("degraded_reason"),
-             "backend": r.meta.get("backend"),
-             "ocr_backend": r.meta.get("ocr_backend"),
-             "codec": r.meta.get("codec"),
-             "color_range": r.meta.get("color_range"),
-             "meta_keys": sorted(r.meta.keys())}
-    ocr = {"n_segments": len(segs), "segments": segs,
-           "seg_struct_sha": struct, "text_sha": text,
-           "crop_sha": crop_sha,
-           "timing": dict(r.timing), "wall": round(wall, 3)}
+    calib = {
+        "bin_thresh": getattr(ex, "_bin_thresh", None),
+        "degraded_reason": r.meta.get("degraded_reason"),
+        "backend": r.meta.get("backend"),
+        "ocr_backend": r.meta.get("ocr_backend"),
+        "codec": r.meta.get("codec"),
+        "color_range": r.meta.get("color_range"),
+        "meta_keys": sorted(r.meta.keys()),
+    }
+    ocr = {
+        "n_segments": len(segs),
+        "segments": segs,
+        "seg_struct_sha": struct,
+        "text_sha": text,
+        "crop_sha": crop_sha,
+        "timing": dict(r.timing),
+        "wall": round(wall, 3),
+    }
     return calib, ocr
 
 
@@ -207,15 +307,19 @@ def write_case(case: dict, calib: dict, ocr: dict) -> None:
     d = GOLDEN / ("case-%s" % case["id"])
     d.mkdir(exist_ok=True)
     (d / "stage-calib.json").write_text(
-        json.dumps(calib, ensure_ascii=False, indent=1), encoding="utf-8", newline="\n")
+        json.dumps(calib, ensure_ascii=False, indent=1), encoding="utf-8", newline="\n"
+    )
     (d / "stage-ocr.json").write_text(
-        json.dumps(ocr, ensure_ascii=False, indent=1), encoding="utf-8", newline="\n")
+        json.dumps(ocr, ensure_ascii=False, indent=1), encoding="utf-8", newline="\n"
+    )
 
 
 def load_case(case: dict) -> tuple[dict, dict]:
     d = GOLDEN / ("case-%s" % case["id"])
-    return (json.loads((d / "stage-calib.json").read_text(encoding="utf-8")),
-            json.loads((d / "stage-ocr.json").read_text(encoding="utf-8")))
+    return (
+        json.loads((d / "stage-calib.json").read_text(encoding="utf-8")),
+        json.loads((d / "stage-ocr.json").read_text(encoding="utf-8")),
+    )
 
 
 def verify_case(case: dict) -> tuple[list[str], bool]:
@@ -233,8 +337,7 @@ def verify_case(case: dict) -> tuple[list[str], bool]:
     def diff_once() -> list[str]:
         calib_new, ocr_new = summarize(case)
         diffs = []
-        for name, new, old in (("calib", calib_new, calib_old),
-                               ("ocr", ocr_new, ocr_old)):
+        for name, new, old in (("calib", calib_new, calib_old), ("ocr", ocr_new, ocr_old)):
             for k in new:
                 if k in TIMING_ONLY or k == "wall":
                     continue
@@ -247,13 +350,15 @@ def verify_case(case: dict) -> tuple[list[str], bool]:
         return [], False
     diffs2 = diff_once()
     if not diffs2:
-        return diffs, True   # 一次性差异 → 翻动
+        return diffs, True  # 一次性差异 → 翻动
     return diffs2, False
 
 
 def write_manifest(env: dict, vids_sha: dict) -> None:
-    lines = ["# S0 金标向量清单——录制基准与期望哈希（由 record.py 生成，人不得手改）",
-             "environment:"]
+    lines = [
+        "# S0 金标向量清单——录制基准与期望哈希（由 record.py 生成，人不得手改）",
+        "environment:",
+    ]
     for k, v in env.items():
         lines.append("  %s: %s" % (k, json.dumps(v, ensure_ascii=False)))
     lines.append("videos:")
@@ -264,29 +369,40 @@ def write_manifest(env: dict, vids_sha: dict) -> None:
         d = GOLDEN / ("case-%s" % c["id"])
         hs = []
         for f in ("stage-calib.json", "stage-ocr.json"):
-            hs.append(hashlib.sha256(
-                (d / f).read_bytes()).hexdigest()[:16])
+            hs.append(hashlib.sha256((d / f).read_bytes()).hexdigest()[:16])
         lines.append("  - id: %s" % c["id"])
         lines.append("    video: %s" % c["kwargs"]["video"])
-        lines.append("    window: [%d, %d]" % (c["kwargs"]["frame_start"],
-                                               c["kwargs"]["frame_end"]))
+        lines.append(
+            "    window: [%d, %d]" % (c["kwargs"]["frame_start"], c["kwargs"]["frame_end"])
+        )
         lines.append("    env: %s" % json.dumps(c["env"]))
-        lines.append("    kwargs: %s" % json.dumps(
-            {k: v for k, v in c["kwargs"].items()
-             if k not in ("video", "roi", "frame_start", "frame_end")},
-            ensure_ascii=False))
+        lines.append(
+            "    kwargs: %s"
+            % json.dumps(
+                {
+                    k: v
+                    for k, v in c["kwargs"].items()
+                    if k not in ("video", "roi", "frame_start", "frame_end")
+                },
+                ensure_ascii=False,
+            )
+        )
         lines.append("    sha: [%s, %s]" % (hs[0], hs[1]))
-    (GOLDEN / "manifest.yaml").write_text(
-        "\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    (GOLDEN / "manifest.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--case", help="只处理指定 id（子串匹配）")
-    ap.add_argument("--tier", default="full", choices=("full", "smoke"),
-                    help="smoke=3 用例 ≈30s（迭代用）；full=全量（发布/合并）")
-    ap.add_argument("--verify", action="store_true",
-                    help="重跑并与已录向量比对（S0 门禁：哈希一致）")
+    ap.add_argument(
+        "--tier",
+        default="full",
+        choices=("full", "smoke"),
+        help="smoke=3 用例 ≈30s（迭代用）；full=全量（发布/合并）",
+    )
+    ap.add_argument(
+        "--verify", action="store_true", help="重跑并与已录向量比对（S0 门禁：哈希一致）"
+    )
     args = ap.parse_args()
     cases = [c for c in MATRIX if not args.case or args.case in c["id"]]
     if args.tier == "smoke":
@@ -299,15 +415,12 @@ def main() -> int:
             diffs, flap = verify_case(c)
             if flap:
                 flaps += 1
-                print("FLAP %s（首跑差 %s，复跑一致——F-12 翻动）"
-                      % (c["id"], ",".join(diffs)))
+                print("FLAP %s（首跑差 %s，复跑一致——F-12 翻动）" % (c["id"], ",".join(diffs)))
             else:
                 tag = "OK " if not diffs else "DIFF"
-                print("%s %s%s" % (tag, c["id"],
-                                   "" if not diffs else " -> " + ",".join(diffs)))
+                print("%s %s%s" % (tag, c["id"], "" if not diffs else " -> " + ",".join(diffs)))
                 bad += bool(diffs)
-        print("verify: %d/%d 一致（翻动 %d）"
-              % (len(cases) - bad - flaps, len(cases), flaps))
+        print("verify: %d/%d 一致（翻动 %d）" % (len(cases) - bad - flaps, len(cases), flaps))
         return 1 if bad else 0
 
     env = environment()
@@ -316,9 +429,10 @@ def main() -> int:
         t0 = time.perf_counter()
         calib, ocr = summarize(c)
         write_case(c, calib, ocr)
-        print("REC %s  %d 段  %.1fs  degraded=%s" % (
-            c["id"], ocr["n_segments"], time.perf_counter() - t0,
-            calib["degraded_reason"]))
+        print(
+            "REC %s  %d 段  %.1fs  degraded=%s"
+            % (c["id"], ocr["n_segments"], time.perf_counter() - t0, calib["degraded_reason"])
+        )
     if not args.case:
         write_manifest(env, vids_sha)
         print("manifest.yaml 已更新（%d 用例）" % len(MATRIX))

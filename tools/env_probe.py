@@ -18,6 +18,7 @@
 设计原则：**不引入新旋钮**（复用既有 FFMPEG_DIR / RACELOG_* env）；
 找不到就**显式失败并列出已探测的候选**，绝不静默回落。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -43,8 +44,15 @@ class EnvFact:
 
     __slots__ = ("kind", "path", "source", "version", "md5", "note")
 
-    def __init__(self, kind: str, path: Path | None, source: str,
-                 version: str = "", md5: str = "", note: str = "") -> None:
+    def __init__(
+        self,
+        kind: str,
+        path: Path | None,
+        source: str,
+        version: str = "",
+        md5: str = "",
+        note: str = "",
+    ) -> None:
         self.kind = kind
         self.path = path
         self.source = source
@@ -99,8 +107,14 @@ def _probe_exe(name: str) -> tuple[Path | None, str, str]:
 def _version_of(exe: Path, args: tuple[str, ...] = ("-version",)) -> str:
     """取版本首行（ffmpeg -version / ffprobe -version）。"""
     try:
-        out = subprocess.run([str(exe), *args], capture_output=True, text=True,
-                             timeout=15, encoding="utf-8", errors="replace")
+        out = subprocess.run(
+            [str(exe), *args],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            encoding="utf-8",
+            errors="replace",
+        )
         first = (out.stdout or out.stderr or "").strip().splitlines()
         if first:
             # "ffmpeg version n9.0.1-26-g5c8e7e2433 Copyright ..." → 取第二词
@@ -109,7 +123,7 @@ def _version_of(exe: Path, args: tuple[str, ...] = ("-version",)) -> str:
                 if t == "version" and i + 1 < len(toks):
                     return toks[i + 1]
             return toks[0][:40]
-    except Exception:  # noqa: BLE001 — 版本探测失败不影响可用性判定
+    except Exception:  # noqa: BLE001,S110 — 无版本号只影响显示，不改变依赖可用性结论
         pass  # 无版本号只影响显示，不改变依赖可用性结论
     return ""
 
@@ -137,7 +151,8 @@ def ffmpeg_bin(name: str = "ffmpeg") -> Path:
     if path is None:
         raise FileNotFoundError(
             "找不到 %s。%s\n修复：设置 FFMPEG_DIR 指向含 %s 的目录，"
-            "或把该目录加入 PATH。" % (name, note, exe))
+            "或把该目录加入 PATH。" % (name, note, exe)
+        )
     return path
 
 
@@ -149,8 +164,7 @@ def ffmpeg_fact() -> EnvFact:
     return EnvFact("ffmpeg", path, source, version=_version_of(path))
 
 
-def decord_fact(expect_dll: Path | None = None, *,
-                install_mode: str = "auto") -> EnvFact:
+def decord_fact(expect_dll: Path | None = None, *, install_mode: str = "auto") -> EnvFact:
     """decord 包与其 DLL 的事实。
 
     ``install_mode``（2026-09-19 起 decord 有正式 wheel 发布，两种形态）：
@@ -168,6 +182,7 @@ def decord_fact(expect_dll: Path | None = None, *,
     # 会把 decord.dll 载入本进程并锁住，--deploy 随即无法覆盖它
     # （实测："目标 DLL 被占用"）。find_spec 只解析路径不执行包代码。
     import importlib.util
+
     try:
         spec = importlib.util.find_spec("decord")
         if spec is None or not spec.submodule_search_locations:
@@ -181,29 +196,37 @@ def decord_fact(expect_dll: Path | None = None, *,
         dll = pkg / "libdecord.so"
     try:
         from importlib.metadata import version as _v
+
         ver = _v("decord")
     except Exception:  # noqa: BLE001 — 元数据缺失不影响事实记录
         ver = "?"
-    fact = EnvFact("decord", dll if dll.is_file() else pkg, "site-packages",
-                   version=ver, md5=_md5(dll) if dll.is_file() else "")
+    fact = EnvFact(
+        "decord",
+        dll if dll.is_file() else pkg,
+        "site-packages",
+        version=ver,
+        md5=_md5(dll) if dll.is_file() else "",
+    )
     # wheel 形态：DLL 由 wheel 自带，不与本地构建产物比对
     if install_mode == "auto":
         try:
             from importlib.metadata import distribution as _dist
+
             files = _dist("decord").files or []
-            install_mode = ("wheel" if any(
-                str(f).endswith("decord.dll") for f in files) else "dev")
+            install_mode = "wheel" if any(str(f).endswith("decord.dll") for f in files) else "dev"
         except Exception:  # noqa: BLE001 — 元数据不可用则按 dev 保守处理
             install_mode = "dev"
     if install_mode == "wheel":
-        fact.note = ""            # wheel 自带 DLL，无"过期"概念
+        fact.note = ""  # wheel 自带 DLL，无"过期"概念
         return fact
     if expect_dll is not None and dll.is_file():
         want = _md5(expect_dll)
         if want and fact.md5 and want != fact.md5:
-            fact.note = ("**DLL 不一致**：构建产物 %s (%s) ≠ 已部署 %s (%s)"
-                         "——运行 `tools/env_doctor.py --deploy` 同步"
-                         % (expect_dll, want[:12], dll, fact.md5[:12]))
+            fact.note = (
+                "**DLL 不一致**：构建产物 %s (%s) ≠ 已部署 %s (%s)"
+                "——运行 `tools/env_doctor.py --deploy` 同步"
+                % (expect_dll, want[:12], dll, fact.md5[:12])
+            )
     return fact
 
 
@@ -212,8 +235,7 @@ def fork_build_dll(repo: str = r"D:\Repo\decord") -> Path | None:
     root = Path(repo)
     if not root.is_dir():
         return None
-    cands = sorted(root.glob("build-*/decord.dll"),
-                   key=lambda p: p.stat().st_mtime, reverse=True)
+    cands = sorted(root.glob("build-*/decord.dll"), key=lambda p: p.stat().st_mtime, reverse=True)
     return cands[0] if cands else None
 
 

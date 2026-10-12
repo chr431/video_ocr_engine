@@ -13,6 +13,7 @@
 extractor.py 的全部 ``_prof``/``prof_end``/``.checkpoint`` 调用点
 （字面量参数；转发壳天然跳过）。
 """
+
 from __future__ import annotations
 
 import ast
@@ -64,8 +65,7 @@ PHASE_KEYS_BY_MODULE: dict[str, set[tuple[str, str]]] = {
 # L1 资源边界 checkpoint（§8.6 r5）：P1 驱动合一后由 _driver.py 单点发出
 # （旧两后端各发一份时的「宿主缺 open」漂移即 P2c 所修）。
 CHECKPOINTS_BY_MODULE: dict[str, set[str]] = {
-    "video_ocr_engine/pipeline/_driver.py":
-        {"open", "calibrate", "decode", "ocr"},
+    "video_ocr_engine/pipeline/_driver.py": {"open", "calibrate", "decode", "ocr"},
 }
 
 _SCAN_ROOTS = ("video_ocr_engine/pipeline", "video_ocr_engine/gpu")
@@ -89,8 +89,13 @@ def _collect(path: Path) -> tuple[set[tuple[str, str]], set[str]]:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        name = (node.func.attr if isinstance(node.func, ast.Attribute)
-                else node.func.id if isinstance(node.func, ast.Name) else "")
+        name = (
+            node.func.attr
+            if isinstance(node.func, ast.Attribute)
+            else node.func.id
+            if isinstance(node.func, ast.Name)
+            else ""
+        )
         args = node.args
         if name == "checkpoint":
             if args and isinstance(args[0], ast.Constant):
@@ -101,27 +106,28 @@ def _collect(path: Path) -> tuple[set[tuple[str, str]], set[str]]:
             # tick(group, key, t0)——tick 是 gpu/device.DevHooks 的同义
             # 脊柱（P9 后设备侧经由它转发 prof_end）
             gi, ki = (1, 2) if name == "_prof" else (0, 1)
-            if (len(args) > ki
-                    and isinstance(args[gi], ast.Constant)
-                    and isinstance(args[ki], ast.Constant)):
+            if (
+                len(args) > ki
+                and isinstance(args[gi], ast.Constant)
+                and isinstance(args[ki], ast.Constant)
+            ):
                 keys.add((args[gi].value, args[ki].value))
     return keys, checkpoints
 
 
 def test_all_prof_keys_are_mapped_in_metrics_registry():
     """漂移 1：任何调用点键都必须进 metrics 映射表（不进 = 指标静默缺席）。"""
-    from video_ocr_engine.domain.metrics import (
-        PROFILE_GAUGES, PROFILE_SPANS, PROFILE_TOTALS)
+    from video_ocr_engine.domain.metrics import PROFILE_GAUGES, PROFILE_SPANS, PROFILE_TOTALS
+
     mapped = set(PROFILE_SPANS) | set(PROFILE_TOTALS) | set(PROFILE_GAUGES)
     unmapped: list[str] = []
     for path in _iter_scan_paths():
         keys, _ = _collect(path)
         bad = keys - mapped
-        unmapped += [f"{path.relative_to(ROOT)}: {g}.{k}" for g, k in
-                     sorted(bad)]
+        unmapped += [f"{path.relative_to(ROOT)}: {g}.{k}" for g, k in sorted(bad)]
     assert not unmapped, (
-        f"存在未映射的 prof 键（domain/metrics.py 缺席，telemetry 将静默"
-        f"无此指标）：{unmapped}")
+        f"存在未映射的 prof 键（domain/metrics.py 缺席，telemetry 将静默无此指标）：{unmapped}"
+    )
 
 
 def test_phase_key_sets_match_registry():
@@ -136,11 +142,13 @@ def test_phase_key_sets_match_registry():
                 problems.append(
                     f"{rel}: 出现未注册键 {sorted(keys - declared)}"
                     f"（先更新 PHASE_KEYS_BY_MODULE，并检查另一条路径"
-                    f"是否应同键——P2c 类漂移的检查时刻就是现在）")
+                    f"是否应同键——P2c 类漂移的检查时刻就是现在）"
+                )
             if declared - keys:
                 problems.append(
                     f"{rel}: 注册表有而代码无 {sorted(declared - keys)}"
-                    f"（键被删/改名，注册表同步清理）")
+                    f"（键被删/改名，注册表同步清理）"
+                )
     assert not problems, "\n".join(problems)
 
 
@@ -154,4 +162,5 @@ def test_backend_checkpoint_sets_identical():
             per_mod[rel] = cps
     assert per_mod == CHECKPOINTS_BY_MODULE, (
         f"checkpoint 集与注册表不符：{per_mod} != {CHECKPOINTS_BY_MODULE}；"
-        f"宿主/GPU 两后端的 L1 相位边界集合不同，diff 读数不可比")
+        f"宿主/GPU 两后端的 L1 相位边界集合不同，diff 读数不可比"
+    )

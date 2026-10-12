@@ -1,4 +1,5 @@
 """OCR 推理冒烟（ONNX CPU 后端；需仓库内模型资产，无需 decord/GPU）。"""
+
 from __future__ import annotations
 
 import numpy as np

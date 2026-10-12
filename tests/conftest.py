@@ -32,8 +32,9 @@ import pytest  # noqa: E402
 def _videos_ready() -> bool:
     try:
         from _measure_lib import has_real_videos
+
         return has_real_videos
-    except Exception:                                  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         return False
 
 
@@ -41,10 +42,11 @@ def _gpu_ready() -> bool:
     if not _videos_ready():
         return False
     try:
-        import decord                                  # noqa: F401
-        import video_ocr_engine.gpu.device             # noqa: F401
+        import decord  # noqa: F401
+        import video_ocr_engine.gpu.device  # noqa: F401
+
         return True
-    except Exception:                                  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         return False
 
 
@@ -54,6 +56,7 @@ def real_video():
     if not _videos_ready():
         pytest.skip("需要真值视频（RACELOG_VIDEO_DIR）")
     from _measure_lib import ROI, VIDS
+
     return VIDS["test5"], ROI["test5"]
 
 
@@ -63,4 +66,5 @@ def gpu_env():
     if not _gpu_ready():
         pytest.skip("需要 GPU + decord fork + 真值视频")
     from _measure_lib import ROI, VIDS
+
     return VIDS["test5"], ROI["test5"]

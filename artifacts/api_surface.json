@@ -1,0 +1,38 @@
+{
+ "symbols": {
+  "ExtractedSegment": {
+   "kind": "class",
+   "signature": "(start: 'int', end: 'int', frames: 'tuple' = (), rep_frame: 'int' = -1, text: 'Optional[str]' = None, confidence: 'float' = 0.0, rep_crop: 'Any' = None) -> None"
+  },
+  "ExtractionResult": {
+   "kind": "class",
+   "signature": "(segments: 'list' = <factory>, frames: 'list' = <factory>, fps: 'float' = 0.0, timing: 'dict' = <factory>, meta: 'dict' = <factory>) -> None"
+  },
+  "FieldExtractor": {
+   "kind": "class",
+   "signature": "(video_path: str, roi: tuple, *, frame_start=None, frame_end=None, force_aspect: float = 0.0, decode_backend: str = 'auto', ocr_backend: str = 'auto', buffer_size: int | None = None, fill_width: int | None = None, C: float | None = None, sample_stride: int = 1, progress_cb=None, cancel_check=None, rep_crop_format: str | None = None, keep_crops: bool = True, keep_frames: bool = True, merge_similar: bool = True, merge_similar_threshold: float | None = None, merge_text_sep: str | None = None)"
+  },
+  "config": {
+   "kind": "module"
+  },
+  "decode": {
+   "kind": "module"
+  },
+  "domain": {
+   "kind": "module"
+  },
+  "extractor": {
+   "kind": "module"
+  },
+  "gpu": {
+   "kind": "module"
+  },
+  "logging": {
+   "kind": "module"
+  },
+  "pipeline": {
+   "kind": "module"
+  }
+ },
+ "version": "0.26.1"
+}

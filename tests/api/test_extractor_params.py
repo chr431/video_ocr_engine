@@ -1,4 +1,5 @@
 """FieldExtractor 参数校验与内存选项测试（无需解码器/视频）。"""
+
 from __future__ import annotations
 
 import numpy as np
@@ -39,8 +40,7 @@ def test_extract_sets_frames_and_defaults_keep(monkeypatch):
 
     def fake_run(self):
         self._crops = {1: "crop1", 2: "crop2"}
-        return RunOutcome([0, 1, 2], [[0, 1], [2]], ["a", "b"],
-                          [0.9, 0.8], [1, 2])
+        return RunOutcome([0, 1, 2], [[0, 1], [2]], ["a", "b"], [0.9, 0.8], [1, 2])
 
     monkeypatch.setattr(FieldExtractor, "_run_pipelined", fake_run)
     result = ex.extract()
@@ -57,8 +57,7 @@ def test_extract_keep_crops_false(monkeypatch):
 
     def fake_run(self):
         self._crops = {}
-        return RunOutcome([0, 1, 2], [[0, 1], [2]], ["a", "b"],
-                          [0.9, 0.8], [1, 2])
+        return RunOutcome([0, 1, 2], [[0, 1], [2]], ["a", "b"], [0.9, 0.8], [1, 2])
 
     monkeypatch.setattr(FieldExtractor, "_run_pipelined", fake_run)
     result = ex.extract()
@@ -70,8 +69,7 @@ def test_extract_keep_frames_false(monkeypatch):
 
     def fake_run(self):
         self._crops = {1: "crop1", 2: "crop2"}
-        return RunOutcome([0, 1, 2], [[0, 1], [2]], ["a", "b"],
-                          [0.9, 0.8], [1, 2])
+        return RunOutcome([0, 1, 2], [[0, 1], [2]], ["a", "b"], [0.9, 0.8], [1, 2])
 
     monkeypatch.setattr(FieldExtractor, "_run_pipelined", fake_run)
     result = ex.extract()
@@ -86,8 +84,7 @@ def test_merge_similar_default_on_and_custom():
     assert ex._merge_similar is True
     assert ex._merge_similar_threshold == 3.0
     assert ex._merge_text_sep == "binary"
-    ex2 = _make(merge_similar=False, merge_similar_threshold=5.0,
-                merge_text_sep="off")
+    ex2 = _make(merge_similar=False, merge_similar_threshold=5.0, merge_text_sep="off")
     assert ex2._merge_similar is False
     assert ex2._merge_similar_threshold == 5.0
     assert ex2._merge_text_sep == "off"
@@ -115,16 +112,16 @@ def test_segments_similar_requires_small_changed_area():
     ex = _make(merge_similar=True)
     a = np.zeros((50, 100), dtype=np.uint8)
     b_small = a.copy()
-    b_small[:10, :10] = 200          # 100 像素显著变化 > 50 -> 不相似
+    b_small[:10, :10] = 200  # 100 像素显著变化 > 50 -> 不相似
     assert not ex._segments_similar(a, b_small)
     # 稀疏小变化（不构成 3×3 稠密簇）<= 50 -> 相似：像素数上限本身仍生效
     b_sparse = a.copy()
     for i in range(0, 50, 2):
-        b_sparse[i, 0] = 200         # 25 像素显著变化，1px 宽 → win3 = 3
+        b_sparse[i, 0] = 200  # 25 像素显著变化，1px 宽 → win3 = 3
     assert ex._segments_similar(a, b_sparse)
     # 平均差超阈值也判不相似
     b_mean = a.copy()
-    b_mean[:, :] = 30                # 整体抬升，平均差 30 > 3
+    b_mean[:, :] = 30  # 整体抬升，平均差 30 > 3
     assert not ex._segments_similar(a, b_mean)
 
 
@@ -137,7 +134,7 @@ def test_segments_similar_dense_gate(monkeypatch):
     """
     a = np.zeros((50, 100), dtype=np.uint8)
     b_dense = a.copy()
-    b_dense[:4, :4] = 200        # 16px ≤ max_changed(51)，但 3×3 窗口和=9
+    b_dense[:4, :4] = 200  # 16px ≤ max_changed(51)，但 3×3 窗口和=9
     monkeypatch.delenv("SEG_MERGE_DENSE_GATE", raising=False)
     assert not _make(merge_similar=True)._segments_similar(a, b_dense)
     # gate=0 关闭 → 回到纯两阈值判定（16 ≤ 51 → 相似）

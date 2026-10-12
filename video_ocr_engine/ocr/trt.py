@@ -73,8 +73,8 @@ def engine_sm() -> str:
             if not _e2 and not _e3:
                 sm = "sm%d%d" % (major, minor)
                 probed = True
-    except Exception:  # noqa: BLE001 — 探测失败回落常量（无 CUDA/无设备）
-        pass
+    except Exception:  # noqa: BLE001,S110 — 容忍（见上下文）
+        pass  # 容忍（见上下文）
     if not probed:
         # 只缓存成功的探测（2026-09-19 审查轮）：此前失败也写缓存——
         # 首次调用若撞上 CUDA 瞬态不可用（独显刚从省电态唤醒，
@@ -106,8 +106,8 @@ class TrtEngine:
             from video_ocr_engine._gpu_kernels import prewarm_cuda_core
 
             prewarm_cuda_core()
-        except Exception:  # noqa: BLE001 预热失败只是失去重叠，无正确性影响
-            pass
+        except Exception:  # noqa: BLE001,S110 — 容忍（见上下文）
+            pass  # 容忍（见上下文）
 
         self._progress_cb = progress_cb
         self.engine_path: Path | None = None
@@ -184,14 +184,14 @@ class TrtEngine:
         if stream is not None:
             try:
                 self.synchronize()
-            except Exception:  # noqa: BLE001 释放路径：流已坏则跳过 sync
-                pass
+            except Exception:  # noqa: BLE001,S110 — 容忍（见上下文）
+                pass  # 容忍（见上下文）
         reducer = getattr(self, "_reducer", None)
         if reducer is not None:
             try:
                 reducer.release()
-            except Exception:  # noqa: BLE001 释放路径：reducer 内部自清理
-                pass
+            except Exception:  # noqa: BLE001,S110 — 容忍（见上下文）
+                pass  # 容忍（见上下文）
             self._reducer = None
         for attr in ("_dev_in", "_dev_out"):
             ptr = getattr(self, attr, None)

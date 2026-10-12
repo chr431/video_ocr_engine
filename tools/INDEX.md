@@ -25,6 +25,7 @@
 | `probe_decode_rates.py` | 各后端解码速率基准（bench 家族） |
 | `refs.py` | R-refs-resolve 执行体（引用解析器） |
 | `render.py` | R-render-consistency 执行体（四视图统一渲染） |
+| `version_advice.py` | R-version-tag/R-version-advice 执行体（API 面 dump/档位判据/verify/金标 manifest/bench 快照） |
 
 ## 在树探针（probe，近两轮；超出即出树）
 

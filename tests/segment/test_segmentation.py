@@ -1,11 +1,15 @@
 """分段纯函数测试（灰度 / Otsu / 3x3 聚类判别）。"""
+
 from __future__ import annotations
 
 import numpy as np
 
 from video_ocr_engine.domain.segmentation import (
-    _cluster_win3, _gray_batch, _gray_seg_yuv,
-    _gray_seg_yuv_batch, _otsu,
+    _cluster_win3,
+    _gray_batch,
+    _gray_seg_yuv,
+    _gray_seg_yuv_batch,
+    _otsu,
 )
 from video_ocr_engine.domain.video_utils import _nv12_luma_full
 

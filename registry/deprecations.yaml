@@ -1,9 +1,9 @@
 # 弃用表（v2 §10.3：机器可检的到期删除表；warning 站点随实现落地）
-- name: OCR_PAD_SMALL
+- name: OCR_PAD_SMALL（v1 env-wins 语义）
   kind: env
-  replaced_by: "FieldExtractor(fill_width=...)"
+  replaced_by: "FieldExtractor(fill_width=...)；v2 注册旋钮 ocr.pad_small（env 同名，语义已改：显式参数 > env）"
   deprecated_in: "0.13.0"
-  remove_in: "0.14.0"
+  remove_in: "0.14.0（已移除：v1 语义随包化删除；同名 env 现属 v2 注册面，不在弃用面）"
   reason: "v1 env 盖过显式参数是排查陷阱（Q5 裁决：显式参数 > env > 默认；VOE_ENV_WINS 逃生门同期移除）"
 - name: VOE_ENV_WINS
   kind: env

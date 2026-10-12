@@ -12,6 +12,7 @@
 （_DevBatchPool/Y pool）与宿主路径都被覆盖。斜率用中位数（首跑实测
 单轮 +130MB 瞬态保留会打穿均值口径；单调泄漏仍敏）。
 """
+
 from __future__ import annotations
 
 import json
@@ -30,7 +31,7 @@ VID = _VIDS_LIB["test5"]
 ROI = _ROI_LIB["test5"]
 WARMUP = 3
 MEASURE = 10
-SLOPE_CAP_MB = 1.5      # C-55 修复前是 +2.0 MiB/轮；留噪声余量
+SLOPE_CAP_MB = 1.5  # C-55 修复前是 +2.0 MiB/轮；留噪声余量
 
 _WORKER = r"""
 import gc, json, sys
@@ -66,13 +67,13 @@ def _available() -> bool:
         return False
     try:
         import decord  # noqa: F401
+
         return True
     except Exception:
         return False
 
 
-pytestmark = pytest.mark.skipif(not _available(),
-                                reason="需要真值视频 + decord（本地回归口径）")
+pytestmark = pytest.mark.skipif(not _available(), reason="需要真值视频 + decord（本地回归口径）")
 
 
 def _slope(seq: list[float]) -> float:
@@ -84,6 +85,7 @@ def _slope(seq: list[float]) -> float:
     # 归零（实测裁后 0.18）。裁剪量 2 < 头/尾窗半宽（n/2≥3/2），单调
     # 泄漏（每轮 +2，13 轮共 +24）远大于裁剪量，灵敏度不受损。
     import statistics
+
     srt = sorted(seq)
     trimmed = srt[:-2] if len(srt) > 6 else srt
     n = max(3, len(trimmed) // 3)
@@ -94,21 +96,33 @@ def _slope(seq: list[float]) -> float:
 
 def test_repeat_extract_no_rss_or_vram_drift():
     p = subprocess.run(
-        [sys.executable, "-c", _WORKER, str(ROOT), VID,
-         ",".join(str(v) for v in ROI), str(WARMUP + MEASURE)],
-        capture_output=True, text=True, timeout=600,
-        env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+        [
+            sys.executable,
+            "-c",
+            _WORKER,
+            str(ROOT),
+            VID,
+            ",".join(str(v) for v in ROI),
+            str(WARMUP + MEASURE),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+    )
     assert p.returncode == 0, (p.stderr or "")[-400:]
     d = json.loads(p.stdout.strip().splitlines()[-1])
     rss = d["rss"][WARMUP:]
     rss_slope = _slope(rss)
     assert rss_slope < SLOPE_CAP_MB, (
         f"RSS 漂移 {rss_slope:+.2f} MiB/轮 超 {SLOPE_CAP_MB}（C-55 类池泄漏"
-        f"回归？逐轮：{[round(x, 1) for x in d['rss']]}）")
+        f"回归？逐轮：{[round(x, 1) for x in d['rss']]}）"
+    )
     vf = [v for v in d["vram_free"][WARMUP:] if v is not None]
     if len(vf) == MEASURE:
         # free 递减 = 显存累积；取负号统一为「每轮增量」
         v_slope = -_slope(vf)
         assert v_slope < SLOPE_CAP_MB, (
             f"VRAM 漂移 {v_slope:+.2f} MiB/轮 超 {SLOPE_CAP_MB}"
-            f"（逐轮 free：{[round(x, 1) for x in vf]}）")
+            f"（逐轮 free：{[round(x, 1) for x in vf]}）"
+        )

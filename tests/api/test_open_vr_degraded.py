@@ -8,6 +8,7 @@ NVDEC 打开失败→CPU / hybrid 打开失败→纯 GPU / codec 探测失败（
 GPU 两分支）/ yuv420 不支持→gray（含标志重置）/ color_range 读取失败
 →limited / GPU 形状不符→宿主管线（门面接线）。
 """
+
 from __future__ import annotations
 
 import sys
@@ -44,7 +45,7 @@ class _FakeVR:
             raise ValueError("output_format must be 'rgb', 'gray' or 'yuv420'")
         self.ctx = ctx
         self._n = 50000
-        self.decode_window_calls: list[int] = []   # C-57 谓词回归观测用
+        self.decode_window_calls: list[int] = []  # C-57 谓词回归观测用
 
     def __len__(self):
         return self._n
@@ -88,8 +89,7 @@ def fake_decord(monkeypatch):
 
 
 def _make(**kw):
-    d = dict(decode_backend="auto", ocr_backend="cpu", keep_crops=False,
-             frame_end=500)
+    d = dict(decode_backend="auto", ocr_backend="cpu", keep_crops=False, frame_end=500)
     d.update(kw)
     return FieldExtractor("dummy.mp4", (0, 0, 100, 50), **d)
 
@@ -138,9 +138,9 @@ def test_codec_probe_fail_cpu_and_gpu_branches(fake_decord):
 def test_yuv420_unsupported_falls_back_gray(fake_decord):
     BEHAVIOR["yuv420_fail"] = True
     ex = _make(keep_crops=True, rep_crop_format="yuv")
-    assert ex._yuv_output is True      # 前置：构造期 yuv 已置位
+    assert ex._yuv_output is True  # 前置：构造期 yuv 已置位
     vr = ex._open_vr()
-    assert ex._yuv_output is False     # 回退后重置
+    assert ex._yuv_output is False  # 回退后重置
     assert ex._color_range == 0
     assert vr is not None
     assert "不支持 yuv420" in _degraded(ex)
@@ -165,10 +165,8 @@ def test_gpu_shape_fallback_delegates_to_host(fake_decord, monkeypatch):
     class _Res(GpuRunResult):
         pass
 
-    res = _Res(fell_back_to_host=True, fallback_engines=["eng"],
-               fallback_vr=object(), fps=30.0)
-    monkeypatch.setattr(eng_mod, "run_gpu_pipeline",
-                        lambda spec, engines: res)
+    res = _Res(fell_back_to_host=True, fallback_engines=["eng"], fallback_vr=object(), fps=30.0)
+    monkeypatch.setattr(eng_mod, "run_gpu_pipeline", lambda spec, engines: res)
     captured = {}
 
     def fake_host(spec, engines, preopened_vr=None):
@@ -177,8 +175,7 @@ def test_gpu_shape_fallback_delegates_to_host(fake_decord, monkeypatch):
         return HostRunResult(fps=30.0)
 
     monkeypatch.setattr(eng_mod, "run_host_pipeline", fake_host)
-    monkeypatch.setattr(FieldExtractor, "_gpu_pipeline_enabled",
-                        lambda self: True)
+    monkeypatch.setattr(FieldExtractor, "_gpu_pipeline_enabled", lambda self: True)
     ex = _make(decode_backend="nvdec", ocr_backend="tensorrt")
     outcome = ex._run_pipelined(None)
     assert captured["engines"] == ["eng"]
@@ -189,6 +186,7 @@ def test_gpu_shape_fallback_delegates_to_host(fake_decord, monkeypatch):
 
 
 # ═════════ C-57 谓词防线回归：晚起点 × 硬窗不设窗（fork 缺陷唯一防线）═════════
+
 
 def test_hard_window_set_when_start_before_window(fake_decord):
     """早起点（start < 窗长）：谓词成立 → set_decode_window(窗长) 被调。"""
@@ -216,10 +214,14 @@ def test_hard_window_late_start_with_seek_safe_contract(fake_decord):
     → 谓词解除，晚起点也设窗（夜间轮 2026-09-28，矩阵 12/12 证据）。
     """
     import decord as _d  # 夹具注入的假模块
+
     _d.CONTRACT_VERSION = 1
     _d.features = lambda: {
-        'roi_first': True, 'hybrid_ctx': True, 'hybrid_gpu_ctx': True,
-        'hard_decode_window': True, 'window_seek_safe': True,
+        "roi_first": True,
+        "hybrid_ctx": True,
+        "hybrid_gpu_ctx": True,
+        "hard_decode_window": True,
+        "window_seek_safe": True,
     }
     ex = _make(decode_backend="hybrid", frame_start=5000, frame_end=6000)
     vr = ex._open_vr()

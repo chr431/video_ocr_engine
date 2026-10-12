@@ -25,8 +25,9 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 ROOT = Path(__file__).resolve().parent.parent
 REGISTRY = ROOT / "registry"
@@ -43,7 +44,7 @@ BARE_SECTION = re.compile(r"§\d")
 BARE_VERSION = re.compile(r"(?<![@\w.])\d+\.\d+\.\d+(?![\w.])")
 
 
-def _load_yaml(path: Path) -> list:
+def _load_yaml(path: Path) -> Any:
     if not path.is_file():
         return []
     return yaml.safe_load(path.read_text(encoding="utf-8")) or []

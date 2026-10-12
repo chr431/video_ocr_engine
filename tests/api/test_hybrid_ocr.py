@@ -7,6 +7,7 @@
 性能/正确性实测（v0 = OCR-bound 负载 +51% 回归、文本 3/26461 差异）由
 tools/_probe_hybrid_ocr.py 承载，不入单测。
 """
+
 from __future__ import annotations
 
 import pytest
@@ -21,10 +22,10 @@ def _make(**kwargs):
 def test_ocr_backend_hybrid_accepted():
     """'hybrid' 合法且 engine_type 映射正确（auto/tensorrt/cpu 不回归）。"""
     ex = _make(ocr_backend="hybrid")
-    assert ex._ocr_engine_type() == 'hybrid'
-    assert _make()._ocr_engine_type() == 'tensorrt'
-    assert _make(ocr_backend="auto")._ocr_engine_type() == 'tensorrt'
-    assert _make(ocr_backend="cpu")._ocr_engine_type() == 'openvino'
+    assert ex._ocr_engine_type() == "hybrid"
+    assert _make()._ocr_engine_type() == "tensorrt"
+    assert _make(ocr_backend="auto")._ocr_engine_type() == "tensorrt"
+    assert _make(ocr_backend="cpu")._ocr_engine_type() == "openvino"
     with pytest.raises(ValueError, match="ocr_backend"):
         _make(ocr_backend="bogus")
 
@@ -37,7 +38,7 @@ def test_hybrid_ocr_on_gpu_counts_as_gpu():
 
 def test_acquire_engines_hybrid_takes_two(monkeypatch):
     """'hybrid' → tensorrt + openvino 各一引擎（同池 key 参数）。"""
-    import video_ocr_engine.ocr.native as _native   # monkeypatch 目标先导入
+    import video_ocr_engine.ocr.native as _native  # monkeypatch 目标先导入
     from video_ocr_engine.pipeline import ocr_stage
 
     calls = []
@@ -63,9 +64,8 @@ def test_acquire_engines_hybrid_takes_two(monkeypatch):
         engine_type_fn = staticmethod(lambda: "hybrid")
 
     engines, etype = ocr_stage.acquire_engines(_Spec())
-    assert etype == 'hybrid'
-    assert [e.backend_name for e in engines] == ['tensorrt', 'openvino']
+    assert etype == "hybrid"
+    assert [e.backend_name for e in engines] == ["tensorrt", "openvino"]
     assert len(calls) == 2
     # 两擎同池 key 参数（fill_width/threads/gamma 一致）——除 engine_type 外
     assert calls[0][2] == calls[1][2]
-

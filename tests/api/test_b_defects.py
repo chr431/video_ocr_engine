@@ -4,6 +4,7 @@ B1：同实例第二次 extract 不再带上一次的降级原因/计时/剖面�
 B3：未知 decode_backend / ocr_backend 构造期 ValueError（v1 静默兜底）。
 两个修复都是 §10.2 声明的**有意行为变更**。
 """
+
 from __future__ import annotations
 
 import pytest
@@ -46,9 +47,7 @@ def test_b1_second_extract_resets_run_state(monkeypatch):
     ex._n_segments = 5
     # _fps 不在重置范围（B2：同实例同视频的文档化缓存）
 
-    monkeypatch.setattr(
-        FieldExtractor, "_run_pipelined",
-        lambda self: RunOutcome())
+    monkeypatch.setattr(FieldExtractor, "_run_pipelined", lambda self: RunOutcome())
     r = ex.extract()
     assert ex._degraded == []
     assert ex._timing == {}

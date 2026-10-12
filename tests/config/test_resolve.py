@@ -4,12 +4,13 @@
 resolve() 的解析结果 == v1 engine_config.env_* 解析器在同一 env 下的
 返回值——两套解析器任何一侧漂移都会在此被抓到。
 """
+
 from __future__ import annotations
 
 import pytest
 
 import video_ocr_engine.config.constants as config
-from video_ocr_engine.config import KNOBS, RunConfig, resolve
+from video_ocr_engine.config import KNOBS, resolve
 
 ENV_NAMES = KNOBS.env_names()
 
@@ -17,12 +18,11 @@ ENV_NAMES = KNOBS.env_names()
 # ── env 契约：19 个 v1 风格旋钮名 + v2 新增 ─────────────────────────
 def test_env_contract_covers_all_v1_knobs():
     v1_names = {getattr(config, n) for n in dir(config) if n.endswith("_ENV")}
-    assert len(v1_names) == 22          # OCR_CPU_BACKEND 随 ORT 移除删除
-    assert set(ENV_NAMES) >= v1_names          # v1 全部迁入，一个不丢
+    assert len(v1_names) == 22  # OCR_CPU_BACKEND 随 ORT 移除删除
+    assert set(ENV_NAMES) >= v1_names  # v1 全部迁入，一个不丢
     # v2 新增三个：r5 telemetry 三档 + S6-0 报告 sidecar（§8.6 N-3）
     # + P4 实验性时间线（2026-09-17 重设计，log 同名章节）
-    assert set(ENV_NAMES) - v1_names == {
-        "VOE_TELEMETRY", "VOE_REPORT_FILE", "VOE_TRACE_FILE"}
+    assert set(ENV_NAMES) - v1_names == {"VOE_TELEMETRY", "VOE_REPORT_FILE", "VOE_TRACE_FILE"}
 
 
 def test_knob_registry_shape():
@@ -30,13 +30,12 @@ def test_knob_registry_shape():
     # + trace_file（P4）
     assert len(KNOBS.knobs) == 25
     for k in KNOBS.knobs:
-        assert k.rationale_id, k.name          # 每个旋钮有依据锚点（D5）
+        assert k.rationale_id, k.name  # 每个旋钮有依据锚点（D5）
 
 
 # ── 优先级：显式参数 > env > 默认（Q5/r3；v1 逃生门 VOE_ENV_WINS 已删）──
 def test_priority_param_beats_env_beats_default():
-    rc = resolve(env={"OCR_GAMMA": "2.5"},
-                 overrides={"ocr.gamma": 2.2})
+    rc = resolve(env={"OCR_GAMMA": "2.5"}, overrides={"ocr.gamma": 2.2})
     assert rc.ocr_gamma == 2.2
     rc = resolve(env={"OCR_GAMMA": "2.5"})
     assert rc.ocr_gamma == 2.5
@@ -46,15 +45,14 @@ def test_priority_param_beats_env_beats_default():
 
 def test_override_none_means_not_given():
     rc = resolve(env={"OCR_GAMMA": "2.5"}, overrides={"ocr.gamma": None})
-    assert rc.ocr_gamma == 2.5                 # None 不锁定（v1 参数默认 None 语义）
+    assert rc.ocr_gamma == 2.5  # None 不锁定（v1 参数默认 None 语义）
 
 
 def test_voe_env_wins_stays_deleted(monkeypatch):
     """v1 逃生门（0.16.0 删除）不得静默复活：设了也不改优先级。"""
     monkeypatch.setenv("VOE_ENV_WINS", "1")
-    rc = resolve(env={"VOE_ENV_WINS": "1", "OCR_GAMMA": "2.5"},
-                 overrides={"ocr.gamma": 2.2})
-    assert rc.ocr_gamma == 2.2                 # 显式参数仍然锁定
+    rc = resolve(env={"VOE_ENV_WINS": "1", "OCR_GAMMA": "2.5"}, overrides={"ocr.gamma": 2.2})
+    assert rc.ocr_gamma == 2.2  # 显式参数仍然锁定
 
 
 # ── 解析语义：与 v1 engine_config.env_* 逐位等价（随机对账）─────────
@@ -71,7 +69,7 @@ FLOAT_SAMPLES = ["", "x", "2.5", "0", "-1e-1", " 3 "]
 def test_int_parse_matches_v1(raw, monkeypatch):
     for k in INT_KNOBS:
         monkeypatch.setenv(k.env, raw)
-        got = resolve().get(k.name)            # env 缺省 → 读 os.environ
+        got = resolve().get(k.name)  # env 缺省 → 读 os.environ
         want = config.env_int(k.env, k.default)
         assert got == want, (k.name, raw, got, want)
         monkeypatch.delenv(k.env, raising=False)
@@ -87,8 +85,9 @@ def test_float_parse_matches_v1(raw, monkeypatch):
         monkeypatch.delenv(k.env, raising=False)
 
 
-@pytest.mark.parametrize("raw", ["1", "TRUE", " yes ", "On", "0", "FALSE",
-                                 " no ", "Off", "maybe", ""])
+@pytest.mark.parametrize(
+    "raw", ["1", "TRUE", " yes ", "On", "0", "FALSE", " no ", "Off", "maybe", ""]
+)
 def test_bool_parse_matches_v1(raw, monkeypatch):
     for k in BOOL_KNOBS:
         monkeypatch.setenv(k.env, raw)
@@ -99,7 +98,7 @@ def test_bool_parse_matches_v1(raw, monkeypatch):
 
 
 def test_gpu_pipeline_tri_state():
-    assert resolve(env={}).pipeline_gpu is None          # 未设 → 规则
+    assert resolve(env={}).pipeline_gpu is None  # 未设 → 规则
     assert resolve(env={"GPU_PIPELINE": "0"}).pipeline_gpu is False
     assert resolve(env={"GPU_PIPELINE": "1"}).pipeline_gpu is True
     # v1 细节：设置了但非法 → False（显式关），≠ 未设（_gpu_pipeline.py:566-570）
@@ -108,8 +107,9 @@ def test_gpu_pipeline_tri_state():
 
 def test_text_sep_merge_raw_string_semantics():
     assert resolve(env={}).segment_text_sep_merge == "binary"
-    assert resolve(env={"TEXT_SEP_MERGE": "contrast"}).segment_text_sep_merge \
-        == "contrast"                     # 原样透传（校验是 S3 B3 的事）
+    assert (
+        resolve(env={"TEXT_SEP_MERGE": "contrast"}).segment_text_sep_merge == "contrast"
+    )  # 原样透传（校验是 S3 B3 的事）
     rc = resolve(env={"TEXT_SEP_MERGE": "x"}, overrides={"segment.text_sep_merge": "y"})
     assert rc.segment_text_sep_merge == "y"
 

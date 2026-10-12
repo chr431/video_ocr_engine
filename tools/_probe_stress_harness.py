@@ -8,6 +8,7 @@
 用法（DECORD_LIBRARY_PATH 指向被测 fork dll）：
   python tools/_probe_stress_harness.py --cases hevc-cpu,hevc-gpu,av1-gpu --trials 4 --timeout 90
 """
+
 from __future__ import annotations
 
 import argparse
@@ -18,12 +19,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-WORKER = r'''
+WORKER = r"""
 import os, sys, time
 sys.path.insert(0, os.environ["PROBE_ROOT"])
 from decord import VideoReader, hybrid, hybrid_gpu
 ctxf = hybrid if os.environ["PROBE_CTX"] == "cpu" else hybrid_gpu
-vid = os.path.join(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"),
+vid = os.path.join(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"),  # hardcode-ok: env 默认值（可被 RACELOG_VIDEO_DIR 覆盖）
                    os.environ["PROBE_VID"])
 roi = (841, 994, 950, 1027) if "hevc" in os.environ["PROBE_VID"] or "test6" in os.environ["PROBE_VID"] else (843, 993, 949, 1026)
 vr = VideoReader(vid, ctx=ctxf(0), output_format="gray",
@@ -35,7 +36,7 @@ for s in range(0, min(n, int(os.environ["PROBE_FRAMES"])), 64):
     if len(held) > 6: held.pop(0)
 print("WALL " + str(round(time.perf_counter() - t, 2)))
 del vr, held
-'''
+"""
 
 # name -> (ctx, video, extra env)。历史注：fork 4ccf889 起 CPU 产能读数
 # 收敛为滑窗持续产能（唯一口径），DECORD_CPU_RATE_SUSTAINED env 已删除
@@ -63,8 +64,9 @@ def main() -> int:
     ap.add_argument("--cases", default="hevc-cpu,hevc-gpu,av1-gpu")
     ap.add_argument("--trials", type=int, default=4)
     ap.add_argument("--frames", type=int, default=3000)
-    ap.add_argument("--nt", type=int, default=16,
-                    help="CPU 臂线程数（§14 起引擎默认 24/32，压测须覆盖新档）")
+    ap.add_argument(
+        "--nt", type=int, default=16, help="CPU 臂线程数（§14 起引擎默认 24/32，压测须覆盖新档）"
+    )
     ap.add_argument("--timeout", type=float, default=90.0)
     ap.add_argument("--log", default=str(ROOT / "bench" / "stress_harness.log"))
     args = ap.parse_args()
@@ -75,22 +77,38 @@ def main() -> int:
         ctx, vid, extra = resolve_case(name)
         for i in range(args.trials):
             env = dict(os.environ)
-            env.update({"PROBE_ROOT": str(ROOT), "PROBE_VID": vid,
-                        "PROBE_CTX": ctx, "PROBE_FRAMES": str(args.frames),
-                        "PROBE_NT": str(args.nt)})
+            env.update(
+                {
+                    "PROBE_ROOT": str(ROOT),
+                    "PROBE_VID": vid,
+                    "PROBE_CTX": ctx,
+                    "PROBE_FRAMES": str(args.frames),
+                    "PROBE_NT": str(args.nt),
+                }
+            )
             env.pop("DECORD_HYBRID_DEBUG", None)
             env.update(extra)
             line = ""
             try:
-                p = subprocess.run([sys.executable, "-c", WORKER], env=env,
-                                   capture_output=True, text=True,
-                                   encoding="utf-8", errors="replace",
-                                   timeout=args.timeout)
-                wall = next((ln[5:] for ln in p.stdout.splitlines()
-                             if ln.startswith("WALL ")), None)
-                line = "%-12s t%-2d %s" % (name, i,
-                                           ("wall " + wall + "s") if wall
-                                           else "FAIL:" + (p.stderr.strip().splitlines() or ["?"])[-1][:60])
+                p = subprocess.run(
+                    [sys.executable, "-c", WORKER],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=args.timeout,
+                )
+                wall = next(
+                    (ln[5:] for ln in p.stdout.splitlines() if ln.startswith("WALL ")), None
+                )
+                line = "%-12s t%-2d %s" % (
+                    name,
+                    i,
+                    ("wall " + wall + "s")
+                    if wall
+                    else "FAIL:" + (p.stderr.strip().splitlines() or ["?"])[-1][:60],
+                )
                 if not wall:
                     bad += 1
             except subprocess.TimeoutExpired:

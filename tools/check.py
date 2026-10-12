@@ -69,9 +69,13 @@ STEPS = {
         "发版清扫（结论钉版清单）",
         [sys.executable, "tools/conclusions_sweep.py", "--strict"],
     ),
+    "version": (
+        "版本纪律（档位判据 verify）",
+        [sys.executable, "tools/version_advice.py", "verify"],
+    ),
 }
 DAILY = ["pytest", "refs", "render", "ext", "golden_smoke"]
-RELEASE = ["pytest", "refs", "render", "ext", "golden_full", "sweep"]
+RELEASE = ["pytest", "refs", "render", "ext", "golden_full", "sweep", "version"]
 
 
 def run_step(name: str, cmd: list, timeout: int) -> tuple[str, float, str]:

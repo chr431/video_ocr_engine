@@ -15,6 +15,7 @@
 - checkin 池淘汰不自噬（优先淘汰其他 key）
 - acquire_ocr_engine 池 key 含 gamma/gpu_ctc
 """
+
 from __future__ import annotations
 
 import threading
@@ -29,6 +30,7 @@ from video_ocr_engine.domain.metrics import Metrics
 
 # ── 池：recycle 顺序（显存泄漏回归钉子）──────────────────────────────
 
+
 def _fake_pool():
     """绕开 CUDA：用假 ptr 构造 _YFramePool 语义（只测列表管理）。"""
     from video_ocr_engine.gpu import device as dev
@@ -38,7 +40,7 @@ def _fake_pool():
             self._fnb = 1024
             self._free = []
             self._lk = threading.Lock()
-            self._released = False   # 2026-09-20 泄漏专项新增字段
+            self._released = False  # 2026-09-20 泄漏专项新增字段
             self.malloc_calls = 0
 
         def _malloc_frame(self):
@@ -63,7 +65,7 @@ def test_pool_recycle_keeps_pool_alive_for_reuse():
     # __del__ 的 GC 兜底，只靠 GC 回收的池帧将永久泄漏。
     assert f.pool is pool, "recycle 不得置空 pool（会切断 GC 回收路径）"
     assert f._recycled is True, "须置 _recycled 标志防双入列"
-    orig_ptr = f.ptr                      # acquire 会把旧壳失能，先存
+    orig_ptr = f.ptr  # acquire 会把旧壳失能，先存
     f2 = pool.acquire()
     assert f2 is not f, "复用必须换壳（复活对象二次死亡不再触发 __del__）"
     assert f2.ptr == orig_ptr, "缓冲本身应复用（malloc 次数不增）"
@@ -89,8 +91,8 @@ def test_pool_reuse_after_resurrection_frees_on_final_death():
 
     pool = _fake_pool()
     f = pool.acquire()
-    pool.recycle(f)                 # 停靠（对象被 __del__ 或显式路径复活）
-    f2 = pool.acquire()             # 复用（换壳）
+    pool.recycle(f)  # 停靠（对象被 __del__ 或显式路径复活）
+    f2 = pool.acquire()  # 复用（换壳）
     assert pool.malloc_calls == 1, "复用不得新增分配"
     freed: list = []
     orig = cudart.cudaFree
@@ -101,8 +103,7 @@ def test_pool_reuse_after_resurrection_frees_on_final_death():
         pool.release_all()
     finally:
         cudart.cudaFree = orig
-    assert len(freed) == 1, (
-        "复用帧最终死亡后 release_all 应释放其缓冲（旧实现此处 0 = 泄漏）")
+    assert len(freed) == 1, "复用帧最终死亡后 release_all 应释放其缓冲（旧实现此处 0 = 泄漏）"
 
 
 def test_pool_recycle_reuse_does_not_leak_via_gc():
@@ -119,7 +120,8 @@ def test_pool_recycle_reuse_does_not_leak_via_gc():
         pool.recycle(f)
     assert pool.malloc_calls == 1, (
         "acquire/recycle 循环应复用同一块（malloc 次数=1），"
-        "实际 %d 次 = 每轮泄漏一块显存" % pool.malloc_calls)
+        "实际 %d 次 = 每轮泄漏一块显存" % pool.malloc_calls
+    )
 
 
 def test_pool_concurrent_acquire_no_indexerror():
@@ -176,9 +178,9 @@ def test_pool_released_late_frame_direct_frees():
     from cuda.bindings import runtime as cudart
 
     pool = _fake_pool()
-    pool.release_all()                 # 清列 + 置 _released
+    pool.release_all()  # 清列 + 置 _released
     assert pool._released is True
-    f = pool._malloc_frame()           # 模拟迟到帧（现实中由在飞 payload GC 触发）
+    f = pool._malloc_frame()  # 模拟迟到帧（现实中由在飞 payload GC 触发）
     freed: list = []
     orig = cudart.cudaFree
     cudart.cudaFree = lambda p: (freed.append(p), (0,))[1]
@@ -191,6 +193,7 @@ def test_pool_released_late_frame_direct_frees():
 
 
 # ── OcrSession：注入路径与等待循环出口 ──────────────────────────────
+
 
 class _FakeEngine:
     backend_name = "fake"
@@ -250,8 +253,7 @@ def test_injected_empty_list_raises_clear_error():
             break
         sess._thread.join(timeout=0.05)
     assert sess.err, "worker 未记录错误"
-    assert isinstance(sess.err[0], ValueError), (
-        "应为显式 ValueError，实际 %r" % (sess.err[0],))
+    assert isinstance(sess.err[0], ValueError), "应为显式 ValueError，实际 %r" % (sess.err[0],)
     assert "注入引擎路径要求" in str(sess.err[0])
 
 
@@ -268,12 +270,13 @@ def test_put_raises_when_worker_died_without_err():
             break
         sess._thread.join(timeout=0.05)
     assert not sess._thread.is_alive(), "worker 应已退出"
-    sess.err.clear()          # 模拟 BaseException 逃逸：线程死而 err 空
+    sess.err.clear()  # 模拟 BaseException 逃逸：线程死而 err 空
     with pytest.raises(RuntimeError):
         sess.put(object())
 
 
 # ── Metrics：snapshot drain 语义 ────────────────────────────────────
+
 
 def test_snapshot_drain_false_is_readonly():
     """只读快照回归钉子：看门狗取快照不得排干指标桶。"""
@@ -284,7 +287,8 @@ def test_snapshot_drain_false_is_readonly():
     # 排干后仍能看到同一条（说明 drain=False 没有清桶）
     drained = m.snapshot(drain=True)
     assert drained["counters"].get("pipeline.consume_feed_n") == 1, (
-        "drain=False 的快照把桶吃掉了——停顿后的最终报告将丢失指标")
+        "drain=False 的快照把桶吃掉了——停顿后的最终报告将丢失指标"
+    )
 
 
 def test_snapshot_drain_true_still_drains():
@@ -305,6 +309,7 @@ def test_resolve_std_alias_maps_to_full_with_warning():
     """两档化（0.22.0）：VOE_TELEMETRY=std 是 full 的受谴责别名。"""
     import warnings as _w
     from video_ocr_engine.config.resolve import resolve
+
     with _w.catch_warnings(record=True) as rec:
         _w.simplefilter("always")
         rc = resolve(env={"VOE_TELEMETRY": "std"})
@@ -323,6 +328,7 @@ def test_resolve_normalizes_enum_str_case_and_space():
 
 # ── RunJournal：last_error ──────────────────────────────────────────
 
+
 def test_journal_report_includes_last_error(tmp_path):
     j = RunJournal(tmp_path / "j.jsonl")
     rep = j.report()
@@ -334,8 +340,8 @@ def test_journal_report_includes_last_error(tmp_path):
     assert j2.report()["last_error"], "落盘失败原因必须出现在报告里"
 
 
-
 # ── OCR 引擎池：淘汰不自噬 + key 含 gamma ────────────────────────────
+
 
 def test_pool_eviction_prefers_other_key():
     """淘汰优先选其他 key（原实现会刚归还就淘汰=白付重建成本）。"""
@@ -355,13 +361,12 @@ def test_pool_eviction_prefers_other_key():
     try:
         n._POOL_MAX_TOTAL = 2
         k_other, k_new = ("other",), ("new",)
-        n.checkin_ocr_engine(_E(k_other))   # 池: other
-        n.checkin_ocr_engine(_E(k_other))   # 池: other×2
+        n.checkin_ocr_engine(_E(k_other))  # 池: other
+        n.checkin_ocr_engine(_E(k_other))  # 池: other×2
         e_new = _E(k_new)
-        n.checkin_ocr_engine(e_new)         # 超上限 → 淘汰应选 other
+        n.checkin_ocr_engine(e_new)  # 超上限 → 淘汰应选 other
         with n._POOL_LOCK:
-            still_new = any(cand is e_new for cand in
-                            n._ENGINE_POOL.get(k_new, []))
+            still_new = any(cand is e_new for cand in n._ENGINE_POOL.get(k_new, []))
         assert still_new, "刚归还的引擎被自己挤掉了（淘汰自噬）"
     finally:
         n._POOL_MAX_TOTAL = saved_max

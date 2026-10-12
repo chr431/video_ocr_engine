@@ -1,4 +1,5 @@
 """引擎独立性与 import 纯净性：不依赖应用层（速度/GUI），顶层 import 无泄漏。"""
+
 from __future__ import annotations
 
 import ast
@@ -14,17 +15,30 @@ from _paths import PKG  # tests/_paths.py：与目录深度无关的 video_ocr_e
 # ocr_trt / segmentation / video_utils）**已删除**（下游 RVTL 完成迁移后）。
 # 本表已换成包内路径——见 docs/MIGRATION.md §1 的迁移表（标注"已删除"）。
 ENGINE_MODULES = [
-    "video_ocr_engine.config.constants", "video_ocr_engine.gpu.context",
-    "video_ocr_engine.ocr.native", "video_ocr_engine.ocr.trt",
+    "video_ocr_engine.config.constants",
+    "video_ocr_engine.gpu.context",
+    "video_ocr_engine.ocr.native",
+    "video_ocr_engine.ocr.trt",
     "video_ocr_engine.domain.segmentation",
-    "video_ocr_engine.domain.video_utils", "video_ocr_engine",
+    "video_ocr_engine.domain.video_utils",
+    "video_ocr_engine",
 ]
 
 # 应用层（RaceVideoToLog）：引擎不得 import / 引入这些模块
 APP_MODULES = {
-    "config", "segment_flow", "seg_correction", "ocr_text", "ocr_engine",
-    "csv_io", "gui", "signals", "monitor", "headless", "constants",
-    "export_controller", "analysis",
+    "config",
+    "segment_flow",
+    "seg_correction",
+    "ocr_text",
+    "ocr_engine",
+    "csv_io",
+    "gui",
+    "signals",
+    "monitor",
+    "headless",
+    "constants",
+    "export_controller",
+    "analysis",
 }
 
 
@@ -49,8 +63,7 @@ def test_extractor_ast_no_app_imports():
     imports: set[str] = set()
     for n in ast.walk(tree):
         # S9-2:相对导入(包内子模块,如 .config)不是应用层依赖
-        if (isinstance(n, ast.ImportFrom) and n.module
-                and n.level == 0):
+        if isinstance(n, ast.ImportFrom) and n.module and n.level == 0:
             imports.add(n.module.split(".")[0])
         elif isinstance(n, ast.Import):
             for a in n.names:
@@ -70,6 +83,7 @@ def test_engine_import_does_not_require_decord():
 def test_no_stale_methods_body_in_package():
     """_methods_body.py 是过期生成参考，不应随包发布。"""
     import video_ocr_engine
+
     stale = Path(video_ocr_engine.__file__).resolve().parent / "_methods_body.py"
     assert not stale.exists()
 
