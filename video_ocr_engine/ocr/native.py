@@ -25,7 +25,7 @@ from video_ocr_engine.ocr.trt import TrtEngine
 # （S8/D7：原 import 期 os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
 # 已删——库 import 不得改写同进程其他 OpenMP 使用方的环境（P0-3：与
 # DECORD_SKIP_LOOP_FILTER 的 DESIGN-REVIEW D1 同一原则）。需要该优化的
-# 使用方自行在导入前设置 env。§10.2 行为变更，金标不受影响。）
+# 使用方自行在导入前设置 env（历史行为变更记录见 git 档案，金标不受影响）。
 
 log = logging.getLogger(__name__)
 
@@ -235,7 +235,7 @@ class OcrEngine:
         # 真值门禁三内容族零差，见 log 2026-09-14-OpenVINO模型级A-B/集成
         # 轮/移除轮）。输入/输出同构（(B,3,48,W)→(B,S,C) float32），
         # 预处理/CTC/批切沿用 ONNX 路径。engine_type 字符串 0.17.0 起
-        # 为 "openvino"（旧 ORT 时代标识已于 0.17.0 退役，MIGRATION §2）。
+        # 为 "openvino"（旧 ORT 时代标识已于 0.17.0 退役，历史迁移表见 git 档案）。
         # 直接构造 OcrEngine（未传 num_threads）时默认物理核/2：避免推理
         # 占满全部逻辑核并与解码器抢核。生产管线 SegmentPipeline.
         # _ocr_num_threads 显式传 auto_ocr_thread_count()（全物理核），

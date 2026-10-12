@@ -40,7 +40,7 @@ from pathlib import Path
 # v9（2026-10-09 监测精简轮）：`cores_avg` 收敛为回退键——cycles 来源
 # 在场（Windows）时**不再发**，仅非 Windows 回退（两个"平均核数"并存
 # 打架，读者分不清权威）。这是**删键语义**（Windows 报告里消失），
-# 消费者改读 `cores_avg_cycles`（MIGRATION §4）。
+# 消费者改读 `cores_avg_cycles`（历史迁移表经 git 档案取回）。
 # v10（2026-10-09 争用定位轮）：full 档新增 `thr_foreign`（外来线程簇
 # 逐 TID 周期差分：decord 解码池/OMP/TBB——命名线程之外的全体）与
 # `thr_foreign_n`、`cycles_e2e.threads_foreign`。个体 TID 只用于差分，
@@ -53,7 +53,7 @@ REPORT_VERSION = 10
 #: - host：consumer 线程墙钟内串行包含 decode.*（流生成器在 feed 循环内
 #:   被拉动）+ 状态机 feed（consume_feed；merge_pair/q_put_block 嵌套于
 #:   其中，不单列）。0.17.0 起 host 只产 pipeline.consumer 单键（同区间
-#:   的 pipeline.decode 双键已删，MIGRATION §2）。
+#:   的 pipeline.decode 双键已删（历史迁移表见 git 档案）。
 #: - gpu：pipeline.consumer 不产出（生产者线程成本由 pipeline.decode 表达），
 #:   故无 consumer 关系；ocr 两对关系两路径同构。
 SPAN_RELATIONS: dict = {
@@ -433,7 +433,7 @@ def finalized_report(
     # 编排三段的显式计时段（res.timing 由两后端直写；此处转成正样本 span）。
     # pipeline.decode 仅 GPU 路径产出（生产者线程成本的真实相位键）；
     # host 的同区间由脊柱 pipeline.consumer 表达——双键同值稀释报告，
-    # 0.17.0 删除 host 侧发射（MIGRATION §2）。
+    # 0.17.0 删除 host 侧发射（历史迁移表见 git 档案）。
     _phases = (("decode", "pipeline.decode"),) if gpu_mode else ()
     for _k, _name in (*_phases, ("ocr", "pipeline.ocr"), ("ocr_tail", "pipeline.ocr_tail")):
         _v = timing.get(_k)

@@ -1,7 +1,7 @@
 """S9-2 行为契约：D6（构造期冻结）与 Q5（显式参数 > env > 默认）。
 
 v1 语义（README 曾承诺"构造之后再改 env 同样生效"、env 盖过构造参数）
-已按 §10.2/Q5 裁决废除——迁移说明见 docs/MIGRATION.md。
+已按 Q5 裁决废除——历史迁移说明经 git 档案取回（archive/pre-rework:docs/MIGRATION.md）。
 """
 
 from __future__ import annotations

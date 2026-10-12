@@ -2,7 +2,7 @@
 
 动机
 ----
-测试面分散在 pytest、两个审计、金标 verify、发版清扫五处，"现在该跑哪
+测试面分散在 pytest、守卫组、金标 verify、发版清扫、版本/KPI 多处，"现在该跑哪
 些"靠记纪律段；且金标 full（72s）与 smoke（6.7s）的分层此前只写在
 AGENTS 里。本脚本把两级合规固化成一条命令，每步带计时与结果汇总：
 
@@ -55,7 +55,7 @@ def _golden_case_count() -> str:
 STEPS = {
     "pytest": ("pytest -q（全量单测）", [sys.executable, "-m", "pytest", "tests/", "-q"]),
     "refs": ("引用解析（substrate）", [sys.executable, "tools/refs.py", "check"]),
-    "render": ("渲染一致性（四视图）", [sys.executable, "tools/render.py", "--check"]),
+    "render": ("渲染一致性（六视图）", [sys.executable, "tools/render.py", "--check"]),
     "ext": ("结构化审计（按名注册）", [sys.executable, "tools/_audit_ext.py"]),
     "golden_smoke": (
         "金标 smoke（3 用例）",

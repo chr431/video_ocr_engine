@@ -6,7 +6,7 @@
    拦不住——AST 扫描「全仓（包+tests+tools）词法引用计数 ≤ 定义行」
    即红。误报走 ALLOWLIST（逐条写理由）。
 2. **命名与行为不符**（`'onnxruntime'` 标签在 ORT 移除后残留一轮，
-   C-48）：产品码与测试面禁该标识符——改名轮（0.17.0，MIGRATION §6）
+   C-48）：产品码与测试面禁该标识符——改名轮（0.17.0，历史迁移表=git 档案 archive/pre-rework:docs/MIGRATION.md）
    之后任何回潮即红。
 3. **architecture.svg 版本漂移**（停在 0.13.3 连续三轮）：图内版本标记
    必须 == `__version__`（AGENTS 规矩「改架构时同步刷新版本号」的
@@ -102,7 +102,7 @@ def test_no_dead_definitions_or_constants() -> None:
     )
 
 
-# ── 2. 旧 OCR 标识禁串（0.17.0 改名轮，MIGRATION §6）────────────────
+# ── 2. 旧 OCR 标识禁串（0.17.0 改名轮，历史迁移表=git 档案）────────────────
 BANNED_TOKENS = ("onnxruntime", "OCR_ONNX_CHUNK", "_init_onnx")
 
 
@@ -120,7 +120,7 @@ def test_no_legacy_ort_labels() -> None:
                 if tok in src:
                     hits.append(f"{p.relative_to(ROOT)}: {tok}")
     assert not hits, (
-        f"旧 OCR 标识回潮（0.17.0 起为 openvino/OCR_OV_CHUNK/_init_ov，见 MIGRATION §6）: {hits}"
+        f"旧 OCR 标识回潮（0.17.0 起为 openvino/OCR_OV_CHUNK/_init_ov，历史迁移表见 git 档案）: {hits}"
     )
 
 

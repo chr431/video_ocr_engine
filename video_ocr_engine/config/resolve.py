@@ -2,7 +2,7 @@
 
 优先级（Q5 裁决）：**显式参数 > env > 注册表默认**。
 v1 相反（env 盖过构造参数，README 自称排查陷阱）；过渡逃生门
-`VOE_ENV_WINS=1` 已于 0.16.0 删除——v1 语义不再可恢复（§10.2/§10.3）。
+`VOE_ENV_WINS=1` 已于 0.16.0 删除——v1 语义不再可恢复（历史行为变更记录见 git 档案）。
 
 本模块不读 os.environ 之外的任何环境状态；测试传入显式 env 映射。
 解析语义与 engine_config.env_* 逐位一致（由 tests/config/test_resolve.py

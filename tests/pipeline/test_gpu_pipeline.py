@@ -170,7 +170,7 @@ def test_gpu_pipeline_force_aspect_supported(gpu_ok):
 
 def test_merge_effective_mode_resolution(monkeypatch):
     """S9-2(D6)：env 在**构造期**解析冻结；构造后改 env 不再生效
-    （v1 语义已废除，见 docs/MIGRATION.md）。"""
+    （v1 语义已废除，历史迁移表经 git 档案取回）。"""
     ex = _make()
     assert ex._merge_effective_mode() == "binary"
     monkeypatch.setenv("TEXT_SEP_MERGE", "off")

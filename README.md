@@ -115,12 +115,12 @@ for seg in result.segments:
 编码 ~3400fps，差 1.6×——主因是编码工具集：x264 medium 加权预测 vs
 > 历史实验叙事与大档案（docs/log/PERFORMANCE·DECISIONS·ARCHIVE 及 2026-10 前的轮叙事）已出树：经 git 档案取回（`archive/pre-rework` tag 锚点，如 `git show archive/pre-rework:docs/log/PERFORMANCE.md`）。
 
-硬编风格廉价流，见 `docs/log/2026-09-18-hybrid启动轮.md` §11-§12），按
+硬编风格廉价流，见 `docs/log/2026-09-18-hybrid启动轮.md` §11-§12），按（git 档案，`archive/pre-rework` 锚点）
 编码格式猜会错，批量场景按实测速率分派。
 
 > **视频长度依赖**（2026-09-18/19 重测，`bench ab` 交错口径）：
 > hybrid 的收益随片长增长——短窗有固定启动税（构造+标定 ~95ms+尾暴露，
-> 见 `docs/log/2026-09-18-hybrid启动轮.md` §10），交叉点（hybrid 反超
+> 见 `docs/log/2026-09-18-hybrid启动轮.md` §10），交叉点（hybrid 反超（git 档案，`archive/pre-rework` 锚点）
 > 各自最优单臂的片长）：**h264（test6 族）全片反超 23%；hevc 交叉点
 > ~1200 帧（w1500 已 −6%）；av1 <3000 帧**。更短的片段（数百帧级）上
 > 纯单臂可能反超约 0.1~0.3s 量级——此时墙钟差异本身很小（<0.3s），
@@ -130,7 +130,7 @@ for seg in result.segments:
 
 > 口径提醒：单次 `bench run` 有轮间散布，**单点值只作量级参考**；要下
 > "谁更快"的结论必须用 `tools/bench.py ab` 的交错配对 + 符号一致性
-> （本表数字即该口径）。证据见 `docs/log/2026-09-18-hybrid启动轮.md`。
+> （本表数字即该口径）。证据见 `docs/log/2026-09-18-hybrid启动轮.md`。（git 档案，`archive/pre-rework` 锚点）
 
 `decode_backend="hybrid"` 由 **decord fork 原生实现**（≥v0.7.15）：同一实例内
 NVDEC 与 CPU 软解并行解码，分片与负载调度在 decord 内部完成，引擎只透传解码
@@ -144,11 +144,10 @@ e2e 口径**定档（decode-only 口径 24T 即饱和，但引擎里解码与分
 共存、消费节奏顶点更高）：`tools/_probe_hybrid_threads_e2e.py` 全片配对
 复测 h264 **32T 比 16T 快 6.6%（3/3 配对同号，唯一文本集一致）**。可用
 `HYBRID_CPU_THREADS` 显式覆盖；差距分解见
-`docs/log/2026-09-11-hybrid差距分解.md`。
+`docs/log/2026-09-11-hybrid差距分解.md`。（git 档案，`archive/pre-rework` 锚点）
 
 > **迁移记录**：原项目层实现（hybrid_decode.py，已于 2026-09-06 删除）由 decord
-> 原生实现取代（commit `fd3bcda`）；决策/历史见 `docs/log/DECISIONS.md` 与
-> `docs/log/PERFORMANCE.md` §24，结论状态见 `docs/CONCLUSIONS.md` C-05。
+> 原生实现取代（commit `fd3bcda`）；决策/历史经 git 档案取回（`docs/log/DECISIONS.md`/`PERFORMANCE.md` §24，archive/pre-rework 锚点）；结论状态见 `docs/CONCLUSIONS.md` C-05。
 
 `result` 为 `ExtractionResult`：
 
@@ -207,7 +206,7 @@ for kw in items:                       # 逐文件顺序跑
 
 > 历史背景：`ExtractionPool.run`（互补配对，曾实测 −20.6%）已于 0.16.0
 > **删除**（0.15 起废弃；其收益基线是"全 nvdec 派工"时代）。当时的并发
-> 配对结论仍有效于「无 hybrid 可用」的场合，机制记录见 `docs/log/`
+> 配对结论仍有效于「无 hybrid 可用」的场合，机制记录见 git 档案 `docs/log/`（archive/pre-rework 锚点）
 > （C-01/C-52）与下表——若你必须并发（如 hybrid 不可用）：
 
 | 配对 | 聚合加速 | 说明 |
@@ -273,7 +272,7 @@ PI-15 预算，故有测试禁止产品代码调用它。**本机自测口径、
 NVDEC 优先（刻意决策，见 `docs/CONCLUSIONS.md` C-07/C-08），指望 auto
 自动配成 CPU 解码是无效的。跑完后用 `FieldExtractor._backend` 核验实际
 后端。少核（≤8 核）机器收益递减，建议先小规模试测。详见
-`docs/log/ARCHIVE.md` §16.8.2 的实测表。
+git 档案的 `docs/log/ARCHIVE.md` §16.8.2 实测表（archive/pre-rework 锚点）。
 
 ## 识别链
 
@@ -308,7 +307,7 @@ Otsu 校准、merge_similar 判定（GPU `sim_pair`；contrast 模式在边界�
   （对端 ~100GB/s 流拷贝下退化 ×1.36 vs 宿主 ×1.70）
 - 整集 stride=8 场景两路径同受 NVDEC 跳帧解码供给率限制，速度持平
 - 默认只放行"全程 raw"（NVDEC+TRT）；GPU 分段 + ONNX OCR 实测无净收益
-  （见 `docs/log/PERFORMANCE.md` §9）→ 无 TRT / `ocr_backend="cpu"` 走宿主
+  （历史依据经 git 档案取回：`docs/log/PERFORMANCE.md` §9，archive/pre-rework 锚点）→ 无 TRT / `ocr_backend="cpu"` 走宿主
 - env `GPU_PIPELINE=0` 显式关闭；`=1` 强制启用（含 GPU 分段+ONNX 实验组合）；
   `decode_backend="hybrid"` + TRT 走 decord 原生 `hybrid_gpu`，帧全程驻留
   显存、直接进零拷贝管线的设备指针通路
@@ -322,7 +321,7 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 ## 环境变量钩子
 
 > 构造参数已覆盖绝大多数用法；环境变量仅在**批量调优/诊断**时使用。
-> 未设置 = 引擎默认值（已按实测调优，见 `docs/log/PERFORMANCE.md`"已锁定参数"）。
+> 未设置 = 引擎默认值（已按实测调优，历史"已锁定参数"经 git 档案取回：`archive/pre-rework:docs/log/PERFORMANCE.md`）。
 
 **优先级**：同一旋钮多入口时按 **显式构造参数 > env > 引擎默认值** 生效
 （Q5 裁决，0.11 起；构造 `fill_width=320` 会**锁定** 320，残留的
@@ -345,15 +344,15 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 | `OCR_THREADS` | OCR 推理线程数覆盖（默认全物理核） |
 | `OCR_BATCH` | OCR 批大小覆盖（默认 16） |
 | `OCR_PAD_SMALL` | OCR 输入 pad 宽度下限覆盖（未设置时由构造参数 `fill_width` 决定，默认 224；此 env 优先级**高于**构造参数，调这个就能改 pad 下限） |
-| `OCR_GAMMA` | OCR 预处理 gamma（默认 2.0；**已复核为真折中，勿再调**——跳出 gamma 框架的逐图自适应拉伸/锐化/局部平场/重采样共六变体实测无杠杆，见 `docs/CONCLUSIONS.md` C-15 与 `docs/log/2026-09-12-准确项.md`） |
+| `OCR_GAMMA` | OCR 预处理 gamma（默认 2.0；**已复核为真折中，勿再调**——跳出 gamma 框架的逐图自适应拉伸/锐化/局部平场/重采样共六变体实测无杠杆，见 `docs/CONCLUSIONS.md` C-15 与 `docs/log/2026-09-12-准确项.md`） |（git 档案，`archive/pre-rework` 锚点）
 | `OCR_ROI_AUTOCROP` | `0` 关闭 OCR 输入宽度自适应裁切（默认开；按二值图内容列裁掉两侧空白，生产门禁 5 视频原始误读 **148 → 124**；真值口径四片均值 +0.82pp，**该 pp 值测于 pad 160 时代，pad 已回退 224，勿直接引用**） |
-| `OCR_ROI_AUTOCROP_MARGIN` | 裁切时内容两侧保留的余量（占 ROI 宽 %，默认 10；**调小会插入多余空格且准确率下降**，见 `docs/log/ARCHIVE.md` §16.2 P0-4） |
+| `OCR_ROI_AUTOCROP_MARGIN` | 裁切时内容两侧保留的余量（占 ROI 宽 %，默认 10；**调小会插入多余空格且准确率下降**，历史依据=git 档案 `docs/log/ARCHIVE.md` §16.2 P0-4，archive/pre-rework 锚点） |
 | `OCR_REORDER_WINDOW` | OCR 重排窗口段数（默认 64；按宽度分组才能让 pad 宽真的降下来） |
 | `DECORD_SKIP_LOOP_FILTER` | **显式 opt-in**（2026-08-30 起，默认**不设置**——import 不再改写进程级 env）：设为 `all` 开启 CPU 软解关去块滤波，须在打开解码器前设置。收益：HEVC **-8.3%~-14.3% 墙钟**、h264 -0.6%~-4.2%、AV1 无效（-0.2%）；NVDEC 不受影响。六片真值 + test4 逐帧**视觉裁定**确认对 OCR 无负面影响（5 片 +0.00~+0.08pp；test4 账面 −0.19pp 系真值伪影——显示为三位补零 `020`、真值剥零，视觉裁定按显示忠实度关滤波反而略优）。注意：显示为 2 位数字时输出会带前导零（`020`，更忠实于显示），下游字符串匹配需注意；rep_crop 预览有块状伪影。需 decord fork ≥v0.7.13 |
 | `DECODE_THREADS` | CPU 软解 FFmpeg 帧线程数覆盖（默认按 OCR 落点 + 采样步长分档：OCR 在 GPU 取满逻辑核钳 8~32；OCR 在 CPU 时 stride>1 取逻辑核 3/4 钳 8~24、stride==1 取 1/3 钳 8~12） |
 | `TEXT_SEP_MERGE` | 相似段合并分离模式（binary/off；contrast 已于 0.9.0 删除） |
 | `SEG_MERGE_DENSE_GATE` | 相似段合并的**稠密簇门**：`0` 关闭；`>0` 时若差异图含 win3 ≥ 该值的 3×3 稠密簇则恒判不合并（默认 `5` = 断段阈值 `SEG_C`）。**默认开启**，遥测/数字类内容基本不再发生相似合并 → 段数比 0.9.x 口径高 1~4%，换得逐帧准确率净 **+226 帧 / 47,134**（见 C-38；OCR-bound 部署可设 `0` 换回段数） |
-| `HYBRID_CPU_THREADS` | 混合解码（decord 原生）中 CPU 软解线程数（默认 0 = **自动：与 CPU 软解后端同一 codec 感知策略**，即 `DECODE_THREADS` 的分档公式，本机 h264/hevc → 32、av1 → 24；全片配对 A/B 复测 h264 32T 比 16T 快 **6.6%**，3/3 同号）。定档依据与 decode-only 口径的差别见 `docs/log/2026-09-11-hybrid差距分解.md` §14；项目层时代的线程 A/B 见 `docs/log/PERFORMANCE.md` §17.2 |
+| `HYBRID_CPU_THREADS` | 混合解码（decord 原生）中 CPU 软解线程数（默认 0 = **自动：与 CPU 软解后端同一 codec 感知策略**，即 `DECODE_THREADS` 的分档公式，本机 h264/hevc → 32、av1 → 24；全片配对 A/B 复测 h264 32T 比 16T 快 **6.6%**，3/3 同号）。定档依据与 decode-only 口径的差别经 git 档案取回（`docs/log/2026-09-11-hybrid差距分解.md` §14）；项目层时代的线程 A/B 同源（`docs/log/PERFORMANCE.md` §17.2） |（git 档案，`archive/pre-rework` 锚点）
 
 ### 实验/诊断（排查问题时用）
 
@@ -367,28 +366,24 @@ NVDEC 回退）+ TRT 可用时，每批帧经宿主灰度转换后 H2D 进同一
 
 > 已删除钩子（0.9.0 清理轮；2026-09-06 hybrid 迁移轮删除的项目层
 > `HYBRID_*` 参数，仅 `HYBRID_CPU_THREADS` 保留见上表）的完整清单与历史
-> 结论见 `docs/log/DECISIONS.md`，结论状态见 `docs/CONCLUSIONS.md`。
+> 结论见 git 档案 `docs/log/DECISIONS.md`（archive/pre-rework 锚点）；结论状态见 `docs/CONCLUSIONS.md`。
 
 内部实现（配置常量、GPU 管线门控等）不在本表；如需深入，以
 `video_ocr_engine/config/constants.py` 为唯一事实源。
 
 ## 文档
 
-- [现役结论索引](docs/CONCLUSIONS.md) —— **动手前先查**：每条结论带状态
-  （active / superseded / dead）、前提条件与复评触发；新结论一行写这里。
-- [性能调优记录](docs/log/PERFORMANCE.md) —— 性能实验史与实测细节（**已冻结增长**，
-  新叙事进 `docs/log/`）；需要证据链/原始数据时按节读，勿整读。
-- [历史归档](docs/log/ARCHIVE.md) —— §4 / §8 / §16 / §18（**编号保留**）：2026-08-29 路线图
-  快照（开头有校正表）、已删除功能档案。**纯历史，勿当现役依据**。
-- [开发决策档案](docs/log/DECISIONS.md) —— 每轮决策过程与设计审查结论（维护者向）。
-- [依赖与运行环境](docs/DEPENDENCIES.md) —— decord fork / TensorRT / onnxruntime 版本与注意事项。
-- `AGENTS.md` —— 维护者向**注入核**：铁律 + 现役架构 + 结论指针。
-  ⚠️ 该文件在每个会话开头被全量注入，**硬上限 14 KB**（由单测守护）。
+新制度（2026-10-12 制度重构）的分层：宪章（不变量）→ registry（唯一事实源）→ 视图（全渲染）→ git（唯一档案）。
 
-> 文档共七份（另有 `docs/log/` 实验叙事目录）。2026-09-08 起按
-> 「事实 / 结论 / 决策 / 历史」四层管理，见 `docs/log/DECISIONS.md`「文档分层管理」。
-> `docs/log/PERFORMANCE.md` 中凡提及 §4 / §8 / §16 / §18 的，均指 `docs/log/ARCHIVE.md`
-> 的对应章节。工具脚本索引见 [`tools/INDEX.md`](tools/INDEX.md)。
+- [现役结论索引](docs/CONCLUSIONS.md) —— **动手前先查**：每条结论带前提与复评触发（渲染产物；事实源 `registry/conclusions.yaml`）。
+- `charter.md` —— 制度不变量（分层/引用/版本/生命周期/注入预算；修订须附取证+裁决）。
+- `registry/` —— 规则、结论、工具分级、环境、架构、KPI 的唯一事实源（yaml）。
+- [旋钮表](docs/KNOBS.md) —— env 旋钮与默认值（渲染产物；事实源 `config/knobs.py`）。
+- [依赖与运行环境](docs/DEPENDENCIES.md) —— decord fork / TensorRT / onnxruntime 版本与注意事项。
+- `AGENTS.md` —— 维护者向**注入核**（渲染产物：宪章 + registry 快照；上限 6KB）。
+- [`tools/INDEX.md`](tools/INDEX.md) —— standing 工具与在树探针清单（渲染产物）。
+
+> 历史大档案（旧 `docs/log/PERFORMANCE·DECISIONS·ARCHIVE` 与 2026-10 前的实验叙事）**已出树**：经 git 档案取回——`git show archive/pre-rework:<路径>`；结论的 `evidence` 字段即 commit 锚点。
 
 ## 测试
 

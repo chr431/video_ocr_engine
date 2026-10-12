@@ -38,5 +38,5 @@
 | `tools/probes/_probe_ov_version_ab` | 近两轮（0.25.x/0.26.x）在用取证（last 2026-10-11） |
 | `tools/probes/_probe_quiet_suite` | 近两轮（0.25.x/0.26.x）在用取证（last 2026-10-11） |
 
-（探针删除协议：结论数字先进 benchmarks.yaml → git rm；数字不丢，档案可溯。）
+（探针删除协议：结论数字已由 conclusions.yaml 的 commit 锚点承载 → git rm；数字不丢。）
 

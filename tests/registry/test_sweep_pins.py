@@ -1,4 +1,5 @@
 """sweep 钉版判据单测——显式前缀才算钉，裸数字是注记（2026-10-12 清账轮教训）。"""
+
 from __future__ import annotations
 
 import sys

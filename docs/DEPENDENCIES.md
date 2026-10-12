@@ -106,14 +106,14 @@
     sha16 `f6cc1a48`，抽验同绿）。**wheel 口径验证全绿**（§15-§17）：金标 28/28 ×2（重录整矩阵同序——局部
     `--case` 重录会录在冷池态，见 FINDINGS F-8 注记）、挂死用例干净、
     引擎 e2e 三码全片段数与 dev dll 一致、压测 9/9、decode-only 漂移带内。
-  - ⚠️ **§16 死锁事故**：hybrid 宿主路径 + ONNX 慢消费者（h264lg B 金字塔
+  - ⚠️ **死锁事故（历史记录见 git 档案「§16」节）**：hybrid 宿主路径 + ONNX 慢消费者（h264lg B 金字塔
     深重排）曾 2/2 必现挂死——突发被在途窗口截断 + KICK_BURST=5 不够
-    冲开 DPB。修复见 `knowledge/benchmarks.yaml:hybrid_host_deadlock_fix`。
-    另 §10.2 的 kick=0 判别当日不可复现（时序敏感），替换证据 = kicks
+    冲开 DPB。修复见 git 档案 `knowledge/benchmarks.yaml:hybrid_host_deadlock_fix`（archive/pre-rework 锚点）。
+    另历史行为变更记录（git 档案）的 kick=0 判别当日不可复现（时序敏感），替换证据 = kicks
     激活计数 + wheel≡dev 全对位；历史 4/4 对照保留。
   - **sustained（滑窗持续产能）现为唯一 CPU 产能口径**（4ccf889 起）：
     `DECORD_CPU_RATE_SUSTAINED` env 已删除。机制/数字见
-    `knowledge/benchmarks.yaml` 的 `hybrid_cpu_rate_ratchet`。
+    git 档案 `knowledge/benchmarks.yaml` 的 `hybrid_cpu_rate_ratchet`（archive/pre-rework 锚点）。
     kick 清偿（**反馈式**，b67f9eb 起：克隆至离场侧债务清偿，护栏 64 防损坏流，
     EOF 冲刷兜底；bf16 重排 17>16 酷刑流 3/3 实证）治 open-GOP DPB 队头尾帧
     死锁；`DECORD_HYBRID_KICK_BURST`：0 = 消融关（单包 kick），>0 = 护栏值。

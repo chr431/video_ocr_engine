@@ -13,7 +13,7 @@ from _paths import PKG  # tests/_paths.py：与目录深度无关的 video_ocr_e
 
 # 2026-09-19：六个根模块 shim（engine_config / gpu_setup / ocr_native /
 # ocr_trt / segmentation / video_utils）**已删除**（下游 RVTL 完成迁移后）。
-# 本表已换成包内路径——见 docs/MIGRATION.md §1 的迁移表（标注"已删除"）。
+# 本表已换成包内路径——历史迁移表经 git 档案取回（archive/pre-rework:docs/MIGRATION.md）。
 ENGINE_MODULES = [
     "video_ocr_engine.config.constants",
     "video_ocr_engine.gpu.context",

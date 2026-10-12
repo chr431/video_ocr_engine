@@ -137,7 +137,7 @@ class FieldExtractor:
         self._buffer_size = buffer_size if buffer_size is not None else config.DEFAULT_BUFFER_SIZE
         # S9-2（D6/Q5）：配置构造期一次解析并冻结（resolve 为唯一 env
         # 读取点；构造后改 env 不再生效——v1 README 曾承诺"仍生效"，
-        # 属有意行为变更，见 docs/MIGRATION.md）。优先级：显式参数 >
+        # 属有意行为变更（历史迁移表经 git 档案取回）。优先级：显式参数 >
         # env > 默认（Q5）；v1 逃生门 VOE_ENV_WINS 已于 0.16.0 删除。
         self._rc = resolve(env=_os.environ)
         _pad_env = self._rc.ocr_pad_small

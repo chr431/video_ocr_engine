@@ -9,9 +9,7 @@
 #   since       生效日期
 #
 # 生命周期：executor 消失即删；12 个月无命中提示复评。advisory 满额须"自动化或删除"。
-# 过渡说明（2026-10-12 Phase A）：标注 (Phase D) 的 ci 执行体尚未建步骤，落成前其
-# executor 文件已存在的按文件计，不存在的在 Phase D 建。旧制度规则的逐条去向见
-# 文末"收编记录"。
+# 旧制度规则的逐条去向见文末"收编记录"。
 #
 # ── ci：线上 CI（机器无关） ────────────────────────────────────────────
 
@@ -81,7 +79,7 @@
 - id: R-injection-budget
   statement: 渲染后注入核 ≤6KB——触碰即失效警报（查泄漏，不上调；见宪章不变量 5）
   enforcement: ci
-  executor: .github/workflows/ci.yml#injection-budget (Phase E)
+  executor: tools/_audit_ext.py#injection_budget
   prevents: S0-A1（AGENTS 贴死 14KB 三周）、S0-A2（同日两次措辞压缩）
   since: 2026-10-12
 
@@ -109,7 +107,7 @@
 - id: R-except-annotated
   statement: except…pass 必须带 noqa S110 + 行内理由——豁免内联化，无登记账本
   enforcement: ci
-  executor: .github/workflows/ci.yml#lint（S110 规则集，Phase D 起）
+  executor: .github/workflows/ci.yml#lint（S110 规则集，Phase D 起，2026-10-12）
   prevents: S0-G4（baseline 豁免账本腐化为 23 处被动余量）
   since: 2026-10-12
 
@@ -177,10 +175,10 @@
   executor: tools/_probe_window_matrix.py
   prevents: 2026-10-08 flake（单轮 12/12 曾作通过线）
   since: 2026-10-08
-  # 注：脚本默认 --repeat 1 与本规则不一致（第一性审查 §4 P3），Phase C 迁移时改默认值 5。
+
 
 - id: R-perf-quiet
-  statement: 性能测量启动前必须过后台负载门禁（外部 CPU>15% 或 GPU>10% 即退出）——机器独占 prose 的机器化
+  statement: 性能测量启动前必须过后台负载门禁（外部 CPU>15% 或 GPU>50% 即退出（桌面合成常态豁免））——机器独占 prose 的机器化
   enforcement: local-gate
   executor: tools/_measure_lib.py#assert_machine_quiet
   prevents: 旧 rules.yaml"标定/实验期间机器独占"（prose 从未执行）；S0-C5 噪声族（同码两跑差 7.7%）

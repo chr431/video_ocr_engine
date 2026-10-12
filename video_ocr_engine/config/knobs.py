@@ -241,7 +241,7 @@ KNOBS = Registry(
             "diag",
             _ALL,
             "ec:84",
-            note="v1 读于构造期；v2 统一构造期一次（§10.2）",
+            note="v1 读于构造期；v2 统一构造期一次（历史行为变更）",
         ),
         Knob(
             "diag.subprobe",

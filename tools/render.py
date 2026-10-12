@@ -1,10 +1,12 @@
 """统一渲染器——registry/ 与产品配置到全部视图的唯一通道（R-render-consistency）。
 
-视图（永不手写；--check 校验一致性 + 裸 CR + 结论路径活性 + 证据锚点活性）：
+视图六份（永不手写；--check 校验一致性 + 裸 CR + 结论路径活性 + 证据锚点活性）：
   docs/CONCLUSIONS.md   ← registry/conclusions.yaml
   docs/KNOBS.md         ← video_ocr_engine.config.KNOBS（旋钮事实源=产品代码）
   registry/knobs.yaml   ← 同上（机器可读镜像）
   tools/INDEX.md        ← registry/tools.yaml（standing 全列 + 在树 probe）
+  AGENTS.md             ← 宪章 + registry 快照（注入核，预算≤6KB=宪章不变量 5）
+  docs/HEALTH.md         ← registry/kpi.yaml（KPI 视图）
 
 旧 knowledge/render.py 的职责并入本文件（Phase C，制度重构）；conclusions 的
 evidence 为 commit 锚点结构，路径活性在锚点提交上验证（git cat-file），与
@@ -236,7 +238,7 @@ def render_index_md(tools: list) -> str:
         lines.append("| `tools/probes/%s` | %s |" % (t["id"], _cell(note)))
     lines += [
         "",
-        "（探针删除协议：结论数字先进 benchmarks.yaml → git rm；数字不丢，档案可溯。）",
+        "（探针删除协议：结论数字已由 conclusions.yaml 的 commit 锚点承载 → git rm；数字不丢。）",
         "",
     ]
     return "\n".join(lines)
@@ -337,4 +339,4 @@ if __name__ == "__main__":
         for e in errs:
             print("  " + e)
         raise SystemExit(1)
-    print("render check：四视图一致 + 路径/锚点活性 + 裸 CR ✓")
+    print("render check：六视图一致 + 路径/锚点活性 + 裸 CR ✓")

@@ -15,7 +15,7 @@ def engine():
 
 def test_backend_name_is_openvino(engine):
     # ORT 后端已移除（2026-09-14，log OpenVINO移除轮）；0.17.0 起 CPU
-    # 引擎标识为 'openvino'（MIGRATION §2）：
+    # 引擎标识为 'openvino'（历史迁移表见 git 档案 archive/pre-rework:docs/MIGRATION.md）：
     # CPU 路径唯一引擎 = OpenVINO。
     assert engine.backend_name == "openvino"
 

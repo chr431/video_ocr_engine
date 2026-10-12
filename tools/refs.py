@@ -35,6 +35,17 @@ CHARTER = ROOT / "charter.md"
 HISTORY = ROOT / "docs" / "log" / "2026-09-10-conclusions-history.md"
 HISTORY_ARCHIVE = "archive/pre-rework:docs/log/2026-09-10-conclusions-history.md"
 
+#: 守卫负测夹具（自带坏样例，整文件豁免 substrate 校验——否则守卫的
+#: 自证材料会被自己的检查当成违规，反射性悖论）
+NEGATIVE_FIXTURES = {
+    "test_refs.py",
+    "test_guards.py",
+    "test_render.py",
+    "test_version_advice.py",
+    "test_load_gate.py",
+    "test_sweep_pins.py",
+}
+
 TOKEN_CONCLUSION = re.compile(r"(?<![A-Za-z0-9@-])C-\d{2,3}\b")
 TOKEN_RULE = re.compile(r"(?<![A-Za-z0-9-])(?:R|adv)-[a-z0-9]+(?:-[a-z0-9]+)*")
 TOKEN_DECORD = re.compile(r"decord@(\d+\.\d+\.\d+)")
@@ -85,8 +96,17 @@ class Index:
                 self.historical = set(re.findall(r"(?m)^## (C-\d+)", r.stdout))
         # 墓碑补全：结论源文件 git 全史中出现过的 id 永远可解析（出源≠不可查）
         hist = subprocess.run(
-            ["git", "-C", str(ROOT), "log", "--format=%H", "-p",
-             "--", "registry/conclusions.yaml", "knowledge/conclusions.md"],
+            [
+                "git",
+                "-C",
+                str(ROOT),
+                "log",
+                "--format=%H",
+                "-p",
+                "--",
+                "registry/conclusions.yaml",
+                "knowledge/conclusions.md",
+            ],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -118,16 +138,27 @@ class Index:
         if TOKEN_FORK.fullmatch(token):
             return f"{token} [外部命名空间] decord fork 仓结论（其仓内取全文）"
         if token.startswith("archive/"):
-            tag = token[len("archive/") :]
-            state = "存在" if tag in self.tags else "UNKNOWN（tag 不存在）"
+            # tags 集合存全名（"archive/pre-rework"），比对用全 token
+            state = "存在" if token in self.tags else "UNKNOWN（tag 不存在）"
             return f"{token} [档案 tag] {state}"
         return f"UNKNOWN: {token}"
 
 
 def _substrate_files(extra: list[str]) -> list[Path]:
-    files = [CHARTER] + sorted(REGISTRY.glob("*.yaml")) if REGISTRY.is_dir() else [CHARTER]
+    """扫描基底：charter + registry + 全仓 py。
+
+    py 的 token 判定（C-/R-/decord@/archive）与 md 同；裸 §N 在 py 里按
+    历史印记豁免（2026-10-12 通读轮：全仓 129 处均为"v2 §8.6/D30/W1"
+    旧改革计划内部编号，定义源不在仓内、不是活引用——逐处改写无收益）。
+    md prose（charter/registry/视图）里的裸 §N 才是不可解析的规范锚点，
+    照旧拦。
+    """
+    files = [CHARTER] + sorted(REGISTRY.glob("*.yaml"))
     if not CHARTER.is_file():
         files = sorted(REGISTRY.glob("*.yaml"))
+    for d in (ROOT / "video_ocr_engine", ROOT / "tests", ROOT / "tools"):
+        if d.is_dir():
+            files += sorted(q for q in d.rglob("*.py") if "__pycache__" not in q.parts)
     files += [Path(f) for f in extra]
     return [f for f in files if f.is_file()]
 
@@ -140,6 +171,8 @@ def scan_file(path: Path, index: Index) -> list[str]:
         rel = path.relative_to(ROOT)
     except ValueError:  # 仓外文件（负测夹具）按原路径显示
         rel = path
+    if rel.name in NEGATIVE_FIXTURES:
+        return []  # 整文件豁免：守卫的坏样例集（R-guard-negative 的自证材料）
     for lineno, line in enumerate(text.splitlines(), 1):
         where = f"{rel}:{lineno}"
         for m in TOKEN_CONCLUSION.finditer(line):
@@ -156,11 +189,13 @@ def scan_file(path: Path, index: Index) -> list[str]:
         for m in TOKEN_ARCHIVE.finditer(line):
             if m.group(0) not in index.tags:
                 errors.append(f"{where}  UNKNOWN  {m.group(0)}")
-        if path.suffix == ".md":  # 裸章号/裸版本仅查 prose 基底（数据住 yaml）
+        if path.suffix == ".md":
+            # 裸 §N/裸版本只禁 md prose 基底（charter/registry/视图）。
             if BARE_SECTION.search(line):
                 errors.append(f"{where}  BARE_SECTION  裸 §N 禁入基底")
-            for m in BARE_VERSION.finditer(line):
-                errors.append(f"{where}  BARE_VERSION  {m.group(0)}（版本须前缀或住 environment）")
+            vm = BARE_VERSION.search(line)
+            if vm:
+                errors.append(f"{where}  BARE_VERSION  {vm.group(0)}（版本须前缀或住 environment）")
     return errors
 
 

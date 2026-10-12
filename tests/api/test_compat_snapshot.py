@@ -1,7 +1,7 @@
 """S0 API 兼容快照（v2 ARCHITECTURE.md §10.1 冻结表的可执行形式）。
 
 v1 的公共面在这里**逐字冻结**：v2 strangler 迁移（S1–S5）期间任何 PR
-改动这些快照即测试失败——除非走 §10.2 的"有意变更"流程并同步本文件的
+改动这些快照即测试失败——除非走金标重录流程并同步本文件的
 冻结字面量与 CHANGELOG。
 
 冻结内容（全部为 r7 基线 7ba1c3a 实测捕获）：
@@ -18,7 +18,7 @@ v1 的公共面在这里**逐字冻结**：v2 strangler 迁移（S1–S5）期�
 本文件**有意**走已废弃的六个根模块路径——第 5/6 项冻结的正是 shim 的
 可导入性与常量面。0.14.0 删除 shim 时，本文件与
 `tests/api/test_engine_imports.py` 的 ENGINE_MODULES 必须同步改为包内路径
-（见 docs/MIGRATION.md §1），这是删除动作的完整清单。
+（历史迁移表经 git 档案取回：archive/pre-rework:docs/MIGRATION.md）。
 """
 
 from __future__ import annotations

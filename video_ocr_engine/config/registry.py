@@ -4,7 +4,7 @@
 resolve() 是全仓库唯一的 env 读取点（D6）；未注册的名字不得读取。
 
 rationale_id 在 S2 之前指向 engine_config 内的依据注释锚点（ec:<起止行>），
-S2 建 knowledge/knobs.yaml 后改为 yaml 条目 id——代码只留 id 反查。
+制度重构后改为 registry/knobs.yaml 条目 id（事实源仍为 config/knobs.py）——代码只留 id 反查。
 """
 
 from __future__ import annotations

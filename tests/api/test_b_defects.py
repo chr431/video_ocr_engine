@@ -2,7 +2,7 @@
 
 B1：同实例第二次 extract 不再带上一次的降级原因/计时/剖面。
 B3：未知 decode_backend / ocr_backend 构造期 ValueError（v1 静默兜底）。
-两个修复都是 §10.2 声明的**有意行为变更**。
+两个修复都是**有意行为变更**（历史记录见 git 档案）。
 """
 
 from __future__ import annotations
