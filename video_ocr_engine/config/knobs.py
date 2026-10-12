@@ -154,7 +154,7 @@ KNOBS = Registry(
             note="fp16 ONNX（keep_io_types）+ STRONGLY_TYPED 引擎（层内 half、"
             "IO fp32）；准确率门禁 _probe_acc_ab --knob TRT_FP16=0,1",
             env_live_only=True,
-        ),  # env-live-only（2026-09-19）：调用期直读 env，不进 digest
+        ),  # env-live-only（2026-10-12 契约收紧）：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
         Knob(
             "ocr.trt_defer_sync",
             "TRT_DEFER_SYNC_ENV",
@@ -168,7 +168,7 @@ KNOBS = Registry(
             "提交序交付）；治 launch 裸奔（运行期 SM ~40%）；"
             "门禁=文本 sha 逐位+段数+bench ab",
             env_live_only=True,
-        ),  # env-live-only（2026-09-19）：消费者调用期直读 env，RunConfig 字段不决定行为 → 已从 config_digest 排除
+        ),  # env-live-only（2026-10-12 契约收紧）：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
         # ── segment ──
         Knob(
             "segment.text_sep_merge",
@@ -217,7 +217,7 @@ KNOBS = Registry(
             "ec:82",
             note="C-10 判零收益，opt-in",
             env_live_only=True,
-        ),  # env-live-only（2026-09-19）：消费者调用期直读 env，RunConfig 字段不决定行为 → 已从 config_digest 排除
+        ),  # env-live-only（2026-10-12 契约收紧）：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
         Knob(
             "pipeline.gpu_drainer",
             "GPU_PIPELINE_DRAINER_ENV",
@@ -230,7 +230,7 @@ KNOBS = Registry(
             note="层4 排空线程（get_batch 独占线程预取深 4 批）；实测零收益"
             "默认关（引擎税=线程争用而非排空阻塞，同 C-10 判例）",
             env_live_only=True,
-        ),  # env-live-only（2026-09-19）：消费者调用期直读 env，RunConfig 字段不决定行为 → 已从 config_digest 排除
+        ),  # env-live-only（2026-10-12 契约收紧）：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
         # ── diag ──
         Knob(
             "diag.profile",
@@ -252,9 +252,9 @@ KNOBS = Registry(
             "diag",
             ("gpu",),
             "ec:85",
-            note="v1 读于 import 期；v2 统一构造期一次（§10.2）",
+            note="TRT_SUBPROBE 在 trt.py 导入期读一次（进程级；诊断档，不做调用期活读）",
             env_live_only=True,
-        ),  # env-live-only（2026-09-19）：消费者调用期直读 env，RunConfig 字段不决定行为 → 已从 config_digest 排除
+        ),  # env-live-only（2026-10-12 契约收紧）：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
         Knob(
             "diag.bounds_debug",
             "DEBUG_BOUNDS_ENV",
@@ -265,7 +265,7 @@ KNOBS = Registry(
             _ALL,
             "ec:86",
             env_live_only=True,
-        ),  # env-live-only（2026-09-19）：消费者调用期直读 env，RunConfig 字段不决定行为 → 已从 config_digest 排除
+        ),  # env-live-only（2026-10-12 契约收紧）：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
         Knob(
             "diag.telemetry",
             "VOE_TELEMETRY",

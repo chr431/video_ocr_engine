@@ -128,6 +128,41 @@ def test_totals_n_max_cover_all_totals_keys():
     assert hist_bucket(0.001) != hist_bucket(0.0021)    # 跨到 [2^-9,2^-8)
 
 
+def test_hist_bucket_lower_bounds():
+    """桶界表须与 hist_bucket 自洽（2026-10-12 审查轮：旧表整表偏 2×）。
+
+    旧式 `2^(i-BIAS)` 把桶的**上界**当下界发布（report.bucket_lower_s
+    据此判读会把每个时长放错一倍）。这里逐桶断言 x=下界 落在该桶。
+    """
+    from video_ocr_engine.domain.metrics import (
+        HIST_BUCKET_LOWER, HIST_N_BUCKETS, hist_bucket)
+    for k in range(1, HIST_N_BUCKETS - 1):
+        x = HIST_BUCKET_LOWER[k]
+        assert hist_bucket(x) == k, (k, x, hist_bucket(x))
+        assert HIST_BUCKET_LOWER[k] <= x < HIST_BUCKET_LOWER[k + 1]
+    assert HIST_BUCKET_LOWER[20] == 0.5
+    assert HIST_BUCKET_LOWER[21] == 1.0
+
+
+def test_gauge_max_merges_by_max_across_threads():
+    """*_max 型 gauge 跨线程合并取最大（2026-10-12 审查轮：旧为末位写者胜）。
+
+    桶序 = 线程首触顺序，故先注册的线程写大值：旧实现被后注册线程的
+    小值覆盖（0.9→0.1），报告的单次最长偏低 = 门禁静默放行。
+    """
+    m = Metrics("full")
+    name = "pipeline.q_put_block_max"
+
+    def worker(v):
+        m.gauge(name, v)
+
+    ta = threading.Thread(target=worker, args=(0.9,))   # 先触桶：写大值
+    tb = threading.Thread(target=worker, args=(0.1,))
+    ta.start(); ta.join()
+    tb.start(); tb.join()
+    assert m.snapshot()["gauges"][name] == pytest.approx(0.9)
+
+
 def test_registry_cap():
     from video_ocr_engine.domain.metrics import METRIC_CAP, MetricRegistry
     specs = tuple(MetricSpec("x.%d" % i, "counter", "", "x", "")

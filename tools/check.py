@@ -58,7 +58,7 @@ STEPS = {
     "golden_full": ("金标 full（%s 用例）" % _golden_case_count(),
                     [sys.executable, "tests/golden/record.py", "--verify"]),
     "sweep": ("发版清扫（结论钉版清单）",
-              [sys.executable, "tools/conclusions_sweep.py"]),
+              [sys.executable, "tools/conclusions_sweep.py", "--strict"]),
 }
 DAILY = ["pytest", "audit_since", "index", "golden_smoke"]
 RELEASE = ["pytest", "audit", "index", "golden_full", "sweep"]
@@ -98,12 +98,22 @@ def main() -> int:
         if ok == "✗":
             failed.append(name)
             print(out[-1200:])
+        elif name == "sweep" and out.strip():
+            # 清扫清单即使通过也可见：落后钉版/触发词命中是发版前的决策输入，
+            # 只在失败时打印会让"通过但带清单"的输出被吞（2026-10-12 审查轮）。
+            print(out.rstrip())
     print("\n汇总：")
     for name, label, ok, dt in results:
         print("  %-2s %-28s %6.1fs" % (ok, label, dt))
+    skipped = [name for name, _, ok, _ in results if ok == "SKIP"]
     if failed:
         print("\n✗ 失败：%s" % ", ".join(failed))
         return 1
+    if skipped:
+        # SKIP 不冒充通过：金标未验证这一事实必须出现在汇总末行（2026-10-12）。
+        print("\n△ %s 链部分通过（跳过：%s——金标未验证）"
+              % (args.tier, ", ".join(skipped)))
+        return 0
     print("\n✓ %s 链全部通过（总 %.1fs）" % (args.tier, sum(d for _, _, _, d in results)))
     return 0
 

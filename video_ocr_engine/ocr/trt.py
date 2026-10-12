@@ -21,6 +21,8 @@ from video_ocr_engine._gpu_kernels import (  # noqa: F401
     GpuPreprocessor,
     GpuOutputReducer,
     GpuFrameAnalyzer,
+    _ck,
+    _ck_alloc,
 )
 
 log = logging.getLogger(__name__)
@@ -28,6 +30,8 @@ log = logging.getLogger(__name__)
 # 子相位探针（TRT_SUBPROBE=1 开启）：累计 HtoD 提交 / kernel enqueue /
 # DtoH 提交 / stream 同步等待的耗时与批数，用于定位共存负载下 TRT 批延迟
 # 的膨胀点（提交调用变慢 = 宿主被饥饿；同步等待变长 = GPU 侧/排队问题）。
+# 导入期读一次（进程级）：本档默认关；调用期活读需改十余处内联读点，
+# 热路径成本不值（2026-10-12 审查轮裁决，knob note 已同步）。
 SUBPROBE_ON = config.env_bool(config.TRT_SUBPROBE_ENV)
 SUBPROBE: dict = {"htod": 0.0, "enqueue": 0.0, "dtoh": 0.0, "sync": 0.0, "n": 0}
 
@@ -192,18 +196,16 @@ class TrtEngine:
         for attr in ("_dev_in", "_dev_out"):
             ptr = getattr(self, attr, None)
             if ptr:
-                try:
-                    cudart.cudaFree(ptr)
-                except Exception:  # noqa: BLE001 释放路径：坏指针由 driver 回收
-                    pass
+                (_err,) = cudart.cudaFree(ptr)  # 失败由 driver/进程退出兜底
+                if int(_err) != 0:
+                    log.debug("cudaFree 失败（释放路径）: %s", _err)
             setattr(self, attr, None)
         self._out_nbytes = 0
         self._out_host = None
         if stream is not None and getattr(self, "_owns_stream", False):
-            try:
-                cudart.cudaStreamDestroy(stream)
-            except Exception:  # noqa: BLE001 释放路径：同上
-                pass
+            (_err,) = cudart.cudaStreamDestroy(stream)
+            if int(_err) != 0:
+                log.debug("流销毁失败: %s", _err)
         self._stream = None
         self._owns_stream = False
 
@@ -364,7 +366,7 @@ class TrtEngine:
         from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
 
         _t_sp = time.perf_counter() if SUBPROBE_ON else 0.0
-        cudart.cudaStreamSynchronize(self._stream)
+        _ck(cudart.cudaStreamSynchronize(self._stream), "TRT 输出同步")
         _sp_tick("sync", _t_sp)
 
     def execute_async(self, x: np.ndarray, out_host: "np.ndarray | None" = None) -> np.ndarray:
@@ -701,19 +703,16 @@ class TrtEngine:
         if ring is None:
             return
         for slot in ring:
-            try:
-                cudart.cudaEventDestroy(slot["event"])
-            except Exception:  # noqa: BLE001
-                pass  # 事件销毁失败不阻断环释放（进程退出兜底）
+            (_err,) = cudart.cudaEventDestroy(slot["event"])
+            if int(_err) != 0:
+                log.debug("事件销毁失败（环释放继续）: %s", _err)
             if slot["ptr"][0]:
-                try:
-                    cudart.cudaFreeHost(slot["ptr"][0])
-                except Exception:  # noqa: BLE001
-                    pass  # pinned 释放失败不阻断（驱动回收）
-                try:
-                    cudart.cudaFreeHost(slot["ptr"][1])
-                except Exception:  # noqa: BLE001
-                    pass  # 同上
+                (_err,) = cudart.cudaFreeHost(slot["ptr"][0])
+                if int(_err) != 0:
+                    log.debug("pinned 释放失败（驱动回收）: %s", _err)
+                (_err,) = cudart.cudaFreeHost(slot["ptr"][1])
+                if int(_err) != 0:
+                    log.debug("pinned 释放失败（驱动回收）: %s", _err)
             slot["idx"] = slot["prob"] = None
             slot["ptr"] = (0, 0)
             slot["rows"] = 0

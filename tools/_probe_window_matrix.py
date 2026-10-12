@@ -23,10 +23,14 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from env_probe import video_dir  # noqa: E402  环境事实源（纪律检查 1）
+from env_probe import fork_build_dll, video_dir  # noqa: E402  环境事实源（纪律检查 1）
 
 sys.stdout.reconfigure(encoding="utf-8")
-os.environ.setdefault("DECORD_LIBRARY_PATH", "D:/Repo/decord/build-dev")
+# DLL 目录走环境事实源（旧为写死 build-dev；fork_build_dll 取最新构建产物，
+# env 仍可经 DECORD_LIBRARY_PATH 覆盖——setdefault 语义不变）
+_fbd = fork_build_dll()
+if _fbd is not None:
+    os.environ.setdefault("DECORD_LIBRARY_PATH", str(_fbd.parent))
 
 from decord import VideoReader, gpu, hybrid  # noqa: E402
 

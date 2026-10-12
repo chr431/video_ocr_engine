@@ -150,8 +150,13 @@ def _cluster_win3(diff: np.ndarray) -> float:
     """
     if not diff.any():
         return 0.0
-    # bool 与 uint8 同为 1 字节 → view 零拷贝；非连续时退回 astype
-    s: np.ndarray = diff.view(np.uint8) if diff.flags.c_contiguous else diff.astype(np.uint8)
+    # bool 与 uint8 同为 1 字节 → view 零拷贝（快路径仅对 bool 成立，
+    # 2026-10-12 审查轮：本函数是宿主/GPU 共用判定原语，对 float32 等
+    # dtype 做 view 会得到原始字节图案——分数恒 ≥C = 逐帧断段且无声）。
+    if diff.dtype == np.bool_ and diff.flags.c_contiguous:
+        s: np.ndarray = diff.view(np.uint8)
+    else:
+        s = (diff != 0).astype(np.uint8)
     # 行向 3 列和（左右越界 0）
     c3 = s.copy()
     c3[:, 1:] += s[:, :-1]

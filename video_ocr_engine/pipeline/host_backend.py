@@ -91,6 +91,21 @@ def _prof(spec, group: str, key: str, t0: float) -> None:
         spec.prof_end(group, key, t0)
 
 
+def _assert_crop_expected(spec, c, roi_h: int, roi_w: int) -> None:
+    """ROI-first 输出形状不符 = 布局契约破坏 → 硬失败（2026-10-12 审查轮）。
+
+    旧行为是静默按全帧坐标切一刀（本意服务「旧 decord 无 roi 支持」），
+    但生产恒传 roi（构造期 ensure_roi_capable_decoder 已硬校验），
+    走到这里只会是把已裁剪数组当全帧切——空/错内容无声流进 Otsu。
+    """
+    if not spec.crop_is_expected(c, roi_h, roi_w):
+        raise RuntimeError(
+            "ROI-first 输出形状不符: got %r, expected (roi_h=%d, roi_w=%d) 或 "
+            "yuv 半高布局——解码器未按 roi 裁剪？（检查 decord fork 版本）"
+            % (tuple(getattr(c, "shape", ())), roi_h, roi_w)
+        )
+
+
 def _calibrate(spec: HostRunSpec, vr, frames, *, with_dev: bool):
     """宿主 Otsu 校准（原 _host_calibrate；ex 读取 → spec 字段）。
 
@@ -113,8 +128,7 @@ def _calibrate(spec: HostRunSpec, vr, frames, *, with_dev: bool):
             dev_c = shape[-1] if len(shape) == 4 else 0
         for k in range(calib_n):
             c = crops[k]
-            if not spec.crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
-                c = c[y1 : y2 + 1, x1 : x2 + 1]
+            _assert_crop_expected(spec, c, y2 - y1 + 1, x2 - x1 + 1)
             g = spec.crop_luma(c)
             dev_info = None
             if dev_c == 1 and len(shape) == 4:
@@ -125,8 +139,7 @@ def _calibrate(spec: HostRunSpec, vr, frames, *, with_dev: bool):
         for k in range(calib_n):
             nd = vr.next_roi(x1, y1, x2 + 1, y2 + 1)
             c = nd.asnumpy()
-            if not spec.crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
-                c = c[y1 : y2 + 1, x1 : x2 + 1]
+            _assert_crop_expected(spec, c, y2 - y1 + 1, x2 - x1 + 1)
             g = spec.crop_luma(c)
             dev_info = None
             if with_dev and len(nd.shape) == 3 and nd.shape[-1] == 1:

@@ -93,6 +93,14 @@ def resolve(
     values: dict[str, Any] = {}
     for k in KNOBS.knobs:
         ov = overrides.get(k.name, None)
+        if ov is not None and getattr(k, "env_live_only", False):
+            # env-live 旋钮由消费者调用期直读 env（子进程 A/B 逐臂切换用），
+            # RunConfig 字段不决定行为——收下 override 只会造出"字段说改了、
+            # 行为没变"的静默谎言（2026-10-12 审查轮）。要改走 env。
+            raise ValueError(
+                "override 不支持 env-live 旋钮 %r：其行为由调用期 env 决定，"
+                "请设 %s 后重建实例" % (k.name, k.env)
+            )
         raw = env.get(k.env) if k.env else None
         if raw is not None:
             parsed = _parse(k, raw)
@@ -113,11 +121,11 @@ def resolve(
         )
         values["diag.telemetry"] = "full"
 
-    # digest 只覆盖**生效值**（2026-09-19）：env_live_only 旋钮的实际
-    # 行为由调用期 env 决定，把解析结果计入 digest 会让 A/B 指纹撒谎。
-    # values 的键是**点号形式**（k.name），排除集合必须同形
-    _live_only = {k.name for k in KNOBS.knobs if getattr(k, "env_live_only", False)}
-    _digest_vals = {k: v for k, v in values.items() if k not in _live_only}
-    digest_src = json.dumps(_digest_vals, sort_keys=True, ensure_ascii=True, default=str)
+    # digest 覆盖**全部生效值**（2026-10-12 审查轮纠偏）：env-live 旋钮的
+    # 实际行为由调用期 env 决定，而标准 A/B 协议正是"设 env → 构造 → run"，
+    # resolve 期的 env 值即行为值——排除它们曾让指纹无法区分 fp16/延迟收集
+    # 两臂（实测 TRT_FP16=0/1 同 digest）。代价：构造后再改 env 会让 digest
+    # 与行为失配（env-live 旋钮本就破坏 D6 冻结，见 registry 字段注）。
+    digest_src = json.dumps(values, sort_keys=True, ensure_ascii=True, default=str)
     values["config_digest"] = hashlib.sha256(digest_src.encode("utf-8")).hexdigest()[:16]
     return RunConfig.from_values(values)

@@ -145,7 +145,7 @@
   type: bool
   default: False
   rationale: ec:85
-  note: v1 读于 import 期；v2 统一构造期一次（§10.2）
+  note: TRT_SUBPROBE 在 trt.py 导入期读一次（进程级；诊断档，不做调用期活读）
 
 - name: diag.bounds_debug
   env: DEBUG_BOUNDS

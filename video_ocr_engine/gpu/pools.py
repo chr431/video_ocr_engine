@@ -54,12 +54,13 @@ class _YFrame:
         except Exception:
             logger.debug("Y 池入列失败，转直释", exc_info=True)
         if not pooled:
-            try:
-                from cuda.bindings import runtime as cudart
+            from cuda.bindings import runtime as cudart
 
-                cudart.cudaFree(self.ptr)
-            except Exception:
-                logger.debug("Y 池放弃路径 cudaFree 失败（进程退出兜底）", exc_info=True)
+            # cudart 返回 (err,) 元组不抛异常——旧 try/except 永不触发、
+            # 失败静默（2026-10-12 审查轮：放弃路径 cudaFree 失败=静默泄漏）。
+            (_err,) = cudart.cudaFree(self.ptr)
+            if int(_err) != 0:
+                logger.debug("Y 池放弃路径 cudaFree 失败（进程退出兜底）: %s", _err)
 
 
 class _YFramePool:
@@ -132,12 +133,13 @@ class _YFramePool:
             return
         frame._recycled = True
         if not self._recycle(frame):
-            try:
-                from cuda.bindings import runtime as cudart
+            from cuda.bindings import runtime as cudart
 
-                cudart.cudaFree(frame.ptr)
-            except Exception:
-                logger.debug("Y 池显式归还列满 cudaFree 失败（进程退出兜底）", exc_info=True)
+            # cudart 返回 (err,) 元组不抛异常——旧 try/except 永不触发、
+            # 失败静默（2026-10-12 审查轮：放弃路径 cudaFree 失败=静默泄漏）。
+            (_err,) = cudart.cudaFree(frame.ptr)
+            if int(_err) != 0:
+                logger.debug("Y 池显式归还列满 cudaFree 失败（进程退出兜底）: %s", _err)
 
     def release_all(self) -> None:
         """显式释放全部空闲缓冲（extract 结束调用；DESIGN-REVIEW C5：池
@@ -151,13 +153,13 @@ class _YFramePool:
                 if not self._free:
                     break
                 frame = self._free.pop()
-            try:
-                from cuda.bindings import runtime as cudart
+            from cuda.bindings import runtime as cudart
 
-                cudart.cudaFree(frame.ptr)
-            except Exception:
-                logger.debug("cudaFree 失败，忽略（进程退出兜底）", exc_info=True)
-                pass  # 释放失败仅余进程退出兜底，无进一步处置手段
+            # cudart 返回 (err,) 元组不抛异常——旧 try/except 永不触发、
+            # 失败静默（2026-10-12 审查轮：放弃路径 cudaFree 失败=静默泄漏）。
+            (_err,) = cudart.cudaFree(frame.ptr)
+            if int(_err) != 0:
+                logger.debug("cudaFree 失败，忽略（进程退出兜底）: %s", _err)
 
 
 class _DevBatch:
@@ -189,12 +191,13 @@ class _DevBatch:
         except Exception:
             logger.debug("批池入列失败，转直释", exc_info=True)
         if not pooled:
-            try:
-                from cuda.bindings import runtime as cudart
+            from cuda.bindings import runtime as cudart
 
-                cudart.cudaFree(self.ptr)
-            except Exception:
-                logger.debug("批池放弃路径 cudaFree 失败（进程退出兜底）", exc_info=True)
+            # cudart 返回 (err,) 元组不抛异常——旧 try/except 永不触发、
+            # 失败静默（2026-10-12 审查轮：放弃路径 cudaFree 失败=静默泄漏）。
+            (_err,) = cudart.cudaFree(self.ptr)
+            if int(_err) != 0:
+                logger.debug("批池放弃路径 cudaFree 失败（进程退出兜底）: %s", _err)
 
 
 class _CpuFrameRef:
@@ -277,12 +280,13 @@ class _DevBatchPool:
             return
         b._recycled = True
         if not self._recycle(b):
-            try:
-                from cuda.bindings import runtime as cudart
+            from cuda.bindings import runtime as cudart
 
-                cudart.cudaFree(b.ptr)
-            except Exception:
-                logger.debug("批池显式归还列满 cudaFree 失败（进程退出兜底）", exc_info=True)
+            # cudart 返回 (err,) 元组不抛异常——旧 try/except 永不触发、
+            # 失败静默（2026-10-12 审查轮：放弃路径 cudaFree 失败=静默泄漏）。
+            (_err,) = cudart.cudaFree(b.ptr)
+            if int(_err) != 0:
+                logger.debug("批池显式归还列满 cudaFree 失败（进程退出兜底）: %s", _err)
 
     def release_all(self) -> None:
         """显式释放全部空闲缓冲（同 _YFramePool.release_all，C5；
@@ -294,10 +298,10 @@ class _DevBatchPool:
                 if not self._free:
                     break
                 b = self._free.pop()
-            try:
-                from cuda.bindings import runtime as cudart
+            from cuda.bindings import runtime as cudart
 
-                cudart.cudaFree(b.ptr)
-            except Exception:
-                logger.debug("cudaFree 失败，忽略（进程退出兜底）", exc_info=True)
-                pass  # 释放失败仅余进程退出兜底，无进一步处置手段
+            # cudart 返回 (err,) 元组不抛异常——旧 try/except 永不触发、
+            # 失败静默（2026-10-12 审查轮：放弃路径 cudaFree 失败=静默泄漏）。
+            (_err,) = cudart.cudaFree(b.ptr)
+            if int(_err) != 0:
+                logger.debug("cudaFree 失败，忽略（进程退出兜底）: %s", _err)

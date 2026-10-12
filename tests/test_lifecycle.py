@@ -54,14 +54,16 @@ def cuda_bindings(monkeypatch):
            "malloc_handles": iter(range(1000, 3000))}
     monkeypatch.setattr(cudart, "cudaMalloc",
                         lambda n: (0, next(rec["malloc_handles"])))
+    # 假件须复刻真实返回形状 (err,)（2026-10-12 审查轮）：cuda-python 返回
+    # 元组不抛异常，调用方现按 `_err, = ...` 解包——返回 None 会误伤。
     monkeypatch.setattr(cudart, "cudaFree",
-                        lambda p: rec["freed"].append(p))
+                        lambda p: (rec["freed"].append(p), (0,))[1])
     monkeypatch.setattr(cudart, "cudaStreamSynchronize",
-                        lambda s: rec["syncs"].append(s))
+                        lambda s: (rec["syncs"].append(s), (0,))[1])
     monkeypatch.setattr(cudart, "cudaStreamDestroy",
-                        lambda s: rec["destroys"].append(s))
-    monkeypatch.setattr(cudart, "cudaMemcpy", lambda *a, **k: None)
-    monkeypatch.setattr(cudart, "cudaMemcpyAsync", lambda *a, **k: None)
+                        lambda s: (rec["destroys"].append(s), (0,))[1])
+    monkeypatch.setattr(cudart, "cudaMemcpy", lambda *a, **k: (0,))
+    monkeypatch.setattr(cudart, "cudaMemcpyAsync", lambda *a, **k: (0,))
     return rec
 
 
@@ -89,7 +91,7 @@ def test_reducer_d2h_is_async_on_reducer_stream(cuda_bindings, monkeypatch):
     from cuda.bindings import runtime as cudart
     calls = {"async": [], "blocking": []}
     monkeypatch.setattr(cudart, "cudaMemcpyAsync",
-                        lambda *a, **k: calls["async"].append(a))
+                        lambda *a, **k: (calls["async"].append(a), (0,))[1])
     monkeypatch.setattr(cudart, "cudaMemcpy",
                         lambda *a, **k: calls["blocking"].append(a))
     red = _make_reducer(stream=1001, owns=False)

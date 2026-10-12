@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -33,8 +34,17 @@ from env_probe import (  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 
 # 审计：绝对路径字面量（Windows 盘符 / UNC）。白名单按「文件 + 行内容」放行。
-_ABS_PATH_RE_PLAIN = re.compile(r"[A-Za-z]:[\/]")  # 文本级预筛（快判有无盘符）
-_ABS_PATH_RE = re.compile(r"""(?<![\w"'#])[A-Za-z]:[\\/](?:[\w.\- ]+[\\/])*[\w.\- ]+""")
+# ⚠️ 预筛字符类须写 [\\/]：[\/] 里反斜杠转义了正斜杠，类中只剩 `/`——
+# 纯反斜杠路径的文件（bench_baseline.py 等）被预筛整文件跳过（2026-10-12 审查轮实测）。
+_ABS_PATH_RE_PLAIN = re.compile(r"[A-Za-z]:[\\/]")  # 文本级预筛（快判有无盘符）
+# ⚠️ 负向后顾不得含引号（2026-10-12 审查轮）：Python 路径字面量必然紧随引号，
+# 旧式 `(?<![\w"'#])` 把全部真实字面量排除、只匹配语法非法的裸路径——审计
+# 恒绿而 bench_baseline.py 三处硬编码路径在场。自检样例见 _PATH_REGEX_SELFTEST。
+_ABS_PATH_RE = re.compile(r"""(?<![\w#])[A-Za-z]:[\\/](?:[\w.\- ]+[\\/])*[\w.\- ]+""")
+#: 审计判据自检（audit 每次先跑）：已知坏的引号内字面量必须命中。
+_PATH_REGEX_SELFTEST_BAD = r'VIDS = {"k": r"D:\Videos\racelog_test\x.mp4"}'
+#: 无路径行不得命中（防正则过宽）。
+_PATH_REGEX_SELFTEST_CLEAN = "out = compute(frames[0], n=3)"
 _AUDIT_SKIP_DIRS = {".git", "build", "dist", "__pycache__", ".venv", "node_modules",
                     "bench", "docs"}          # docs/log 的历史叙事可提及路径
 _AUDIT_EXTS = {".py", ".bat", ".ps1", ".cmd"}
@@ -54,15 +64,69 @@ def _iter_audit_files():
                 yield Path(dirpath) / f
 
 
-def audit_hardcoded_paths() -> list[str]:
-    """扫描**可执行代码**中的绝对路径字面量（docstring/注释不算）。
+_DISCIPLINE_BASELINE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "_discipline_baseline.json")
 
-    判据：用 AST 标记 docstring 所在行并豁免，再剔除纯注释行——这样
-    docstring 里的用法示例（占误报多数）被排除，而真正写死在代码里的
-    路径会被抓到。
+
+def _load_baseline_abs() -> dict[str, int]:
+    """存量绝对路径字面量登记（tools/_discipline_baseline.json）。
+
+    同 except-pass 判据：存量豁免、增量严格。键=文件（posix 相对），
+    值=存量处数；超出登记数才算新增违规。
     """
-    import ast
-    bad: list[str] = []
+    if not os.path.isfile(_DISCIPLINE_BASELINE):
+        return {}
+    with open(_DISCIPLINE_BASELINE, encoding="utf-8") as f:
+        data = json.load(f)
+    d = data.get("abs_path_by_file") if isinstance(data, dict) else None
+    return {k: int(v) for k, v in d.items()} if isinstance(d, dict) else {}
+
+
+def _env_default_lines(tree) -> set[int]:
+    """AST 标记「env 带默认值」调用跨及的行（豁免形态：可被覆盖）。
+
+    os.environ.get/setdefault 与 getenv 的路径实参即纪律允许的形态；
+    旧实现按**单行**子串豁免，多行调用的字面量行（常在下一行）被误报
+    （2026-10-12 预筛修复后显形）。这里按调用节点整段标行。
+    """
+    lines: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        name = getattr(f, "attr", "") if isinstance(f, ast.Attribute) else (
+            f.id if isinstance(f, ast.Name) else "")
+        if name not in ("get", "setdefault", "getenv"):
+            continue
+        val = getattr(f, "value", None)
+        is_env = (isinstance(val, ast.Attribute) and val.attr == "environ") or name == "getenv"
+        if not is_env:
+            continue
+        end = getattr(node, "end_lineno", node.lineno)
+        lines.update(range(node.lineno, end + 1))
+    return lines
+
+
+def _abs_path_selftest_failed() -> str | None:
+    """正则判据自检：失明/过宽都返回错误描述（2026-10-12 审查轮加）。
+
+    正则对已知坏例失明时整个审计项都是假绿灯（旧后顾含引号时正是此态，
+    恒绿 26 天无人察觉）。
+    """
+    if not _ABS_PATH_RE.search(_PATH_REGEX_SELFTEST_BAD):
+        return "env_doctor._ABS_PATH_RE 自检失败：引号内路径字面量未命中（正则失明）"
+    if _ABS_PATH_RE.search(_PATH_REGEX_SELFTEST_CLEAN):
+        return "env_doctor._ABS_PATH_RE 自检失败：无路径行被误命中（正则过宽）"
+    return None
+
+
+def _abs_path_hits_raw() -> list[tuple[str, int, str]]:
+    """全部命中 (文件, 行号, 行文本)——未经 baseline 过滤。
+
+    结构化返回：命中行内含 `D:` 盘符冒号，字符串拼接后再 split 会把
+    文件键污染成行内容（2026-10-12 实测），计数一律按元组做。
+    """
+    bad: list[tuple[str, int, str]] = []
     for p in _iter_audit_files():
         rel = p.relative_to(ROOT).as_posix()
         if rel in _AUDIT_ALLOW_FILES:
@@ -77,6 +141,7 @@ def audit_hardcoded_paths() -> list[str]:
         if not _ABS_PATH_RE_PLAIN.search(text):
             continue
         doc_lines: set[int] = set()
+        env_lines: set[int] = set()
         try:
             tree = ast.parse(text)
         except SyntaxError:
@@ -92,6 +157,7 @@ def audit_hardcoded_paths() -> list[str]:
                         end = getattr(first.value, "end_lineno",
                                       first.value.lineno)
                         doc_lines.update(range(first.value.lineno, end + 1))
+            env_lines = _env_default_lines(tree)
         for i, line in enumerate(text.splitlines(), 1):
             if i in doc_lines:
                 continue
@@ -100,11 +166,37 @@ def audit_hardcoded_paths() -> list[str]:
             code_part = line.split("#", 1)[0]   # 行尾注释也剔除
             if not _ABS_PATH_RE.search(code_part):
                 continue
-            # 例外：env 默认值（可被覆盖）——纪律允许的形态
-            if "environ.get(" in code_part or "getenv(" in code_part:
+            # 例外：env 默认值（可被覆盖）——纪律允许的形态（整段豁免：
+            # 多行 os.environ.get/setdefault 的字面量行在上，见 _env_default_lines）
+            if i in env_lines:
                 continue
-            bad.append("%s:%d: %s" % (rel, i, line.strip()[:110]))
+            bad.append((rel, i, line.strip()[:110]))
     return bad
+
+
+def audit_hardcoded_paths() -> list[str]:
+    """扫描**可执行代码**中的绝对路径字面量（docstring/注释不算）。
+
+    判据：用 AST 标记 docstring 所在行并豁免，再剔除纯注释行——这样
+    docstring 里的用法示例（占误报多数）被排除，而真正写死在代码里的
+    路径会被抓到。存量按文件计数登记在 _discipline_baseline.json 的
+    abs_path_by_file（同 except-pass 判据：存量豁免、增量严格；
+    2026-10-12 预筛修复后存量显形 ≈60 处，多为 frozen 探针）。
+    """
+    fail = _abs_path_selftest_failed()
+    if fail:
+        return [fail]       # 自检失败（伪命中）原样上报，不做存量过滤
+    hits = _abs_path_hits_raw()
+    # 存量豁免、增量严格（判据同 except_pass_by_file）：按文件计数，
+    # 超出登记数的部分才算新增违规。
+    base = _load_baseline_abs()
+    cnt: dict[str, int] = {}
+    real: list[str] = []
+    for rel, i, line in hits:
+        cnt[rel] = cnt.get(rel, 0) + 1
+        if cnt[rel] > base.get(rel, 0):
+            real.append("%s:%d: %s" % (rel, i, line))
+    return real
 
 
 def deploy_fork_dll(dry: bool = False) -> int:

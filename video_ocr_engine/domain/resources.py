@@ -121,8 +121,11 @@ class ThreadLedger:
     def __init__(self) -> None:
         import ctypes
 
-        self._ntdll = None           # NtQuerySystemInformation 快路径（惰性）
-        self._nt_trusted = None      # None=未对账 / True=NT 快路径转正 / False=永久回退
+        # 显式注解（2026-10-12 审查轮）：mypy 面对这两个惰性字段报
+        # "expression has type bool/WinDLL, variable has type None"——
+        # 此前 CI 的 mypy 步在 HEAD 上即为红（3 处，无人察觉）。
+        self._ntdll: "ctypes.WinDLL | None" = None  # NtQuerySystemInformation 快路径（惰性）
+        self._nt_trusted: "bool | None" = None  # None=未对账 / True=NT 转正 / False=永久回退
 
         # 私有 WinDLL 实例 + 显式原型：windll 是进程级共享缓存，函数对象
         # 上的 argtypes 会被各使用方互相覆盖；句柄原型必须显式（与本文件
@@ -195,7 +198,7 @@ class ThreadLedger:
         if self._nt_trusted is not False:
             try:
                 out = self._sample_all_nt()
-            except Exception:               # noqa: BLE001 — 遥测绝不让 run 失败
+            except Exception:  # noqa: BLE001 — 遥测绝不让 run 失败
                 out = None
             if out:
                 if self._nt_trusted is None:
@@ -226,7 +229,7 @@ class ThreadLedger:
         """
         ref = self._sample_all_toolhelp()
         if not ref:
-            return True                     # 快照空（极端时点）：无从对账，放行
+            return True  # 快照空（极端时点）：无从对账，放行
         common = set(out) & set(ref)
         return len(common) >= 0.9 * min(len(out), len(ref))
 
@@ -248,31 +251,35 @@ class ThreadLedger:
             ntdll = self._ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
             ntdll.NtGetNextThread.restype = ctypes.c_long
             ntdll.NtGetNextThread.argtypes = (
-                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32,
-                ctypes.c_uint32, ctypes.c_uint32, ctypes.POINTER(ctypes.c_void_p))
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_uint32,
+                ctypes.c_uint32,
+                ctypes.c_uint32,
+                ctypes.POINTER(ctypes.c_void_p),
+            )
         k32 = self._k32
         k32.GetThreadId.restype = ctypes.c_uint32
         k32.GetThreadId.argtypes = (ctypes.c_void_p,)
         THREAD_ALL_ACCESS = 0x1FFFFF
-        h_proc = ctypes.c_void_p(-1)               # GetCurrentProcess() 伪句柄
+        h_proc = ctypes.c_void_p(-1)  # GetCurrentProcess() 伪句柄
         cyc = ctypes.c_ulonglong()
         out: dict = {}
         prev: int | None = None
         okq = 0
-        for _ in range(8192):                      # 合理带上限，防协议异常死循环
+        for _ in range(8192):  # 合理带上限，防协议异常死循环
             h = ctypes.c_void_p()
-            rc = ntdll.NtGetNextThread(h_proc, prev, THREAD_ALL_ACCESS, 0, 0,
-                                       ctypes.byref(h))
+            rc = ntdll.NtGetNextThread(h_proc, prev, THREAD_ALL_ACCESS, 0, 0, ctypes.byref(h))
             if prev is not None:
                 k32.CloseHandle(prev)
                 prev = None
-            if rc != 0:                            # 非 0 = 链尾/错误
+            if rc != 0:  # 非 0 = 链尾/错误
                 break
             if not h.value:
                 break
             prev = h.value
             tid = k32.GetThreadId(h)
-            if not tid or tid >= 1 << 32:          # TID 是 32-bit；超域=协议错
+            if not tid or tid >= 1 << 32:  # TID 是 32-bit；超域=协议错
                 continue
             if k32.QueryThreadCycleTime(h, ctypes.byref(cyc)):
                 out[int(tid)] = int(cyc.value)

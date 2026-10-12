@@ -8,11 +8,38 @@ ocr_trt 顶部 re-export 本模块三个类，保持旧导入路径兼容。
 
 from __future__ import annotations
 
+import logging
 import threading
 
 import numpy as np
 
 from video_ocr_engine.config import constants as config
+
+log = logging.getLogger(__name__)
+
+
+def _ck_alloc(err, ptr, nbytes: int) -> int:
+    """cudaMalloc 错误检查（范式同 gpu/pools._malloc_frame）。
+
+    2026-10-12 审查轮：此前丢弃 _err、仅靠 assert 兜底——`python -O` 下
+    assert 消失，失败句柄（0）会被当有效指针喂给内核（写向空页）或让
+    下游读未初始化显存。失败即抛，调用点不再需要后置 assert。
+    """
+    if int(err) != 0 or not ptr:
+        raise MemoryError("cudaMalloc(%d B) 失败: %s" % (nbytes, err))
+    return int(ptr)
+
+
+def _ck(ret, what: str) -> None:
+    """cudaMemcpyAsync / cudaStreamSynchronize / cudaMemsetAsync 返回检查。
+
+    cuda-python 返回 (err,) 元组而不抛异常——失败若只丢返回值，D2H 的
+    宿主数组（多为 np.empty）会把未初始化内存当"测量值"流进分段/合并判定。
+    """
+    err = ret[0] if isinstance(ret, tuple) else ret
+    if int(err) != 0:
+        raise RuntimeError("%s 失败: %s" % (what, err))
+
 
 # NVRTC 编译缓存（DESIGN-REVIEW B5）：编译产物（Program/Module）进程级共享
 # ——无状态、线程安全（kernel launch 只读）；Buffer/stream 等可变状态仍归
@@ -227,6 +254,7 @@ extern "C" __global__ void prep_gray_raw(
         self._owns_stream = stream is None
         if self._stream is None:
             _err, self._stream = cudart.cudaStreamCreate()
+            _ck(_err, "内核流创建")
         self._raw_size = 0
         self._raw_dev: int | None = None
         self._raw_buf = None
@@ -249,9 +277,10 @@ extern "C" __global__ void prep_gray_raw(
             if self._raw_dev is not None:
                 cudart.cudaFree(self._raw_dev)
             _err, self._raw_dev = cudart.cudaMalloc(nbytes)
+            _ck_alloc(_err, self._raw_dev, nbytes)
             self._raw_buf = self._buffer_cls.from_handle(self._raw_dev, nbytes)
             self._raw_size = nbytes
-        assert self._raw_dev is not None  # 惰性分配不变量：size>0 ⇒ 已分配
+        assert self._raw_dev is not None  # mypy 收窄（运行时由 _ck_alloc 保证）
         return self._raw_dev
 
     def _ensure_width(self, nbytes: int) -> int:
@@ -261,9 +290,10 @@ extern "C" __global__ void prep_gray_raw(
             if self._width_dev is not None:
                 cudart.cudaFree(self._width_dev)
             _err, self._width_dev = cudart.cudaMalloc(nbytes)
+            _ck_alloc(_err, self._width_dev, nbytes)
             self._width_buf = self._buffer_cls.from_handle(self._width_dev, nbytes)
             self._width_size = nbytes
-        assert self._width_dev is not None  # 同 _ensure_raw
+        assert self._width_dev is not None  # mypy 收窄（同上）
         return self._width_dev
 
     def _ensure_bases(self, nbytes: int) -> int:
@@ -273,9 +303,10 @@ extern "C" __global__ void prep_gray_raw(
             if self._bases_dev is not None:
                 cudart.cudaFree(self._bases_dev)
             _err, self._bases_dev = cudart.cudaMalloc(nbytes)
+            _ck_alloc(_err, self._bases_dev, nbytes)
             self._bases_buf = self._buffer_cls.from_handle(self._bases_dev, nbytes)
             self._bases_size = nbytes
-        assert self._bases_dev is not None  # 同 _ensure_raw
+        assert self._bases_dev is not None  # mypy 收窄（同上）
         return self._bases_dev
 
     def _ensure_out(self, nbytes: int) -> int:
@@ -285,9 +316,10 @@ extern "C" __global__ void prep_gray_raw(
             if self._out_dev is not None:
                 cudart.cudaFree(self._out_dev)
             _err, self._out_dev = cudart.cudaMalloc(nbytes)
+            _ck_alloc(_err, self._out_dev, nbytes)
             self._out_buf = self._buffer_cls.from_handle(self._out_dev, nbytes)
             self._out_size = nbytes
-        assert self._out_dev is not None  # 同 _ensure_raw
+        assert self._out_dev is not None  # mypy 收窄（同上）
         return self._out_dev
 
     def _ensure_i32x3(self, nbytes: int):
@@ -299,6 +331,7 @@ extern "C" __global__ void prep_gray_raw(
             if self._i32_dev is not None:
                 cudart.cudaFree(self._i32_dev)
             _err, self._i32_dev = cudart.cudaMalloc(nbytes)
+            _ck_alloc(_err, self._i32_dev, nbytes)
             self._i32_size = nbytes
         return self._i32_dev, self._buffer_cls.from_handle(self._i32_dev, nbytes)
 
@@ -308,27 +341,24 @@ extern "C" __global__ void prep_gray_raw(
 
         stream = getattr(self, "_stream", None)
         if stream is not None:
-            try:
-                cudart.cudaStreamSynchronize(stream)
-            except Exception:
-                pass
+            (_err,) = cudart.cudaStreamSynchronize(stream)
+            if int(_err) != 0:
+                log.debug("释放前流同步失败（继续释放）: %s", _err)
         for attr in ("_raw_dev", "_out_dev", "_width_dev", "_bases_dev", "_i32_dev"):
             ptr = getattr(self, attr, None)
             if ptr:
-                try:
-                    cudart.cudaFree(ptr)
-                except Exception:
-                    pass
+                (_err,) = cudart.cudaFree(ptr)
+                if int(_err) != 0:
+                    log.debug("cudaFree 失败（进程退出兜底）: %s", _err)
             setattr(self, attr, None)
         for attr in ("_raw_buf", "_out_buf", "_width_buf", "_bases_buf"):
             setattr(self, attr, None)
         self._raw_size = self._out_size = self._width_size = 0
         self._bases_size = self._i32_size = 0
         if stream is not None and getattr(self, "_owns_stream", False):
-            try:
-                cudart.cudaStreamDestroy(stream)
-            except Exception:
-                pass
+            (_err,) = cudart.cudaStreamDestroy(stream)
+            if int(_err) != 0:
+                log.debug("流销毁失败: %s", _err)
         self._stream = None
         self._owns_stream = False
 
@@ -386,12 +416,15 @@ extern "C" __global__ void prep_gray_raw(
         raw_nbytes = B * src_h * src_w
         raw_dev = self._ensure_raw(raw_nbytes)
         for i, t in enumerate(infos):
-            cudart.cudaMemcpyAsync(
-                raw_dev + i * src_h * src_w,
-                int(t.ptr),
-                src_h * src_w,
-                cudart.cudaMemcpyKind.cudaMemcpyDeviceToDevice,
-                self._stream,
+            _ck(
+                cudart.cudaMemcpyAsync(
+                    raw_dev + i * src_h * src_w,
+                    int(t.ptr),
+                    src_h * src_w,
+                    cudart.cudaMemcpyKind.cudaMemcpyDeviceToDevice,
+                    self._stream,
+                ),
+                "prep D2D 聚批",
             )
         out_nbytes = B * 3 * dst_h * dst_w * 4
         out_dev = self._ensure_out(out_nbytes)
@@ -406,12 +439,15 @@ extern "C" __global__ void prep_gray_raw(
         grid = (total + block - 1) // block
         i32 = np.concatenate([xoffs, crop_ws, content_ws])
         i32_dev, i32_buf = self._ensure_i32x3(i32.nbytes)
-        cudart.cudaMemcpyAsync(
-            i32_dev,
-            i32.ctypes.data,
-            i32.nbytes,
-            cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
-            self._stream,
+        _ck(
+            cudart.cudaMemcpyAsync(
+                i32_dev,
+                i32.ctypes.data,
+                i32.nbytes,
+                cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
+                self._stream,
+            ),
+            "prep 参数 H2D",
         )
         bnb = B * 4
         self._launch(
@@ -455,26 +491,35 @@ extern "C" __global__ void prep_gray_raw(
         out_nbytes = B * C * H * out_width * 4
         out_dev = self._ensure_out(out_nbytes)
 
-        cudart.cudaMemcpyAsync(
-            raw_dev,
-            raw.ctypes.data,
-            raw.nbytes,
-            cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
-            self._stream,
+        _ck(
+            cudart.cudaMemcpyAsync(
+                raw_dev,
+                raw.ctypes.data,
+                raw.nbytes,
+                cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
+                self._stream,
+            ),
+            "prep 宿主批 H2D",
         )
-        cudart.cudaMemcpyAsync(
-            width_dev,
-            widths.ctypes.data,
-            widths.nbytes,
-            cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
-            self._stream,
+        _ck(
+            cudart.cudaMemcpyAsync(
+                width_dev,
+                widths.ctypes.data,
+                widths.nbytes,
+                cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
+                self._stream,
+            ),
+            "prep 宿主批 H2D",
         )
-        cudart.cudaMemcpyAsync(
-            bases_dev,
-            bases.ctypes.data,
-            bases.nbytes,
-            cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
-            self._stream,
+        _ck(
+            cudart.cudaMemcpyAsync(
+                bases_dev,
+                bases.ctypes.data,
+                bases.nbytes,
+                cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
+                self._stream,
+            ),
+            "prep 宿主批 H2D",
         )
 
         shape = (B, C, H, out_width)
@@ -547,6 +592,7 @@ extern "C" __global__ void argmax_last(
         self._owns_stream = stream is None
         if self._stream is None:
             _err, self._stream = cudart.cudaStreamCreate()
+            _ck(_err, "内核流创建")
         self._idx_dev = None
         self._idx_size = 0
         self._prob_dev = None
@@ -557,24 +603,21 @@ extern "C" __global__ void argmax_last(
 
         stream = getattr(self, "_stream", None)
         if stream is not None:
-            try:
-                cudart.cudaStreamSynchronize(stream)
-            except Exception:
-                pass
+            (_err,) = cudart.cudaStreamSynchronize(stream)
+            if int(_err) != 0:
+                log.debug("释放前流同步失败（继续释放）: %s", _err)
         for attr in ("_idx_dev", "_prob_dev"):
             ptr = getattr(self, attr, None)
             if ptr:
-                try:
-                    cudart.cudaFree(ptr)
-                except Exception:
-                    pass
+                (_err,) = cudart.cudaFree(ptr)
+                if int(_err) != 0:
+                    log.debug("cudaFree 失败（进程退出兜底）: %s", _err)
             setattr(self, attr, None)
         self._idx_size = 0
         if stream is not None and getattr(self, "_owns_stream", False):
-            try:
-                cudart.cudaStreamDestroy(stream)
-            except Exception:
-                pass
+            (_err,) = cudart.cudaStreamDestroy(stream)
+            if int(_err) != 0:
+                log.debug("流销毁失败: %s", _err)
         self._stream = None
         self._owns_stream = False
 
@@ -609,9 +652,12 @@ extern "C" __global__ void argmax_last(
             if self._prob_dev is not None:
                 cudart.cudaFree(self._prob_dev)
             _err, self._idx_dev = cudart.cudaMalloc(nbytes)
-            self._idx_size = nbytes
+            _ck_alloc(_err, self._idx_dev, nbytes)
             _err, self._prob_dev = cudart.cudaMalloc(nbytes)
-            self._argmax_epoch = getattr(self, "_argmax_epoch", 0) + 1
+            _ck_alloc(_err, self._prob_dev, nbytes)
+            # 水位线在两次分配都成功后写（旧版 idx 后即写：prob 失败时
+            # 尺寸声称已分配、句柄为 0，守卫永不重试——2026-10-12 审查轮）
+            self._idx_size = nbytes
 
     def reduce_into(self, preds_dev: int, out_shape: tuple, idx_host: int, prob_host: int) -> int:
         """图捕获段：argmax + 异步 D2H 到给定 pinned 宿主（不分配/不同步）。"""
@@ -619,8 +665,14 @@ extern "C" __global__ void argmax_last(
 
         rows, nbytes = self._launch_argmax(preds_dev, out_shape)
         _d2h = cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost
-        cudart.cudaMemcpyAsync(idx_host, self._idx_dev, nbytes, _d2h, self._stream)
-        cudart.cudaMemcpyAsync(prob_host, self._prob_dev, nbytes, _d2h, self._stream)
+        _ck(
+            cudart.cudaMemcpyAsync(idx_host, self._idx_dev, nbytes, _d2h, self._stream),
+            "argmax idx D2H",
+        )
+        _ck(
+            cudart.cudaMemcpyAsync(prob_host, self._prob_dev, nbytes, _d2h, self._stream),
+            "argmax prob D2H",
+        )
         return rows
 
     def reduce(self, preds_dev: int, out_shape: tuple):
@@ -639,9 +691,15 @@ extern "C" __global__ void argmax_last(
         idx = np.empty(rows, dtype=np.int32)
         prob = np.empty(rows, dtype=np.float32)
         _d2h = cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost
-        cudart.cudaMemcpyAsync(idx.ctypes.data, self._idx_dev, nbytes, _d2h, self._stream)
-        cudart.cudaMemcpyAsync(prob.ctypes.data, self._prob_dev, nbytes, _d2h, self._stream)
-        cudart.cudaStreamSynchronize(self._stream)
+        _ck(
+            cudart.cudaMemcpyAsync(idx.ctypes.data, self._idx_dev, nbytes, _d2h, self._stream),
+            "argmax idx D2H",
+        )
+        _ck(
+            cudart.cudaMemcpyAsync(prob.ctypes.data, self._prob_dev, nbytes, _d2h, self._stream),
+            "argmax prob D2H",
+        )
+        _ck(cudart.cudaStreamSynchronize(self._stream), "argmax D2H 同步")
         return idx, prob
 
 
@@ -970,12 +1028,14 @@ extern "C" __global__ void luma_nv12(
         from cuda.bindings import runtime as cudart
 
         _err, self._stream = cudart.cudaStreamCreate()
+        _ck(_err, "analyzer 生产流创建")
         # 消费端专用流（2026-09-10）：content_range/sim_pair/luma_into 等
         # 消费侧小 kernel 若排在生产者流上，其同步会等生产者在途的整批
         # 解码侧工作 —— 生产者跑赢消费时（hybrid），每段一次的同步把消费
         # 线程拖成全局瓶颈（实测 hybrid 引擎内 2400fps 产能被压到 2010）。
         # 帧数据在 analyze_batch 的同步点已就绪，消费流无需跨流依赖。
         _err, self._stream_c = cudart.cudaStreamCreate()
+        _ck(_err, "analyzer 消费流创建")
         self._owns_stream = True
         self._summary_size = 0
         self._summary_dev: int | None = None
@@ -993,10 +1053,9 @@ extern "C" __global__ void luma_nv12(
 
         for s in (getattr(self, "_stream", None), getattr(self, "_stream_c", None)):
             if s is not None:
-                try:
-                    cudart.cudaStreamSynchronize(s)
-                except Exception:
-                    pass
+                (_err,) = cudart.cudaStreamSynchronize(s)
+                if int(_err) != 0:
+                    log.debug("释放前流同步失败（继续释放）: %s", _err)
         for attr in (
             "_prev_dev",
             "_histpf_dev",
@@ -1010,10 +1069,9 @@ extern "C" __global__ void luma_nv12(
         ):
             ptr = getattr(self, attr, None)
             if ptr:
-                try:
-                    cudart.cudaFree(ptr)
-                except Exception:
-                    pass
+                (_err,) = cudart.cudaFree(ptr)
+                if int(_err) != 0:
+                    log.debug("cudaFree 失败（进程退出兜底）: %s", _err)
             setattr(self, attr, None)
         self._prev_size = self._histpf_size = self._summary_size = 0
         self._luma_size = 0
@@ -1022,10 +1080,9 @@ extern "C" __global__ void luma_nv12(
         for attr in ("_stream", "_stream_c"):
             s = getattr(self, attr, None)
             if s is not None and getattr(self, "_owns_stream", False):
-                try:
-                    cudart.cudaStreamDestroy(s)
-                except Exception:
-                    pass
+                (_err,) = cudart.cudaStreamDestroy(s)
+                if int(_err) != 0:
+                    log.debug("流销毁失败: %s", _err)
             setattr(self, attr, None)
         self._owns_stream = False
 
@@ -1036,8 +1093,9 @@ extern "C" __global__ void luma_nv12(
             if self._prev_dev is not None:
                 cudart.cudaFree(self._prev_dev)
             _err, self._prev_dev = cudart.cudaMalloc(nbytes)
+            _ck_alloc(_err, self._prev_dev, nbytes)
             self._prev_size = nbytes
-        assert self._prev_dev is not None  # 惰性分配不变量
+        assert self._prev_dev is not None  # mypy 收窄（同上）
         return self._prev_dev
 
     def histograms_perframe(self, raw_ptr: int, B: int, H: int, W: int) -> "np.ndarray":
@@ -1053,8 +1111,9 @@ extern "C" __global__ void luma_nv12(
             if self._histpf_dev is not None:
                 cudart.cudaFree(self._histpf_dev)
             _err, self._histpf_dev = cudart.cudaMalloc(nbytes)
+            _ck_alloc(_err, self._histpf_dev, nbytes)
             self._histpf_size = nbytes
-        cudart.cudaMemsetAsync(self._histpf_dev, 0, nbytes, self._stream)
+        _ck(cudart.cudaMemsetAsync(self._histpf_dev, 0, nbytes, self._stream), "直方图清零")
         buf = Buffer.from_handle(self._histpf_dev, nbytes)
         launch(
             self._stream,
@@ -1065,14 +1124,17 @@ extern "C" __global__ void luma_nv12(
             np.int32(H * W),
         )
         hists: np.ndarray = np.empty((B, 256), dtype=np.int32)
-        cudart.cudaMemcpyAsync(
-            hists.ctypes.data,
-            self._histpf_dev,
-            nbytes,
-            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost,
-            self._stream,
+        _ck(
+            cudart.cudaMemcpyAsync(
+                hists.ctypes.data,
+                self._histpf_dev,
+                nbytes,
+                cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost,
+                self._stream,
+            ),
+            "直方图 D2H",
         )
-        cudart.cudaStreamSynchronize(self._stream)
+        _ck(cudart.cudaStreamSynchronize(self._stream), "直方图 D2H 同步")
         return hists
 
     def content_range(
@@ -1092,6 +1154,7 @@ extern "C" __global__ void luma_nv12(
         s = self._stream if stream is None else stream
         if self._range_dev is None:
             _err, self._range_dev = cudart.cudaMalloc(2 * 4)
+            _ck_alloc(_err, self._range_dev, 2 * 4)
         launch(
             s,
             LaunchConfig(grid=1, block=256),
@@ -1103,10 +1166,17 @@ extern "C" __global__ void luma_nv12(
             np.int32(int(th)),
         )
         out: np.ndarray = np.empty(2, dtype=np.int32)
-        cudart.cudaMemcpyAsync(
-            out.ctypes.data, self._range_dev, 2 * 4, cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, s
+        _ck(
+            cudart.cudaMemcpyAsync(
+                out.ctypes.data,
+                self._range_dev,
+                2 * 4,
+                cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost,
+                s,
+            ),
+            "col_ink D2H",
         )
-        cudart.cudaStreamSynchronize(s)
+        _ck(cudart.cudaStreamSynchronize(s), "col_ink D2H 同步")
         if int(out[0]) > int(out[1]):
             return None
         return int(out[0]), int(out[1])
@@ -1132,18 +1202,23 @@ extern "C" __global__ void luma_nv12(
             if getattr(self, "_ptrb_dev", None) is not None:
                 cudart.cudaFree(self._ptrb_dev)
             _err, self._ptrb_dev = cudart.cudaMalloc(in_nbytes)
+            _ck_alloc(_err, self._ptrb_dev, in_nbytes)
             self._ptrb_size = in_nbytes
         if getattr(self, "_rangeb_size", 0) < out_nbytes:
             if getattr(self, "_rangeb_dev", None) is not None:
                 cudart.cudaFree(self._rangeb_dev)
             _err, self._rangeb_dev = cudart.cudaMalloc(out_nbytes)
+            _ck_alloc(_err, self._rangeb_dev, out_nbytes)
             self._rangeb_size = out_nbytes
-        cudart.cudaMemcpyAsync(
-            self._ptrb_dev,
-            ptrs_arr.ctypes.data,
-            in_nbytes,
-            cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
-            s,
+        _ck(
+            cudart.cudaMemcpyAsync(
+                self._ptrb_dev,
+                ptrs_arr.ctypes.data,
+                in_nbytes,
+                cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
+                s,
+            ),
+            "col_ink 批指针 H2D",
         )
         launch(
             s,
@@ -1157,14 +1232,17 @@ extern "C" __global__ void luma_nv12(
             np.int32(B),
         )
         out: np.ndarray = np.empty((B, 2), dtype=np.int32)
-        cudart.cudaMemcpyAsync(
-            out.ctypes.data,
-            self._rangeb_dev,
-            out_nbytes,
-            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost,
-            s,
+        _ck(
+            cudart.cudaMemcpyAsync(
+                out.ctypes.data,
+                self._rangeb_dev,
+                out_nbytes,
+                cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost,
+                s,
+            ),
+            "col_ink 批 D2H",
         )
-        cudart.cudaStreamSynchronize(s)
+        _ck(cudart.cudaStreamSynchronize(s), "col_ink 批 D2H 同步")
         return out
 
     def luma_into_batch(
@@ -1185,15 +1263,19 @@ extern "C" __global__ void luma_nv12(
             if getattr(self, "_luma_b_dev", None) is not None:
                 cudart.cudaFree(self._luma_b_dev)
             _err, self._luma_b_dev = cudart.cudaMalloc(nbytes)
+            _ck_alloc(_err, self._luma_b_dev, nbytes)
             self._luma_b_size = nbytes
-        assert self._luma_b_dev is not None  # 惰性分配不变量（上方 if 必已建）
-        cudart.cudaMemcpyAsync(
-            self._luma_b_dev,
-            arr.ctypes.data,
-            nbytes,
-            cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
-            s,
+        _ck(
+            cudart.cudaMemcpyAsync(
+                self._luma_b_dev,
+                arr.ctypes.data,
+                nbytes,
+                cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
+                s,
+            ),
+            "luma 批指针 H2D",
         )
+        assert self._luma_b_dev is not None  # mypy 收窄（上方分支/既有分配保证）
         launch(
             s,
             LaunchConfig(grid=B, block=256),
@@ -1248,8 +1330,9 @@ extern "C" __global__ void luma_nv12(
             if self._luma_dev is not None:
                 cudart.cudaFree(self._luma_dev)
             _err, self._luma_dev = cudart.cudaMalloc(nbytes)
+            _ck_alloc(_err, self._luma_dev, nbytes)
             self._luma_size = nbytes
-        assert self._luma_dev is not None  # 惰性分配不变量
+        assert self._luma_dev is not None  # mypy 收窄（同上）
         self.luma_into(src_ptr, self._luma_dev, H, W, limited, B)
         return self._luma_dev
 
@@ -1274,6 +1357,7 @@ extern "C" __global__ void luma_nv12(
         # 3 个 double：mad_sum / changed / win3_max（out[2] 由稠密簇门消费）
         if getattr(self, "_sim_dev", None) is None:
             _err, self._sim_dev = cudart.cudaMalloc(3 * 8)
+            _ck_alloc(_err, self._sim_dev, 3 * 8)
         n = H * W
         out_buf = Buffer.from_handle(self._sim_dev, 3 * 8)
         launch(
@@ -1290,10 +1374,17 @@ extern "C" __global__ void luma_nv12(
             np.int32(H),
         )
         out: np.ndarray = np.empty(3, dtype=np.float64)
-        cudart.cudaMemcpyAsync(
-            out.ctypes.data, self._sim_dev, 3 * 8, cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, s
+        _ck(
+            cudart.cudaMemcpyAsync(
+                out.ctypes.data,
+                self._sim_dev,
+                3 * 8,
+                cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost,
+                s,
+            ),
+            "sim_pair D2H",
         )
-        cudart.cudaStreamSynchronize(s)
+        _ck(cudart.cudaStreamSynchronize(s), "sim_pair D2H 同步")
         return int(out[0]), int(out[1]), int(out[2])
 
     def analyze_batch(
@@ -1309,6 +1400,7 @@ extern "C" __global__ void luma_nv12(
             if self._summary_dev is not None:
                 cudart.cudaFree(self._summary_dev)
             _err, self._summary_dev = cudart.cudaMalloc(nbytes)
+            _ck_alloc(_err, self._summary_dev, nbytes)
             self._summary_size = nbytes
         buf = Buffer.from_handle(self._summary_dev, nbytes)
         launch(
@@ -1324,12 +1416,15 @@ extern "C" __global__ void luma_nv12(
             np.float32(th),
         )
         out: np.ndarray = np.empty((B, 2), dtype=np.float64)
-        cudart.cudaMemcpyAsync(
-            out.ctypes.data,
-            self._summary_dev,
-            nbytes,
-            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost,
-            self._stream,
+        _ck(
+            cudart.cudaMemcpyAsync(
+                out.ctypes.data,
+                self._summary_dev,
+                nbytes,
+                cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost,
+                self._stream,
+            ),
+            "analyze 标量 D2H",
         )
-        cudart.cudaStreamSynchronize(self._stream)
+        _ck(cudart.cudaStreamSynchronize(self._stream), "analyze 标量 D2H 同步")
         return out

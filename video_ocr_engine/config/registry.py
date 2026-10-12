@@ -28,9 +28,10 @@ class Knob:
     applies_to: tuple[str, ...]  # ("cpu", "gpu") —— 取代散落的门控注释
     rationale_id: str  # → 依据锚点（S2 前为 ec:<行>，之后为 knobs.yaml id）
     note: str = ""  # 解析语义备注（三态 / 特殊回退等）
-    # 2026-09-19：该旋钮由消费者**调用期 env 活读**，RunConfig 字段值
-    # 不决定行为 → 从 config_digest 排除（否则 A/B 指纹与实际不符）。
-    # 标记为 True 的旋钮，其 RunConfig 字段仅供 introspection 兼容。
+    # 消费者**调用期 env 活读**（子进程 A/B 逐臂切换用），RunConfig 字段
+    # 仅供 introspection。2026-10-12 契约收紧：resolve 期 env 实值计入
+    # config_digest（排除曾使指纹无法区分 fp16 两臂），显式 override 拒收
+    # （resolve 报错指路 env）——字段不再可被构造参数改写。
     env_live_only: bool = False
 
 

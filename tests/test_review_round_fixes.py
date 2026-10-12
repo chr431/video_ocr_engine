@@ -94,7 +94,7 @@ def test_pool_reuse_after_resurrection_frees_on_final_death():
     assert pool.malloc_calls == 1, "复用不得新增分配"
     freed: list = []
     orig = cudart.cudaFree
-    cudart.cudaFree = lambda p: (freed.append(p), (0, None))[1]
+    cudart.cudaFree = lambda p: (freed.append(p), (0,))[1]
     try:
         del f, f2
         gc.collect()
@@ -157,7 +157,7 @@ def test_pool_overflow_recycle_direct_frees():
     frames = [pool._malloc_frame() for _ in range(dev._YFramePool._MAX + 2)]
     freed: list = []
     orig = cudart.cudaFree
-    cudart.cudaFree = lambda p: (freed.append(p), (0, None))[1]
+    cudart.cudaFree = lambda p: (freed.append(p), (0,))[1]
     try:
         for f in frames:
             pool.recycle(f)
@@ -181,7 +181,7 @@ def test_pool_released_late_frame_direct_frees():
     f = pool._malloc_frame()           # 模拟迟到帧（现实中由在飞 payload GC 触发）
     freed: list = []
     orig = cudart.cudaFree
-    cudart.cudaFree = lambda p: (freed.append(p), (0, None))[1]
+    cudart.cudaFree = lambda p: (freed.append(p), (0,))[1]
     try:
         pool.recycle(f)
     finally:

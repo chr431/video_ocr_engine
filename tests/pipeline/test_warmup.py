@@ -66,8 +66,8 @@ def test_warmup_uses_same_spec_as_run(monkeypatch):
 
 
 @pytest.mark.gpu
-def test_warmup_makes_next_run_hot():
-    """真机：预热后首个 extract 的 engine_init 必须远小于冷启动。"""
+def test_warmup_makes_next_run_hot(monkeypatch):
+    """真机：预热后首个 extract 的 engine_init 必须远小于冷启动（PI-10）。"""
     import os
     vid = os.path.join(
         os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"),
@@ -78,14 +78,21 @@ def test_warmup_makes_next_run_hot():
         import cuda.bindings  # noqa: F401  无 CUDA 则跳过
     except ImportError:
         pytest.skip("无 cuda-python（CI 无 GPU 环境）")
+    # report 只在 telemetry≠off 时产出（extractor 只挂非空报告）——
+    # 默认 off 下本测试恒 skip 且跳因是 KeyError('report')（2026-10-12
+    # 审查轮：缺陷被 try/except 转成"环境不可用"假 skip，门禁从未跑过）。
+    monkeypatch.setenv("VOE_TELEMETRY", "full")
     ex = FieldExtractor(vid, (843, 993, 948, 1025), frame_start=0,
                         frame_end=600, decode_backend="cpu",
                         ocr_backend="tensorrt", keep_crops=False)
     try:
-        assert ex.warmup() >= 1
-        rep = ex.extract().meta["report"]
-    except Exception as e:  # noqa: BLE001  环境缺 TRT/引擎文件时跳过
+        n_warm = ex.warmup()
+    except Exception as e:  # noqa: BLE001  仅引擎构建可跳（TRT/引擎文件缺失）
         pytest.skip("TRT/引擎不可用：%r" % (e,))
+    assert n_warm >= 1
+    res = ex.extract()          # 引擎已建好：此后的失败是真缺陷，不再 skip
+    assert "report" in res.meta, "VOE_TELEMETRY=full 必须产出 report"
+    rep = res.meta["report"]
     assert rep["counters"].get("ocr.engine_reuse", 0) >= 1, \
         "预热后应命中池复用（PI-10）"
     assert rep["gauges"]["ocr.engine_init"] < 0.1, \

@@ -39,9 +39,12 @@ class ProfSpine:
         self.profile: dict = {}
         self._lock = threading.Lock() if profile_enabled else None
         # 单次 run 的累计/单次最长（report 收敛时冲刷进指标，见
-        # pipeline/report.finalized_report）
+        # pipeline/report.finalized_report）。锁：两表由 producer 与各
+        # infer 线程并发读改写（2026-10-12 审查轮：旧版无锁丢更新 →
+        # 报告的累计与单次最长偏低）。两档全关在 end() 早退，锁不进热路径。
         self.totals: dict = {}
         self.maxes: dict = {}
+        self._tm_lock = threading.Lock()
 
     def end(self, group: str, key: str, t0: float) -> None:
         """一个计时相位的收口：同一 t0 喂 profile 与指标。"""
@@ -81,15 +84,16 @@ class ProfSpine:
             return name
         name = PROFILE_TOTALS.get((group, key))
         if name is not None:
-            t = self.totals
-            t[name] = t.get(name, 0.0) + elapsed
             # std 档也留「次数 + 单次最长」：背压分诊的最小充分集
             _n = PROFILE_TOTALS_N.get((group, key))
+            _mx = PROFILE_TOTALS_MAX[(group, key)] if _n is not None else None
+            with self._tm_lock:
+                t = self.totals
+                t[name] = t.get(name, 0.0) + elapsed
+                if _mx is not None and elapsed > self.maxes.get(_mx, 0.0):
+                    self.maxes[_mx] = elapsed
             if _n is not None:
                 m.counter(_n)
-                _mx = PROFILE_TOTALS_MAX[(group, key)]
-                if elapsed > self.maxes.get(_mx, 0.0):
-                    self.maxes[_mx] = elapsed
             if m.detailed:
                 m.record_span(name, elapsed)  # full 档另留逐次样本
                 # W1：分布形状（full 档专属；每事件 0.165µs，std 预算付不起）

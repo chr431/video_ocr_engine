@@ -16,6 +16,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tools"))
+from env_probe import video_dir  # noqa: E402  环境事实源（2026-10-12 审查轮）
 
 
 def tick(label: str, t0: float) -> float:
@@ -26,7 +28,7 @@ def tick(label: str, t0: float) -> float:
 
 def main() -> int:
     from video_ocr_engine import FieldExtractor
-    vid = r"D:\Videos\racelog_test\test5.mp4"
+    vid = str(Path(video_dir()) / "test5.mp4")
     roi = (843, 993, 948, 1025)
     # 先跑一次把 CUDA 上下文/引擎池预热（此后测到的都是"每 run 重复支付"的部分）
     ex = FieldExtractor(vid, roi, frame_start=0, frame_end=600,

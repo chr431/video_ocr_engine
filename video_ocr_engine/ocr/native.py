@@ -114,7 +114,11 @@ def ocr_lane_prep(eng, stream: int | None = None):
     if pre is None:
         from video_ocr_engine.ocr.trt import GpuPreprocessor
 
-        pre = GpuPreprocessor(stream=stream, gamma=None)
+        # gamma 取引擎冻结值（2026-10-12 审查轮）：None 的语义是逐批重读
+        # OCR_GAMMA env，与宿主路径/引擎自带 prep 的冻结 gamma 不同源——
+        # env 中途变更或经 overrides 构造时，同一帧因车道归属不同而
+        # 预处理不一致（文本可能不同）。_gamma 已在池 key 内。
+        pre = GpuPreprocessor(stream=stream, gamma=getattr(eng, "_gamma", None))
         eng._gpu_pre_lane = pre
     return pre
 

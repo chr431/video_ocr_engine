@@ -585,10 +585,13 @@ CHECKS = {
 
 
 def update_baseline() -> None:
-    """把当前所有 `except … pass` 登记为存量豁免。
+    """把当前存量登记为豁免：except…pass + 绝对路径字面量两套。
 
-    只在"全绿之后重新打底"或"接手一批历史代码"时用。之后新增的静默吞噬
-    不在 baseline 里，审计会报。
+    只在"全绿之后重新打底"或"接手一批历史代码"时用。之后新增的不在
+    baseline 里，审计会报。⚠️ 登记**必须用检查器同一判据**取数
+    （2026-10-12 审查轮）：旧版把带注释者也计入，登记数>可报数，每文件
+    留被动余量（合计 23 处），"不许新增"要等余量耗尽才生效。绝对路径
+    计数取 env_doctor._abs_path_hits_raw()——判据单源，此处不重抄正则。
     """
     import json
     items: dict[str, int] = {}
@@ -598,20 +601,43 @@ def update_baseline() -> None:
             tree = ast.parse(src)
         except SyntaxError:
             continue
+        # 与 check_bare_except 同判据（2026-10-12）：带注释的 pass 不登记——
+        # 旧版把注释者也计入，登记数>可报数=每文件被动余量。
+        lines = src.split("\n")
         n_hit = 0
         for n in ast.walk(tree):
             if not isinstance(n, ast.ExceptHandler) or n.type is None:
                 continue
-            if len(n.body) == 1 and isinstance(n.body[0], ast.Pass):
-                n_hit += 1
+            if len(n.body) != 1 or not isinstance(n.body[0], ast.Pass):
+                continue
+            pl = lines[n.body[0].lineno - 1] if n.body[0].lineno <= len(lines) else ""
+            if "#" in pl:
+                continue          # pass 行自带注释：检查器豁免
+            if n.lineno >= 2 and lines[n.lineno - 2].strip().startswith("#"):
+                continue          # except 上一行注释：检查器豁免
+            n_hit += 1
         if n_hit:
             items[rel.replace(os.sep, "/")] = n_hit
+    # 绝对路径存量：import 同目录的 env_doctor（判据单源）
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import env_doctor as _ed
+
+    raw = _ed._abs_path_hits_raw()
+    selftest = _ed._abs_path_selftest_failed()
+    if selftest:
+        print("✗ env_doctor 正则自检失败，拒绝打底：%s" % selftest)
+        return
+    abs_items: dict[str, int] = {}
+    for rel, _ln, _txt in raw:
+        abs_items[rel] = abs_items.get(rel, 0) + 1
     with open(BASELINE, "w", encoding="utf-8", newline="\n") as f:
-        json.dump({"except_pass_by_file": dict(sorted(items.items()))},
+        json.dump({"except_pass_by_file": dict(sorted(items.items())),
+                   "abs_path_by_file": dict(sorted(abs_items.items()))},
                   f, ensure_ascii=False, indent=2)
         f.write("\n")
-    print("已登记 %d 个文件 / 共 %d 处存量 `except … pass` → %s"
-          % (len(items), sum(items.values()), BASELINE))
+    print("已登记 except…pass：%d 文件 / %d 处；绝对路径：%d 文件 / %d 处 → %s"
+          % (len(items), sum(items.values()),
+             len(abs_items), sum(abs_items.values()), BASELINE))
 
 
 def main() -> int:

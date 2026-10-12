@@ -1,6 +1,6 @@
 # tools/ 索引
 
-`tools/` 现有 **156 个 `.py`**（26,191 行），其中 138 个是探针
+`tools/` 现有 **156 个 `.py`**（26,325 行），其中 138 个是探针
 （`_probe_*`）。本文件只做**索引**，**不移动任何文件** —— 理由见下节（有实测依据）。
 
 > 本索引的每个数字都由 `python tools/_probe_index_audit.py` 核对（退出码非 0
@@ -35,14 +35,14 @@
 | `_probe_hybrid_trace.py` | 109 | hybrid 调度轨迹剖析（DECORD_HYBRID_DEBUG 分侧发射时间线/份额/慢批定位） | docs/log/2026-09-10-hybrid联调深挖.md |
 | `_probe_hybrid_startup.py` | 146 | hybrid 启动期派工诊断（fork 级冷进程：硬窗界+TRACE 轨迹+hybrid_stats 对账；盲派 GOP 数/稳态份额/rg 真伪的判定仪）| docs/log/2026-09-18-hybrid启动轮.md |
 | `env_probe.py` | 228 | **环境事实源**（纪律轮）：外部依赖路径的唯一解析入口——ffmpeg 候选列表/decord DLL 定位（find_spec 不加载，避免锁 DLL）/md5 校验；工具与探针一律 `from env_probe import ffmpeg_bin`，禁写绝对路径 | docs/log/2026-09-19-纪律轮.md |
-| `env_doctor.py` | 274 | **环境体检/部署/审计**：`--deploy` 把 fork 构建产物同步进 site-packages 并校验 md5（消除手工 cp 导致的「用的 DLL 非最新」）；`--audit` 硬编码路径扫描（纪律项 1 的实现）；`--json` 供 CI/审计消费 | docs/log/2026-09-19-纪律轮.md |
+| `env_doctor.py` | 366 | **环境体检/部署/审计**：`--deploy` 把 fork 构建产物同步进 site-packages 并校验 md5（消除手工 cp 导致的「用的 DLL 非最新」）；`--audit` 硬编码路径扫描（纪律项 1 的实现）；`--json` 供 CI/审计消费 | docs/log/2026-09-19-纪律轮.md |
 | `_probe_leak_longrun.py` | 221 | 长跑资源泄漏检测（同进程多轮 extract 采样 VRAM/RSS，后段斜率判平台 vs 泄漏；cudaMemGetInfo 口径优先 + keep_crops 默认对齐引擎；`--expect-leak` 注入放弃语义做反向对照——2026-09-20 两盲区修复）| docs/log/2026-09-19-资源长跑轮.md；2026-09-20-审计修复轮.md §2 |
 | `_probe_leak_pinpoint.py` | 203 | 泄漏定位探针（双层：A=释放边界 cudaMemGetInfo 差；B=Python 侧 cudaMalloc/MallocHost 全局追踪按调用点聚合存活——2026-09-20 定位池复活泄漏真根因）| docs/log/2026-09-20-审计修复轮.md §2 |
 | `_probe_pool_vs_serial.py` | 128 | 批量三码族三臂交错：serial-hybrid vs pool pair vs pool-hybrid 并发（臂序轮转+同轮配对——pool 退役裁决：串行 28.61s 最快；pool.py 已删 0.16.0，本探针为 C-53 存档证据）| docs/log/2026-09-20-批量策略与hybridOCR轮.md §2 |
 | `_probe_unify_decode.py` | 148 | decode 统一设想测量：forced-hybrid vs 纯臂（输出位级等价/速率平价/ctor 冷税；av1×force_cpu 退化 GPU 实证；子进程自调用协议）| docs/log/2026-09-20-批量策略与hybridOCR轮.md §1.1 |
 | `_probe_hybrid_ocr.py` | 89 | hybrid OCR（双车道 TRT+OV）A/B 与文本对照（batch_test 字幕 stride=1 OCR-bound 口径——v0 +51% 回归与 3/26461 文本差的证据）| docs/log/2026-09-20-批量策略与hybridOCR轮.md §3 |
 | `_probe_window_repro.py` | 45 | hard-window 回归复现器（CPU-out 窗口口径，got==n 判少交付 + hybrid_stats；可选 start 参数=晚起点复现（窗×seek 尾帧替补缺陷的取证口径，2026-09-20））| docs/log/2026-09-19-hybrid窗口缺陷轮.md；2026-09-20-审计修复轮.md §4 |
-| `_probe_window_matrix.py` | 111 | hard-window 位级对照矩阵（C-57/C-62 门禁）：三码 × start×win 网格 × {hybrid+窗, hybrid 无窗, nvdec} 三读法帧 md5 逐位断言 + win_subs==0；`--repeat N` 重复协议（2026-10-08：单轮 12/12 被证明可被概率竞态 lucky-pass，发布门禁口径 = 连续 5 轮全绿）| docs/log/2026-10-08-收口与窗口架构重做.md |
+| `_probe_window_matrix.py` | 115 | hard-window 位级对照矩阵（C-57/C-62 门禁）：三码 × start×win 网格 × {hybrid+窗, hybrid 无窗, nvdec} 三读法帧 md5 逐位断言 + win_subs==0；`--repeat N` 重复协议（2026-10-08：单轮 12/12 被证明可被概率竞态 lucky-pass，发布门禁口径 = 连续 5 轮全绿）| docs/log/2026-10-08-收口与窗口架构重做.md |
 | `_probe_worktree_ab.py` | 166 | 跨代码版本的同会话交错 A/B（A=HEAD 临时 worktree / B=当前工作树；bench run 子进程自带时钟门禁，臂序轮转 + 同轮配对差分 + 段数旁证；重构中性验证专用件——硬件漂移禁止新码 vs 注册表过往条目直接比对）| docs/log/2026-09-20-宿主GPU驱动合一轮.md |
 | `_probe_autocrop_retest.py` | 181 | 裁切复测探针（5 臂 accuracy：A1/A64/C/C639/C781——拆 reorder 混变量 + OCR_PAD_SMALL 纯张量宽扰动；perf 模式交错配对 wall/infer/q_get_wait）| docs/log/2026-09-20-裁切复测轮.md |
 | `_probe_hybridocr_prize.py` | 183 | hybrid OCR 奖金池裁决探针（A nvdec+TRT / B nvdec+双车道 / C hybrid+hybrid / D 纯解码上限参考；整集交错配对 + 文本旁证；预注册判据 5%/10%）| docs/log/2026-09-20-hybridOCR奖金池裁决.md |
@@ -51,7 +51,7 @@
 | `_probe_onnx_dcd_sweep.py` | 80 | ONNX OCR 场景解码线程数 sweep（DECODE_THREADS；h264/hevc/av1 × stride），产出 2026-09-10 新档位表 | docs/log/2026-09-10-ONNX解码线程档位.md |
 | `_probe_perf_sweep.py` | 118 | 解码参数 sweep（batch/stream/threads/hybthreads），monkey-patch 模块常量；用于 C-10 复确认与 batch=32 越界 bug 的暴露 | docs/log/2026-09-09-深度性能优化.md |
 | `_probe_index_audit.py` | 361 | 核对本索引的每个数字是否与磁盘一致 + L2 live 名单自洽（【6】） | 本文件（自检） |
-| `_probe_discipline_audit.py` | 703 | **项目纪律审计**（13 项主检查：硬编码路径 / 异常吞噬 / 未用 import / 未门控 print / 版本号 / 文档引用 / 注入预算…；扩展项见 `_audit_ext.py`，编号注册表自证无冲突） | AGENTS.md「纪律与自动化守卫」 |
+| `_probe_discipline_audit.py` | 729 | **项目纪律审计**（13 项主检查：硬编码路径 / 异常吞噬 / 未用 import / 未门控 print / 版本号 / 文档引用 / 注入预算…；扩展项见 `_audit_ext.py`，编号注册表自证无冲突） | AGENTS.md「纪律与自动化守卫」 |
 | `_audit_ext.py` | 367 | 纪律审计扩展项（14..26，含 render_consistency / decord_pin）；被 `_probe_discipline_audit.py` 并入同一入口 | `_probe_discipline_audit.py` |
 | `_doc_guards.py` | 114 | **文档守卫单一实现**（2026-10-10 治理改革轮）：裸 CR / 注入预算 / 各文档预算的判据与常量唯一事实源 + 大文档可分章检查；审计与 pytest 同源取数 | AGENTS.md；tests/test_docs_hygiene.py；tests/knowledge/test_budgets.py |
 | `conclusions_sweep.py` | 135 | **发版清扫**（铁律 9 执行体）：列结论钉版落后/触发命中清单；`--strict` 供发版钩子 | AGENTS.md 铁律 9；rules.yaml |
@@ -64,7 +64,7 @@
 | `_probe_ov_version_ab.py` | 83 | OpenVINO 换代 A/B（2026.3.1 vs 2026.4.1：模型级四形状 + 引擎 OV e2e + 剪枝副本逐位门；本轮结论=性能持平、输出逐位一致） | docs/log/2026-10-11-争用微观定位轮.md |
 | `_probe_hybrid_supply.py` | 46 | C-69 供给上限测量（无 OCR 直读 decord.hybrid 双臂；供给 vs 胃口 vs 引擎耦合的三段归因载体） | docs/log/2026-10-11-争用微观定位轮.md §6 |
 | `_probe_quiet_suite.py` | 108 | 静默机器全量补测套件（供给 B64/B300、FORCE 分臂独立子进程、引擎 span、三码缺口一次跑完；口径纠缠批效应判别） | docs/log/2026-10-11-争用微观定位轮.md §11 |
-| `check.py` | 113 | **两级标准化测试入口**：daily（pytest+快检+金标smoke ≈47s）/ release（全量审计+金标full+清扫）；每步计时汇总 | AGENTS.md「纪律与自动化守卫」 |
+| `check.py` | 123 | **两级标准化测试入口**：daily（pytest+快检+金标smoke ≈47s）/ release（全量审计+金标full+清扫）；每步计时汇总 | AGENTS.md「纪律与自动化守卫」 |
 | `_doc_section.py` | 230 | **文档章节级检索**：`--toc` 看目录 / `--find` 按标题定位 / 读单章。避免整文件读，实测省 84~96% tokens；2026-10-10 起覆盖全部治理文档+log 单篇（含 §A~§E 字母节键） | AGENTS.md「查文档前先定位」 |
 | `_probe_roi_decode.py` | 105 | **否定结果**：量化「打开时 SetRoi」vs「每次 get_batch 传 roi」对 CPU 软解速率的影响。实测两者无差异（1841 vs 1849 fps），但**不传 ROI = 520 fps**（3.6× 慢）→ ROI 本身是巨大优化，两种传法等价 | PERF §22.5 |
 | `_probe_nvdec_interference.py` | 141 | **推翻前一轮归因**：隔离测 NVDEC 对 CPU 软解的干扰，A 单跑 / B ∥NVDEC / C ∥忙等线程（对照）。实测 NVDEC 只造成 **−3.3%**，而等量纯抢核 **−41.9%** → 元凶是分段/OCR 流水线，不是 NVDEC | PERF §22.6 |
@@ -80,7 +80,7 @@
 | `_probe_trt_maxbatch.py` | 101 | **否定/定量**：同一份 ONNX 构建 batch 6 与 18 两个 profile，同批 1116 张走同一提交路径 → 0.663s vs 0.557s（**−16%**）；支撑 `TRT_PROFILE_BATCH=18`（S6） | log 2026-09-10-S6性能轮 §7；FINDINGS F-10 |
 | `_probe_engine_ab.py` | 121 | 引擎产物端到端交错 A/B（worker 子进程 monkeypatch `_engine_candidates`，产品代码零开关）：h264-cpu 热轮 −5.85%、`ocr.infer` −33% | log §7；FINDINGS F-10 |
 | `_probe_decode_batch_ab.py` | 127 | 解码批 sweep（交错 + 独立子进程 + 段数/文本 sha 硬门）：64/128/256 → **64 最优**（128 持平、256 墙钟 +0.96% 尽管解码相位 −4.9%） | log 2026-09-11-hybrid差距分解 §0 |
-| `_probe_run_setup_cost.py` | 80 | 每 run 固定成本分解：analyzer/池/kernel 全在 0.1ms 级 → 0.083s 的 `calibrate` 主体是**首帧解码冷启**（不可省） | 同上 §0 |
+| `_probe_run_setup_cost.py` | 82 | 每 run 固定成本分解：analyzer/池/kernel 全在 0.1ms 级 → 0.083s 的 `calibrate` 主体是**首帧解码冷启**（不可省） | 同上 §0 |
 | `_probe_hybrid_gap.py` | 107 | hybrid **三层差距分解**（L1 解码器能力 / L2 两路吞吐相加理想 / L3 引擎口径）：hybrid_gpu 仅达理想 67–77%；hybrid_gpu 比宿主输出慢 19–24% | log 2026-09-11-hybrid差距分解；C-05 |
 | `_probe_phase_cores.py` | 91 | **每相位资源读数**（§8.6 r5 L1/L2 的消费者）：墙钟/平均并行核数/线程/RSS/磁盘速率/显存 + full 档 NVML 峰值因子。实测 h264-cpu 解码相位 **21.2/32 核** → hybrid CPU 分片必与引擎线程争核 | log 2026-09-11-资源层与门控校准 §3 |
 | `_probe_upload_chain.py` | 157 | 用 fork 的 `DECORD_HYBRID_FORCE_SIDE` 拆 **mixed / 纯NVDEC / 纯CPU** 三臂（每组独立子进程 + **45–90s 硬超时** + 轮内组序轮转 + 进度落文件）。量出 mixed"低于最优单侧"（§7.1）——**该结论已被 §8 翻案**：EWMA 估计器伪影 | log 2026-09-11-hybrid差距分解 §7/§8；DECISIONS 2026-09-11 fork 修复 |

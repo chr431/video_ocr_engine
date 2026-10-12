@@ -50,8 +50,12 @@ METRIC_CAP = 96
 HIST_EXP_BIAS = 20
 HIST_N_BUCKETS = 32
 #: 桶 i 的秒级下界（供 report 自述；i=0 覆盖 [0, 2^-20)）
+#: ⚠️ 指数须再减 1（2026-10-12 审查轮纠偏）：桶号 = frexp(x)[1]+BIAS，而
+#: frexp 给 x∈[2^(e-1), 2^e)——旧式 2^(i-BIAS) 实为该桶**上界**，整表
+#: 偏 2×（report.bucket_lower_s 的判读随之错位）。性质测试见
+#: tests/domain/test_metrics.py::test_hist_bucket_lower_bounds。
 HIST_BUCKET_LOWER = tuple(
-    (2.0 ** (i - HIST_EXP_BIAS)) if i > 0 else 0.0 for i in range(HIST_N_BUCKETS)
+    (2.0 ** (i - 1 - HIST_EXP_BIAS)) if i > 0 else 0.0 for i in range(HIST_N_BUCKETS)
 )
 
 
@@ -476,7 +480,14 @@ class Metrics:
             for k, v in b["counters"].items():
                 counters[k] = counters.get(k, 0) + v
             for k, v in b["gauges"].items():
-                gauges[k] = v
+                if k.endswith("_max"):
+                    # *_max 型跨线程取最大（2026-10-12 审查轮）：桶序=线程
+                    # 首触顺序，"最后写入者胜"会丢弃较大观测——正是本模块
+                    # drain 注释担心的"门禁静默放行"形态。
+                    cur = gauges.get(k)
+                    gauges[k] = v if cur is None or v > cur else cur
+                else:
+                    gauges[k] = v
             for k, arr in b.get("hists", {}).items():
                 agg = hists.get(k)
                 if agg is None:
