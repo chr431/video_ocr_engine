@@ -113,6 +113,8 @@ for seg in result.segments:
 即：**长片（全识别范围）三编码一律 `hybrid` 最快**。注意「h264 选 cpu」
 是**文件相关而非码级规则**：test6_h264 的 CPU 软解仅 ~2155fps（test5 同
 编码 ~3400fps，差 1.6×——主因是编码工具集：x264 medium 加权预测 vs
+> 历史实验叙事与大档案（docs/log/PERFORMANCE·DECISIONS·ARCHIVE 及 2026-10 前的轮叙事）已出树：经 git 档案取回（`archive/pre-rework` tag 锚点，如 `git show archive/pre-rework:docs/log/PERFORMANCE.md`）。
+
 硬编风格廉价流，见 `docs/log/2026-09-18-hybrid启动轮.md` §11-§12），按
 编码格式猜会错，批量场景按实测速率分派。
 
@@ -146,7 +148,7 @@ e2e 口径**定档（decode-only 口径 24T 即饱和，但引擎里解码与分
 
 > **迁移记录**：原项目层实现（hybrid_decode.py，已于 2026-09-06 删除）由 decord
 > 原生实现取代（commit `fd3bcda`）；决策/历史见 `docs/log/DECISIONS.md` 与
-> `docs/log/PERFORMANCE.md` §24，结论状态见 `docs/CONCLUSIONS.md` C-05/C-06。
+> `docs/log/PERFORMANCE.md` §24，结论状态见 `docs/CONCLUSIONS.md` C-05。
 
 `result` 为 `ExtractionResult`：
 

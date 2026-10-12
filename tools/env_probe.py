@@ -12,7 +12,7 @@
     + md5，可打印、可断言；
   · **部署链自动化**：`tools/env_doctor.py --deploy` 把构建产物同步到
     site-packages 并校验 md5 一致（消除手工 cp）；
-  · **审计守门**：`tools/env_doctor.py` 与 `tools/_probe_discipline_audit.py`
+  · **审计守门**：`tools/env_doctor.py --audit`（R-path-no-hardcode）
     检查硬编码路径（新纪律：仓库内不得出现绝对路径字面量）。
 
 设计原则：**不引入新旋钮**（复用既有 FFMPEG_DIR / RACELOG_* env）；

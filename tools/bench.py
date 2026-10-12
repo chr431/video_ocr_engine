@@ -26,7 +26,7 @@ from pathlib import Path
 # PI-15 门禁（r11 用户裁决"门控过严导致误报，适当放松"后的**校准版**）：
 # 阈值由本机 A/A 标定得出（同档两槽、同进程交替、每槽 3 次均值、25 对：
 # 均值偏差 −0.179%、sd 1.053%、SE 0.211% → 0.179+3×0.211 ≈ 0.81 → 0.85）。
-# 出处：knowledge/benchmarks.yaml:pi15_gate_calibration。
+# 出处：registry/benchmarks.yaml:pi15_gate_calibration。
 #   - 两档化（2026-10-09）后只剩一条 full 可分辨下限（std 档已退役，
 #     DECISIONS §30；µs 级严格性由 `tests/config/test_telemetry_cost.py`
 #     的确定性成本守卫承担——那里有 10⁴ 倍于墙钟的分辨力）。

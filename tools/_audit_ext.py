@@ -1,11 +1,15 @@
-"""S8 审计扩展（v2 §8.2 目标审计的扩展项，14..26）。
+"""结构化审计扩展（按名注册，Phase C 制度重构后独立入口）。
 
-由 _probe_discipline_audit.py 经 CHECKS_EXT 并入同一入口（钩子/CI 共用）。
-每项失败即违规；历史豁免沿用既有机制（--since 快检兼容）。
-2026-10-10 治理改革轮：编号由 13..23 改为 14 起连续（原 13 与主检查 13
-双占用）；主入口启动期自证编号无冲突/无空洞。文档引用检查项一律**按名**
-（no_deprecated_shim_usage 等），不按号——编号会重排，名字不会。
+每项失败即违规。旧 _probe_discipline_audit（26 项合流入口）随旧制度退役，
+本文件保留下列仍有效的检查并改接新事实源（registry/）：
+  layering / no_shim_duplication / dead_code / knob_coverage /
+  no_import_side_effects / metrics_coverage / rules_schema /
+  probe_hooks_resolve / render_consistency / decord_pin
+消亡项（目标已删或被新守卫取代）：docs_budget（预算制废）、baseline_liveness
+（豁免账本废）、no_deprecated_shim_usage（shims 已物理删除）。
+引用检查项一律按名——编号会重排，名字不会。
 """
+
 from __future__ import annotations
 
 import ast
@@ -21,31 +25,14 @@ sys.path.insert(0, str(ROOT))
 
 
 def _product_files():
-    files = [ROOT / f for f in (
-        "engine_config.py", "gpu_setup.py", "ocr_native.py", "ocr_trt.py",
-        "segmentation.py", "video_utils.py")]
     pkg = ROOT / "video_ocr_engine"
-    files += [p for p in pkg.rglob("*.py") if "__pycache__" not in p.parts]
-    return [p for p in files if p.exists()]
-
-
-# 六个废弃根模块（0.13.0 弃用 / 0.14.0 删除，docs/MIGRATION.md §1）
-_SHIM_MODULES = ("engine_config", "gpu_setup", "ocr_native",
-                 "ocr_trt", "segmentation", "video_utils")
-_SHIM_IMPORT_PAT = re.compile(
-    r"^[ \t]*(?:from|import)[ \t]+(?:%s)\b" % "|".join(_SHIM_MODULES), re.M)
-
-# 有意走废弃路径的白名单：冻结 shim 可导入性/常量面的两个契约测试。
-# 0.14.0 删除 shim 时改的就是这两个文件（见各文件内注记）。
-_SHIM_WHITELIST = {
-    "tests/api/test_compat_snapshot.py",
-    "tests/api/test_engine_imports.py",
-}
+    return [p for p in pkg.rglob("*.py") if "__pycache__" not in p.parts]
 
 
 def check_layering() -> str | None:
     """[14] 模块级导入图无环（P0-1b：v1 本就是 DAG，测试守住）。"""
     import importlib.util
+
     names = {p.stem: p for p in _product_files()}
     graph = {}
     for name, p in names.items():
@@ -55,8 +42,7 @@ def check_layering() -> str | None:
             continue
         deps = set()
         for n in ast.walk(tree):
-            if (isinstance(n, ast.ImportFrom) and n.module
-                    and n.level == 0 and n.module in names):
+            if isinstance(n, ast.ImportFrom) and n.module and n.level == 0 and n.module in names:
                 deps.add(n.module)
             elif isinstance(n, ast.Import):
                 for a in n.names:
@@ -64,18 +50,22 @@ def check_layering() -> str | None:
                         deps.add(a.name)
         graph[name] = deps
     seen, stack = set(), []
+
     def dfs(n):
         if n in stack:
-            cycle = " → ".join(stack[stack.index(n):] + [n])
+            cycle = " → ".join(stack[stack.index(n) :] + [n])
             return cycle
         if n in seen:
             return None
-        seen.add(n); stack.append(n)
+        seen.add(n)
+        stack.append(n)
         for d in graph.get(n, ()):
             r = dfs(d)
             if r:
                 return r
-        stack.pop(); return None
+        stack.pop()
+        return None
+
     for n in graph:
         r = dfs(n)
         if r:
@@ -85,9 +75,14 @@ def check_layering() -> str | None:
 
 def check_no_shim_duplication() -> str | None:
     """[15] 转发壳/重复符号回归守卫（S2 已清除的名字不得复活）。"""
-    banned = ("_otsu_from_hist", "_otsu_median_threshold",
-              "_preprocess_standard", "_text_sep_gray", "_gray_mean_abs_diff",
-              "similar_binary")
+    banned = (
+        "_otsu_from_hist",
+        "_otsu_median_threshold",
+        "_preprocess_standard",
+        "_text_sep_gray",
+        "_gray_mean_abs_diff",
+        "similar_binary",
+    )
     for p in (ROOT / "video_utils.py", ROOT / "video_ocr_engine" / "_helpers.py"):
         if not p.exists():
             continue
@@ -109,8 +104,12 @@ def check_dead_code_regression() -> str | None:
     ec = ROOT / "engine_config.py"
     if ec.exists():
         t = io.open(ec, encoding="utf-8").read()
-        for name in ("DECODE_BACKEND_KEYS", "DECODE_BACKEND_LABELS",
-                     "OCR_BACKEND_KEYS", "OCR_BACKEND_LABELS"):
+        for name in (
+            "DECODE_BACKEND_KEYS",
+            "DECODE_BACKEND_LABELS",
+            "OCR_BACKEND_KEYS",
+            "OCR_BACKEND_LABELS",
+        ):
             if re.search(r"^%s\s*[:=]" % name, t, re.M):
                 return "engine_config 复活了零引用常量 %s" % name
     return None
@@ -120,6 +119,7 @@ def check_knob_coverage() -> str | None:
     """[17] 每个旋钮有依据锚点；注册表不超上限。"""
     from video_ocr_engine.config import KNOBS
     from video_ocr_engine.config.registry import _REGISTRY_CAP
+
     if len(KNOBS.knobs) > _REGISTRY_CAP:
         return "旋钮注册表 %d 超上限 %d" % (len(KNOBS.knobs), _REGISTRY_CAP)
     for k in KNOBS.knobs:
@@ -140,53 +140,11 @@ def check_no_import_side_effects() -> str | None:
             if getattr(n, "col_offset", 1) != 0:
                 continue
             src = ast.unparse(n)
-            if "environ[" in src or "environ.setdefault" in src or \
-                    "putenv" in src:
+            if "environ[" in src or "environ.setdefault" in src or "putenv" in src:
                 if "add_dll_directory" in src or "getenv" in src:
                     continue  # 读取与 DLL 注册（gpu_setup 有 _gpu_initialized 守卫的调用期路径）
-                return "%s import 期改写进程环境：%s" % (
-                    p.name, src[:60])
+                return "%s import 期改写进程环境：%s" % (p.name, src[:60])
     return None
-
-
-def check_docs_budget() -> str | None:
-    """[19] 知识库与活文档预算（§14.2；薄委托 tools/_doc_guards.py）。
-
-    常量唯一事实源在 _doc_guards.py（2026-10-10 治理改革轮收敛：此前
-    本处与 tests 两处各写一遍上限，迟早分叉）。conclusions 源上限
-    2026-10-10 由 14 KB 上调 16 KB（14,241/14,336 只剩 95 B，饱和即逼
-    仓促归档）。超限时顺带给压缩建议（松绑轮 2026-10-09）。
-    """
-    sys.path.insert(0, str(HERE))
-    from _doc_guards import budget_violations
-    bad = budget_violations()
-    for rel, size, cap in bad:
-        if rel == "knowledge/conclusions.md":
-            _suggest_conclusion_cuts()
-        print("      %s %dB 超 %dB" % (rel, size, cap))
-    if bad:
-        return "文档预算超限 %d 项（上限见 tools/_doc_guards.py）" % len(bad)
-    return None
-
-
-def _suggest_conclusion_cuts() -> None:
-    """超预算时打印压缩建议：最长条目 × 可压字段（压缩顺序的证据链）。
-
-    顺序即 knowledge/conclusions.md 头注的规则：evidence（机械可压）→
-    premises → conclusion 正文最后动；superseded 条目只留指针。
-    """
-    import re as _re
-    text = (ROOT / "knowledge" / "conclusions.md").read_text(encoding="utf-8")
-    entries = []
-    for chunk in text.split("\n- id: ")[1:]:
-        cid = chunk.split("\n", 1)[0].strip()
-        entries.append((len(chunk.encode("utf-8")), cid, chunk))
-    entries.sort(reverse=True)
-    print("    压缩建议（按条目字节排序，顺序：evidence → premises → 正文；")
-    print("            superseded 只留指针）：")
-    for size, cid, chunk in entries[:3]:
-        sup = "  [superseded→可只留指针]" if "status: superseded" in chunk else ""
-        print("      %-6s %5dB%s" % (cid, size, sup))
 
 
 def check_metrics_coverage() -> str | None:
@@ -196,77 +154,48 @@ def check_metrics_coverage() -> str | None:
     死键只稀释报告），以同代现役键 pipeline.consumer 顶替守卫位。
     """
     from video_ocr_engine.domain.metrics import METRICS, METRIC_CAP
+
     if len(METRICS.names()) > METRIC_CAP:
         return "指标注册表超 %d 上限" % METRIC_CAP
-    for name in ("pipeline.decode", "pipeline.ocr", "pipeline.ocr_tail",
-                 "pipeline.consumer", "pipeline.q_get_wait"):
+    for name in (
+        "pipeline.decode",
+        "pipeline.ocr",
+        "pipeline.ocr_tail",
+        "pipeline.consumer",
+        "pipeline.q_get_wait",
+    ):
         if name not in METRICS:
             return "v1 现役指标 %s 从注册表丢失" % name
     return None
 
 
-def check_rules_ladder() -> str | None:
-    """[21] 注入核规则：每条有 mechanism；prose 须附 why。"""
-    p = ROOT / "knowledge" / "rules.yaml"
-    if not p.exists():
-        return "knowledge/rules.yaml 缺失"
-    t = io.open(p, encoding="utf-8").read()
-    n_rule = len(re.findall(r"^- rule:", t, re.M))
-    n_mech = len(re.findall(r"^  mechanism:", t, re.M))
-    n_why = len(re.findall(r"^  why:", t, re.M))
-    n_prose = len(re.findall(r"^  mechanism: prose", t, re.M))
-    if n_rule == 0:
-        return "rules.yaml 无规则"
-    if n_mech != n_rule:
-        return "rules.yaml 有 %d 条规则缺 mechanism（%d/%d）" % (n_rule - n_mech, n_mech, n_rule)
-    if n_why != n_prose:
-        return "prose 类规则缺 why（%d prose / %d why）" % (n_prose, n_why)
-    return None
+def check_rules_schema() -> str | None:
+    """规则注册表 schema-lite（R-registry-schema 的先行版；全量版 Phase D）。
 
-
-def check_baseline_liveness() -> str | None:
-    """[22] 豁免账本活性：baseline 里的文件必须仍存在（幽灵豁免回收）。"""
-    p = ROOT / "tools" / "_discipline_baseline.json"
-    if not p.exists():
-        return None
-    import json
-    data = json.loads(io.open(p, encoding="utf-8").read())
-    ghosts = []
-    for cat, files in data.items():
-        if isinstance(files, dict):
-            ghosts += ["%s:%s" % (cat, k) for k in files
-                       if not (ROOT / k).exists()]
-    if ghosts:
-        return "baseline 幽灵豁免（文件已删）：%s" % ", ".join(ghosts[:3])
-    return None
-
-
-def check_no_deprecated_shim_usage() -> str | None:
-    """[23] 六个废弃根模块 shim 不得新增引用（存量已迁清，防回归）。
-
-    shim 是 0.13.0 弃用、0.14.0 删除的过渡面（docs/MIGRATION.md §1）。
-    仓库内 45 处引用已迁至包内路径；本项只留两个**有意**冻结 shim 的
-    契约测试在白名单里——删除动作的完整清单就是这两个文件。
+    enforcement ∈ {ci, local-gate, advisory}；非 advisory 须有 executor；
+    advisory ≤10（宪章不变量）；每条必有 prevents（举证义务）。
     """
-    hits = []
-    for d in (ROOT / "tests", ROOT / "tools", ROOT / "video_ocr_engine"):
-        if not d.exists():
-            continue
-        for p in sorted(d.rglob("*.py")):
-            if "__pycache__" in p.parts:
-                continue
-            rel = p.relative_to(ROOT).as_posix()
-            if rel in _SHIM_WHITELIST:
-                continue
-            try:
-                t = io.open(p, encoding="utf-8").read()
-            except OSError:
-                continue
-            for m in _SHIM_IMPORT_PAT.finditer(t):
-                hits.append("%s:%d" % (rel, t.count("\n", 0, m.start()) + 1))
-    if hits:
-        return ("废弃根模块 shim 新增引用 %d 处（改走包内路径，"
-                "见 docs/MIGRATION.md §1）：%s" % (len(hits), ", ".join(hits[:5])))
+    import yaml
+
+    p = ROOT / "registry" / "rules.yaml"
+    if not p.exists():
+        return "registry/rules.yaml 缺失"
+    entries = yaml.safe_load(io.open(p, encoding="utf-8").read()) or []
+    rules = [e for e in entries if isinstance(e, dict) and "id" in e]
+    if not rules:
+        return "rules.yaml 无规则条目"
+    n_adv = 0
+    for e in rules:
+        if e.get("enforcement") not in ("ci", "local-gate", "advisory"):
+            return "%s enforcement 非法：%r" % (e["id"], e.get("enforcement"))
+        if e.get("enforcement") != "advisory" and not e.get("executor"):
+            return "%s 缺 executor（无执行体的不是规则，见宪章）" % e["id"]
+        if not e.get("prevents"):
+            return "%s 缺 prevents（举证义务）" % e["id"]
+        if e.get("enforcement") == "advisory":
+            n_adv += 1
+    if n_adv > 10:
+        return "advisory %d 条超 10 席上限（自动化或删除）" % n_adv
     return None
 
 
@@ -278,15 +207,18 @@ def check_probe_hooks_resolve() -> str | None:
     而不是靠逐个探针跑来发现（2026-09-13 实测：S9 模块化一次打破 4 个探针）。
     """
     import sys as _sys
+
     _sys.path.insert(0, str(HERE))
     try:
         from _probe_hooks import hooks
-    except Exception as e:                  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
         return "tools/_probe_hooks.py 不可导入：%r" % (e,)
     bad = hooks.audit()
     if bad:
         return "打桩点失效 %d 项（改 POINTS 表即可，探针不必动）：%s" % (
-            len(bad), "；".join(bad[:2]))
+            len(bad),
+            "；".join(bad[:2]),
+        )
     return None
 
 
@@ -297,63 +229,67 @@ def check_render_consistency() -> str | None:
     审计入口）；折进来后全量审计一次跑齐。render 顺带校验结论字段里的
     仓库内全路径存在性（C-32 教训：包化后旧路径标签静默存活两周+）。
     """
-    r = subprocess.run([sys.executable, str(ROOT / "knowledge" / "render.py")],
-                       capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", cwd=str(ROOT), timeout=180)
+    r = subprocess.run(
+        [sys.executable, str(ROOT / "tools" / "render.py"), "--check"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=str(ROOT),
+        timeout=180,
+    )
     out = (r.stdout or "") + (r.stderr or "")
     if r.returncode != 0:
         tail = [ln for ln in out.splitlines() if ln.strip()][-1:] or ["（无输出）"]
-        return ("render --check 未过（重渲染：python knowledge/render.py "
-                "--write）：%s" % tail[0][:110])
+        return "render --check 未过（重渲染：python tools/render.py --write）：%s" % tail[0][:110]
     return None
 
 
 def check_decord_pin() -> str | None:
-    """[26] 两仓版本口径：DEPENDENCIES.md 的 decord 行须含实际安装版本。
+    """两仓版本口径：registry/environment.yaml 钉版须含实际安装版本。
 
-    2026-10-10 治理改革轮新增：该行曾写 0.8.5 而本机已装 0.9.2——跨仓
-    版本引用是纯人肉同步点（C-66 提交信息里 0.9.1/0.9.2 口径也曾含糊）。
-    CI 不装 decord：import 失败按环境事实跳过（与 env_provenance 同语义，
-    "装了但不一致"才是缺陷）。发版时的全量清扫见 tools/conclusions_sweep.py。
+    2026-10-10 治理改革轮新增（当时对账 DEPENDENCIES.md 的 decord 行，
+    该行曾写 0.8.5 而本机已装 0.9.2）；Phase C 制度重构后事实源迁
+    registry/environment.yaml。CI 不装 decord：import 失败按环境事实
+    跳过（"装了但不一致"才是缺陷）。发版时的全量清扫见 conclusions_sweep。
     """
     try:
         import decord  # type: ignore[import-not-found]
-    except Exception:                                  # noqa: BLE001 — 环境事实
+    except Exception:  # noqa: BLE001 — 环境事实
         return None
     ver = decord.__version__
-    dep = ROOT / "docs" / "DEPENDENCIES.md"
-    if not dep.exists():
-        return None
-    row = ""
-    for line in io.open(dep, encoding="utf-8").read().splitlines():
-        if line.startswith("| decord"):
-            row = line
-            break
-    if not row:
-        return "docs/DEPENDENCIES.md 缺 decord 表行"
-    if ver not in row:
-        return ("DEPENDENCIES.md 的 decord 行未含本机安装版本 %s——"
-                "fork 升级当轮须同步该行（发版清扫：tools/conclusions_sweep.py）" % ver)
+    import yaml
+
+    env = (
+        yaml.safe_load(io.open(ROOT / "registry" / "environment.yaml", encoding="utf-8").read())
+        or {}
+    )
+    pin = str((env.get("dependencies") or {}).get("decord_pin", ""))
+    if not pin:
+        return "registry/environment.yaml 缺 dependencies.decord_pin"
+    if ver != pin:
+        return (
+            "environment.yaml 钉版 %s ≠ 本机安装 %s——fork 升级当轮须同步"
+            "钉版（发版清扫：tools/conclusions_sweep.py --strict）" % (pin, ver)
+        )
     return None
 
 
 CHECKS_EXT = {
-    14: ("layering 分层无环", check_layering),
-    15: ("no_shim_duplication 转发壳", check_no_shim_duplication),
-    16: ("dead_code 死代码回归", check_dead_code_regression),
-    17: ("knob_coverage 旋钮依据", check_knob_coverage),
-    18: ("no_import_side_effects", check_no_import_side_effects),
-    19: ("docs_budget 文档预算", check_docs_budget),
-    20: ("metrics_coverage 指标注册表", check_metrics_coverage),
-    21: ("rules_ladder 规则执行梯", check_rules_ladder),
-    22: ("baseline_liveness 豁免活性", check_baseline_liveness),
-    23: ("no_deprecated_shim_usage 废弃 shim", check_no_deprecated_shim_usage),
-    24: ("probe_hooks_resolve 打桩点表", check_probe_hooks_resolve),
-    25: ("render_consistency 渲染一致", check_render_consistency),
-    26: ("decord_pin 两仓版本口径", check_decord_pin),
+    "dead_code_regression": ("dead_code 死代码回归", check_dead_code_regression),
+    "decord_pin": ("decord_pin 两仓版本口径", check_decord_pin),
+    "knob_coverage": ("knob_coverage 旋钮依据", check_knob_coverage),
+    "layering": ("layering 分层无环", check_layering),
+    "metrics_coverage": ("metrics_coverage 指标注册表", check_metrics_coverage),
+    "no_import_side_effects": ("no_import_side_effects", check_no_import_side_effects),
+    "no_shim_duplication": ("no_shim_duplication 转发壳", check_no_shim_duplication),
+    "probe_hooks_resolve": ("probe_hooks_resolve 打桩点表", check_probe_hooks_resolve),
+    "render_consistency": ("render_consistency 渲染一致", check_render_consistency),
+    "rules_schema": ("rules_schema 规则注册表", check_rules_schema),
 }
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(encoding="utf-8")
     bad = 0
     for k, (name, fn) in sorted(CHECKS_EXT.items()):
         try:
@@ -361,6 +297,6 @@ if __name__ == "__main__":
         except Exception as e:  # noqa: BLE001
             r = "检查本身异常 %r" % (e,)
         tag = "✓" if r is None else "✗"
-        print("%s [%2d] %s%s" % (tag, k, name, "" if r is None else " —— " + r))
+        print("%s %s %s%s" % (tag, name, "", "" if r is None else " —— " + r))
         bad += r is not None
     sys.exit(1 if bad else 0)

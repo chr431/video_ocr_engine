@@ -44,16 +44,16 @@
   since: 2026-10-12
 
 - id: R-render-consistency
-  statement: 视图（AGENTS/CONCLUSIONS/KNOBS/DEPENDENCIES/INDEX/HEALTH）全渲染且与源一致，人不得手写
+  statement: 视图（AGENTS/CONCLUSIONS/KNOBS/INDEX/HEALTH）全渲染且与源一致，人不得手写
   enforcement: ci
-  executor: tools/render.py --check（Phase C/E 随视图切换落成）
+  executor: tools/render.py
   prevents: S0-B1/B2/C2（三处表示互漂）
   since: 2026-10-10
 
 - id: R-registry-schema
   statement: 注册表 schema 校验 + enforcement↔executor 一一对应 + advisory ≤10 + probe 住 tools/probes/
   enforcement: ci
-  executor: tools/registry_lint.py (Phase D)
+  executor: tools/_audit_ext.py#rules_schema（lite 版已上；全量 lint Phase D）
   prevents: S0-J1（守卫清单自漂）、S0-G3（散文规则堆积）
   since: 2026-10-12
 
@@ -139,7 +139,7 @@
 - id: R-golden
   statement: 正确性门禁=金标（段数+唯一文本集+按帧对齐真值准确率），--verify 失败不许合入；金标变更=行为变更（触发 version-advice）
   enforcement: local-gate
-  executor: tests/golden/bench_baseline.py
+  executor: tests/golden/record.py
   prevents: 旧铁律 2/3（"看起来没问题"判错）
   since: 2026-08-20
 

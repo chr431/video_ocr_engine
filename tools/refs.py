@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent
 REGISTRY = ROOT / "registry"
 CHARTER = ROOT / "charter.md"
 HISTORY = ROOT / "docs" / "log" / "2026-09-10-conclusions-history.md"
+HISTORY_ARCHIVE = "archive/pre-rework:docs/log/2026-09-10-conclusions-history.md"
 
 TOKEN_CONCLUSION = re.compile(r"(?<![A-Za-z0-9@-])C-\d{2,3}\b")
 TOKEN_RULE = re.compile(r"(?<![A-Za-z0-9-])(?:R|adv)-[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -68,10 +69,19 @@ class Index:
             if isinstance(entry, dict) and "id" in entry:
                 self.rules[entry["id"]] = entry
         self.historical: set[str] = set()
-        if HISTORY.is_file():
+        if HISTORY.is_file():  # 过渡期本地文件；出树后经档案 tag 取
             self.historical = set(
                 re.findall(r"(?m)^## (C-\d+)", HISTORY.read_text(encoding="utf-8"))
             )
+        else:
+            r = subprocess.run(
+                ["git", "-C", str(ROOT), "show", HISTORY_ARCHIVE],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            if r.returncode == 0:
+                self.historical = set(re.findall(r"(?m)^## (C-\d+)", r.stdout))
         env = _load_yaml(REGISTRY / "environment.yaml")
         self.decord_pin = str(env.get("dependencies", {}).get("decord_pin", ""))
         self.tags = _git_tags()
@@ -82,7 +92,7 @@ class Index:
             entry = self.conclusions[token]
             return f"{token} [active] {entry.get('conclusion', '')}"
         if token in self.historical:
-            return f"{token} [superseded/dead] 全文见 {HISTORY.relative_to(ROOT)}（git 档案）"
+            return f"{token} [superseded/dead] 全文经 {HISTORY_ARCHIVE} 取回（git show）"
         if token in self.rules:
             entry = self.rules[token]
             return f"{token} [{entry.get('enforcement', '')}] {entry.get('statement', '')}"

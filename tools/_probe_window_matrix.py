@@ -18,6 +18,7 @@
 环境：RACELOG_VIDEO_DIR（默认 D:/Videos/racelog_test）；
 DECORD_LIBRARY_PATH 指向待验 DLL（默认 D:/Repo/decord/build-dev）。
 """
+
 import hashlib
 import os
 import sys
@@ -43,8 +44,7 @@ GRID = [(0, 1000), (0, 3000), (5000, 1000), (5000, 3000)]  # (start, win)
 
 
 def read_hash(path, roi, start, n, ctx, use_win):
-    vr = VideoReader(path, ctx=ctx, output_format="gray", roi=roi,
-                     num_threads=32)
+    vr = VideoReader(path, ctx=ctx, output_format="gray", roi=roi, num_threads=32)
     if use_win:
         vr.set_decode_window(n)
     vr.seek_accurate(start)
@@ -63,7 +63,7 @@ def read_hash(path, roi, start, n, ctx, use_win):
 
 def main():
     quick = "--quick" in sys.argv
-    repeat = 1
+    repeat = 5  # R-window-gate：单轮通过不作数（2026-10-08 flake 教训）
     if "--repeat" in sys.argv:
         repeat = int(sys.argv[sys.argv.index("--repeat") + 1])
     vdir = video_dir()
@@ -72,8 +72,10 @@ def main():
         if repeat > 1:
             print(f"── repeat {rep + 1}/{repeat} ──", flush=True)
         fails += run_matrix(quick, vdir)
-    print(f"matrix: {'ALL PASS' if fails == 0 else f'{fails} 格失败'}"
-          f"{' × ' + str(repeat) if repeat > 1 else ''}")
+    print(
+        f"matrix: {'ALL PASS' if fails == 0 else f'{fails} 格失败'}"
+        f"{' × ' + str(repeat) if repeat > 1 else ''}"
+    )
     return 1 if fails else 0
 
 
@@ -93,20 +95,18 @@ def run_matrix(quick, vdir):
             n_eff = min(win, vr_len - start)
             if n_eff <= 0:
                 continue
-            h_win, got_w, subs = read_hash(path, roi, start, n_eff,
-                                           hybrid(0), True)
-            h_now, got_n, _ = read_hash(path, roi, start, n_eff,
-                                        hybrid(0), False)
-            h_nv, got_v, _ = read_hash(path, roi, start, n_eff,
-                                       gpu(0), False)
-            ok = (h_win == h_now == h_nv and got_w == got_n == got_v == n_eff
-                  and subs == 0)
+            h_win, got_w, subs = read_hash(path, roi, start, n_eff, hybrid(0), True)
+            h_now, got_n, _ = read_hash(path, roi, start, n_eff, hybrid(0), False)
+            h_nv, got_v, _ = read_hash(path, roi, start, n_eff, gpu(0), False)
+            ok = h_win == h_now == h_nv and got_w == got_n == got_v == n_eff and subs == 0
             if not ok:
                 fails += 1
-            print(f"{'OK ' if ok else 'FAIL'} {codec:4s} start={start:5d}"
-                  f" win={n_eff:4d}  hybrid+win={h_win} hybrid={h_now}"
-                  f" nvdec={h_nv} got={got_w}/{got_n}/{got_v}"
-                  f" win_subs={subs}")
+            print(
+                f"{'OK ' if ok else 'FAIL'} {codec:4s} start={start:5d}"
+                f" win={n_eff:4d}  hybrid+win={h_win} hybrid={h_now}"
+                f" nvdec={h_nv} got={got_w}/{got_n}/{got_v}"
+                f" win_subs={subs}"
+            )
     return fails
 
 

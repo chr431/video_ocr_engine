@@ -42,7 +42,7 @@
     path: docs/log/PERFORMANCE.md
     anchor: §21/§22.1
   - commit: 9b5b9cd
-    path: docs\log\2026-09-08-decord-0.8.1升级.md
+    path: docs/log/2026-09-08-decord-0.8.1升级.md
 - id: C-05
   conclusion: hybrid=fork 原生（传输恒宿主输出，C-76）；收益面=TRT；ONNX 不反超→选 nvdec；可见性 2.45×；e2e 见 C-53
   status: active
@@ -50,10 +50,10 @@
   revisit: '>32 核 / 残余=每臂混跑干扰'
   evidence:
   - commit: f7c0333
-    path: docs\log\2026-09-11-hybrid差距分解.md
+    path: docs/log/2026-09-11-hybrid差距分解.md
     anchor: hybrid差距分解
   - commit: e956d3a
-    path: docs\log\2026-09-13-hybrid可见性重评.md
+    path: docs/log/2026-09-13-hybrid可见性重评.md
     anchor: 可见性
 - id: C-07
   conclusion: auto 一例试 NVDEC；批量互补须显式 `cpu` 并核验 `_backend`
@@ -77,7 +77,7 @@
     path: docs/log/DECISIONS.md
     anchor: A2
   - commit: a852b86
-    path: docs\log\2026-09-09-深度性能优化.md
+    path: docs/log/2026-09-09-深度性能优化.md
     anchor: 深度优化
 - id: C-09
   conclusion: GPU 分段+ONNX 无净收益，GPU 管线默认只放行 NVDEC+TRT
@@ -122,7 +122,7 @@
   revisit: pad/预处理架构变更；换模型或字体/ROI 形态
   evidence:
   - commit: e956d3a
-    path: docs\log\2026-09-12-准确项.md
+    path: docs/log/2026-09-12-准确项.md
     anchor: 准确项 §4.1
 - id: C-16
   conclusion: OCR 裁切余量 10% 优于 0%；裁切提准确率（旧"守卫"前提错）
@@ -140,7 +140,7 @@
   revisit: fork/驱动/FFmpeg 换代
   evidence:
   - commit: 9b5b9cd
-    path: docs\log\2026-09-08-decord-0.8.1升级.md
+    path: docs/log/2026-09-08-decord-0.8.1升级.md
     anchor: decord-0.8.1
   - commit: c5d64eb
     path: docs/DEPENDENCIES.md
@@ -176,7 +176,7 @@
   revisit: 大字号字体 / OCR-bound 部署
   evidence:
   - commit: e956d3a
-    path: docs\log\2026-09-12-准确项.md
+    path: docs/log/2026-09-12-准确项.md
     anchor: 准确项 §3
 - id: C-39
   conclusion: '**NVML NVDEC%=在用指示器非占空比**（35% 忙仍读 98%）；忙闲用 fork busy 计数'
@@ -185,7 +185,7 @@
   revisit: 换卡（NVDEC% 语义随卡变）/ fork 换代
   evidence:
   - commit: e956d3a
-    path: docs\log\2026-09-13-hybrid可见性重评.md
+    path: docs/log/2026-09-13-hybrid可见性重评.md
     anchor: 可见性重评
 - id: C-40
   conclusion: '**hybrid 收益与片长相关**：h264 短窗即胜；hevc 交叉 ~1200；av1<3000；纯 CPU 臂三码全片均胜'
@@ -194,7 +194,7 @@
   revisit: 换卡 / GOP 尺寸极端小 / <500 帧短片
   evidence:
   - commit: a3fdc65
-    path: docs\log\2026-09-18-hybrid启动轮.md
+    path: docs/log/2026-09-18-hybrid启动轮.md
     anchor: hybrid启动轮 §4
 - id: C-42
   conclusion: 相似判定 232µs、全片≈21% 但**不在关键路径**（短路实验无改善）
@@ -203,7 +203,7 @@
   revisit: 消费者不再空等 / 段边界密度大增 / 换卡
   evidence:
   - commit: 87d1905
-    path: docs\log\2026-09-13-merge判定代价与短路实验.md
+    path: docs/log/2026-09-13-merge判定代价与短路实验.md
     anchor: merge短路实验
 - id: C-43
   conclusion: '**fill_width×force_aspect 强交互**（224 保持）：fa=1.5 下 224 零误读；仅 fa=0 关填充更准'
@@ -212,7 +212,7 @@
   revisit: 换片源 / 模型换代 / 默认 force_aspect 变更
   evidence:
   - commit: aedb180
-    path: docs\log\2026-09-13-填充宽度重测.md
+    path: docs/log/2026-09-13-填充宽度重测.md
     anchor: 填充宽度
 - id: C-46
   conclusion: '**hybrid=包缓存+供料期 GOP 派工**：Push 只入缓存，泵贪心派工；kick 经泵流序注入；A/B −5~6%'
@@ -221,10 +221,10 @@
   revisit: 换卡 / fork 换代 / 截断流·bf16 重跑
   evidence:
   - commit: c9ac095
-    path: docs\log\2026-09-13-hybrid重设计分支.md
+    path: docs/log/2026-09-13-hybrid重设计分支.md
     anchor: hybrid重设计
   - commit: 5d27201
-    path: docs\log\2026-09-14-hybrid达成率定稿测量.md
+    path: docs/log/2026-09-14-hybrid达成率定稿测量.md
     anchor: 达成率定稿
 - id: C-47
   conclusion: '**OCR 批延迟残差=GPU 链争用**：DEFER_SYNC 一致 e2e 平价；复测周期 +4.6%（16/16）'
@@ -233,7 +233,7 @@
   revisit: 换卡 / TRT 换代 / 解码下 GPU
   evidence:
   - commit: e2b7a7b
-    path: docs\log\2026-09-14-TRT延迟收集流水.md
+    path: docs/log/2026-09-14-TRT延迟收集流水.md
     anchor: TRT延迟收集流水
   - commit: e2b7a7b
     note: 10-09-账本产品化
@@ -244,7 +244,7 @@
   revisit: 换 CPU / openvino 换代 / 内容族大变
   evidence:
   - commit: 7b90814
-    path: docs\log\2026-09-14-OpenVINO模型级A-B.md
+    path: docs/log/2026-09-14-OpenVINO模型级A-B.md
     anchor: OV A/B
   - commit: 51fafff
     note: 10-11 换代
@@ -255,7 +255,7 @@
   revisit: 换卡 / 带 ROI-first 的解码绑定 / 预处理升为关键路径
   evidence:
   - commit: 2086fa6
-    path: docs\log\2026-09-15-依赖替换裁决.md
+    path: docs/log/2026-09-15-依赖替换裁决.md
     anchor: 依赖替换
 - id: C-50
   conclusion: '**DECODE_THREADS（CPU-OCR 口径）维持 auto=10**：d32 墙钟 −1.86% 但 e2e 周期 +13.4%=争用税。GPU-OCR 口径 auto=32
@@ -265,7 +265,7 @@
   revisit: 独占部署（CPU 空闲换墙钟可接受）/ 核数格局变 / OCR 再提速 / decord 预取变
   evidence:
   - commit: 7d9eb3e
-    path: docs\log\2026-09-17-性能监测系统重设计.md
+    path: docs/log/2026-09-17-性能监测系统重设计.md
     anchor: 重设计 §5-§11
   - commit: 7d9eb3e
     note: 10-09-账本产品化
@@ -276,7 +276,7 @@
   revisit: 换卡/机器 / 协议改即 --aa 重标 / trace 转正需锁频
   evidence:
   - commit: 7d9eb3e
-    path: docs\log\2026-09-17-性能监测系统重设计.md
+    path: docs/log/2026-09-17-性能监测系统重设计.md
     anchor: 重设计 §7
 - id: C-53
   conclusion: '**hybrid 基线=目标码最快纯臂**：h264=CPU；hevc/av1=NVDEC→选 hybrid。批量=逐文件串行（pool 已删）'
@@ -285,7 +285,7 @@
   revisit: 换卡 / fork 换代
   evidence:
   - commit: a3fdc65
-    path: docs\log\2026-09-18-hybrid启动轮.md
+    path: docs/log/2026-09-18-hybrid启动轮.md
     anchor: hybrid启动轮
 - id: C-54
   conclusion: '**启动+窗口尾轮：熟前挂起+防饿死盲派+尾 ETA**——盲派 13→2、hevc 交叉 ~1200；H2D 聚合无净收益→关'
@@ -294,7 +294,7 @@
   revisit: 换卡 / fork 换代 / infer 暴露复现日
   evidence:
   - commit: a3fdc65
-    path: docs\log\2026-09-18-hybrid启动轮.md
+    path: docs/log/2026-09-18-hybrid启动轮.md
     anchor: hybrid启动轮
 - id: C-55
   conclusion: '**池复用必须换壳**（复活对象二次死亡不触发 __del__）；旧 Y 池漏 +2.0 MiB/轮'
@@ -303,7 +303,7 @@
   revisit: PyPy finalizer 语义 / 池契约重构
   evidence:
   - commit: db14b38
-    path: docs\log\2026-09-20-审计修复轮.md
+    path: docs/log/2026-09-20-审计修复轮.md
     anchor: 审计修复 §2
 - id: C-58
   conclusion: '**hybrid OCR 双车道（TRT+OV）：回归已消除、无净收益**（OV=TRT 1/3）；见 C-60'
@@ -312,7 +312,7 @@
   revisit: NVDEC 纯解码部署 / 多 NVDEC 卡 / OCR 变重
   evidence:
   - commit: 7ce974c
-    path: docs\log\2026-09-20-批量策略与hybridOCR轮.md
+    path: docs/log/2026-09-20-批量策略与hybridOCR轮.md
     anchor: 批量策略轮 §3-4
 - id: C-59
   conclusion: 宽 ROI 字幕：裁切文本效应=临界字形宽度彩票（C639 不翻/C781 翻），随集波动；性能真收益 −6.6~−9.0%。默认维持
@@ -321,7 +321,7 @@
   revisit: 换模型 / PAD_SMALL×裁切联调 / NVDEC 纯解码 / dbe 变更
   evidence:
   - commit: f442d28
-    path: docs\log\2026-09-20-裁切复测轮.md
+    path: docs/log/2026-09-20-裁切复测轮.md
     anchor: 裁切复测
 - id: C-60
   conclusion: hybrid OCR 奖金池负结果：双车道只兑 −4.9%（TRT 劣化 ~28%+OV 短板）；动态分配不立项
@@ -330,7 +330,7 @@
   revisit: OV 产能>TRT 1/2 / GPU 分离部署（解码/OCR 异卡）
   evidence:
   - commit: 7e8d3ce
-    path: docs\log\2026-09-20-hybridOCR奖金池裁决.md
+    path: docs/log/2026-09-20-hybridOCR奖金池裁决.md
     anchor: hybridOCR裁决
 - id: C-62
   conclusion: '**硬窗架构重做（0.9.0）：绝对帧区间+marker 分离+会话对象化+窗禁替补（win_subs 恒 0）**——根除 C-57 族。矩阵 12/12×5+哈希逐位+七套件'
@@ -339,7 +339,7 @@
   revisit: fork 换代/窗口路径改动（matrix --repeat 5 + window 套件）/换卡/竞态再现
   evidence:
   - commit: e25c836
-    path: docs\log\2026-10-08-收口与窗口架构重做.md
+    path: docs/log/2026-10-08-收口与窗口架构重做.md
     anchor: 窗口架构重做
 - id: C-63
   conclusion: '**周期/指令账本可作 A/B 判据**：QueryProcessCycleTime CV≤2.3%（墙钟 30-36%）、nvdec 守恒 0.965。边界：SMT ±16%
@@ -349,7 +349,7 @@
   revisit: 换机/CPU；线程模型换代
   evidence:
   - commit: cf20282
-    path: docs\log\2026-10-09-周期计数测量首轮.md
+    path: docs/log/2026-10-09-周期计数测量首轮.md
     anchor: 周期首轮
 - id: C-64
   conclusion: '**周期账本产品化（report v7 + bench 判读）**：per_phase 含 cycles + cycles_e2e；ab 自动周期判读（不改退出码）。A/A：cyc:e2e
@@ -359,7 +359,7 @@
   revisit: 换机/换 CPU；周期 A/A 带漂移超 1×SE 重标；BLAS/OV 线程模型换代
   evidence:
   - commit: 1fd8303
-    path: docs\log\2026-10-09-账本产品化与不可判定复测.md
+    path: docs/log/2026-10-09-账本产品化与不可判定复测.md
     anchor: 账本产品化
 - id: C-65
   conclusion: '**跨线程账本（v8）+预处理容量**：full 档逐线程占空。宿主膝点 0.5-1ms/crop 1:1 传导；GPU 臂 SM 余量 ~5×'
@@ -368,7 +368,7 @@
   revisit: 换机/换卡；OCR 提速（余量收窄）；真上重算法前复核膝点
   evidence:
   - commit: 676a036
-    path: docs\log\2026-10-09-跨线程账本与预处理容量.md
+    path: docs/log/2026-10-09-跨线程账本与预处理容量.md
     anchor: 跨线程账本
 - id: C-66
   conclusion: '**0.9.2 时代归因（C-74/76 部分翻案）**：缺口归 CPU 臂欠配+同卡争用；"同卡无免费解"被 C-76 推翻。遗产：尾窗 4→10（av1 CV 2.9%）；三修全反已回滚仍有效'
@@ -377,7 +377,7 @@
   revisit: fork 泵改动后复跑；换卡
   evidence:
   - commit: 0c28cd1
-    path: docs\log\2026-10-09-争用定位与hybrid缺口.md
+    path: docs/log/2026-10-09-争用定位与hybrid缺口.md
     anchor: /10 争用定位
 - id: C-67
   conclusion: '**纯 CPU 配平=静态预算失衡非动态**——h264 轻码 10 档饿、24 档 +27%；hevc/av1 auto 已在峰。动态不可行（OV 线程定死）→编码分档：h264
@@ -387,7 +387,7 @@
   revisit: 换 CPU（3/2 公式重验）；OV 换代；stride>1 域另验
   evidence:
   - commit: 1f7bdcb
-    path: docs\log\2026-10-10-纯CPU争用配平.md
+    path: docs/log/2026-10-10-纯CPU争用配平.md
     anchor: 纯CPU配平
 - id: C-68
   conclusion: '**比例预留/再平衡在 GOP 300×窗 3000 下不可行**：切换税≈分配收益——三变体全劣基线；收益需亚 GOP 派工或无 kick 管线。宿主修法=null（C-75）；GPU

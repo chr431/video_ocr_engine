@@ -1,202 +1,40 @@
-# AGENTS.md — 开发记录与约定（注入核）
+# AGENTS.md — 注入核（过渡版，Phase E 起由渲染生成）
 
-> 本文件在每个会话开头被注入，**只放"现在必须知道的"**。
-> **硬上限 14 KB** — 超了就把内容迁到 `docs/log/DECISIONS.md`，这里只留指针。
+> **制度已重构（2026-10-12，rework/institution）**：宪章=`charter.md`，全部规则/结论/
+> 工具分级的事实源=`registry/`（人读视图由 `tools/render.py` 渲染），引用查询=
+> `python tools/refs.py resolve <C-NN / R-名 / decord@x.y.z>`。本文件 Phase E 起改为
+> charter+registry 的渲染产物，当前为过渡手写版（只含指针，不含事实）。
 
-## 文档地图（7 份治理文档，别再新增；另有 4 份衍生/辅助）
+## 铁律与规则
 
-| 文件 | 性质 | 什么时候读 |
-|---|---|---|
-| `README.md` | 用户向 API / 用法 | 写调用代码时 |
-| `AGENTS.md`（本文件） | 维护者向**注入核**：铁律 + 现役架构 + 结论指针 | 自动注入 |
-| `docs/CONCLUSIONS.md` | **L1 结论索引**（状态/前提/复评触发），唯一允许规范性结论处 | 动手前查结论、出结论写这里 |
-| `docs/log/PERFORMANCE.md` | 性能实验史（**已冻结增长**，新叙事进 `docs/log/`） | 需要实测细节/证据链时 |
-| `docs/log/DECISIONS.md` | 每轮决策过程、已删除功能、设计审查结论 | 想问"为什么这么做"时 |
-| `docs/log/ARCHIVE.md` | 归档（PERF §4 / §8 / §16 / §18），**编号保留勿重编** | 只看"为什么不做" |
-| `docs/DEPENDENCIES.md` | 依赖版本与已知问题 | 装环境 / 报 bug 时 |
-| `docs/MIGRATION.md` | API 迁移表（v0.11→v0.13；**0.14.0 删除清单在这里**） | 改导入路径 / 删 shim 前 |
-| `docs/KNOBS.md` | 旋钮表（render 产物，事实源 `video_ocr_engine/config/knobs.py`） | 查旋钮默认值与依据 |
-| `docs/log/README.md` | `docs/log/` 自己的写作规则（叙事不放规范性语句） | 往 log 写东西前 |
-| `docs/architecture.svg` | README 配图（用户向架构图，**手绘，改架构时同步刷新版本号**） | 改架构 / 发版时 |
-
-⚠️ 现役规则以本文件为准（DECISIONS 是迁出存档，避免两套真相，D6）；
-结论当前状态（active/superseded/dead）以 `docs/CONCLUSIONS.md` 为准。
-
-### ⛔ 查文档前先定位；大文档禁止无 offset 整读
-
-大文档实测（cl100k）：PERFORMANCE ≈ **31k**、ARCHIVE ≈ **28k**、
-DECISIONS ≈ **20k**、INDEX ≈ **9k** tokens——误读一次 PERFORMANCE
-≈ **9 倍**本文件注入成本。**规则：>16 KB 的 md 一律不得无 offset 整读**
-（ZCode PreToolUse hook `tools/_hook_guard_read.py` 会拦并给指引；
-带 offset/limit 的分段读放行）：
-
-```bash
-python tools/_doc_section.py --find <关键词>   # 跨文档按标题定位（≈357 tok）
-python tools/_doc_section.py --toc <文件>      # 目录+token 数（≈838 tok）
-python tools/_doc_section.py <文件> 21         # 只读 §21（支持 16 / 16.8 / 4.4b / A~E）
-```
-
-`--toc` + 单章 ≈ **2,800 tokens**，比整文件读**省 84~96%**；`--find` 只搜标题，
-搜正文用 grep。覆盖面=全部治理文档+docs/log 单篇（含按日叙事）。查结论
-先读 `docs/CONCLUSIONS.md`（≈3k，预算受测试守护）。新增大文档必须带
-≥3 个章节标题（守卫：`tools/_doc_guards.py`，否则无法分章定位）。
-
-## 铁律（先量后做）
-
-1. **先量后做**：任何结论必须带实测数字，禁止凭直觉推断下结论。
-2. **正确性门禁** = 段数 + 唯一文本集（或真值准确率），不是"看起来没问题"。
-3. **只测"文本有没有变"会判错 OCR 的好坏** —— 必须**按帧对齐真值**测准确率；
-   别用置信度当代理（`羸弱→赢弱` 是退化，置信度反而 0.9433→0.9700）。
-4. **均值不能替代逐片检查**：5 片均值 ±0.01pp 曾用来支持"无负面影响"，
-   第 6 片就翻了案。
-5. **真值本身要抽查**：版本、剥零、哨兵、时间基准都可能错
-   （见 DECISIONS「P0-6 翻案」）。
-6. **别按"看起来旧"删脚本**：`tools/` 的探针是**证据链**，删前先查引用
-   （绝大多数被文档、跨探针 import 或文档路径引用锚定）。
-7. **探针放 `tools/_probe_*.py`**（下划线前缀 = 调查工具，不随产品发布）。
-8. **结论分离**：结论一行进 `docs/CONCLUSIONS.md`（必须带状态/前提/复评
-   触发），实验叙事进 `docs/log/`（PERFORMANCE.md 已冻结增长）；历史章节
-   不回溯重写。版本号改动必须打同名 git tag；用户不可见的优化/修复一律
-   bump patch（minor=行为/API 变化）。
-9. **迁移清扫**：依赖升级 / 大迁移落地时，逐条复核结论的"前提/触发"
-   并翻状态（active / superseded / dead）——执行体
-   `python tools/conclusions_sweep.py`（列钉版落后与触发命中的清单，
-   发版时必跑；翻状态前先看证据）。
-10. **向后兼容**：新功能默认关闭，除非明确作为新默认；新增遗留面一律先标
-   deprecated、两个版本后删除。
+见 `registry/rules.yaml`（35 条：ci 18 / local-gate 7 / advisory 9；每条含执行体与所防
+事故）。最高约束见 `charter.md`（七条不变量）。
 
 ## 现役架构
 
-链路：**解码 → 像素分段 → 代表帧 → OCR → 相似段合并**
-
-| 阶段 | 入口 |
-|---|---|
-| 解码 | `decord.VideoReader.get_batch`（**唯一入口**；hybrid 走 decord 原生 ctx；打开与格式适配在 `video_ocr_engine/decode/decord_source.py`，DecordFrameSource=FrameSource 端口接线） |
-| 分段 | `video_ocr_engine/domain/segmentation.py` |
-| 编排引擎 | `video_ocr_engine/pipeline/engine.py`（SegmentEngine 唯一入口，EngineInputs 显式 run 契约；生命周期单出处 `_driver.py`，lane 策略；策略纯函数 `video_ocr_engine/pipeline/policy.py`） |
-| 宿主后端 | `video_ocr_engine/pipeline/host_backend.py` |
-| GPU 后端 | `video_ocr_engine/pipeline/gpu_backend.py`（gray+NVDEC+TRT 默认；设备侧拆分：gpu 包 pools=池/streams=流/device=探测） |
-| OCR 会话 | `video_ocr_engine/pipeline/ocr_stage.py`（SessionSpec 契约；CPU 引擎=OpenVINO 唯一，C-48） |
-| OCR 调度 / 引擎池 | `video_ocr_engine/ocr/native.py` |
-| TRT | `video_ocr_engine/ocr/trt.py` + `video_ocr_engine/_gpu_kernels.py` |
-| 配置常量 | `video_ocr_engine/config/constants.py`；旋钮注册表 `video_ocr_engine/config/` |
-| 运行报告 | `video_ocr_engine/pipeline/report.py`（RunReport schema **v9** → `meta['report']`；层级图=metrics.py 模块头）；指标注册表 `video_ocr_engine/domain/metrics.py`；资源层 `video_ocr_engine/domain/resources.py`（L1 边界差分 / L2 NVML） |
-| 分相打桩 | `video_ocr_engine/domain/prof.py` 的 `ProfSpine`（**单一计时脊柱**：同一 t0 喂 profile 与指标；门面 `_prof_end` 薄委托） |
-| 性能 A/B | `tools/bench.py`（`run`/`diff`/`show`/`ab`/`telemetry-check`；报告落 `bench/registry.jsonl`） |
-
-⚠️ **A/B 必须交错**（`bench ab`，2026-09-17 起含臂序轮转 + GPU 时钟门禁
-+ 自动判定）：同码连跑两次实测可差 **7.7%**（GPU 热降）。⚠️ **门禁阈值
-≥ 本机可分辨下限**：先 `bench telemetry-check --aa` 标定（阈值=|偏差|+3×SE）；
-ab 子进程协议另有 `ab --aa` 标定。**标定值、判定判据、hybrid 评估基线
-（C-53：对照臂=目标码最快纯臂）等细则的执行体在 `knowledge/rules.yaml`，
-本文件不重复数字（防双份漂移）**；µs 级严格性见
-`tests/config/test_telemetry_cost.py`。
-⚠️ **遥测两档**（0.22.0，D30）：off=发布默认；full=调试/bench 默认
-（成本限 ≤1.2%，改遥测跑成本守卫+`--aa` 重标）；std=别名→full（0.24.0 拒收）。
-
-**现役并行维度只有一个**：`decode_backend="hybrid"` 的 CPU+NVDEC 双解码，
-**已由 decord fork 原生实现**（`hybrid`/`hybrid_gpu` ctx，引擎只透传解码
-参数；旧项目层实现已删，迁移见 PERF §24）。**没有 dual pipeline、没有
-`DUAL_*` 环境变量、没有 `_dual_pipeline.py`** —— 历史提及均为旧档案，勿据此调优。
-
-其他现役事实：
-
-- **引擎内部恒为单通道灰度**：decord 只输出 `'yuv420'`（keep_crops 且
-  `rep_crop_format="yuv"`）或 `'gray'`；旧 `gray_output`/`yuv_output` 已删除。
-- **相似段合并**在分离图上进行，默认 `binary`（`TEXT_SEP_MERGE=binary|off`）。
-- **GPU 管线门控**：gray + `decode∈{auto,nvdec,cpu}` + `ocr≠cpu` + NVDEC/TRT
-  可用时自动启用；`GPU_PIPELINE=0` 关 / `=1` 强制。GPU+ONNX 组合实测无净收益。
-- **OCR 引擎池**：`_POOL_MAX_PER_KEY=4`、`_POOL_MAX_TOTAL=16`，
-  key=(model, type, fill_width, threads)。
-
-## 已封板结论 → `docs/CONCLUSIONS.md`
-
-结论全表在 `docs/CONCLUSIONS.md`（计数快照不维护，防漂移），只留
-最易踩的六条：
-
-- 并发退化真因 = **NVDEC 会话数**；互补配对首选 NVDEC∥CPU，聚合 1.87×（PERF §21）
-- `auto` **恒为 NVDEC 优先**（刻意决策，C-08：本机 h264 CPU 虽快 1.7~2.8×，
-  但弱 CPU 可能反慢且必带争用/功耗代价，峰值才选显式 cpu）。**批量吞吐 =
-  逐文件顺序跑**（串行快于一切跨视频并发；`pool.run` 已删，C-52→C-53）
-- GPU 分段 + ONNX OCR 无净收益，门控只放行 NVDEC+TRT（PERF §9）
-- hybrid 已迁 **decord 原生**（现役架构=包缓存+供料期 GOP 派工与达成率
-  数字见 C-46/C-66）；**kick 必须经泵按流序注入**（错位=IDR 冲掉重排窗
-  →遮蔽损坏，fork 级测不出）；**e2e 评估基线=目标码最快纯臂（C-53 勿再
-  用错）**，窗口须越过该码交叉点（C-40）；fork 遥测经 `vr.hybrid_stats()`
-  直通 RunReport；fp16 已产品化（`TRT_FP16=1`，opt-in）；CUDA Graph
-  无收益已移除；旧机制（计划/视界/REPLAN/债务克隆）已删除
-- **合并判定默认带「稠密簇门」**（`segment.merge_dense_gate`）：遥测内容不再合并，
-  段数比此前高 1~4%（C-38）
-
-## 编辑护栏（docs/log/PERFORMANCE.md）
-
-✅ **纯 LF，裸 CR = 0**（2026-08-31 曾清 934 处；成因与「工具不安全」
-旧规勘误见 DECISIONS「编辑护栏」）；自检 `count(b'\r')==0`，防护
-`tests/test_docs_hygiene.py`（判据单源 `tools/_doc_guards.py`）。
-
-## 纪律与自动化守卫
-
-**两级合规**（2026-10-10 定形）：**标准入口 = `tools/check.py`**——
-daily（pytest+快检+金标 smoke ≈47s，迭代默认）/ release（全量审计+金标
-full+发版清扫 ≈2min），每步计时；细粒度入口（非 0 即违规；渲染一致性/
-结论路径活性已折入审计）：
-
-```bash
-python tools/check.py                  # 两级链（默认 daily；--tier release 发版）
-python tools/_probe_discipline_audit.py --since HEAD   # 日常快检（变更 .py）
-python tools/_probe_index_audit.py                     # INDEX 数字漂移 --fix 自动校准
-```
-
-**单一实现**：裸 CR / 注入预算 / 各文档预算的判据与常量只在
-`tools/_doc_guards.py`——审计与 pytest 都从它取数（此前三处各写一遍，
-两处常量迟早分叉）。**mypy 面**：以 pyproject `[tool.mypy] files` 为唯一描述源。**代码风格**：
-pyproject `[tool.ruff]` 成文（formatter=双引号/行宽 100 单一执行面，
-CI `ruff format --check` 挡增量；lint 精选集不扩）。**发版清扫**=
-`conclusions_sweep.py`（铁律 9 执行体）；**测量原语**=tools/_measure_lib.py（注册表/指纹/配对 A/B，先复用）。
-
-松绑速记：INDEX 计数不符→`--fix`；L2 live 外一律 frozen（名单由
-index 审计【6】守护）；版本 bump 未推送=warn；金标 smoke 迭代/full 发布；
-CI 红自动开 issue（ci-watchdog）。
-
-几条容易踩、且已自动化的：
-
-- **路径不许写死**：仓库内路径一律 `__file__` 推导；外部视频走环境变量
-  （`RACELOG_VIDEO_DIR` / `RACELOG_BATCH_DIR`）；**ffmpeg/decord 一律经
-  `tools/env_probe.py` 解析**（`from env_probe import ffmpeg_bin`）——
-  2026-09-19 纪律轮：4 处硬编码 ffmpeg 路径 3 处失效，因「tools/ 豁免」
-  无人察觉（审计项 1/13 已不再豁免）。环境异常先跑 `env_doctor.py`；
-  改完 decord C++ 跑 `rebuild_dev.bat`（构建即部署，md5 自动校验）。
-  ⚠️ `WORKER = r"""..."""` 子进程模板是特例：`python -c` 下 `__file__`
-  未定义，须靠父进程注入 `PROBE_ROOT`（`_probe_cpu_onnx.py` 例外：
-  子进程 cwd 是旧 worktree，必须插 cwd）。
-- **`except … pass` 不许无声**：要么 `logger.debug`，要么 `pass  # 为何可忽略`
-  （存量 63 处登记在 `tools/_discipline_baseline.json`，**存量豁免、增量严格**；
-  改到该文件时顺手补注释即自然脱出）。`except BaseException` 仅清理路径允许。
-- **产品代码的 print 必须受 debug 开关保护**（`env_bool(DEBUG_BOUNDS_ENV)` /
-  `self._probe`），否则走 `logging`。docstring 里的用法示例不算。
-- **未使用的 import**：有意 re-export 加 `# noqa: F401`，否则删掉。
-- **探针分层（L2）**：`tools/INDEX.md`「探针状态」是唯一权威——只有 `live`
-  名单里的探针有修复义务，其余默认 `frozen`（证据已封板 → 豁免活性检查，
-  重构不必修）；新增 live 须写理由；**计数不写死**（防漂移，名单由
-  index 审计【6】守护）。
-- **六个根模块 shim 已于 0.14.1 删除**（`engine_config` / `gpu_setup` /
-  `ocr_native` / `ocr_trt` / `segmentation` / `video_utils`）——旧路径不可
-  导入，改用包内路径（`video_ocr_engine.config.constants` 等）。下游
-  （RaceVideoToLog 33 文件 / video_subtitle_extractor）已先行迁移；
-  迁移表 `docs/MIGRATION.md` §1。
-- **文档裸 CR = 0、AGENTS.md ≤ 14 KB、CONCLUSIONS 预算**：
-  `tests/test_docs_hygiene.py` 守护，判据单一实现于 `tools/_doc_guards.py`。
+链路与各阶段入口见 `registry/architecture.yaml`（唯一事实源）。要点：解码 → 像素分段 →
+代表帧 → OCR → 相似段合并；hybrid 双解码已由 decord fork 原生实现（引擎只透传）。
 
 ## 环境与命令
 
-- Python：`c:/Users/eric chen/AppData/Local/Programs/Python/python313/python.exe`
-  （项目环境；PATH `python` 本机即它，换环境先自证 numpy）。pytest / numpy / psutil / cuda.bindings / decord
-  均可用。
-- 硬件：RTX 4060（**单 NVDEC 单元**）/ 16C32T / 2×16GB DDR5-6000
-  （流式实测 **55.8 GB/s**）。
-- 测试视频 `D:\Videos\racelog_test\`，真值在 `ground_truth_csv/`
-  （头是 `# roi=...`，**必须用正则取四个整数**，按逗号切只能拿到第一个）。
-  ⚠️ **该目录全部视频一律 `sample_stride=1`**（2026-09-10 重申，防漏信息）；
-  `stride>1` 只用于字幕提取场景（字幕更新频率慢）。
-- 中文输出需 `sys.stdout.reconfigure(encoding="utf-8")`（GBK 控制台会崩）。
-- `tools/` 子目录下 `sys.path[0]` 是 tools/，探针须 `sys.path.insert(0, 上级目录)`。
+本机与外部事实（python/硬件/decord 钉版/测试视频目录）见 `registry/environment.yaml`。
+
+- 合规链：`python tools/check.py`（daily）/ `--tier release`（发版：金标 full+清扫 --strict）
+- 性能 A/B：`python tools/bench.py ab`（交错+时钟门禁；阈值先 `--aa` 标定；hybrid 对照臂=
+  目标码最快纯解码臂，C-53）
+- 引用查询：`python tools/refs.py resolve C-53`
+- 视图重渲染：`python tools/render.py --write`
+- 环境异常：`python tools/env_doctor.py`；改 decord C++ 后 `rebuild_dev.bat`
+- 金标：`python tests/golden/record.py --verify [--tier smoke]`
+
+## 探针与工具
+
+standing（常备，质量面=生产代码）住 `tools/`；probe（一次性取证）住 `tools/probes/`，
+近两轮出树。清单见 `tools/INDEX.md`（渲染产物）。历史探针/大档案/旧 log 一律在 git
+（`archive/pre-rework` tag 锚点起），不在工作树。
+
+## 提交纪律
+
+结论进 `registry/conclusions.yaml`（带 commit 锚点 evidence），叙事进当轮 log
+（`docs/log/YYYY-MM-DD-主题.md`，发版出树），提交信息=结果一句话+指针（≤600 字符）。
+版本 bump 判据与 tag 对账见宪章不变量 3。

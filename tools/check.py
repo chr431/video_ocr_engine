@@ -17,6 +17,7 @@ AGENTS 里。本脚本把两级合规固化成一条命令，每步带计时与�
 降级：无真值视频环境（CI/新机）自动跳过金标步并标注 SKIP；步骤失败
 即非 0 退出，汇总表给全量结果。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -34,8 +35,9 @@ sys.stdout.reconfigure(encoding="utf-8")
 def _has_videos() -> bool:
     try:
         from env_probe import video_dir
+
         return os.path.isfile(os.path.join(video_dir(), "test5.mp4"))
-    except Exception:                    # noqa: BLE001 — 环境事实
+    except Exception:  # noqa: BLE001 — 环境事实
         return False
 
 
@@ -43,6 +45,7 @@ def _golden_case_count() -> str:
     """金标用例数动态取（防标签自漂移——用例增删不用改本文件）。"""
     try:
         import glob as _glob
+
         n = len(_glob.glob(os.path.join(ROOT, "tests", "golden", "case-*")))
         return str(n) if n else "?"
     except OSError:
@@ -51,24 +54,37 @@ def _golden_case_count() -> str:
 
 STEPS = {
     "pytest": ("pytest -q（全量单测）", [sys.executable, "-m", "pytest", "tests/", "-q"]),
-    "audit": ("纪律审计", [sys.executable, "tools/_probe_discipline_audit.py"]),
-    "index": ("INDEX 一致性审计", [sys.executable, "tools/_probe_index_audit.py"]),
-    "golden_smoke": ("金标 smoke（3 用例）",
-                     [sys.executable, "tests/golden/record.py", "--verify", "--tier", "smoke"]),
-    "golden_full": ("金标 full（%s 用例）" % _golden_case_count(),
-                    [sys.executable, "tests/golden/record.py", "--verify"]),
-    "sweep": ("发版清扫（结论钉版清单）",
-              [sys.executable, "tools/conclusions_sweep.py", "--strict"]),
+    "refs": ("引用解析（substrate）", [sys.executable, "tools/refs.py", "check"]),
+    "render": ("渲染一致性（四视图）", [sys.executable, "tools/render.py", "--check"]),
+    "ext": ("结构化审计（按名注册）", [sys.executable, "tools/_audit_ext.py"]),
+    "golden_smoke": (
+        "金标 smoke（3 用例）",
+        [sys.executable, "tests/golden/record.py", "--verify", "--tier", "smoke"],
+    ),
+    "golden_full": (
+        "金标 full（%s 用例）" % _golden_case_count(),
+        [sys.executable, "tests/golden/record.py", "--verify"],
+    ),
+    "sweep": (
+        "发版清扫（结论钉版清单）",
+        [sys.executable, "tools/conclusions_sweep.py", "--strict"],
+    ),
 }
-DAILY = ["pytest", "audit_since", "index", "golden_smoke"]
-RELEASE = ["pytest", "audit", "index", "golden_full", "sweep"]
+DAILY = ["pytest", "refs", "render", "ext", "golden_smoke"]
+RELEASE = ["pytest", "refs", "render", "ext", "golden_full", "sweep"]
 
 
 def run_step(name: str, cmd: list, timeout: int) -> tuple[str, float, str]:
     t0 = time.perf_counter()
-    r = subprocess.run(cmd + (["--since", "HEAD"] if name == "audit_since" else []),
-                       cwd=ROOT, capture_output=True, text=True,
-                       encoding="utf-8", errors="replace", timeout=timeout)
+    r = subprocess.run(
+        cmd,
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+    )
     ok = "✓" if r.returncode == 0 else "✗"
     return ok, time.perf_counter() - t0, (r.stdout or "") + (r.stderr or "")
 
@@ -88,8 +104,7 @@ def main() -> int:
     print("=" * 72)
     results, failed = [], []
     for name in plan:
-        key = "audit" if name == "audit_since" else name
-        label, cmd = STEPS[key]
+        label, cmd = STEPS[name]
         if name.startswith("golden") and not has_vid:
             results.append((name, label, "SKIP", 0.0))
             continue
@@ -111,8 +126,7 @@ def main() -> int:
         return 1
     if skipped:
         # SKIP 不冒充通过：金标未验证这一事实必须出现在汇总末行（2026-10-12）。
-        print("\n△ %s 链部分通过（跳过：%s——金标未验证）"
-              % (args.tier, ", ".join(skipped)))
+        print("\n△ %s 链部分通过（跳过：%s——金标未验证）" % (args.tier, ", ".join(skipped)))
         return 0
     print("\n✓ %s 链全部通过（总 %.1fs）" % (args.tier, sum(d for _, _, _, d in results)))
     return 0

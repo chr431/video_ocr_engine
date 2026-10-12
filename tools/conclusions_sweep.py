@@ -21,6 +21,7 @@
 版本事实源：引擎 = video_ocr_engine/config/constants.__version__；
 decord = import decord（装不到按环境事实跳过该列，与审计 decord_pin 同语义）。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -43,8 +44,7 @@ def _ver_tuple(s: str) -> tuple[int, ...]:
 
 
 def _load_entries() -> list[dict]:
-    text = io.open(os.path.join(ROOT, "knowledge", "conclusions.md"),
-                   encoding="utf-8").read()
+    text = io.open(os.path.join(ROOT, "registry", "conclusions.yaml"), encoding="utf-8").read()
     entries, cur = [], None
     for line in text.split("\n"):
         m = re.match(r"- id: (\S+)", line)
@@ -56,28 +56,32 @@ def _load_entries() -> list[dict]:
             continue
         m = re.match(r"  (conclusion|status|premises|revisit): (.*)", line)
         if m:
-            cur[m.group(1)] = m.group(2).strip()
+            # yaml 渲染值可能带单引号包裹，钉版扫描前剥掉
+            cur[m.group(1)] = m.group(2).strip().strip("'")
     return entries
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--strict", action="store_true",
-                    help="存在落后钉版时退出 1（发版钩子用）")
+    ap.add_argument("--strict", action="store_true", help="存在落后钉版时退出 1（发版钩子用）")
     args = ap.parse_args()
 
     import video_ocr_engine.config.constants as constants
+
     engine_ver = constants.__version__
     decord_ver = None
     try:
         import decord
+
         decord_ver = decord.__version__
-    except Exception:                              # noqa: BLE001
+    except Exception:  # noqa: BLE001
         pass  # decord 未装=环境事实（CI 只装引擎），该列跳过、不判失败
 
     print("=" * 70)
-    print("发版清扫：结论钉版 vs 当前版本（引擎 %s，decord %s）"
-          % (engine_ver, decord_ver or "未安装"))
+    print(
+        "发版清扫：结论钉版 vs 当前版本（引擎 %s，decord %s）"
+        % (engine_ver, decord_ver or "未安装")
+    )
     print("=" * 70)
 
     stale, current_anchor, trigger_info = [], [], []
@@ -89,14 +93,14 @@ def main() -> int:
             pin = m.group(1)
             # 钉版类别按上下文词判定（跨类比较是噪音：decord 钉 0.8.3 与
             # 引擎 0.23.3 无关）。认不出类别时对两类都比，宁多列不漏列。
-            ctx = blob[max(0, m.start() - 10):m.end() + 6]
+            ctx = blob[max(0, m.start() - 10) : m.end() + 6]
             kinds = []
             if re.search(r"fork|decord|wheel", ctx, re.I):
                 kinds.append("decord")
             if re.search(r"引擎|engine", ctx, re.I):
                 kinds.append("engine")
             cur_of = {"engine": engine_ver, "decord": decord_ver}
-            for kind in (kinds or ["engine", "decord"]):
+            for kind in kinds or ["engine", "decord"]:
                 cur = cur_of[kind]
                 if not cur:
                     continue
@@ -114,17 +118,21 @@ def main() -> int:
     else:
         print("\n复评候选：无（没有落后于当前版本的钉版）")
     if current_anchor:
-        print("\n当轮锚点（钉版 == 当前版本，正常，无需动作）：%s"
-              % ", ".join("%s(%s)" % (c, p) for c, p, _ in current_anchor))
+        print(
+            "\n当轮锚点（钉版 == 当前版本，正常，无需动作）：%s"
+            % ", ".join("%s(%s)" % (c, p) for c, p, _ in current_anchor)
+        )
     if trigger_info:
         print("\n触发词命中（换代/换卡类，信息性）：")
         for cid, t in trigger_info:
             print("  %-6s %s" % (cid, t))
 
-    print("\n处理：确认失效→状态翻 superseded/dead 并把全文迁"
-          " docs/log/2026-09-10-conclusions-history.md；仍成立→钉版改为当前"
-          "版本或补注前提。两仓口径（DEPENDENCIES decord 行）由审计项"
-          " decord_pin 独立守护。")
+    print(
+        "\n处理：确认失效→状态翻 superseded/dead 并出源（全文随出源提交进"
+        " git 档案，检索经 commit 锚点）；仍成立→钉版改为当前版本或补注"
+        "前提。两仓口径（registry/environment.yaml 钉版）由审计项"
+        " decord_pin 独立守护。"
+    )
     if stale and args.strict:
         return 1
     return 0
