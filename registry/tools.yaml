@@ -1,4 +1,4 @@
-# 工具注册表——standing/probe 分级（裁决 18）的唯一事实源
+# 工具注册表——standing/probe 分级的唯一事实源
 #
 # tier 判据（机器可判，不靠"常用"直觉）：
 #   standing = 被规则 executor 引用，或被产品/测试 import，或为测量/门禁基建
@@ -57,7 +57,7 @@
   why: 各后端解码速率基准（bench 家族）
 - id: health.py
   tier: standing
-  why: KPI 计算→registry/kpi.yaml（S1 §5 自我约束执行体；HEALTH.md 视图源）
+  why: KPI 计算→registry/kpi.yaml（自我约束执行体；HEALTH.md 视图源）
 - id: version_advice.py
   tier: standing
   why: R-version-tag/R-version-advice 执行体（API 面 dump/档位判据/verify/金标 manifest/bench 快照）

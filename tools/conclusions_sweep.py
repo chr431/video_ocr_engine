@@ -229,7 +229,7 @@ def _print_comment_coordinates() -> None:
                 for kind, mt in _comment_hits(seg):
                     hits.append("%s:%d  %s  %s" % (rel, ln, kind, mt))
                     break
-    for cfg in ("pyproject.toml", ".github/workflows/ci.yml", ".gitignore"):
+    for cfg in ("pyproject.toml", ".github/workflows/ci.yml", ".gitignore", ".rgignore"):
         p = ROOT_PATH / cfg
         if not p.is_file():
             continue

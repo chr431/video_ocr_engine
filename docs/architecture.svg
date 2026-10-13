@@ -91,10 +91,10 @@
   <!-- 统一实现文件（左侧大标注） -->
   <rect x="24" y="200" width="500" height="128" class="unified" rx="10"/>
   <text x="274" y="224" text-anchor="middle" class="lbl" fill="#8a5a00" font-size="15">segmentation.py —— 分段 + 预处理统一实现（双管线唯一出处）</text>
-  <text x="40" y="248" class="sub">§1 像素原语：批量灰度（g_buf 复用）/ NV12 Y 展开 / Otsu（帧+直方图）/ win3 聚类</text>
-  <text x="40" y="268" class="sub">§2 校准与判定：otsu_median_threshold · similar_decision（两阈值判据）· similar_binary</text>
-  <text x="40" y="288" class="sub">§3 SegmentStateMachine：断段/代表帧/合并统一编排 —— 宿主喂 bin，GPU 喂 cluster 分数</text>
-  <text x="40" y="308" class="sub">§4 裁切与预处理：content_range_to_crop 余量+门槛 · crop_to_content / crop_after_aspect（顺序⑦）</text>
+  <text x="40" y="248" class="sub">像素原语：批量灰度（g_buf 复用）/ NV12 Y 展开 / Otsu（帧+直方图）/ win3 聚类</text>
+  <text x="40" y="268" class="sub">校准与判定：otsu_median_threshold · similar_decision（两阈值判据）· similar_binary</text>
+  <text x="40" y="288" class="sub">SegmentStateMachine：断段/代表帧/合并统一编排 —— 宿主喂 bin，GPU 喂 cluster 分数</text>
+  <text x="40" y="308" class="sub">裁切与预处理：content_range_to_crop 余量+门槛 · crop_to_content / crop_after_aspect（顺序⑦）</text>
   <path d="M524,264 H560 V303" class="flow" style="stroke:#c47f17;stroke-dasharray:5 3" fill="none"/>
   <path d="M524,264 H540 V117 H560" class="flow" style="stroke:#c47f17;stroke-dasharray:5 3" fill="none"/>
 

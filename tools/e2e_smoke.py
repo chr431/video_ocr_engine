@@ -219,7 +219,7 @@ def main():
         type=int,
         default=1,
         help="采样步长（默认 1；⚠️ racelog_test 全部视频一律 "
-        "stride=1 防漏信息——2026-09-10 用户重申；stride>1 "
+        "stride=1 防漏信息；stride>1 "
         "仅用于字幕场景：字幕更新频率慢，允许稀疏采样）",
     )
     ap.add_argument("--configs", default=",".join(CONFIGS), help="功能矩阵配置名，逗号分隔")

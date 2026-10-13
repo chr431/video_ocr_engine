@@ -364,7 +364,7 @@ def verify_case(case: dict) -> tuple[list[str], bool]:
 
 def write_manifest(env: dict, vids_sha: dict) -> None:
     lines = [
-        "# S0 金标向量清单——录制基准与期望哈希（由 record.py 生成，人不得手改）",
+        "# 金标向量清单——录制基准与期望哈希（由 record.py 生成，人不得手改）",
         "environment:",
     ]
     for k, v in env.items():
@@ -408,9 +408,7 @@ def main() -> int:
         choices=("full", "smoke"),
         help="smoke=3 用例 ≈30s（迭代用）；full=全量（发布/合并）",
     )
-    ap.add_argument(
-        "--verify", action="store_true", help="重跑并与已录向量比对（S0 门禁：哈希一致）"
-    )
+    ap.add_argument("--verify", action="store_true", help="重跑并与已录向量比对（门禁：哈希一致）")
     args = ap.parse_args()
     cases = [c for c in MATRIX if not args.case or args.case in c["id"]]
     if args.tier == "smoke":
