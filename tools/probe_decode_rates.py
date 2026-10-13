@@ -119,7 +119,7 @@ def main():
 
     try:
         assert_machine_quiet()
-    except BackgroundLoadError as e:  # noqa: BLE001 — 门禁语义：超阈退出
+    except BackgroundLoadError as e:  # 门禁语义：超阈退出
         print(e)
         raise SystemExit(2)
     ap = argparse.ArgumentParser()

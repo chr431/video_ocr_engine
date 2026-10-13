@@ -373,7 +373,7 @@ class OcrSession:
             k32 = ctypes.windll.kernel32
             if not k32.SetThreadPriority(k32.GetCurrentThread(), 1):
                 pass  # 设置失败（句柄/权限）：维持 NORMAL，无正确性影响
-        except Exception:  # noqa: BLE001,S110 — ctypes 缺失/调用失败：维持 NORMAL，无正确性影响（见上 docstring）
+        except Exception:  # noqa: S110 — ctypes 缺失/调用失败：维持 NORMAL，无正确性影响（见上 docstring）
             pass  # ctypes 缺失/调用失败：维持 NORMAL，无正确性影响（见上 docstring）
 
     def _worker(self) -> None:
@@ -488,7 +488,7 @@ class OcrSession:
                         from video_ocr_engine.ocr.native import ocr_lane_prep
 
                         _lane_prep = ocr_lane_prep(eng)
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         logger.debug("车道 prep 挂载失败，回退宿主路径", exc_info=True)
                         _lane_prep = None
                 # TRT_DEFER_SYNC（默认关）：单 TRT 引擎 + raw 直通批走深度 2
@@ -786,7 +786,7 @@ class OcrSession:
                 # 超时对齐 finish() 的 10s 哲学：infer 线程卡设备调用时不无限
                 # 等待，超时后由 daemon 兜底 + err 路径上报。
                 t.join(10.0)
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             # BaseException 而非 Exception：worker 逃逸的异常若不被记录，
             # self.err 恒空 → put/finish 的等待循环失去唯一出口 = 挂死。
             # 此处全接并记录（KeyboardInterrupt 等仍会被 put/finish 以

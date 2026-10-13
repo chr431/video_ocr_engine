@@ -111,6 +111,13 @@
   prevents: S0-G4（baseline 豁免账本腐化为 23 处被动余量）
   since: 2026-10-12
 
+- id: R-exemption-live
+  statement: 豁免必须仍在生效——未用/未启用的 noqa 即红（RUF100）、未用 type:ignore 即红（warn_unused_ignores）、负测夹具整文件豁免须真含坏样例（audit 自证）、hardcode-ok 须带非空理由
+  enforcement: ci
+  executor: pyproject.toml#ruff/mypy 配置 + tools/_audit_ext.py#negative_fixtures + tools/env_doctor.py#hardcode-ok
+  prevents: S0-G4（豁免腐化族）；2026-10-13 审计实测惰性 noqa 95 处、死 type:ignore 6 处
+  since: 2026-10-13
+
 - id: R-knob-registry
   statement: 旋钮进 config/ 注册表，未注册名不得读取；默认值依据 rationale 可解析（指 R-/C- id）
   enforcement: ci

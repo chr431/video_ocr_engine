@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from video_ocr_engine import FieldExtractor  # noqa: E402
+from video_ocr_engine import FieldExtractor
 
 BACKENDS = {
     "nvdec": dict(decode_backend="nvdec", ocr_backend="auto"),
@@ -92,7 +92,7 @@ def main():
 
     try:
         assert_machine_quiet()
-    except BackgroundLoadError as e:  # noqa: BLE001 — 门禁语义：超阈退出
+    except BackgroundLoadError as e:  # 门禁语义：超阈退出
         print(e)
         raise SystemExit(2)
     if hasattr(sys.stdout, "reconfigure"):

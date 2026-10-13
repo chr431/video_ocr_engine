@@ -143,7 +143,7 @@ def _gpu_state() -> str:
         if int(nvml.nvmlDeviceGetPowerUsage(h, ctypes.byref(pw))) == 0:
             parts.append("power=%dmW" % (pw.value // 1000))
         return " ".join(parts) or "n/a"
-    except Exception:  # noqa: BLE001
+    except Exception:
         return "n/a"
 
 
@@ -171,7 +171,7 @@ def _sm_max_clock() -> int | None:
         if int(nvml.nvmlDeviceGetMaxClockInfo(h, 1, ctypes.byref(c))) != 0:
             return None
         return int(c.value)
-    except Exception:  # noqa: BLE001 无 NVML = 本机不可判，不是错误
+    except Exception:  # 无 NVML = 本机不可判，不是错误
         return None
 
 
@@ -264,7 +264,7 @@ def _set_priority_above_normal() -> bool:
         return bool(
             k.SetPriorityClass(ctypes.c_void_p(-1), 0x00008000)
         )  # ABOVE_NORMAL_PRIORITY_CLASS
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 

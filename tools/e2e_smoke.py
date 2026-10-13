@@ -37,8 +37,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
-from video_ocr_engine import FieldExtractor  # noqa: E402
-from video_ocr_engine.domain.video_utils import nvdec_available, tensorrt_available  # noqa: E402
+from video_ocr_engine import FieldExtractor
+from video_ocr_engine.domain.video_utils import nvdec_available, tensorrt_available
 
 CONFIGS = {
     "gpu_yuv": dict(ocr_backend="auto", rep_crop_format="yuv"),

@@ -123,7 +123,7 @@ def _version_of(exe: Path, args: tuple[str, ...] = ("-version",)) -> str:
                 if t == "version" and i + 1 < len(toks):
                     return toks[i + 1]
             return toks[0][:40]
-    except Exception:  # noqa: BLE001,S110 — 无版本号只影响显示，不改变依赖可用性结论
+    except Exception:  # noqa: S110 — 无版本号只影响显示，不改变依赖可用性结论
         pass  # 无版本号只影响显示，不改变依赖可用性结论
     return ""
 
@@ -135,7 +135,7 @@ def _md5(path: Path) -> str:
             for chunk in iter(lambda: f.read(1 << 20), b""):
                 h.update(chunk)
         return h.hexdigest()
-    except Exception:  # noqa: BLE001 — 读不到就不给摘要
+    except Exception:  # 读不到就不给摘要
         return ""
 
 
@@ -188,7 +188,7 @@ def decord_fact(expect_dll: Path | None = None, *, install_mode: str = "auto") -
         if spec is None or not spec.submodule_search_locations:
             raise ImportError("decord 未安装")
         pkg = Path(list(spec.submodule_search_locations)[0])
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return EnvFact("decord", None, "", note="定位 decord 失败: %r" % (e,))
     dll = pkg / "decord.dll"
     if not dll.is_file():
@@ -198,7 +198,7 @@ def decord_fact(expect_dll: Path | None = None, *, install_mode: str = "auto") -
         from importlib.metadata import version as _v
 
         ver = _v("decord")
-    except Exception:  # noqa: BLE001 — 元数据缺失不影响事实记录
+    except Exception:  # 元数据缺失不影响事实记录
         ver = "?"
     fact = EnvFact(
         "decord",
@@ -214,7 +214,7 @@ def decord_fact(expect_dll: Path | None = None, *, install_mode: str = "auto") -
 
             files = _dist("decord").files or []
             install_mode = "wheel" if any(str(f).endswith("decord.dll") for f in files) else "dev"
-        except Exception:  # noqa: BLE001 — 元数据不可用则按 dev 保守处理
+        except Exception:  # 元数据不可用则按 dev 保守处理
             install_mode = "dev"
     if install_mode == "wheel":
         fact.note = ""  # wheel 自带 DLL，无"过期"概念

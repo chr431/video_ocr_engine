@@ -217,7 +217,7 @@ def environment() -> dict:
                 break
         else:
             env["ocr_engine"] = None
-    except Exception:  # noqa: BLE001 无 TRT/无引擎时只记 None，不阻塞录制
+    except Exception:  # 无 TRT/无引擎时只记 None，不阻塞录制
         env["ocr_engine"] = None
     try:
         import decord

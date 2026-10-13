@@ -98,7 +98,7 @@ def test_warmup_makes_next_run_hot(monkeypatch):
     )
     try:
         n_warm = ex.warmup()
-    except Exception as e:  # noqa: BLE001  仅引擎构建可跳（TRT/引擎文件缺失）
+    except Exception as e:  # 仅引擎构建可跳（TRT/引擎文件缺失）
         pytest.skip("TRT/引擎不可用：%r" % (e,))
     assert n_warm >= 1
     res = ex.extract()  # 引擎已建好：此后的失败是真缺陷，不再 skip

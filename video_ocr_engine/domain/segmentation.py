@@ -302,7 +302,7 @@ class SegmentStateMachine:
             if bin is not None:
                 # feed 契约：宿主传 bin / GPU 传 cluster，恰传其一；
                 # _started 后 _prev_bin 必为 ndarray（热路径不加 assert）
-                d = self._prev_bin != bin  # type: ignore[operator]
+                d = self._prev_bin != bin
                 score = _cluster_win3(d)  # type: ignore[arg-type]  # 同上行契约
                 changed = score >= self._C
             else:

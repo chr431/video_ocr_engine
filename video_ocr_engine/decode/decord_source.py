@@ -165,7 +165,7 @@ class DecordFrameSource:
 
                 vr = self._open_reader(_g(0), roi_kw)
                 label = "GPU"
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 # 保留异常文本：吞掉原始异常会让「驱动/权限不可用」与
                 # 「代码 bug 导致打开失败」在 auto 路径下完全无法区分，
                 # 性能回归静默发生。
@@ -179,7 +179,7 @@ class DecordFrameSource:
         if label == "CPU":
             try:
                 self.codec = str(vr.get_codec() or "").lower()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 # 探测失败=线程档位按默认 h264 走（hevc/av1 实测差
                 # 4~13%）——记降级原因。
                 self.codec = ""
@@ -197,7 +197,7 @@ class DecordFrameSource:
         else:
             try:
                 self.codec = str(vr.get_codec() or "").lower()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 # 探测失败=线程档位按默认 h264 走（hevc/av1 实测差
                 # 4~13%）——记降级原因。
                 self.codec = ""
@@ -295,7 +295,7 @@ class DecordFrameSource:
                     self.codec,
                     _ct,
                 )
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 self._degraded.append(f"hybrid 打开失败，回退纯 GPU: {e}")
                 logger.warning("原生混合解码打开失败，回退纯 GPU: %s", e)
         self._vr = vr
@@ -338,7 +338,7 @@ class DecordFrameSource:
             return
         try:
             self.color_range = int(vr.get_color_range() or 0)
-        except Exception:  # noqa: BLE001
+        except Exception:
             # 失败按 limited 处理但**记录**：full
             # range 流被当 limited 会错误拉伸 Y → 分段阈值/OCR 像素静默
             # 改变；不记录则 meta['color_range']=0 与"真的是 limited"不可分。

@@ -180,9 +180,9 @@ def test_gauge_max_merges_by_max_across_threads():
     ta = threading.Thread(target=worker, args=(0.9,))  # 先触桶：写大值
     tb = threading.Thread(target=worker, args=(0.1,))
     ta.start()
-    ta.join()  # noqa: E702 — 启动即汇合的紧凑写法
+    ta.join()  # 启动即汇合的紧凑写法
     tb.start()
-    tb.join()  # noqa: E702
+    tb.join()
     assert m.snapshot()["gauges"][name] == pytest.approx(0.9)
 
 

@@ -206,10 +206,10 @@ def gate_manifest() -> int:
     dt = time.perf_counter() - t0
     decord_ver: str | None = None
     try:
-        import decord as _decord  # type: ignore[import-not-found]
+        import decord as _decord
 
         decord_ver = _decord.__version__
-    except Exception:  # noqa: BLE001,S110 — CI 无 decord=环境事实
+    except Exception:  # noqa: S110 — CI 无 decord=环境事实
         pass
     tail = [ln for ln in (r.stdout or "").splitlines() if ln.strip()][-1:]
     manifest = {

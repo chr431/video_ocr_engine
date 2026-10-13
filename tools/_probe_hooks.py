@@ -116,7 +116,7 @@ class _Hooks:
         for name, (mod, sym) in sorted(POINTS.items()):
             try:
                 m = importlib.import_module(mod)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 bad.append("%s: 模块 %s 不可导入（%s）" % (name, mod, e))
                 continue
             if not hasattr(m, sym):

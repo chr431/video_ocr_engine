@@ -131,13 +131,13 @@ def environment() -> dict:
         import decord
 
         env["decord"] = decord.__version__
-    except Exception:  # noqa: BLE001
+    except Exception:
         env["decord"] = None
     try:
         import tensorrt
 
         env["tensorrt"] = tensorrt.__version__
-    except Exception:  # noqa: BLE001
+    except Exception:
         env["tensorrt"] = None
     # GPU/驱动：优先 NVML（本机实测 20.8ms 首调 vs nvidia-smi 子进程 43.1ms，
     # 且不起子进程），失败才回退 nvidia-smi；两者都不行记 unavailable。
@@ -161,7 +161,7 @@ def environment() -> dict:
             env["gpu"] = name.strip() or None
             env["driver"] = drv.strip() or None
             env["gpu_source"] = "nvidia-smi" if name.strip() else "unavailable"
-        except Exception:  # noqa: BLE001 无驱动工具 → 显式记不可用
+        except Exception:  # 无驱动工具 → 显式记不可用
             env["gpu"] = env["driver"] = None
             env["gpu_source"] = "unavailable"
     _ENV_CACHE = dict(env)

@@ -63,7 +63,7 @@ class TraceRecorder:
             s = NvmlSampler(interval_s=0.2)
             s.start()
             self._nvml = s
-        except Exception:  # noqa: BLE001 NVML 不可用：host 时间线仍完整
+        except Exception:  # NVML 不可用：host 时间线仍完整
             self._nvml = None
 
     def dump(self, path: str, *, meta: dict | None = None, wall: float = 0.0) -> dict:

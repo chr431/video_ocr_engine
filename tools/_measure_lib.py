@@ -54,7 +54,7 @@ def quick_guard(reason: str = "需要真值视频（RACELOG_VIDEO_DIR）") -> No
             import pytest
 
             pytest.skip(reason)
-        except ImportError:  # noqa: S110 探针上下文：调用方自行判 has_real_videos
+        except ImportError:  # 探针上下文：调用方自行判 has_real_videos
             pass  # 探针上下文：调用方自行判 has_real_videos
 
 
@@ -99,10 +99,10 @@ def paired_ab(
     for i in range(pairs):
         if i % 2 == 0:  # AB/BA 臂序逐对轮转
             a.append(run_a())
-            b.append(run_b())  # noqa: E702 — 交错对紧凑写法
+            b.append(run_b())  # 交错对紧凑写法
         else:
             b.append(run_b())
-            a.append(run_a())  # noqa: E702
+            a.append(run_a())
     diffs = [(y - x) / x * 100.0 for x, y in zip(a, b)]
     return {
         "a": a,
@@ -151,7 +151,7 @@ def _gpu_util():
             timeout=5,
         )
         return float(r.stdout.strip().splitlines()[0])
-    except Exception:  # noqa: BLE001,S110 — 无卡/无工具/超时=环境事实
+    except Exception:  # 无卡/无工具/超时=环境事实
         return 0.0
 
 
@@ -171,7 +171,7 @@ def _prime_foreign_processes(ignore_own_tree: bool = True):
         own.add(os.getpid())
         try:
             own |= {q.pid for q in psutil.Process(os.getpid()).children(recursive=True)}
-        except psutil.Error:  # noqa: BLE001 — 子进程枚举失败按无子进程处理
+        except psutil.Error:  # 子进程枚举失败按无子进程处理
             pass
     procs = []
     for q in psutil.process_iter(["pid", "name"]):
@@ -182,7 +182,7 @@ def _prime_foreign_processes(ignore_own_tree: bool = True):
                 continue
             q.cpu_percent(interval=None)  # 首调恒 0，仅 prime
             procs.append(q)
-        except psutil.Error:  # noqa: BLE001 — 进程消失=正常竞态
+        except psutil.Error:  # 进程消失=正常竞态
             continue
     return procs
 
@@ -216,7 +216,7 @@ def assert_machine_quiet(
                 total += c
                 if c > 3.0:
                     top.append((c, q.info.get("name") or "?"))
-            except psutil.Error:  # noqa: BLE001 — 进程消失=正常竞态
+            except psutil.Error:  # 进程消失=正常竞态
                 continue
         readings.append((total / ncpu, sorted(top, reverse=True)))
     gpu_pct = _gpu_util() if gpu else 0.0

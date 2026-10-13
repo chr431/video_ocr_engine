@@ -24,7 +24,7 @@ import pytest
 from _paths import ROOT
 
 # 视频注册表单一事实源 = tools/_measure_lib.py
-from _measure_lib import ROI as _ROI_LIB, VIDS as _VIDS_LIB  # noqa: E402
+from _measure_lib import ROI as _ROI_LIB, VIDS as _VIDS_LIB
 
 VID = _VIDS_LIB["test5"]
 ROI = _ROI_LIB["test5"]

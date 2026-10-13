@@ -89,7 +89,7 @@ def _inputs(**over):
         batch_luma=lambda c: c,
         batch_luma_out=lambda c, o: o,
         crop_is_expected=lambda c, h, w: True,
-        content_range_to_crop=lambda f, left, w: None,  # noqa: E741
+        content_range_to_crop=lambda f, left, w: None,
         open_vr=lambda: None,
         start_ocr_session=lambda e=None: None,
     )

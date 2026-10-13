@@ -72,7 +72,7 @@ def _register_gpu_dlls() -> None:
                     _val, _ = _wr.QueryValueEx(_k, "Path")
                     _wr.CloseKey(_k)
                     _reg_paths.extend(_val.split(";"))
-                except OSError:  # noqa: S110 PATH 探测尽力而为（缺项容忍）
+                except OSError:  # PATH 探测尽力而为（缺项容忍）
                     pass  # PATH 探测尽力而为（缺项容忍）
             # 追加注册表中独有的条目（去重）
             _env_set = {_os.path.normpath(p) for p in _path_raw.split(_os.pathsep) if p.strip()}
@@ -134,7 +134,7 @@ def _register_gpu_dlls() -> None:
                 _dll_dir_cookies.append(_os.add_dll_directory(_d))
                 _path_new.append(_d)
                 _registered += 1
-            except (AttributeError, OSError):  # noqa: S110 PATH 探测尽力而为（缺项容忍）
+            except (AttributeError, OSError):  # PATH 探测尽力而为（缺项容忍）
                 pass  # PATH 探测尽力而为（缺项容忍）
 
     # 将找到的目录前置到 PATH（tensorrt 包依赖此路径）

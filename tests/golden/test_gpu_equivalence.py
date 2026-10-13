@@ -11,7 +11,7 @@ import pytest
 
 
 # 视频注册表单一事实源 = tools/_measure_lib.py
-from _measure_lib import ROI, VIDS  # noqa: E402
+from _measure_lib import ROI, VIDS
 
 VID = VIDS["test5"]
 ROI = ROI["test5"]

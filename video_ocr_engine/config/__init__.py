@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from video_ocr_engine.config.constants import app_data_dir, app_logs_dir, models_dir  # noqa: F401
+from video_ocr_engine.config.constants import app_data_dir, app_logs_dir, models_dir
 
 from .knobs import KNOBS
 from .registry import Knob, Registry

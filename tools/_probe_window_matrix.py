@@ -23,7 +23,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from env_probe import fork_build_dll, video_dir  # noqa: E402  环境事实源
+from env_probe import fork_build_dll, video_dir  # 环境事实源
 
 sys.stdout.reconfigure(encoding="utf-8")
 # DLL 目录走环境事实源（fork_build_dll 取最新构建产物，env 仍可经
@@ -65,7 +65,7 @@ def main():
 
     try:
         assert_machine_quiet()
-    except BackgroundLoadError as e:  # noqa: BLE001 — 门禁语义：超阈退出
+    except BackgroundLoadError as e:  # 门禁语义：超阈退出
         print(e)
         raise SystemExit(2)
     quick = "--quick" in sys.argv

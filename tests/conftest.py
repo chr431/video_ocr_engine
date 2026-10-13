@@ -34,7 +34,7 @@ def _videos_ready() -> bool:
         from _measure_lib import has_real_videos
 
         return has_real_videos
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
@@ -46,7 +46,7 @@ def _gpu_ready() -> bool:
         import video_ocr_engine.gpu.device  # noqa: F401
 
         return True
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 

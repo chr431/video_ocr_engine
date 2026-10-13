@@ -340,7 +340,7 @@ class _GpuLane:
             for item in self._stream:
                 if not self._put_q(item):
                     return
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             # BaseException 而非 Exception（与 gpu/device.py 排空线程对齐）：
             # 逃逸的 BaseException 会让 producer_err 恒空 → 消费循环见哨兵即
             # 正常收尾 → run 报成功但帧数静默截断。

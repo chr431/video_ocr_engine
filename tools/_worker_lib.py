@@ -122,5 +122,5 @@ def acquire_probe_lock(name: str):
     finally:
         try:
             lock.unlink()
-        except FileNotFoundError:  # noqa: S110 锁已被外部清理
+        except FileNotFoundError:  # 锁已被外部清理
             pass  # 锁已被外部清理

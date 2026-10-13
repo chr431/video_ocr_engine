@@ -29,7 +29,7 @@ from video_ocr_engine.extractor import (  # noqa: F401
     ExtractedSegment,
     ExtractionResult,
 )
-from video_ocr_engine import _version  # noqa: F401
+from video_ocr_engine import _version
 
 import logging
 

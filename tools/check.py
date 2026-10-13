@@ -37,7 +37,7 @@ def _has_videos() -> bool:
         from env_probe import video_dir
 
         return os.path.isfile(os.path.join(video_dir(), "test5.mp4"))
-    except Exception:  # noqa: BLE001 — 环境事实
+    except Exception:  # 环境事实
         return False
 
 

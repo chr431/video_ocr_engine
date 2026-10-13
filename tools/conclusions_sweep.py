@@ -128,7 +128,7 @@ def main() -> int:
         import decord
 
         decord_ver = decord.__version__
-    except Exception:  # noqa: BLE001,S110 — decord 未装=环境事实（CI 只装引擎），该列跳过、不判失败
+    except Exception:  # noqa: S110 — decord 未装=环境事实（CI 只装引擎），该列跳过、不判失败
         pass  # decord 未装=环境事实（CI 只装引擎），该列跳过、不判失败
 
     print("=" * 70)

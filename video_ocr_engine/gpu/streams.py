@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Callable
 import numpy as np
 
 from video_ocr_engine.config import constants as config
-from video_ocr_engine.domain.segmentation import (  # noqa: F401 —— 等价性由金标向量守护（C-32）
+from video_ocr_engine.domain.segmentation import (  # 等价性由金标向量守护（C-32）
     _otsu_from_hist,
     otsu_median_threshold,
 )
@@ -327,7 +327,7 @@ def _gpu_frame_stream_nvdec(
                     nds = vr.get_batch(frames[bstart:bend])
                     hooks.tick("producer", "decode_batch", _t_dec)
                     _q.put((bstart, nds))
-            except BaseException as e:  # noqa: BLE001
+            except BaseException as e:
                 _err.append(e)
             finally:
                 _q.put(None)

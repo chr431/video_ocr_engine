@@ -133,7 +133,7 @@ def test_pool_concurrent_acquire_no_indexerror():
             for _ in range(500):
                 f = pool.acquire()
                 pool.recycle(f)
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             errs.append(e)
 
     ts = [threading.Thread(target=worker) for _ in range(4)]

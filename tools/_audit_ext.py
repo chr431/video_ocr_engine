@@ -3,7 +3,8 @@
 检查项：layering / no_shim_duplication / dead_code / knob_coverage /
 no_import_side_effects / metrics_coverage / rules_schema /
 probe_hooks_resolve / render_consistency / decord_pin /
-deprecation_due / dependency_floors / gate_manifest / injection_budget。
+deprecation_due / dependency_floors / gate_manifest / injection_budget /
+negative_fixtures。
 未设检查：docs_budget / baseline_liveness / deprecated_shim_usage——
 对应制度对象已不存在。引用检查项一律按名（编号会重排，名字不会）。
 """
@@ -209,7 +210,7 @@ def check_probe_hooks_resolve() -> str | None:
     _sys.path.insert(0, str(HERE))
     try:
         from _probe_hooks import hooks
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return "tools/_probe_hooks.py 不可导入：%r" % (e,)
     bad = hooks.audit()
     if bad:
@@ -249,8 +250,8 @@ def check_decord_pin() -> str | None:
     发版时的全量清扫见 conclusions_sweep。
     """
     try:
-        import decord  # type: ignore[import-not-found]
-    except Exception:  # noqa: BLE001 — 环境事实
+        import decord
+    except Exception:  # 环境事实
         return None
     ver = decord.__version__
     import yaml
@@ -305,7 +306,7 @@ def check_deprecation_due() -> str | None:
                 import importlib
 
                 alive = bool(attr) and hasattr(importlib.import_module(mod), attr)
-            except Exception:  # noqa: BLE001 — 模块不存在=已删
+            except Exception:  # 模块不存在=已删
                 alive = False
         if alive:
             return "弃用到期未删：%s（remove_in %s ≤ 当前 %s）" % (name, m.group(1), ver)
@@ -332,8 +333,8 @@ def check_gate_manifest() -> str | None:
             ver,
         )
     try:
-        import decord  # type: ignore[import-not-found]
-    except Exception:  # noqa: BLE001 — CI 无 decord=环境事实
+        import decord
+    except Exception:  # CI 无 decord=环境事实
         return None
     env = (
         yaml.safe_load(io.open(ROOT / "registry" / "environment.yaml", encoding="utf-8").read())
@@ -398,6 +399,28 @@ def check_dependency_floors() -> str | None:
     return None
 
 
+def check_negative_fixtures() -> str | None:
+    """负测夹具豁免的自证（R-exemption-live）。
+
+    refs.NEGATIVE_FIXTURES 是"整文件免检"的最强豁免形态——它唯一的
+    正当理由是"守卫的坏样例集"（R-guard-negative 自证材料）。因此每个
+    成员必须真实存在、且不带豁免地扫它必须出 ≥1 处违规：夹具一旦不再
+    含坏样例，豁免就变成免检通行证，必须移除。
+    """
+    import refs
+
+    dead = []  # 汇总全部失效成员（不短路——首成员失败会遮住后面的）
+    for name in sorted(refs.NEGATIVE_FIXTURES):
+        cands = sorted((ROOT / "tests").rglob(name)) if (ROOT / "tests").is_dir() else []
+        if not cands:
+            dead.append("%s（文件不存在）" % name)
+        elif not refs.scan_file(cands[0], refs.Index(), exempt=False):
+            dead.append("%s（不再含坏样例）" % name)
+    if dead:
+        return "NEGATIVE_FIXTURES 成员失去豁免依据，须移出集合：" + "、".join(dead)
+    return None
+
+
 CHECKS_EXT = {
     "dead_code_regression": ("dead_code 死代码回归", check_dead_code_regression),
     "decord_pin": ("decord_pin 两仓版本口径", check_decord_pin),
@@ -408,6 +431,7 @@ CHECKS_EXT = {
     "knob_coverage": ("knob_coverage 旋钮依据", check_knob_coverage),
     "layering": ("layering 分层无环", check_layering),
     "metrics_coverage": ("metrics_coverage 指标注册表", check_metrics_coverage),
+    "negative_fixtures": ("negative_fixtures 负测夹具自证", check_negative_fixtures),
     "no_import_side_effects": ("no_import_side_effects", check_no_import_side_effects),
     "no_shim_duplication": ("no_shim_duplication 转发壳", check_no_shim_duplication),
     "probe_hooks_resolve": ("probe_hooks_resolve 打桩点表", check_probe_hooks_resolve),
@@ -424,7 +448,7 @@ if __name__ == "__main__":
     for k, (name, fn) in sorted(CHECKS_EXT.items()):
         try:
             r = fn()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             r = "检查本身异常 %r" % (e,)
         tag = "✓" if r is None else "✗"
         print("%s %s %s%s" % (tag, name, "", "" if r is None else " —— " + r))

@@ -40,10 +40,6 @@ HISTORY_ARCHIVE = "archive/pre-rework:docs/log/2026-09-10-conclusions-history.md
 NEGATIVE_FIXTURES = {
     "test_refs.py",
     "test_guards.py",
-    "test_render.py",
-    "test_version_advice.py",
-    "test_load_gate.py",
-    "test_sweep_pins.py",
 }
 
 TOKEN_CONCLUSION = re.compile(r"(?<![A-Za-z0-9@-])C-\d{2,3}\b")
@@ -159,11 +155,12 @@ def _substrate_files(extra: list[str]) -> list[Path]:
     return [f for f in files if f.is_file()]
 
 
-def scan_file(path: Path, index: Index) -> list[str]:
+def scan_file(path: Path, index: Index, exempt: bool = True) -> list[str]:
     """单文件扫描：token 逐一解析 + 裸 §N/裸版本检查。
 
     裸 §N 禁入范围（宪章不变量 2）：md 基底（charter/registry/视图）与
-    py 注释层一视同仁。
+    py 注释层一视同仁。exempt=False 供审计复用（负测夹具豁免的自证：
+    不带豁免地扫夹具必须出违规，否则豁免就是免检通行证）。
     """
     errors: list[str] = []
     text = path.read_text(encoding="utf-8", errors="replace")
@@ -171,7 +168,7 @@ def scan_file(path: Path, index: Index) -> list[str]:
         rel = path.relative_to(ROOT)
     except ValueError:  # 仓外文件（负测夹具）按原路径显示
         rel = path
-    if rel.name in NEGATIVE_FIXTURES:
+    if exempt and rel.name in NEGATIVE_FIXTURES:
         return []  # 整文件豁免：守卫的坏样例集（R-guard-negative 的自证材料）
     for lineno, line in enumerate(text.splitlines(), 1):
         where = f"{rel}:{lineno}"

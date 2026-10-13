@@ -128,7 +128,7 @@ def _compile_module(src: str, name_expressions: tuple):
         if f.is_file():
             try:
                 mod = ObjectCode.from_cubin(str(f))
-            except Exception:  # noqa: BLE001 缓存损坏 → 走重编译
+            except Exception:  # 缓存损坏 → 走重编译
                 mod = None
         if mod is None:
             prog = Program(
@@ -145,7 +145,7 @@ def _compile_module(src: str, name_expressions: tuple):
                 tmp = f.with_name(f.name + ".tmp")
                 tmp.write_bytes(code)
                 tmp.replace(f)
-            except OSError:  # noqa: S110 缓存盘不可写：功能不受影响，仅失去跨进程复用
+            except OSError:  # 缓存盘不可写：功能不受影响，仅失去跨进程复用
                 pass  # 缓存盘不可写：功能不受影响，仅失去跨进程复用
         _KERNEL_MODULE_CACHE[key] = mod
     return mod

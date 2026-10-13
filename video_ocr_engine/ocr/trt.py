@@ -73,7 +73,7 @@ def engine_sm() -> str:
             if not _e2 and not _e3:
                 sm = "sm%d%d" % (major, minor)
                 probed = True
-    except Exception:  # noqa: BLE001,S110 — 容忍（见上下文）
+    except Exception:  # noqa: S110 — 容忍（见上下文）
         pass  # 容忍（见上下文）
     if not probed:
         # 只缓存成功的探测：失败也写缓存时，首次调用若撞上 CUDA 瞬态
@@ -105,7 +105,7 @@ class TrtEngine:
             from video_ocr_engine._gpu_kernels import prewarm_cuda_core
 
             prewarm_cuda_core()
-        except Exception:  # noqa: BLE001,S110 — 容忍（见上下文）
+        except Exception:  # noqa: S110 — 容忍（见上下文）
             pass  # 容忍（见上下文）
 
         self._progress_cb = progress_cb
@@ -182,13 +182,13 @@ class TrtEngine:
         if stream is not None:
             try:
                 self.synchronize()
-            except Exception:  # noqa: BLE001,S110 — 容忍（见上下文）
+            except Exception:  # noqa: S110 — 容忍（见上下文）
                 pass  # 容忍（见上下文）
         reducer = getattr(self, "_reducer", None)
         if reducer is not None:
             try:
                 reducer.release()
-            except Exception:  # noqa: BLE001,S110 — 容忍（见上下文）
+            except Exception:  # noqa: S110 — 容忍（见上下文）
                 pass  # 容忍（见上下文）
             self._reducer = None
         for attr in ("_dev_in", "_dev_out"):
@@ -242,7 +242,7 @@ class TrtEngine:
         """
         try:
             from cuda.bindings import runtime as cudart
-        except Exception:  # noqa: BLE001 无 cuda.bindings → 交给 TRT 自己报错
+        except Exception:  # 无 cuda.bindings → 交给 TRT 自己报错
             return
         for i in range(attempts):
             err = cudart.cudaFree(0)[0]

@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 _models_dir = config.models_dir
 
 
-def cpu_physical_cores() -> int:  # noqa: F401  # re-export
+def cpu_physical_cores() -> int:  # # re-export
     """物理核数（单一事实源：config.decode_caliber）。"""
     from video_ocr_engine.config.decode_caliber import cpu_physical_cores as _c
 

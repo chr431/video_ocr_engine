@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-from env_probe import (  # noqa: E402
+from env_probe import (
     decord_fact,
     ffmpeg_fact,
     fork_build_dll,
@@ -62,7 +62,9 @@ _AUDIT_SKIP_DIRS = {
 }  # docs 内的叙事可提及路径
 _AUDIT_EXTS = {".py", ".bat", ".ps1", ".cmd"}
 # 允许的例外：环境事实源本身（它就是放默认路径/正则自检样例的地方）。
-# 行级豁免：命中行行尾注释含 `hardcode-ok:` 即放行（内联豁免，无登记账本）。
+# 行级豁免：命中行行尾注释含 `hardcode-ok: <非空理由>` 才放行（内联豁免，
+# 无登记账本；无理由的裸 hardcode-ok 不豁免——豁免必须携带依据）。
+_HARDCODE_OK = re.compile(r"#\s*hardcode-ok:\s*\S")
 _AUDIT_ALLOW_FILES = {"tools/env_probe.py", "tools/env_doctor.py"}
 
 
@@ -135,7 +137,7 @@ def _abs_path_hits_raw() -> list[tuple[str, int, str]]:
             continue
         try:
             text = p.read_text(encoding="utf-8", errors="replace")
-        except Exception:  # noqa: BLE001 — 读不了就跳过（非源码）
+        except Exception:  # 读不了就跳过（非源码）
             continue
         # 全文无盘符字面量时 AST 解析（≈0.2s/246 文件）
         # 纯属浪费——预筛不过直接跳 doc 行标记（正则逐行仍执行，漏报面=0：
@@ -166,8 +168,8 @@ def _abs_path_hits_raw() -> list[tuple[str, int, str]]:
                 continue
             if line.lstrip().startswith("#"):
                 continue  # 整行注释
-            if "# hardcode-ok:" in line:
-                continue  # 行级内联豁免（带理由）
+            if _HARDCODE_OK.search(line):
+                continue  # 行级内联豁免——必须带非空理由（无理由不豁免，见 R-exemption-live）
             code_part = line.split("#", 1)[0]  # 行尾注释也剔除
             if not _ABS_PATH_RE.search(code_part):
                 continue
@@ -270,7 +272,7 @@ def _md5(p: Path) -> str:
             for chunk in iter(lambda: f.read(1 << 20), b""):
                 h.update(chunk)
         return h.hexdigest()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return ""
 
 

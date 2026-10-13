@@ -74,7 +74,7 @@ def probe_contract() -> FeatureView | None:
         return None
     try:
         feats = features_fn()
-    except Exception:  # noqa: BLE001 - 契约面自身故障按无契约处理
+    except Exception:  # 契约面自身故障按无契约处理
         logger.warning("decord.features() 调用失败，按无契约面处理", exc_info=True)
         return None
     view = FeatureView(version, feats if isinstance(feats, Mapping) else {})

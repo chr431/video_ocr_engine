@@ -41,7 +41,7 @@ from video_ocr_engine.domain.segmentation import _text_sep_binary
 # 下列 re-export 为引擎内部结构（_helpers/_result_types 均属下划线私有
 # 命名，从 extractor 再导出仅为旧导入路径兼容，勿直接 import；公共入口
 # 是 video_ocr_engine.__init__ 的三件套）。
-from ._result_types import (  # noqa: F401
+from ._result_types import (
     ExtractedSegment,
     ExtractionResult,
 )
@@ -472,7 +472,7 @@ class FieldExtractor:
             if self._diag.armed:
                 try:
                     self._diag.stop()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     logger.debug("诊断收尾失败（run 失败路径）", exc_info=True)
         _wall = time.perf_counter() - _t_run
         frames, segs, texts, confs, rep_frames = _outcome.as_tuple()
