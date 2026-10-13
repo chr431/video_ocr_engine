@@ -60,7 +60,7 @@ testpaths = ["tests"]
 # **新增测试变慢即现形**（0.4s 门槛以下不列，榜取前 15）。
 addopts = "--durations=15 --durations-min=0.4"
 markers = [
-  "gpu: 需要 GPU + decord fork + 真值视频（S4 双后端等价门禁）",
+  "gpu: 需要 GPU + decord fork + 真值视频（双后端等价门禁）",
 ]
 
 [tool.ruff]
