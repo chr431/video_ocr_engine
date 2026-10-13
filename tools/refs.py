@@ -145,7 +145,7 @@ def _substrate_files(extra: list[str]) -> list[Path]:
 
     token 判定（C-/R-/decord@/archive/裸 §N）在 md 与 py 同权。
     """
-    files = [CHARTER] + sorted(REGISTRY.glob("*.yaml"))
+    files = [CHARTER] + sorted(REGISTRY.glob("*.yaml")) + [ROOT / "README.md"]
     if not CHARTER.is_file():
         files = sorted(REGISTRY.glob("*.yaml"))
     for d in (ROOT / "video_ocr_engine", ROOT / "tests", ROOT / "tools"):

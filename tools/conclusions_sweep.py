@@ -168,6 +168,14 @@ def _print_comment_coordinates() -> None:
             for kind, mt in _comment_hits(line):
                 hits.append("%s:%d  %s  %s" % (cfg, i, kind, mt))
                 break
+    # README 是唯一手写散文文档（其余视图由 render 保证）；全文逐行扫——
+    # refs 管 token/裸§N/裸版本，本清单补"旧编号/日期/出树引用"三类。
+    readme = ROOT_PATH / "README.md"
+    if readme.is_file():
+        for i, line in enumerate(io.open(readme, encoding="utf-8").read().split("\n"), 1):
+            for kind, mt in _comment_hits(line):
+                hits.append("README.md:%d  %s  %s" % (i, kind, mt))
+                break
     if not hits:
         return
     print("\n注释历史坐标清单（发版复核——现在时化或删，历史看 git）：")

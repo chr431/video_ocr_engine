@@ -105,18 +105,23 @@ BANNED_TOKENS = ("onnxruntime", "OCR_ONNX_CHUNK", "_init_onnx")
 
 
 def test_no_legacy_ort_labels() -> None:
-    """产品码与测试不得出现旧 ORT 标识。"""
+    """产品码、测试与手写文档（README）不得出现旧 ORT 标识。
+
+    面含 README：它是唯一手写散文文档，"旧能力标签任何回潮即红"必须
+    覆盖它——本轮实测曾漏（README 把 onnxruntime 写成运行时依赖）。
+    """
     hits = []
-    for base in (PKG, ROOT / "tests"):
-        for p in base.rglob("*.py"):
-            if "__pycache__" in p.parts:
-                continue
-            if p.name == "test_audit_sentinels.py":
-                continue  # 哨兵自身定义禁串表，不算回潮
-            src = p.read_text(encoding="utf-8", errors="replace")
-            for tok in BANNED_TOKENS:
-                if tok in src:
-                    hits.append(f"{p.relative_to(ROOT)}: {tok}")
+    scanned = [p for base in (PKG, ROOT / "tests") for p in base.rglob("*.py")]
+    scanned.append(ROOT / "README.md")
+    for p in scanned:
+        if "__pycache__" in p.parts or not p.is_file():
+            continue
+        if p.name == "test_audit_sentinels.py":
+            continue  # 哨兵自身定义禁串表，不算回潮
+        src = p.read_text(encoding="utf-8", errors="replace")
+        for tok in BANNED_TOKENS:
+            if tok in src:
+                hits.append(f"{p.relative_to(ROOT)}: {tok}")
     assert not hits, f"旧 OCR 标识回潮（现行为 openvino/OCR_OV_CHUNK/_init_ov）: {hits}"
 
 
