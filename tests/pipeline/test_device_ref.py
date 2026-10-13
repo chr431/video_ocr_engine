@@ -29,6 +29,7 @@ def test_device_ref_with_crop_from_mark():
     mark = DeviceRef(ptr=7, h=48, w=320, owner="b", sharp=3.0)
     cut = mark.with_crop(0, 320)
     assert cut.deferred is False and cut.span == (0, 320)
+    assert cut.sharp is None  # 标记态丢弃
 
 
 def test_segment_task_and_infer_batch_fields():

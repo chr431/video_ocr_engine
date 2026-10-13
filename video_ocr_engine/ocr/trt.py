@@ -1,6 +1,6 @@
 """TensorRT 引擎构建 / 缓存 / 执行（OcrEngine 的 GPU 后端）。
 
-与 ONNX 路径共享 OCR 预处理与 CTC 后处理；本模块只负责 TRT 特有逻辑：
+与 CPU（OpenVINO）路径共享 OCR 预处理与 CTC 后处理；本模块只负责 TRT 特有逻辑：
 引擎候选查找（模型目录 → 程序目录缓存）→ 反序列化校验 → 本地构建缓存
 → CUDA 显存执行。GPU 预处理/归约/帧分析内核类在
 video_ocr_engine._gpu_kernels（本模块 re-export 保持兼容）。
@@ -279,7 +279,7 @@ class TrtEngine:
         prof_in = self.engine.get_tensor_profile_shape(in_name, 0)
         self.in_name = in_name
         self.out_name = out_name
-        self.max_batch = int(prof_in[2][0])  # profile 的 batch 上限（如 6）
+        self.max_batch = int(prof_in[2][0])  # profile 的 batch 上限（见 config.TRT_PROFILE_BATCH）
         self.max_in_shape = tuple(int(v) for v in prof_in[2])
         self._last_in_shape: tuple | None = None
         self._out_shape: tuple | None = None

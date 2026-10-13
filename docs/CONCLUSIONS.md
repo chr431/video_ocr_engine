@@ -28,10 +28,10 @@
 | C-42 | 相似判定 232µs、全片≈21% 但**不在关键路径**（短路实验无改善） | GPU 管线；hevc 6000 帧；merges=0 | 消费者不再空等 / 段边界密度大增 / 换卡 | 87d1905:docs/log/2026-09-13-merge判定代价与短路实验.md#merge短路实验 |
 | C-43 | **fill_width×force_aspect 强交互**（224 保持）：fa=1.5 下 224 零误读；仅 fa=0 关填充更准 | 六片真值 | 换片源 / 模型换代 / 默认 force_aspect 变更 | aedb180:docs/log/2026-09-13-填充宽度重测.md#填充宽度 |
 | C-46 | **hybrid=包缓存+供料期 GOP 派工**：Push 只入缓存，泵贪心派工；kick 经泵流序注入；A/B −5~6% | 达成率=同会话三臂 | 换卡 / fork 换代 / 截断流·bf16 重跑 | c9ac095:docs/log/2026-09-13-hybrid重设计分支.md#hybrid重设计；5d27201:docs/log/2026-09-14-hybrid达成率定稿测量.md#达成率定稿 |
-| C-47 | **OCR 批延迟残差=GPU 链争用**：DEFER_SYNC 一致 e2e 平价；复测周期 +4.6%（16/16） | trt_call 13.9ms/批占 87% | 换卡 / TRT 换代 / 解码下 GPU | e2b7a7b:docs/log/2026-09-14-TRT延迟收集流水.md#TRT延迟收集流水；10-09-账本产品化（e2b7a7b） |
-| C-48 | **CPU OCR=OpenVINO 唯一**：模型级 2.1×（ORT）；真值零差；冻结包 74MB；2026.4.1 换代持平+逐位一致 | 4060/Zen4；openvino 2026.4.1 | 换 CPU / openvino 换代 / 内容族大变 | 7b90814:docs/log/2026-09-14-OpenVINO模型级A-B.md#OV A/B；10-11 换代（51fafff） |
+| C-47 | **OCR 批延迟残差=GPU 链争用**：DEFER_SYNC 一致 e2e 平价；复测周期 +4.6%（16/16） | trt_call 13.9ms/批占 87% | 换卡 / TRT 换代 / 解码下 GPU | e2b7a7b:docs/log/2026-09-14-TRT延迟收集流水.md#TRT延迟收集流水；账本产品化（e2b7a7b） |
+| C-48 | **CPU OCR=OpenVINO 唯一**：模型级 2.1×（ORT）；真值零差；冻结包 74MB；2026.4.1 换代持平+逐位一致 | 4060/Zen4；openvino 2026.4.1 | 换 CPU / openvino 换代 / 内容族大变 | 7b90814:docs/log/2026-09-14-OpenVINO模型级A-B.md#OV A/B；openvino 换代（51fafff） |
 | C-49 | **换依赖无剩余性能空间**：解码绑定；fork 超外部参考 989fps；PyNv+DLL 冲突；cv2 −0.26%（989fps 等为旧代口径） | 4060/16C32T/Zen4；fork 0.9.8 | 换卡 / 带 ROI-first 的解码绑定 / 预处理升为关键路径 | 2086fa6:docs/log/2026-09-15-依赖替换裁决.md#依赖替换 |
-| C-50 | **DECODE_THREADS（CPU-OCR 口径）维持 auto=10**：d32 墙钟 −1.86% 但 e2e 周期 +13.4%=争用税。GPU-OCR 口径 auto=32 已最优 | 16C32T；CPU OCR；h264 n=16 配对 | 独占部署（CPU 空闲换墙钟可接受）/ 核数格局变 / OCR 再提速 / decord 预取变 | 7d9eb3e:docs/log/2026-09-17-性能监测系统重设计.md#重设计 §5-§11；10-09-账本产品化（7d9eb3e） |
+| C-50 | **DECODE_THREADS（CPU-OCR 口径）维持 auto=10**：d32 墙钟 −1.86% 但 e2e 周期 +13.4%=争用税。GPU-OCR 口径 auto=32 已最优 | 16C32T；CPU OCR；h264 n=16 配对 | 独占部署（CPU 空闲换墙钟可接受）/ 核数格局变 / OCR 再提速 / decord 预取变 | 7d9eb3e:docs/log/2026-09-17-性能监测系统重设计.md#重设计 §5-§11；账本产品化（7d9eb3e） |
 | C-51 | **监测系统新基线**：时钟门禁+ab 轮转；report（fork 穿透）；子相位闭合；地板 0.30%（n=50 后 0.20） | 4060；共享桌面 | 换卡/机器 / 协议改即 --aa 重标 / trace 转正需锁频 | 7d9eb3e:docs/log/2026-09-17-性能监测系统重设计.md#重设计 §7 |
 | C-53 | **hybrid 基线=目标码最快纯臂**：h264=CPU；hevc/av1=NVDEC→选 hybrid。批量=逐文件串行（pool 已删） | 4060/16C32T；fork ≥a6cdeb7 | 换卡 / fork 换代 | a3fdc65:docs/log/2026-09-18-hybrid启动轮.md#hybrid启动轮 |
 | C-54 | **启动+窗口尾轮：熟前挂起+防饿死盲派+尾 ETA**——盲派 13→2、hevc 交叉 ~1200；H2D 聚合无净收益→关 | 盲承诺下界=2 GOP | 换卡 / fork 换代 / infer 暴露复现日 | a3fdc65:docs/log/2026-09-18-hybrid启动轮.md#hybrid启动轮 |

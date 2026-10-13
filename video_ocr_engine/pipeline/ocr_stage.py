@@ -115,9 +115,9 @@ def acquire_engines(spec: "SessionSpec") -> "tuple[list, str]":
     if engine_type == "hybrid":
         # 双 OCR（opt-in）：TRT 设备车道 + OpenVINO CPU 车道各一引擎，
         # worker 为每引擎起一条 infer 线程共享 infer_q（自然工作窃取，
-        # 与双实例 ONNX 同骨架——库存派工，无需速率学习；结果按 idx 收敛，
+        # 与双实例 CPU(OpenVINO) 同骨架——库存派工，无需速率学习；结果按 idx 收敛，
         # 无序交付无害）。raw 设备直通要求单 TRT 引擎 → 双引擎自动回退
-        # 宿主 crop 路径（GPU 管线的 ONNX 回退既有机制，D2H 每代表帧
+        # 宿主 crop 路径（GPU 管线的 CPU 回退既有机制，D2H 每代表帧
         # ≤ROI 字节）。TRT 不可用时 OcrEngine 内部回退 OV → 双 OV 仍
         # 成立（等价双实例）。
         engines: list = [
@@ -291,7 +291,7 @@ class OcrSession:
         self.wall = [0.0]
         self.raw_ready = [False]  # raw 直通可用：worker 引擎就绪后置位（单 TRT）
         # 批量 autocrop 挂点（GPU 管线注入）：autocropper 存在时，raw 项
-        # emit 为 5 元组 (owner,ptr,h,w,sharp)，autocrop 推迟到 flush 批量
+        # emit 为 DeviceRef（sharp 就位、裁切未定），autocrop 推迟到 flush 批量
         # 执行。None = emit 内逐段裁切。
         self.autocropper = None
         # 注入路径：参数必须存入——否则 worker 读空列表 → IndexError，且
@@ -404,8 +404,8 @@ class OcrSession:
                 _names = sorted({e.backend_name for e in engines})
                 spec.on_backend_used("+".join(_names))
                 if engine_type == "tensorrt" and engines[0].backend_name != "tensorrt":
-                    # 请求 TRT 但引擎回退 ONNX → 降级原因透出 meta
-                    spec.on_degraded("TRT 引擎不可用，回退 ONNX")
+                    # 请求 TRT 但引擎回退 OpenVINO → 降级原因透出 meta
+                    spec.on_degraded("TRT 引擎不可用，回退 OpenVINO")
                 if engine_type == "hybrid" and _names == ["openvino"]:
                     # 双车道里 TRT 臂也不可用 → 全 OV（等价双实例），
                     # 降级原因同样透出
@@ -441,7 +441,7 @@ class OcrSession:
             # in-flight 改 context 形状）——OCR_BATCH=16 在 max_batch=6 下
             # 切成 6+6+4，**每个 OCR 批一次全流水同步**（实测 test5 全片
             # CPU+TRT：批 16→18 墙钟 -10.3%、ocr_infer -13%）。单 TRT
-            # 引擎时分块对齐到 max_batch 整倍数即零 sync；ONNX 路径保持 B
+            # 引擎时分块对齐到 max_batch 整倍数即零 sync；CPU(OpenVINO) 路径保持 B
             # （18=16+2 切伤 OCR_OV_CHUNK=16 尾批，实测 +3.7%），双实例同理。
             _trt_max = (
                 engines[0]._trt.max_batch
@@ -475,7 +475,7 @@ class OcrSession:
             def infer_worker(eng) -> None:
                 self._bump_priority()
                 # 非 TRT 车道（OV）挂**独立流**的设备 prep——见
-                # ocr_lane_prep 的流语义注释。单引擎/双实例 ONNX 路径
+                # ocr_lane_prep 的流语义注释。单引擎/双实例 CPU(OpenVINO) 路径
                 # _lane_prep 恒 None（行为不变）。
                 _lane_prep = None
                 if (
@@ -619,7 +619,7 @@ class OcrSession:
                     return
                 # 分流：带 dev 的项走 raw 直通（单 TRT 引擎时），带 crop 的
                 # 项走宿主预处理。两类可能并存于同一批（引擎就绪切换仅有
-                # 一批；ONNX/回退引擎全程 crop）→ 拆批投递，不混流。
+                # 一批；CPU/回退引擎全程 crop）→ 拆批投递，不混流。
                 # raw 代表帧：gray = decord gray NDArray 指针；yuv =
                 # _YFramePool 池帧提取的 Y 平面（由 GPU 管线保证）。
                 # 双车道（TRT+OV）时设备项也走 raw——TRT 车道沿用
@@ -661,7 +661,7 @@ class OcrSession:
                     # 跨批按「裁后内容宽」分组（与宿主裁切路径同一策略）：
                     # 顺序分批时每批几乎必有满宽成员 → pad 宽被顶回全宽，
                     # 裁切收益归零；把宽度相近的段分到同一批才真的降下来。
-                    # 6 元组 dev = (owner, ptr, h, w, x_off, crop_w)。
+                    # dev 为 DeviceRef（.span 给裁切区间、.deferred 标待裁）。
                     if spec.reorder_window > 1:
                         raw_sel.sort(key=lambda i: b_devs[i].span[1])
                     # raw 任务交给 infer 线程异步执行；载荷 = (force_aspect,
@@ -785,7 +785,7 @@ class OcrSession:
             for t in infer_threads:
                 # 超时对齐 finish() 的 10s 哲学：infer 线程卡设备调用时不无限
                 # 等待，超时后由 daemon 兜底 + err 路径上报。
-                t.join(10.0)
+                t.join(_OCR_JOIN_TIMEOUT_S)
         except BaseException as e:
             # BaseException 而非 Exception：worker 逃逸的异常若不被记录，
             # self.err 恒空 → put/finish 的等待循环失去唯一出口 = 挂死。

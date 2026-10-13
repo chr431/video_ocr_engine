@@ -73,11 +73,11 @@ def gpu_pipeline_enabled(
       零拷贝 OCR 不互斥）；hybrid 走 CPU 分支消费 hybrid 解码器交付的
       宿主数组（双解码收益 + 零拷贝 OCR 叠加）。
     - TensorRT 可用且 ocr_backend ≠ cpu —— 全程 raw 才有净收益
-      （GPU 分段+ONNX 实测无优势，默认走宿主管线，配置面更简）
+      （GPU 分段+CPU(OpenVINO) 实测无优势，默认走宿主管线，配置面更简）
     - cuda-python（cuda.core / cuda.bindings）可导入
 
     env GPU_PIPELINE：'0' 显式关闭；'1' 强制尝试（跳过 TRT 要求，
-    允许 GPU 分段+ONNX 等实验组合）；不设置 = 上述默认规则。
+    允许 GPU 分段+CPU(OpenVINO) 等实验组合）；不设置 = 上述默认规则。
     rc.pipeline_gpu 为构造期冻结的三态（None=规则 / falsy 关 /
     truthy 强制）。
     """

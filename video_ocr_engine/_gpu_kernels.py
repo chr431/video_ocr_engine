@@ -570,8 +570,7 @@ extern "C" __global__ void argmax_last(
 }
 """
 
-    def __init__(self, stream: int | None = None, gamma: float | None = None) -> None:
-        self._gamma = gamma  # None=每批读 env；注入=构造期冻结
+    def __init__(self, stream: int | None = None) -> None:
         _cc = _cuda_core()
         Buffer, Device, LaunchConfig, launch = (
             _cc.Buffer,

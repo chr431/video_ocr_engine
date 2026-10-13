@@ -54,8 +54,14 @@ _GATE_CASES = [
         {"rep_crop_format": "gray"},
         False,
     ),
-    ("contrast_supported", {}, {"TEXT_SEP_MERGE": "contrast"}, {"rep_crop_format": "gray"}, True),
-    ("force_aspect_supported", {}, {}, {"rep_crop_format": "gray", "force_aspect": 1.5}, True),
+    # cuda-python 不可用 → 直接关（与其它旋钮无关）
+    (
+        "cuda_python_unavailable",
+        {"_cuda_python_available": lambda: False},
+        {},
+        {"rep_crop_format": "gray"},
+        False,
+    ),
 ]
 
 

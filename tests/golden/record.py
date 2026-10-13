@@ -207,7 +207,6 @@ def environment() -> dict:
     # tactic 选择不保证一致 → 同一 profile 的两次构建也会让置信度在第 4 位
     # 漂移（文本/段结构不变）。不记指纹就无法区分"代码回归"与"引擎重建"。
     try:
-        import hashlib
         from video_ocr_engine.ocr.trt import TrtEngine
 
         for cand in TrtEngine._engine_candidates("small"):

@@ -72,24 +72,17 @@ def test_warmup_uses_same_spec_as_run(monkeypatch):
 
 
 @pytest.mark.gpu
-def test_warmup_makes_next_run_hot(monkeypatch):
+def test_warmup_makes_next_run_hot(gpu_env, monkeypatch):
     """真机：预热后首个 extract 的 engine_init 必须远小于冷启动（PI-10）。"""
-    import os
-
-    vid = os.path.join(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"), "test5.mp4")
-    if not os.path.exists(vid):
-        pytest.skip("无真值视频（RACELOG_VIDEO_DIR）")
-    try:
-        import cuda.bindings  # noqa: F401  无 CUDA 则跳过
-    except ImportError:
-        pytest.skip("无 cuda-python（CI 无 GPU 环境）")
+    pytest.importorskip("cuda.bindings")  # 无 cuda-python（CI 无 GPU）→ skip
+    vid, roi = gpu_env
     # report 只在 telemetry≠off 时产出（extractor 只挂非空报告）——
     # 默认 off 下本测试恒 skip 且跳因是 KeyError('report')；若被
     # try/except 转成"环境不可用"假 skip，门禁就形同虚设。
     monkeypatch.setenv("VOE_TELEMETRY", "full")
     ex = FieldExtractor(
         vid,
-        (843, 993, 948, 1025),
+        roi,
         frame_start=0,
         frame_end=600,
         decode_backend="cpu",

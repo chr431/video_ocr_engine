@@ -153,7 +153,7 @@ def main():
 
     results = {}
     for bk in backends:
-        walls, segs_n, texts, metas, timings = [], [], set(), [], []
+        walls, segs_n, texts = [], [], set()
         for i in range(args.runs):
             ex, res, wall = run_once(
                 args.video, roi, args.frames, BACKENDS[bk], stride=args.stride, envs=envs
@@ -161,8 +161,6 @@ def main():
             walls.append(wall)
             segs_n.append(len(res.segments))
             texts |= {s.text for s in res.segments if s.text}
-            metas.append(res.meta)
-            timings.append(dict(res.timing))
             print(
                 f"  [{bk}] run{i + 1}: {wall:.3f}s segs={len(res.segments)} "
                 f"meta={res.meta} timing={ {k: round(v, 3) for k, v in res.timing.items()} }"

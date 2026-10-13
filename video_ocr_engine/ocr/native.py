@@ -1,4 +1,4 @@
-"""原生 OCR 识别引擎 — 绕过 rapidocr，直接使用 ONNX Runtime / TensorRT。
+"""原生 OCR 识别引擎 — 绕过 rapidocr，直接使用 OpenVINO / TensorRT。
 
 与 rapidocr 的 TextRecognizer 输出逐字节对齐（预处理/CTC 后处理复刻）：
 - 预处理: resize 到 48 高 + (x/255 - 0.5) / 0.5 归一化 + pad 到 batch 最大宽
@@ -131,7 +131,7 @@ def release_lane_prep(eng) -> None:
 
 
 class OcrEngine:
-    """PP-OCRv6 rec 原生引擎（ONNX / TensorRT 双后端）。
+    """PP-OCRv6 rec 原生引擎（OpenVINO / TensorRT 双后端）。
 
     Args:
         variant: "v6_small"（唯一模型）
@@ -140,7 +140,7 @@ class OcrEngine:
         fill_width: OCR 输入 pad 宽度下限（px）。None = 模型下限；
             0 = 关闭填充（批内自适应）；>0 = 指定下限。速度窄图
             对宽 pad 更准，用户可调（GUI 160-320）。
-        num_threads: ONNX 推理线程数。None = OCR_THREADS env →
+        num_threads: CPU（OpenVINO）推理线程数。None = OCR_THREADS env →
             默认物理核/2（仅直接构造 OcrEngine 时）；生产管线会显式传入
             auto_ocr_thread_count()（全物理核），因此 CPU/GPU 解码后端统一。
     """
@@ -197,7 +197,7 @@ class OcrEngine:
             try:
                 self._trt = TrtEngine(models, size, progress_cb=self._progress_cb)
             except Exception as e:
-                log.warning("TensorRT 引擎不可用 (%s)，回退 ONNX 后端。", e)
+                log.warning("TensorRT 引擎不可用 (%s)，回退 OpenVINO 后端。", e)
                 self._init_ov(models, size)
         else:
             self._init_ov(models, size)
@@ -229,7 +229,7 @@ class OcrEngine:
     def _init_ov(self, models: Path, size: str) -> None:
         # CPU 推理引擎 = OpenVINO（模型级 2.1× 于 ORT，真值门禁三内容族
         # 零差）。输入/输出同构（(B,3,48,W)→(B,S,C) float32），
-        # 预处理/CTC/批切沿用 ONNX 路径。engine_type 字符串必须为
+        # 预处理/CTC/批切沿用 CPU（OpenVINO）路径。engine_type 字符串必须为
         # "openvino"。
         # 直接构造 OcrEngine（未传 num_threads）时默认物理核/2：避免推理
         # 占满全部逻辑核并与解码器抢核。生产管线 SegmentPipeline.
@@ -354,7 +354,7 @@ class OcrEngine:
     def _ctc_decode_batch(self, preds: np.ndarray) -> list:
         """批 CTC decode：(B, seq, C) → list[RecOut]。
 
-        分块归约：整批 argmax 在 C=6906 时产生 (B, seq) int64，~1000 帧一次
+        分块归约：整批 argmax 在 C=18710 时产生 (B, seq) int64，~1000 帧一次
         归约峰值 ~2.2GB（Windows 堆不归还 → RSS 保持高位）。分块后峰值
         ~150MB。逐行归约与整批数值一致。
         """
@@ -481,7 +481,7 @@ class OcrEngine:
         跳过 D2H 代表帧拷贝。
 
         infos: [DeviceRef, ...]（裁切区间见 .span）
-        (dev_ptr, src_h, src_w, owner, x_off, crop_w) —— 该帧只把源列区间
+        DeviceRef（裁切区间见 .span）—— 该帧只把源列区间
         [x_off, x_off+crop_w) 参与 OCR（宽度自适应裁切的 GPU 直通，
         区间来自 GPU col_ink + 宿主同一余量规则）。
         force_aspect > 0：强制 OCR 输入宽 = OCR_TARGET_H × force_aspect

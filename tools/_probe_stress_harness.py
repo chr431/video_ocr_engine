@@ -25,7 +25,7 @@ from decord import VideoReader, hybrid, hybrid_gpu
 ctxf = hybrid if os.environ["PROBE_CTX"] == "cpu" else hybrid_gpu
 vid = os.path.join(os.environ.get("RACELOG_VIDEO_DIR", r"D:\Videos\racelog_test"),  # hardcode-ok: env 默认值（可被 RACELOG_VIDEO_DIR 覆盖）
                    os.environ["PROBE_VID"])
-roi = (841, 994, 950, 1027) if "hevc" in os.environ["PROBE_VID"] or "test6" in os.environ["PROBE_VID"] else (843, 993, 949, 1026)
+roi = (841, 994, 949, 1026) if "hevc" in os.environ["PROBE_VID"] or "test6" in os.environ["PROBE_VID"] else (843, 993, 948, 1025)
 vr = VideoReader(vid, ctx=ctxf(0), output_format="gray",
                  num_threads=int(os.environ.get("PROBE_NT", "16")), roi=roi)
 n = len(vr); idx = list(range(n)); t = time.perf_counter(); held = []
