@@ -26,7 +26,9 @@ dependencies = [
 
 [project.optional-dependencies]
 # pyyaml：tests/decode/test_contract.py 对账读 tests/golden/decoder_contract.yaml
-dev = ["pytest>=8", "ruff", "mypy", "pyyaml"]   # lint/type 与 CI lint job 同源
+# ruff/mypy 钉版：类型/lint 判定随版本漂移会假红（platform/严格度语义变化，
+# 两起回归先例）；升级=有意识的单点改动，顺手跑全链。
+dev = ["pytest>=8", "ruff==0.16.6", "mypy==2.3.1", "pyyaml"]   # lint/type 与 CI lint job 同源
 
 [tool.setuptools]
 # 显式列入全部子包：仅列顶层包时 wheel 内子包缺失

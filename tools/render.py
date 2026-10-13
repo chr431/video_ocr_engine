@@ -1,12 +1,14 @@
 """统一渲染器——registry/ 与产品配置到全部视图的唯一通道（R-render-consistency）。
 
-视图六份（永不手写；--check 校验一致性 + 裸 CR + 结论路径活性 + 证据锚点活性）：
+视图七份（永不手写；--check 校验一致性 + 裸 CR + 结论路径活性 + 证据锚点活性）：
   docs/CONCLUSIONS.md   ← registry/conclusions.yaml
   docs/KNOBS.md         ← video_ocr_engine.config.KNOBS（旋钮事实源=产品代码）
   registry/knobs.yaml   ← 同上（机器可读镜像）
   tools/INDEX.md        ← registry/tools.yaml（standing 全列 + 在树 probe）
   AGENTS.md             ← 宪章 + registry 快照（注入核，预算≤6KB=宪章不变量 5）
-  docs/HEALTH.md         ← registry/kpi.yaml（KPI 视图）
+  docs/HEALTH.md        ← registry/kpi.yaml（KPI 视图）
+  docs/DEPENDENCIES.md  ← pyproject + registry/environment.yaml（依赖事实视图；
+                          fork 版本史不进视图——历史在 git，教训在 conclusions）
 
 conclusions 的 evidence 为 commit 锚点结构，路径活性在锚点提交上验证
 （git cat-file）——与"档案归 git"语义一致：树里不存在的 docs/log 路径
@@ -32,6 +34,7 @@ REGISTRY = ROOT / "registry"
 VIEWS = {
     "agents": ROOT / "AGENTS.md",
     "conclusions": ROOT / "docs" / "CONCLUSIONS.md",
+    "deps": ROOT / "docs" / "DEPENDENCIES.md",
     "knobs_md": ROOT / "docs" / "KNOBS.md",
     "knobs_yaml": REGISTRY / "knobs.yaml",
     "index": ROOT / "tools" / "INDEX.md",
@@ -216,6 +219,80 @@ def render_knobs_yaml() -> str:
     return "\n".join(lines)
 
 
+def render_deps_md() -> str:
+    """依赖与运行环境（渲染产物；事实源=pyproject + registry/environment.yaml）。
+
+    fork 版本史/换代叙事不进视图：历史在 git（tag/commit），教训在
+    registry/conclusions.yaml。操作事实（现状口径）住 environment.yaml
+    的 runtime_notes。
+    """
+    import tomllib
+
+    env = _y_load(REGISTRY / "environment.yaml")
+    dep = env.get("dependencies", {})
+    notes = env.get("runtime_notes", {})
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    req = pyproject.get("project", {}).get("dependencies", [])
+    dev = pyproject.get("project", {}).get("optional-dependencies", {}).get("dev", [])
+
+    def pin(k: str) -> str:
+        return str(dep.get(k, "—"))
+
+    lines = [
+        "# 依赖与运行环境（渲染产物；事实源=pyproject + registry/environment.yaml）",
+        "",
+        "> 本文件由 tools/render.py 渲染，人不得手写；fork 版本史经 git 档案",
+        "> 取回，换代教训见 docs/CONCLUSIONS.md。",
+        "",
+        "## Python 依赖（约束=pyproject；本机口径=environment.yaml）",
+        "",
+        "| pyproject 约束 | 本机 |",
+        "|---|---|",
+    ]
+    local = {"numpy": pin("numpy"), "openvino": pin("openvino"), "psutil": pin("psutil")}
+    for r in req:
+        name = re.split(r"[><=!~\[]", r, maxsplit=1)[0].strip()
+        lines.append("| `%s` | %s |" % (r, local.get(name, "—")))
+    lines += [
+        "",
+        "## 本机外部件（不在 PyPI 依赖；事实源=environment.yaml）",
+        "",
+        "| 件 | 口径 | 说明 |",
+        "|---|---|---|",
+        "| decord（fork） | decord@%s | %s；NVDEC 硬解 + CPU 软解 |"
+        % (pin("decord_pin"), pin("decord_source")),
+        "| cuda-python | %s | TRT 执行 + decord GPU DLL 注册 |" % pin("cuda_python"),
+        "| TensorRT | %s | %s |" % (pin("tensorrt"), "首次运行自动建引擎缓存到 ocr_engines/"),
+        "| FFmpeg | %s | wheel 已打包运行库 |" % pin("ffmpeg"),
+        "",
+        "## 开发依赖（钉版=pyproject dev extras；与 CI lint job 同源）",
+        "",
+    ]
+    for r in dev:
+        lines.append("- `%s`" % r)
+    lines += ["", "## fork 能力 floors（CI 校验 pin ≥ 每个 floor）", ""]
+    for k, v in (env.get("dependency_floors") or {}).items():
+        lines.append("- %s ≥ %s" % (k, v))
+    for key, title in (
+        ("gpu", "GPU 运行时"),
+        ("decord", "decord 操作事实"),
+        ("models", "模型资产"),
+        ("fork_build", "fork 本地开发构建（命令事实源在 fork 仓）"),
+    ):
+        lines += ["", "### " + title, ""]
+        for item in notes.get(key, []) or []:
+            lines.append("- " + str(item))
+    lines += [
+        "",
+        "## 升级流程",
+        "",
+        "1. 升级单个包 → 2. `python -m pytest tests/ -v` → 3. 真实视频端到端",
+        "（CPU+CPU 与 GPU+TRT 各一）→ 4. 对比逐帧文本/置信度指纹确认无读数漂移。",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def render_index_md(tools: list) -> str:
     standing = [t for t in tools if t.get("tier") == "standing"]
     probes = [t for t in tools if t.get("tier") == "probe"]
@@ -286,6 +363,7 @@ def generate() -> dict[str, str]:
             _load(REGISTRY / "tools.yaml"), _load(REGISTRY / "conclusions.yaml")
         ),
         "conclusions": render_conclusions_md(_load(REGISTRY / "conclusions.yaml")),
+        "deps": render_deps_md(),
         "knobs_md": render_knobs_md(),
         "knobs_yaml": render_knobs_yaml(),
         "index": render_index_md(_load(REGISTRY / "tools.yaml")),
