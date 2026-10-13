@@ -246,8 +246,8 @@ SEG_MERGE_DENSE_GATE: int = 5  # 默认 = SEG_C，与断段判据同源
 # ═══════════════════ OCR 输入 pad 宽度下限 ═══════════════════
 # **224 为基线，勿下调。**
 #
-# 评估口径：`force_aspect=0.0`（引擎默认）与生产（RaceVideoToLog
-# 2.17.x）传的 `force_aspect=mw`（真值头里 test5 = 1.5）下，pad 下限的
+# 评估口径：`force_aspect=0.0`（引擎默认）与生产调用传的
+# `force_aspect=mw`（真值头里 test5 = 1.5）下，pad 下限的
 # 作用方向完全相反：
 #
 # | pad | force_aspect=0（内容 154px）| force_aspect=1.5（内容被压到 72px）|

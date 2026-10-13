@@ -8,7 +8,6 @@
   decode_backend / ocr_backend / buffer_size / fill_width ...`），不含速度/纠错参数。
 - **解码器只输出 ROI**（自建 [chr431/decord](https://github.com/chr431/decord) fork 的
   ROI-first 管线），非识别区域不参与转换，显著提速。
-- 自 [RaceVideoToLog](https://github.com/chr431/RaceVideoToLog) 拆分独立。
 
 ![架构图](docs/architecture.svg)
 
@@ -108,8 +107,8 @@ for seg in result.segments:
 `FieldExtractor(sample_stride=N)`（默认 1）：`>1` 时只解码/分段/OCR 每个第 N 帧——
 字幕等 ROI 更新较慢时显著降低处理压力，时间戳仍取真实帧号（准确度基本不变）。
 依赖 decord fork 的 `GetBatch` 等差步长快速路径（版本要求见
-[docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)）。`stride=1`（默认）与
-RaceVideoToLog 完全兼容（零改动）。
+[docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)）。`stride=1`（默认）保持完全兼容
+（零改动）。
 
 > 长视频/大 ROI 且不需要预览图时，`keep_crops=False`、`keep_frames=False` 可
 > 显著降低内存占用（默认 `True` 保持兼容）。注意 `keep_frames=False` 同时清空
@@ -221,7 +220,3 @@ python tools/e2e_smoke.py --video <视频> --roi 843,993,948,1025 --perf --runs 
 
 **Apache-2.0**。本引擎是独立通用库：不依赖 Qt/GUI 组件，无 copyleft 传染，
 可自由用于开源与商业项目（其依赖 decord / PP-OCRv6 亦为宽松或兼容许可）。
-
-> 来源说明：引擎由 RaceVideoToLog（GPL-3.0）拆分而来，代码为原作者原创作品，
-> 拆分时已重新授权为 Apache-2.0。RaceVideoToLog 本身因依赖 GPLv3 组件仍保持
-> GPL-3.0，但可自由包含本引擎。
