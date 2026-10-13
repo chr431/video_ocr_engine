@@ -32,10 +32,13 @@ def test_bare_versions_are_not_pins() -> None:
 
 
 def test_tombstone_pattern_word_boundary() -> None:
-    """负测：`DC-06` 是解码契约用例名，不得被判为死者 `C-06` 的引用（子串误报）。"""
-    pat = _tombstone_pattern({"C-06", "C-24"})
-    assert pat.findall("DC-06") == []
-    assert pat.findall("见 C-06 与 C-24") == ["C-06", "C-24"]
+    """负测：词边界防子串误报——相邻编号与前缀串不得命中（真实事故：解码
+    契约用例名 DC-06 曾被误判为死者编号的引用）。用活结论 id 做测例，
+    避免测试串引用死者、在墓碑清单里常驻噪音。"""
+    pat = _tombstone_pattern({"C-53", "C-08"})
+    assert pat.findall("DC-530") == []
+    assert pat.findall("C-5300") == []
+    assert pat.findall("见 C-53 与 C-08") == ["C-53", "C-08"]
 
 
 def test_comment_coordinate_patterns_hit() -> None:
