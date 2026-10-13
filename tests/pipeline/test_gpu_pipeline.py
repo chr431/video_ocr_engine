@@ -24,15 +24,52 @@ def gpu_ok(monkeypatch):
     monkeypatch.setattr(_gpu, "_cuda_python_available", lambda: True)
 
 
-def test_gpu_pipeline_default_on_for_gray_nvdec_trt(gpu_ok):
-    ex = _make(rep_crop_format="gray")
-    assert ex._gpu_pipeline_enabled() is True
+# 门控判据矩阵：同一谓词 _gpu_pipeline_enabled() 在 (patch, env, 构造 kwargs)
+# 组合下的期望值。单列成表便于逐行读"什么组合该启用 GPU 管线"。
+_GATE_CASES = [
+    ("default_gray", {}, {}, {"rep_crop_format": "gray"}, True),
+    ("opt_out_env", {}, {"GPU_PIPELINE": "0"}, {"rep_crop_format": "gray"}, False),
+    ("requires_trt", {"tensorrt_available": lambda: False}, {}, {"rep_crop_format": "gray"}, False),
+    (
+        "forced_without_trt",
+        {"tensorrt_available": lambda: False},
+        {"GPU_PIPELINE": "1"},
+        {"rep_crop_format": "gray", "ocr_backend": "cpu"},
+        True,
+    ),
+    ("ocr_cpu_host_by_default", {}, {}, {"rep_crop_format": "gray", "ocr_backend": "cpu"}, False),
+    # CPU 解码分支跳过 NVDEC 探测：nvdec_available 为假也应启用
+    (
+        "cpu_decode_ignores_nvdec_probe",
+        {"nvdec_available": lambda p: False},
+        {},
+        {"rep_crop_format": "gray", "decode_backend": "cpu"},
+        True,
+    ),
+    ("hybrid_enabled", {}, {}, {"rep_crop_format": "gray", "decode_backend": "hybrid"}, True),
+    (
+        "nvdec_unavailable",
+        {"nvdec_available": lambda p: False},
+        {},
+        {"rep_crop_format": "gray"},
+        False,
+    ),
+    ("contrast_supported", {}, {"TEXT_SEP_MERGE": "contrast"}, {"rep_crop_format": "gray"}, True),
+    ("force_aspect_supported", {}, {}, {"rep_crop_format": "gray", "force_aspect": 1.5}, True),
+]
 
 
-def test_gpu_pipeline_opt_out_env(gpu_ok, monkeypatch):
-    monkeypatch.setenv("GPU_PIPELINE", "0")
-    ex = _make(rep_crop_format="gray")
-    assert ex._gpu_pipeline_enabled() is False
+@pytest.mark.parametrize(
+    "patches,env,kwargs,expected",
+    [c[1:] for c in _GATE_CASES],
+    ids=[c[0] for c in _GATE_CASES],
+)
+def test_gpu_pipeline_gate(gpu_ok, monkeypatch, patches, env, kwargs, expected):
+    for name, fn in patches.items():
+        monkeypatch.setattr(_gpu, name, fn)
+    for name, val in env.items():
+        monkeypatch.setenv(name, val)
+    assert _make(**kwargs)._gpu_pipeline_enabled() is expected
 
 
 def test_gpu_pipeline_default_yuv_supported(gpu_ok):
@@ -49,44 +86,6 @@ def test_gpu_pipeline_keep_crops_false_no_yuv(gpu_ok):
     # keep_crops=False：无 UV 需求 → decord 直接 gray 输出（省 0.5B/px 传输）
     ex = _make(rep_crop_format="yuv", keep_crops=False)
     assert ex._yuv_output is False
-    assert ex._gpu_pipeline_enabled() is True
-
-
-def test_gpu_pipeline_default_requires_trt(gpu_ok, monkeypatch):
-    # 默认规则：无 TRT → GPU 分段+ONNX 实测无净收益 → 走宿主管线
-    monkeypatch.setattr(_gpu, "tensorrt_available", lambda: False)
-    ex = _make(rep_crop_format="gray")
-    assert ex._gpu_pipeline_enabled() is False
-
-
-def test_gpu_pipeline_forced_without_trt(gpu_ok, monkeypatch):
-    # GPU_PIPELINE=1 强制尝试：允许 GPU 分段+ONNX 等实验组合
-    monkeypatch.setattr(_gpu, "tensorrt_available", lambda: False)
-    monkeypatch.setenv("GPU_PIPELINE", "1")
-    ex = _make(rep_crop_format="gray", ocr_backend="cpu")
-    assert ex._gpu_pipeline_enabled() is True
-
-
-def test_gpu_pipeline_ocr_cpu_host_by_default(gpu_ok):
-    # 默认规则：ocr_backend="cpu"（ONNX）→ 宿主管线（无全程 raw 收益）
-    ex = _make(rep_crop_format="gray", ocr_backend="cpu")
-    assert ex._gpu_pipeline_enabled() is False
-
-
-def test_gpu_pipeline_cpu_decode_enabled_p13(gpu_ok, monkeypatch):
-    # decode_backend="cpu"（显式 CPU 软解）+ TRT → GPU 管线
-    # （每批 H2D 进 GPU 分段/raw OCR，CPU 解码收益与零拷贝 OCR 叠加）
-    ex = _make(rep_crop_format="gray", decode_backend="cpu")
-    assert ex._gpu_pipeline_enabled() is True
-    # CPU 解码分支跳过 NVDEC 探测：nvdec_available 为假也应启用
-    monkeypatch.setattr(_gpu, "nvdec_available", lambda p: False)
-    assert _make(rep_crop_format="gray", decode_backend="cpu")._gpu_pipeline_enabled() is True
-
-
-def test_gpu_pipeline_hybrid_enabled_p83(gpu_ok):
-    # hybrid（decord 原生）：OCR on GPU 时走 hybrid_gpu 驻留显存路径
-    # （设备指针通路），OCR on CPU 时走宿主管线。
-    ex = _make(rep_crop_format="gray", decode_backend="hybrid")
     assert ex._gpu_pipeline_enabled() is True
 
 
@@ -148,28 +147,8 @@ def test_autocrop_min_gain(monkeypatch):
     assert ex2._content_range_to_crop(12, 88, w) is not None
 
 
-def test_gpu_pipeline_unavailable_backends(monkeypatch):
-    monkeypatch.setattr(_gpu, "nvdec_available", lambda p: False)
-    ex = _make(rep_crop_format="gray")
-    assert ex._gpu_pipeline_enabled() is False
-
-
-def test_gpu_pipeline_contrast_supported(gpu_ok, monkeypatch):
-    # contrast 合并判定：边界时 D2H 两帧 → 宿主 _segments_similar（已支持）
-    monkeypatch.setenv("TEXT_SEP_MERGE", "contrast")
-    ex = _make(rep_crop_format="gray")
-    assert ex._gpu_pipeline_enabled() is True
-
-
-def test_gpu_pipeline_force_aspect_supported(gpu_ok):
-    # force_aspect：process_gray_raw 支持强制 content 宽（round 语义）
-    ex = _make(rep_crop_format="gray", force_aspect=1.5)
-    assert ex._gpu_pipeline_enabled() is True
-
-
 def test_merge_effective_mode_resolution(monkeypatch):
-    """env 在**构造期**解析冻结；构造后改 env 不再生效
-    （v1 语义已废除，历史迁移表经 git 档案取回）。"""
+    """env 在**构造期**解析冻结；构造后改 env 不再生效。"""
     ex = _make()
     assert ex._merge_effective_mode() == "binary"
     monkeypatch.setenv("TEXT_SEP_MERGE", "off")

@@ -132,3 +132,28 @@ def test_runconfig_defaults_match_registry():
     rc = resolve(env={})
     for k in KNOBS.knobs:
         assert rc.get(k.name) == k.default, k.name
+
+
+# ── 档位别名与枚举串归一 ────────────────────────────────────────
+def test_resolve_std_alias_maps_to_full_with_warning():
+    """两档化：VOE_TELEMETRY=std 是 full 的受谴责别名。"""
+    import warnings as _w
+
+    from video_ocr_engine.config.resolve import resolve as _resolve
+
+    with _w.catch_warnings(record=True) as rec:
+        _w.simplefilter("always")
+        rc = _resolve(env={"VOE_TELEMETRY": "std"})
+    assert rc.diag_telemetry == "full"
+    assert any(issubclass(r.category, DeprecationWarning) for r in rec)
+
+
+def test_resolve_normalizes_enum_str_case_and_space():
+    """VOE_TELEMETRY 的大小写/空白归一（原样输入会撞非法档位）。"""
+    from video_ocr_engine.config.resolve import _parse
+
+    knob = KNOBS.by_name("diag.telemetry")
+    assert _parse(knob, "FULL") == "full"
+    assert _parse(knob, " off ") == "off"
+    # 未知值原样保留（由消费方显式报错，保持 v1 宽松语义）
+    assert _parse(knob, "bogus") == "bogus"

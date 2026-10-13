@@ -196,3 +196,33 @@ def test_registry_cap():
     from video_ocr_engine.domain.metrics import METRICS
 
     assert len(METRICS.names()) <= METRIC_CAP * 0.8
+
+
+# ── snapshot drain 语义（看门狗取快照不得排干桶）─────────────────
+
+
+def test_snapshot_drain_false_is_readonly():
+    """只读快照回归钉子：看门狗取快照不得排干指标桶。"""
+    m = Metrics(tier="full")
+    m.counter("pipeline.consume_feed_n")
+    peek = m.snapshot(drain=False)
+    assert peek["counters"].get("pipeline.consume_feed_n") == 1
+    # 排干后仍能看到同一条（说明 drain=False 没有清桶）
+    drained = m.snapshot(drain=True)
+    assert drained["counters"].get("pipeline.consume_feed_n") == 1, (
+        "drain=False 的快照把桶吃掉了——停顿后的最终报告将丢失指标"
+    )
+
+
+def test_snapshot_drain_true_still_drains():
+    m = Metrics(tier="full")
+    m.counter("pipeline.consume_feed_n")
+    assert m.snapshot()["counters"].get("pipeline.consume_feed_n") == 1
+    assert not m.snapshot()["counters"].get("pipeline.consume_feed_n")
+
+
+def test_metrics_invalid_tier_raises_valueerror():
+    """非法档位：显式 ValueError（原 assert 无消息、-O 下消失）。"""
+    with pytest.raises(ValueError) as ei:
+        Metrics(tier="FULL")
+    assert "off/full" in str(ei.value)
