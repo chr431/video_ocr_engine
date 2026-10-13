@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
+from video_ocr_engine.config import constants as config
 from video_ocr_engine.config.decode_caliber import decode_num_threads
 from video_ocr_engine.decode.contract import probe_contract
 from video_ocr_engine.domain.segmentation import (
@@ -288,7 +289,11 @@ class DecordFrameSource:
                     and (_seek_safe or self._frame_start < (self._frame_end - self._frame_start))
                     and self._frame_end - self._frame_start < len(vr)
                 ):
-                    _sdw(self._frame_end - self._frame_start)
+                    # 窗长 = max(请求长, HYBRID_WINDOW_MIN)：窗缘贴近请求边界
+                    # 会让 fork 泵落 Pop 饿死派工路径、把 GOP 系统性判给
+                    # NVDEC 臂（实测供给 −45%~−51%；见 constants 注释）。
+                    _win_len = self._frame_end - self._frame_start
+                    _sdw(min(len(vr), max(_win_len, config.HYBRID_WINDOW_MIN)))
                 self.backend_label = "decord/hybrid"
                 logger.info(
                     "混合解码开启(原生): codec=%s ctx=hybrid cpuT=%d",

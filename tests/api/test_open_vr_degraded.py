@@ -189,11 +189,32 @@ def test_gpu_shape_fallback_delegates_to_host(fake_decord, monkeypatch):
 
 
 def test_hard_window_set_when_start_before_window(fake_decord):
-    """早起点（start < 窗长）：谓词成立 → set_decode_window(窗长) 被调。"""
+    """早起点（start < 窗长）：谓词成立 → set_decode_window(下限) 被调。
+
+    窗长**不等于**请求长：窗缘贴近请求边界会让 fork 泵落 Pop 饿死派工
+    路径（GOP 判给 NVDEC 臂，hybrid 供给 −45%~−51%，见 constants 注释与
+    HYBRID_WINDOW_MIN）。
+    """
     ex = _make(decode_backend="hybrid", frame_start=0, frame_end=3000)
     vr = ex._open_vr()
     assert ex._backend == "decord/hybrid"
-    assert vr.decode_window_calls == [3000]
+    assert vr.decode_window_calls == [9000]  # max(3000, HYBRID_WINDOW_MIN=9000)
+
+
+def test_hard_window_short_request_uses_floor(fake_decord):
+    """短请求（1500 帧）：窗长取下限 9000（短窗即使加余量也不健康——
+    1500 帧请求在窗 2400 下仍落饿死派工路径，冷态阈值实测 6000~9000）。"""
+    ex = _make(decode_backend="hybrid", frame_start=0, frame_end=1500)
+    vr = ex._open_vr()
+    assert vr.decode_window_calls == [9000]
+
+
+def test_hard_window_long_request_capped_by_total(fake_decord):
+    """窗长受总帧数封顶（min(len(vr), ...)）：不越界声明。"""
+    ex = _make(decode_backend="hybrid", frame_start=0, frame_end=49000)
+    vr = ex._open_vr()
+    assert vr._n == 50000
+    assert vr.decode_window_calls == [49000]  # max(49000, 9000)=49000（未触顶）
 
 
 def test_hard_window_skipped_for_late_start(fake_decord):
@@ -225,4 +246,4 @@ def test_hard_window_late_start_with_seek_safe_contract(fake_decord):
     ex = _make(decode_backend="hybrid", frame_start=5000, frame_end=6000)
     vr = ex._open_vr()
     assert ex._backend == "decord/hybrid"
-    assert vr.decode_window_calls == [1000]
+    assert vr.decode_window_calls == [9000]  # max(1000, HYBRID_WINDOW_MIN=9000)
