@@ -433,3 +433,10 @@
   evidence:
   - commit: c5d64eb
     note: log 同日
+- id: C-81
+  conclusion: '**CI 不配置 GPU runner（封案）**——单机单贡献者，发布证据随 tag 归档（金标 manifest+bench 快照+kpi）；GPU/视频门禁保持 local-gate，CI 只跑机器无关面'
+  status: active
+  premises: 单机单贡献者；GPU/视频门禁依赖本机 fork DLL 与真值视频语料
+  revisit: 第二台机器或第二贡献者出现；local-gate 长期无人执行
+  evidence:
+  - path: .github/workflows/ci.yml

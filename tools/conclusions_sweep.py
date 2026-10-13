@@ -71,6 +71,110 @@ def _tombstone_pattern(ids: set[str]) -> re.Pattern[str]:
     return re.compile(r"(?<![A-Za-z0-9@-])(?:%s)\b" % "|".join(re.escape(c) for c in sorted(ids)))
 
 
+# ── 注释历史坐标扫描（adv-comment-present-tense 的机器面：只列清单不拦，发版复核） ──
+# 判据保守：只扫 py 的注释 token 与 docstring 行、配置文件的整行 # 注释——
+# 代码与字符串字面量不扫（数据值里的数字不可判定）。活标识（PI-N、S0-C1、
+# fork@C-NN、decord@x.y.z、R-名/adv-名）不在模式内，不会命中。
+_COMMENT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    (
+        "旧编号",
+        re.compile(
+            r"\bS\d{1,2}-\d{1,2}\b|\b(?:R|D|Q)\d{1,2}\b|铁律\s*\d|裁决\s*\d|Phase\s+[A-E0-9]|第[一二三四五六七八九十]+轮"
+        ),
+    ),
+    (
+        "出树文档",
+        re.compile(
+            r"(?<!rework:)docs/(?:log/|PERFORMANCE\.md|DECISIONS\.md|MIGRATION\.md|ARCHIVE\.md)|(?<!/)knowledge/"
+        ),
+    ),
+    ("日期坐标", re.compile(r"\b20\d{2}-\d{2}-\d{2}\b")),
+]
+# 扫描器自证材料豁免（同 refs NEGATIVE_FIXTURES 哲学：坏样例字符串会命中自身）
+_COMMENT_SCAN_EXEMPT = {"test_sweep_pins.py"}
+
+
+def _comment_hits(seg: str) -> list[tuple[str, str]]:
+    """一段注释文本命中的坐标（kind, match）；空=干净。负测见 test_sweep_pins。"""
+    out = []
+    for kind, pat in _COMMENT_PATTERNS:
+        m = pat.search(seg)
+        if m:
+            out.append((kind, m.group(0)))
+    return out
+
+
+def _iter_comment_segments(text: str):
+    """产出 (行号, 注释段)：tokenize 的 COMMENT + AST 定位的 docstring 行。"""
+    import ast as _ast
+    import tokenize as _tk
+
+    doc_lines: set[int] = set()
+    try:
+        tree = _ast.parse(text)
+        for n in _ast.walk(tree):
+            if isinstance(n, (_ast.Module, _ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef)):
+                b = getattr(n, "body", [])
+                if (
+                    b
+                    and isinstance(b[0], _ast.Expr)
+                    and isinstance(b[0].value, _ast.Constant)
+                    and isinstance(b[0].value.value, str)
+                ):
+                    doc_lines.update(
+                        range(
+                            b[0].value.lineno,
+                            getattr(b[0].value, "end_lineno", b[0].value.lineno) + 1,
+                        )
+                    )
+    except SyntaxError:
+        pass
+    for i, line in enumerate(text.split("\n"), 1):
+        if i in doc_lines:
+            yield i, line
+    try:
+        for t in _tk.generate_tokens(_io.StringIO(text).readline):
+            if t.type == _tk.COMMENT:
+                yield t.start[0], t.string
+    except _tk.TokenError:
+        pass
+
+
+def _print_comment_coordinates() -> None:
+    """注释历史坐标清单（发版复核；历史看 git——本清单是两轮人工清理后的常设网）。"""
+    hits: list[str] = []
+    for d in (ROOT_PATH / "video_ocr_engine", ROOT_PATH / "tools", ROOT_PATH / "tests"):
+        if not d.is_dir():
+            continue
+        for p in sorted(d.rglob("*.py")):
+            if "__pycache__" in p.parts or p.name in _COMMENT_SCAN_EXEMPT:
+                continue
+            try:
+                text = io.open(p, encoding="utf-8").read()
+            except OSError:
+                continue
+            rel = p.relative_to(ROOT_PATH).as_posix()
+            for ln, seg in _iter_comment_segments(text):
+                for kind, mt in _comment_hits(seg):
+                    hits.append("%s:%d  %s  %s" % (rel, ln, kind, mt))
+                    break
+    for cfg in ("pyproject.toml", ".github/workflows/ci.yml", ".gitignore"):
+        p = ROOT_PATH / cfg
+        if not p.is_file():
+            continue
+        for i, line in enumerate(io.open(p, encoding="utf-8").read().split("\n"), 1):
+            if not line.lstrip().startswith("#"):
+                continue  # 只扫整行注释（保守：行内值不判）
+            for kind, mt in _comment_hits(line):
+                hits.append("%s:%d  %s  %s" % (cfg, i, kind, mt))
+                break
+    if not hits:
+        return
+    print("\n注释历史坐标清单（发版复核——现在时化或删，历史看 git）：")
+    for h in hits:
+        print("  " + h)
+
+
 def _print_tombstone_refs() -> None:
     """墓碑引用清单（adv-comment-present-tense 的 note：出源引用复核同循该原则）。
 
@@ -176,6 +280,7 @@ def main() -> int:
         for cid, t in trigger_info:
             print("  %-6s %s" % (cid, t))
     _print_tombstone_refs()
+    _print_comment_coordinates()
 
     print(
         "\n处理：确认失效→状态翻 superseded/dead 并出源（全文随出源提交进"

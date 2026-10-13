@@ -80,7 +80,7 @@ extend-exclude = ["tools/probes", "*.md"]
 [tool.ruff.lint]
 # S110（try-except-pass）豁免=行内 `# noqa: S110 <理由>`，无登记账本。
 # RUF100：未用/未启用的 noqa 即红——豁免必须仍在抑制真实违规（惰性
-# noqa 是 S0-G4 豁免腐化族的静态通道，2026-10-13 实测曾积 95 处）。
+# noqa 是 S0-G4 豁免腐化族的静态通道，审计实测曾积 95 处）。
 select = ["E4", "E7", "E9", "F", "S110", "RUF100"]
 
 [tool.ruff.format]
@@ -109,7 +109,7 @@ files = ["video_ocr_engine/domain", "video_ocr_engine/pipeline",
          "tools/conclusions_sweep.py", "tools/_audit_ext.py", "tools/health.py"]
 follow_imports = "skip"
 # 未用的 type: ignore 即红——与 ruff RUF100 同一原则：豁免必须仍在生效
-#（死 ignore 是 S0-G4 豁免腐化族的 mypy 通道，2026-10-13 实测曾积 6 处）。
+#（死 ignore 是 S0-G4 豁免腐化族的 mypy 通道，审计实测曾积 6 处）。
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]

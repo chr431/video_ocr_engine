@@ -6,8 +6,8 @@ compute → registry/kpi.yaml（数据事实源）；docs/HEALTH.md 由 render.p
   injection_bytes   注入核字节（AGENTS.md ≤6144，宪章不变量 5——触碰=警报）
   charter_bytes     宪章 ≤2048（手写制度文本的唯一处）
   gov_corpus_bytes  树内治理语料（charter+registry+视图+当轮 log+artifacts）
-  gov_commit_share  全史治理类提交占比（pathspec 口径）
-  pure_gov_share    纯治理轮占比（该提交不触产品/测试代码）
+  gov_commit_share  治理类提交占比（近 50 提交窗口；pathspec 口径）
+  pure_gov_share    纯治理轮占比（近 50 提交窗口；不触产品/测试代码）
   body_p90          提交正文长度 p90（adv-commit-slim ≤600）
   dangling_refs     refs check 违规数（目标 0；直接复用 refs.check 结果）
 """
@@ -79,10 +79,15 @@ def _dir_bytes(paths: list[str]) -> int:
     return total
 
 
+WINDOW = 50  # 占比口径=近 N 提交窗口：全史占比在治理密集期不可恢复地红，
+# 只会训练人忽视红色（狼来了）；窗口口径随常规开发回落即可变绿。
+
+
 def _commit_shares() -> tuple[float, float]:
-    total = [h for h in _git("log", "--format=%H").splitlines() if h.strip()]
-    gov = set(_git("log", "--format=%H", "--", *GOV_PATHSPEC).splitlines())
-    prod = set(_git("log", "--format=%H", "--", *PRODUCT_PATHSPEC).splitlines())
+    total = [h for h in _git("log", "--format=%H", "-n", str(WINDOW)).splitlines() if h.strip()]
+    gov = set(_git("log", "--format=%H", "-n", str(WINDOW), "--", *GOV_PATHSPEC).splitlines())
+    prod = set(_git("log", "--format=%H", "-n", str(WINDOW), "--", *PRODUCT_PATHSPEC).splitlines())
+    gov &= set(total)
     pure_gov = gov - prod
     n = max(len(total), 1)
     return 100.0 * len(gov) / n, 100.0 * len(pure_gov) / n
@@ -122,8 +127,16 @@ def compute() -> dict:
                 "value": _dir_bytes(GOV_CORPUS),
                 "target": "≤100KB（benchmarks 归档后）",
             },
-            {"name": "治理类提交占比（全史）", "value": round(gov_share, 1), "target": "≤25%"},
-            {"name": "纯治理轮占比（全史）", "value": round(pure_share, 1), "target": "≤15%"},
+            {
+                "name": "治理类提交占比（近50提交）",
+                "value": round(gov_share, 1),
+                "target": "≤25%",
+            },
+            {
+                "name": "纯治理轮占比（近50提交）",
+                "value": round(pure_share, 1),
+                "target": "≤15%",
+            },
             {"name": "提交信息行 p90（字符）", "value": _body_p90(), "target": "≤600"},
             {"name": "悬空引用（refs）", "value": dangling, "target": "0"},
         ],
@@ -145,9 +158,8 @@ def check() -> int:
     stored = yaml.safe_load(io.open(KPI, encoding="utf-8").read())
     fresh = compute()
 
-    # 时点敏感指标（shares/generated_at）不比对，只比对状态类
     # 时点敏感指标（随每次提交漂移）不比对：占比类 + p90
-    VOLATILE = ("治理类提交占比（全史）", "纯治理轮占比（全史）", "提交信息行 p90（字符）")
+    VOLATILE = ("治理类提交占比（近50提交）", "纯治理轮占比（近50提交）", "提交信息行 p90（字符）")
 
     def stable(m: dict) -> list:
         return [r for r in m["metrics"] if r["name"] not in VOLATILE]

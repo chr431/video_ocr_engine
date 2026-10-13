@@ -4,7 +4,7 @@
 no_import_side_effects / metrics_coverage / rules_schema /
 probe_hooks_resolve / render_consistency / decord_pin /
 deprecation_due / dependency_floors / gate_manifest / injection_budget /
-negative_fixtures。
+negative_fixtures / probe_age。
 未设检查：docs_budget / baseline_liveness / deprecated_shim_usage——
 对应制度对象已不存在。引用检查项一律按名（编号会重排，名字不会）。
 """
@@ -399,6 +399,48 @@ def check_dependency_floors() -> str | None:
     return None
 
 
+def _probe_stale(tag_counts: dict[str, int], rounds: int = 2) -> list[str]:
+    """超龄判据（纯函数，负测见 tests/registry/test_audit_ext.py）。
+
+    tag_counts=每个探针"最后触达提交之后已发生的发版 tag 数"
+    （`git tag --contains <最后触达提交>`）；≥rounds 即超龄。
+    """
+    return sorted(name for name, n in tag_counts.items() if n >= rounds)
+
+
+def check_probe_age() -> str | None:
+    """探针生命周期（宪章不变量 4：探针留近两轮，轮=发版）。
+
+    超龄即红——红就是出树提醒（出树=删文件进 git 档案，人看过再动）。
+    未跟踪的新探针（无提交）不超龄。
+    """
+    probes_dir = ROOT / "tools" / "probes"
+    counts: dict[str, int] = {}
+    if probes_dir.is_dir():
+        for p in sorted(probes_dir.glob("_probe_*.py")):
+            rel = p.relative_to(ROOT).as_posix()
+            sha = subprocess.run(
+                ["git", "-C", str(ROOT), "log", "-1", "--format=%H", "--", rel],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            ).stdout.strip()
+            if not sha:
+                counts[p.name] = 0
+                continue
+            tags = subprocess.run(
+                ["git", "-C", str(ROOT), "tag", "--contains", sha],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            ).stdout.split()
+            counts[p.name] = len(tags)
+    stale = _probe_stale(counts)
+    if stale:
+        return "探针超龄（留近两轮，轮=发版；出树进 git 档案）：%s" % "、".join(stale)
+    return None
+
+
 def check_negative_fixtures() -> str | None:
     """负测夹具豁免的自证（R-exemption-live）。
 
@@ -434,6 +476,7 @@ CHECKS_EXT = {
     "negative_fixtures": ("negative_fixtures 负测夹具自证", check_negative_fixtures),
     "no_import_side_effects": ("no_import_side_effects", check_no_import_side_effects),
     "no_shim_duplication": ("no_shim_duplication 转发壳", check_no_shim_duplication),
+    "probe_age": ("probe_age 探针生命周期", check_probe_age),
     "probe_hooks_resolve": ("probe_hooks_resolve 打桩点表", check_probe_hooks_resolve),
     "render_consistency": ("render_consistency 渲染一致", check_render_consistency),
     "rules_schema": ("rules_schema 规则注册表", check_rules_schema),

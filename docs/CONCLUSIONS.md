@@ -52,6 +52,7 @@
 | C-79 | **线程矩阵竞态审计（fork@C-78 后）**——真 bug：fallback 泵请求无服务者（消费 retry 补内联）；side_pending_ 原子化；eof-starve 动门前锁内复核；诊断打印入锁。窗界/kf/SetRoi 靠停泊+启动序保证。CU 冻结休眠（27 次零触发）；相位探针入冻结打印=复发即定位 | 4060M/32LP；fork 0.9.8 | 泵线程模型再动 / CU 冻结复发看 phase | log 同日 §18（3ab4499） |
 | C-76 | **引擎 hybrid 传输恒选宿主输出（hybrid(0)）**——gpu-out 上载中转（H2D 攒批/同步）−13% 流交付（A/B 3805→3252）；宿主帧+OCR 上传 crop=cpu 后端同通路；配套 SetRoi 深银行出 out_cuda_ 门（否则 GPU 置速码 CPU 臂冲 1536 帽，av1 82.9→94.1%）。三码验收 92.6-95.4%（0.9.8） | 4060M/32LP；fork 0.9.8；引擎 0.26.2；TRT OCR | fork 传输重设计 / 显存驻留管线换代 | log 同日 §16（d184d5c） |
 | C-80 | **第一性审查轮（P0+P1 修复）**——守卫空转×2（sweep --strict，11钉版由不可见转门禁可见；路径正则引号漏配）；digest 收 env-live 实值+override 拒收（指纹语义变更）；CUDA 错误落检查（原弃置=热路径垃圾数）；hist 桶界 2×；crop 形状硬失败；warmup 假 skip 转真门禁；余修与积压=log 同日 | 引擎 0.26.2 | CUDA/驱动换代复评错误面；新守卫/新旋钮按同判据自检 | log 同日（c5d64eb） |
+| C-81 | **CI 不配置 GPU runner（封案）**——单机单贡献者，发布证据随 tag 归档（金标 manifest+bench 快照+kpi）；GPU/视频门禁保持 local-gate，CI 只跑机器无关面 | 单机单贡献者；GPU/视频门禁依赖本机 fork DLL 与真值视频语料 | 第二台机器或第二贡献者出现；local-gate 长期无人执行 | .github/workflows/ci.yml |
 
 （复评/清扫：python tools/conclusions_sweep.py --strict，发版必跑。）
 

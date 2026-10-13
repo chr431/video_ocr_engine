@@ -180,3 +180,9 @@ def test_negative_fixtures_catches_dead_member(monkeypatch):
 
     monkeypatch.setattr(refs, "NEGATIVE_FIXTURES", {"no_such_fixture_test.py"})
     assert "no_such_fixture_test.py" in (ae.check_negative_fixtures() or "")
+
+
+def test_probe_age_catches_stale():
+    """坏例：探针最后触达后已过 ≥2 个发版 tag（超龄即红）。"""
+    counts = {"_probe_old.py": 2, "_probe_fresh.py": 1, "_probe_new.py": 0}
+    assert ae._probe_stale(counts) == ["_probe_old.py"]
