@@ -186,3 +186,74 @@ def test_probe_age_catches_stale():
     """坏例：探针最后触达后已过 ≥2 个发版 tag（超龄即红）。"""
     counts = {"_probe_old.py": 2, "_probe_fresh.py": 1, "_probe_new.py": 0}
     assert ae._probe_stale(counts) == ["_probe_old.py"]
+
+
+def test_worktree_clean_catches_untracked(monkeypatch):
+    """坏例：工作树出现未纳管文件（porcelain 的 `?? ` 行）。"""
+    fake = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="?? scratch_note.py\n M a.py\n", stderr=""
+    )
+    monkeypatch.setattr(ae.subprocess, "run", lambda *a, **k: fake)
+    assert "scratch_note.py" in (ae.check_worktree_clean() or "")
+
+
+def test_no_literal_tmp_catches_literal_string(tmp_path, monkeypatch):
+    """坏例：产品文件里出现字面临时目录路径（拼接构造，测试自身不含该串）。"""
+    root = _mini_root(tmp_path)
+    (root / "video_ocr_engine" / "leaky.py").write_text(
+        'import os\nP = "' + "/" + "tmp" + '/x"\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(ae, "ROOT", root)
+    assert "leaky.py" in (ae.check_no_literal_tmp() or "")
+
+
+def test_no_literal_tmp_spares_docstring(tmp_path, monkeypatch):
+    """精度：docstring 里提及该路径不算违规（禁的是字符串用法）。"""
+    root = _mini_root(tmp_path)
+    (root / "video_ocr_engine" / "clean.py").write_text(
+        '"""说明：不要写 ' + "/" + "tmp" + ' 字面量。"""\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(ae, "ROOT", root)
+    assert ae.check_no_literal_tmp() is None
+
+
+def test_ignore_liveness_catches_dead_entry(tmp_path, monkeypatch):
+    """坏例：具体路径型 ignore 条目已无目标且无行内理由。"""
+    root = _mini_root(tmp_path)
+    (root / ".gitignore").write_text("tools/_gone_probe_dir/\n", encoding="utf-8")
+    monkeypatch.setattr(ae, "ROOT", root)
+    assert "_gone_probe_dir" in (ae.check_ignore_liveness() or "")
+
+
+def test_ignore_liveness_reason_spares(tmp_path, monkeypatch):
+    """精度：带行内理由的条目即使暂无目标也放行（豁免内联化）。"""
+    root = _mini_root(tmp_path)
+    (root / ".gitignore").write_text("tools/_future_out/  # 新写方落脚点\n", encoding="utf-8")
+    monkeypatch.setattr(ae, "ROOT", root)
+    assert ae.check_ignore_liveness() is None
+
+
+def test_guard_declarations_catches_missing_negative(tmp_path, monkeypatch):
+    """坏例：非 advisory 规则缺 negative（守卫声明不完备）。"""
+    root = _mini_root(tmp_path)
+    (root / "registry").mkdir()
+    (root / "registry" / "rules.yaml").write_text(
+        "- id: TEST_RULE\n  statement: s\n  enforcement: ci\n"
+        '  executor: x\n  prevents: S0-A1\n  env: "无"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ae, "ROOT", root)
+    assert "缺 negative" in (ae.check_guard_declarations() or "")
+
+
+def test_guard_declarations_catches_dead_negative_path(tmp_path, monkeypatch):
+    """坏例：negative 声明指向不存在的测试文件。"""
+    root = _mini_root(tmp_path)
+    (root / "registry").mkdir()
+    (root / "registry" / "rules.yaml").write_text(
+        "- id: TEST_RULE\n  statement: s\n  enforcement: ci\n  executor: x\n"
+        '  prevents: S0-A1\n  env: "无"\n  negative: "tests/nope.py"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ae, "ROOT", root)
+    assert "路径不存在" in (ae.check_guard_declarations() or "")

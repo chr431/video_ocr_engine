@@ -28,7 +28,9 @@ import io
 from pathlib import Path
 import os
 import re
+import subprocess
 import sys
+import time
 
 import io as _io
 
@@ -138,6 +140,75 @@ def _iter_comment_segments(text: str):
                 yield t.start[0], t.string
     except _tk.TokenError:
         pass
+
+
+def _hygiene_rows(cands: list[tuple[str, float, int]], now: float, days: int) -> list[str]:
+    """超龄候选（名, mtime, 字节）→ 清单行——纯函数，负测见 test_sweep_pins。"""
+    rows = [
+        "%s（%.1f MB，%.0f 天）" % (rel, sz / 1e6, (now - mt) / 86400)
+        for rel, mt, sz in cands
+        if (now - mt) / 86400 >= days
+    ]
+    return sorted(rows)
+
+
+def _worktree_hygiene_items(days: int = 14) -> list[str]:
+    """忽略域里超龄的运行产物/草稿（仓根与 tools/ 两处；大块运行域与工具缓存不列）。
+
+    忽略 ≠ 退出：宪章 L4"一切对象有退出"覆盖到 ignore 域——发版时清一次。
+    工具缓存（.mypy_cache/.ruff_cache/.pytest_cache/__pycache__）与 agent
+    会话目录自管自清，不属复核对象。
+    """
+    skip = (
+        ".mypy_cache/",
+        ".ruff_cache/",
+        ".pytest_cache/",
+        ".venv/",
+        ".zcode/",
+        ".claude/",
+        ".workbuddy/",
+    )
+    cands: list[tuple[str, float, int]] = []
+    paths: list[tuple[Path, str]] = []
+    for scope, keep_dirs in ((ROOT_PATH, False), (ROOT_PATH / "tools", True)):
+        if not scope.is_dir():
+            continue
+        for p in sorted(scope.glob("*")):
+            if p.is_dir() and not keep_dirs and p.name != "_scratch":
+                continue  # 仓根只扫文件与 _scratch/（bench/ 等子域各有政策）
+            files = [p] if p.is_file() else [q for q in p.rglob("*") if q.is_file()]
+            for q in files:
+                rel = q.relative_to(ROOT_PATH).as_posix()
+                if "__pycache__" in q.parts or rel.startswith(skip) or rel.startswith(".git/"):
+                    continue
+                paths.append((q, rel))
+    # 一次 check-ignore（--stdin -z）批量判定——逐文件 subprocess 在 Windows 上 ~0.2s/次。
+    # 必须 -z + bytes 输入：文本模式会把 \n 翻成 \r\n，git 把 \r 当路径一部分而不匹配。
+    r = subprocess.run(
+        ["git", "-C", ROOT, "check-ignore", "--stdin", "-z"],
+        input="\0".join(rel for _, rel in paths).encode("utf-8"),
+        capture_output=True,
+    )
+    ignored = {x.decode("utf-8") for x in (r.stdout or b"").split(b"\0") if x}
+    for q, rel in paths:
+        if rel not in ignored:
+            continue
+        try:
+            st = q.stat()
+        except OSError:
+            continue
+        cands.append((rel, st.st_mtime, st.st_size))
+    return _hygiene_rows(cands, time.time(), days)
+
+
+def _print_worktree_hygiene() -> None:
+    """工作树卫生清单（发版复核）：忽略域超龄物——忽略≠退出，复核时清一次。"""
+    items = _worktree_hygiene_items()
+    if not items:
+        return
+    print("\n工作树卫生清单（忽略域超龄物，发版复核——忽略≠退出）：")
+    for it in items:
+        print("  " + it)
 
 
 def _print_comment_coordinates() -> None:
@@ -288,6 +359,7 @@ def main() -> int:
         for cid, t in trigger_info:
             print("  %-6s %s" % (cid, t))
     _print_tombstone_refs()
+    _print_worktree_hygiene()
     _print_comment_coordinates()
 
     print(

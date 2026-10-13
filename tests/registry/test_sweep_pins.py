@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 from conclusions_sweep import (  # noqa: E402
     _PIN,
     _comment_hits,
+    _hygiene_rows,
     _tombstone_pattern,
 )
 
@@ -53,3 +54,15 @@ def test_comment_coordinate_patterns_spared() -> None:
     """负测：活标识与档案锚点不得误报。"""
     assert _comment_hits("见 PI-10、S0-C1、fork@C-77、decord@0.9.8、R-perf-quiet") == []
     assert _comment_hits("迁移表见 git 档案 archive/pre-rework:docs/MIGRATION.md") == []
+
+
+def test_worktree_hygiene_age_filter() -> None:
+    """卫生清单只列超龄物（忽略≠退出），新物不列。"""
+    now = 1_000_000_000.0
+    day = 86400.0
+    cands = [
+        ("tools/_old.log", now - 30 * day, 2_000_000),
+        ("tools/_fresh.log", now - 1 * day, 10),
+    ]
+    rows = _hygiene_rows(cands, now, days=14)
+    assert len(rows) == 1 and rows[0].startswith("tools/_old.log（2.0 MB，30 天）")

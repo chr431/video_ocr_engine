@@ -272,3 +272,17 @@ def test_snapshot_and_report_scale_with_records():
     cost_ms = (time.perf_counter() - t) * 1000
     assert rep["report_version"] >= 2
     assert cost_ms < 8.0, "full 档收尾组装 %.2fms（样本翻 4 倍仍须 <8ms）" % cost_ms
+
+
+def test_cost_budget_can_trip_on_injected_inflation():
+    """坏例（C2 守护卫本身）：per-run 注入额外工作后，增量必须越过 2ms 预算——
+    这是"预算能失败"的实体证据（否则预算只是恒绿装饰）。注入量级（~10ms）
+    远超机器噪声，REPLAYS 取小值即可稳定复现。"""
+
+    def inflated(m) -> None:
+        _one_run_base(m)
+        sum(i * i for i in range(300_000))  # 每次注入 ~10ms 量级
+
+    base = _median_cost(_one_run_base, 5, tier="off")
+    ms = _median_cost(inflated, 5) - base
+    assert ms > 2.0, "注入膨胀后增量 %.3fms 仍低于预算——预算判据失明" % ms

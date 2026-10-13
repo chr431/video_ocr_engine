@@ -4,7 +4,8 @@
 no_import_side_effects / metrics_coverage / rules_schema /
 probe_hooks_resolve / render_consistency / decord_pin /
 deprecation_due / dependency_floors / gate_manifest / injection_budget /
-negative_fixtures / probe_age。
+negative_fixtures / probe_age / worktree_clean / no_literal_tmp /
+ignore_liveness / guard_declarations。
 未设检查：docs_budget / baseline_liveness / deprecated_shim_usage——
 对应制度对象已不存在。引用检查项一律按名（编号会重排，名字不会）。
 """
@@ -441,6 +442,163 @@ def check_probe_age() -> str | None:
     return None
 
 
+def _untracked_from_porcelain(text: str) -> list[str]:
+    """porcelain 输出里的非忽略未跟踪项（`?? ` 行）——纯函数，负测见 test_audit_ext。"""
+    return [ln[3:].strip() for ln in text.splitlines() if ln.startswith("?? ")]
+
+
+def check_worktree_clean() -> str | None:
+    """工作树卫生（R-worktree-clean）：非忽略的未跟踪文件/目录即红。
+
+    宪章 L4"工作树只放现役物"的机器面。三类产物归属：①入库证据（工具写、
+    随发版提交）；②运行产物（只落已忽略路径、可重生）；③一次性草稿落
+    `_scratch/`（已忽略）。副作用：`git add -A` 从此不会把草稿卷进提交。
+    """
+    r = subprocess.run(
+        ["git", "-C", str(ROOT), "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    items = _untracked_from_porcelain(r.stdout or "")
+    if items:
+        shown = "、".join(items[:5])
+        more = "（+%d）" % (len(items) - 5) if len(items) > 5 else ""
+        return "工作树有未纳管文件（入库 / 进 ignore / 删）：%s%s" % (shown, more)
+    return None
+
+
+def _literal_tmp_hits(src: str) -> list[int]:
+    """字符串常量里的字面 /tmp 命中行号（跳过 docstring）——纯函数，负测见 test_audit_ext。"""
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return []
+    doc_lines: set[int] = set()
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            b = getattr(n, "body", [])
+            if (
+                b
+                and isinstance(b[0], ast.Expr)
+                and isinstance(b[0].value, ast.Constant)
+                and isinstance(b[0].value.value, str)
+            ):
+                doc_lines.update(
+                    range(
+                        b[0].value.lineno, getattr(b[0].value, "end_lineno", b[0].value.lineno) + 1
+                    )
+                )
+    return [
+        n.lineno
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Constant)
+        and isinstance(n.value, str)
+        and ("/" + "tmp") in n.value
+        and n.lineno not in doc_lines
+    ]
+
+
+def check_no_literal_tmp() -> str | None:
+    """禁字面 /tmp（R-worktree-clean）：Windows 下它解析为 <当前盘符>\\tmp，
+    与 Git Bash 的 /tmp（%TEMP%）不是同一目录——静默写错地方（实测：D:\\tmp
+    曾积 83MB 探针产物）。临时目录一律 tempfile.gettempdir() / tmp_path。
+    """
+    bad = []
+    files = _product_files()
+    for base in (ROOT / "tests", ROOT / "tools"):
+        if base.is_dir():
+            files += [p for p in base.rglob("*.py") if "__pycache__" not in p.parts]
+    for p in files:
+        if p.name == "_audit_ext.py":
+            continue  # 审计自身定义禁串（同 test_audit_sentinels 的自排除）
+        for ln in _literal_tmp_hits(io.open(p, encoding="utf-8").read())[:1]:
+            bad.append("%s:%d" % (p.relative_to(ROOT).as_posix(), ln))
+    for cfg in ("pyproject.toml", ".gitignore"):
+        p = ROOT / cfg
+        if p.is_file() and ("/" + "tmp") in p.read_text(encoding="utf-8"):
+            bad.append(cfg)
+    # .github/workflows/** 不扫：CI shell 是 bash（ubuntu 与 windows runner 皆然），
+    # /tmp 在那里是正确惯用法；危险面是本地/产品代码里被当成系统临时目录用。
+    if bad:
+        return "字面 /tmp（Windows 落到盘符根；用 tempfile/tmp_path）：%s" % "、".join(bad[:4])
+    return None
+
+
+def _ignore_specific_dead(entries: list[str], root: Path) -> list[str]:
+    """具体路径型 ignore 条目里"匹配不到任何东西且无内联理由"的——纯函数，负测见 test_audit_ext。
+
+    具体路径型 = 去尾斜杠后仍含 "/" 的条目（`tools/xxx`）；裸目录名
+    （build/、.venv/）与通配条目（*.mp4）属预防性，不判。目标消失的
+    具体条目就是腐化豁免——删或补行内 `# 理由`（同 R-exemption-live）。
+    """
+    dead = []
+    for raw in entries:
+        line = raw.split("#", 1)[0].rstrip()
+        s = line.strip()
+        if not s or s.startswith("!") or "*" in s or "?" in s:
+            continue
+        name = s.rstrip("/")
+        if "/" not in name:
+            continue
+        if (root / name).exists():
+            continue
+        if "#" in raw and raw.split("#", 1)[1].strip():
+            continue  # 行内理由（豁免内联化）
+        dead.append(s)
+    return dead
+
+
+def check_ignore_liveness() -> str | None:
+    """ignore 条目活性（R-worktree-clean）：具体路径型条目必须命中目标或带理由。"""
+    dead: list[str] = []
+    for fn in (".gitignore", ".rgignore"):
+        p = ROOT / fn
+        if not p.is_file():
+            continue
+        dead += [
+            "%s:%s" % (fn, s)
+            for s in _ignore_specific_dead(io.open(p, encoding="utf-8").read().split("\n"), ROOT)
+        ]
+    if dead:
+        return "ignore 条目已无目标（删或补行内理由）：%s" % "、".join(dead)
+    return None
+
+
+def check_guard_declarations() -> str | None:
+    """守卫声明完备（R-guard-reliable）：非 advisory 规则必须声明 `env:`
+    （环境依赖）与 `negative:`（负测）——负测为路径时必须存在，或用
+    固定形式之一（工具内建 / 内嵌自检 / 协议内建）。声明本身受审计，
+    守卫的环境依赖不再只活在事故记忆里。
+    """
+    import yaml
+
+    p = ROOT / "registry" / "rules.yaml"
+    if not p.exists():
+        return "registry/rules.yaml 缺失"
+    entries = yaml.safe_load(io.open(p, encoding="utf-8").read()) or []
+    bad = []
+    for e in entries:
+        if not isinstance(e, dict) or "id" not in e or e.get("enforcement") == "advisory":
+            continue
+        rid = e["id"]
+        if not str(e.get("env", "")).strip():
+            bad.append("%s 缺 env" % rid)
+            continue
+        neg = str(e.get("negative", "")).strip()
+        if not neg:
+            bad.append("%s 缺 negative" % rid)
+        elif neg.startswith(("工具内建", "内嵌自检", "协议内建")):
+            continue  # 固定形式（工具自带判据 / 内嵌自检 / 协议内建；可带括注说明）
+        else:
+            path = neg.split("::")[0]
+            if not (ROOT / path).is_file():
+                bad.append("%s negative 路径不存在：%s" % (rid, path))
+    if bad:
+        return "守卫声明不完备（R-guard-reliable）：" + "；".join(bad[:5])
+    return None
+
+
 def check_negative_fixtures() -> str | None:
     """负测夹具豁免的自证（R-exemption-live）。
 
@@ -469,17 +627,21 @@ CHECKS_EXT = {
     "dependency_floors": ("dependency_floors 依赖能力 floors", check_dependency_floors),
     "deprecation_due": ("deprecation_due 弃用到期", check_deprecation_due),
     "gate_manifest": ("gate_manifest 门禁时效", check_gate_manifest),
+    "guard_declarations": ("guard_declarations 守卫声明完备", check_guard_declarations),
     "injection_budget": ("injection_budget 注入预算", check_injection_budget),
     "knob_coverage": ("knob_coverage 旋钮依据", check_knob_coverage),
     "layering": ("layering 分层无环", check_layering),
     "metrics_coverage": ("metrics_coverage 指标注册表", check_metrics_coverage),
     "negative_fixtures": ("negative_fixtures 负测夹具自证", check_negative_fixtures),
     "no_import_side_effects": ("no_import_side_effects", check_no_import_side_effects),
+    "no_literal_tmp": ("no_literal_tmp 禁字面 /tmp", check_no_literal_tmp),
     "no_shim_duplication": ("no_shim_duplication 转发壳", check_no_shim_duplication),
     "probe_age": ("probe_age 探针生命周期", check_probe_age),
     "probe_hooks_resolve": ("probe_hooks_resolve 打桩点表", check_probe_hooks_resolve),
     "render_consistency": ("render_consistency 渲染一致", check_render_consistency),
     "rules_schema": ("rules_schema 规则注册表", check_rules_schema),
+    "ignore_liveness": ("ignore_liveness ignore 条目活性", check_ignore_liveness),
+    "worktree_clean": ("worktree_clean 工作树卫生", check_worktree_clean),
 }
 
 if __name__ == "__main__":

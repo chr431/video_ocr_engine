@@ -320,6 +320,19 @@ def load_case(case: dict) -> tuple[dict, dict]:
     )
 
 
+def _verdict(first: list[str], second: list[str]) -> tuple[list[str], bool]:
+    """翻动判定（纯函数，负测见 tests/golden/test_flap_verdict.py）。
+
+    首跑无差异 → 一致；首跑差异而复跑一致 → 翻动（F-12，放行并计数）；
+    两轮都差 → 真回归（必红）。
+    """
+    if not first:
+        return [], False
+    if not second:
+        return first, True
+    return second, False
+
+
 def verify_case(case: dict) -> tuple[list[str], bool]:
     """复验并比对。返回 (差异字段, flap)。
 
@@ -346,10 +359,7 @@ def verify_case(case: dict) -> tuple[list[str], bool]:
     diffs = diff_once()
     if not diffs:
         return [], False
-    diffs2 = diff_once()
-    if not diffs2:
-        return diffs, True  # 一次性差异 → 翻动
-    return diffs2, False
+    return _verdict(diffs, diff_once())
 
 
 def write_manifest(env: dict, vids_sha: dict) -> None:

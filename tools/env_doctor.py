@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -276,6 +277,34 @@ def _md5(p: Path) -> str:
         return ""
 
 
+def _drive_root_tmp_notes() -> list[str]:
+    """盘符根 `<drive>:\\tmp` 非空提示（B7）。
+
+    字面 /tmp 在原生 Windows 解析为**当前盘符根**（与 Git Bash 的 /tmp =
+    %TEMP% 是不同目录）——误写产物落在仓外，任何仓内守卫都看不见。
+    这里只提示（非失败）：发现即清空，并把写方改为 tempfile.gettempdir()。
+    """
+    import os as _os
+
+    drives = list(getattr(_os, "listdrives", lambda: [])())
+    if not drives:
+        drives = list({Path.cwd().drive, Path(tempfile.gettempdir()).drive} - {""})
+    notes = []
+    for d in drives:
+        p = Path(d) / "tmp"
+        try:
+            if p.is_dir() and any(p.iterdir()):
+                n = sum(1 for q in p.rglob("*") if q.is_file())
+                sz = sum(q.stat().st_size for q in p.rglob("*") if q.is_file())
+                notes.append(
+                    "%s\\tmp 非空（%d 文件 / %.1f MB）——疑似误写（临时目录应经 tempfile.gettempdir()）"
+                    % (d, n, sz / 1e6)
+                )
+        except OSError:
+            continue
+    return notes
+
+
 def health_report() -> dict:
     """依赖事实汇总（供打印 / --json / CI）。"""
     ff = ffmpeg_fact()
@@ -299,6 +328,7 @@ def health_report() -> dict:
         },
         "fork_build": {"path": str(build) if build else None, "md5": _md5(build) if build else ""},
         "video_dir": {"path": str(vd), "exists": vd.is_dir()},
+        "drive_tmp_notes": _drive_root_tmp_notes(),
     }
 
 
@@ -362,6 +392,8 @@ def main() -> int:
         print("  修复：python tools/env_doctor.py --deploy")
     vd = rep["video_dir"]
     print("  %-10s %s  %s" % ("视频目录", "✓" if vd["exists"] else "✗", vd["path"]))
+    for note in rep.get("drive_tmp_notes") or []:
+        print("  %-10s ⚠️ %s" % ("盘符根tmp", note))
     ok = ff["ok"] and dc["ok"]
     print("\n%s" % ("✓ 环境就绪" if ok else "✗ 环境有问题（见上）"))
     return 0 if ok else 1

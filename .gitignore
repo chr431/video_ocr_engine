@@ -1,34 +1,45 @@
-# Python
+# ── 产物三类归属（R-worktree-clean 的唯一归属声明）────────────────────
+# ① 入库证据（工具写、随发版提交）：artifacts/、bench/snapshots/、tests/golden/case-*
+# ② 运行产物（只落已忽略路径、可重生、永不入库）：见下方各分节
+# ③ 一次性草稿：_scratch/（唯一落脚点；仓根禁未纳管的 _* 文件）
+# 判据由 tools/_audit_ext.py 的 worktree_clean / ignore_liveness 执行：
+# 非忽略未跟踪物即红；具体路径型条目若无目标须带行内 `# 理由`。
+
+# ── ③ 草稿与探针产物的唯一落脚点 ──
+_scratch/
+tools/_probe_out/            # 探针产物唯一落脚点（新写方用它；旧探针随出树消亡）
+
+# ── Python 缓存与环境 ──
 __pycache__/
 *.py[cod]
 *.so
 .pytest_cache/
-
-# Virtual environments
 .venv/
 venv/
 build/
 dist/
 *.egg-info/
 
-# IDE
+# ── IDE ──
 .vscode/
 .idea/
 .DS_Store
 
-# 运行缓存（引擎目录内生成；子模块方式挂载时避免弄脏引擎提交）
+# ── 运行缓存（引擎目录内生成；子模块方式挂载时避免弄脏引擎提交）──
 ocr_engines/
 logs/
 index/
+gpu_kernels/
+ocr_engines/*.engine
 
-# 视频/大产物不入库
+# ── 视频/大产物不入库 ──
 *.mp4
 *.mkv
 *.avi
 *_log.csv
 *_output.csv
 
-# Agent 工作区（会话记忆 / 中间态，非项目源码）
+# ── Agent 工作区（会话记忆 / 中间态，非项目源码）──
 .workbuddy/
 # Agent worktree：会话产出的完整仓库副本。实测 .claude/ 达 154 MB，
 # 且让每次搜索多返回约 6 倍重复命中。搜索侧另由 .rgignore 单独控制。
@@ -36,23 +47,19 @@ index/
 # 智能体会话残留：Zed/agent 的 plans 目录（会话 UUID 命名，非项目文档）——
 # 其调度计划可能含判死假设/注册表外旋钮，被当规范读会误导。与 .claude/ 同政策。
 .zcode/*
-# 探针输出产物
-tools/_probe_truth_env.json
-tools/_int8_probe/
-# 探针生成的拼图/裁图产物
+
+# ── 探针产物（旧路径；新写方一律 tools/_probe_out/）──
 tools/_slf_vis/
 tools/_merge_vis/
 
-# 外部只读审查报告（本地生成的一次性分析输入，非项目文档）
+# ── 外部只读审查报告的一次性输入（非项目文档）──
 PERFORMACE_REPORT.txt
-gpu_kernels/
-ocr_engines/*.engine
 
-# bench run registry（append-only 本地滚动证据）；发版快照除外（version_advice snapshot-bench，树内留近两版）
+# ── bench run registry（append-only 本地滚动证据）；发版快照除外（version_advice snapshot-bench，树内留近两版）──
 bench/*
 !bench/snapshots/
 
-# 探针/基准运行日志与一次性调试 dump（run 产物，非源码；与 bench/ 同政策）
+# ── 探针/基准运行日志与一次性调试 dump（run 产物，非源码；与 bench/ 同政策）──
 # 例：tools/_bench_mig*_*.log、/_spy_{new,old}.json
 tools/*.log
 /_spy_*.json

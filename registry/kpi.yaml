@@ -1,4 +1,4 @@
-generated_at: '2026-10-13T13:53:26'
+generated_at: '2026-10-13T19:29:55'
 metrics:
 - name: 注入核字节（≤6144=宪章不变量）
   value: 4667
@@ -7,13 +7,13 @@ metrics:
   value: 1427
   target: ≤2048
 - name: 树内治理语料（字节）
-  value: 75769
+  value: 79793
   target: ≤100KB（benchmarks 归档后）
 - name: 治理类提交占比（近50提交）
-  value: 94.0
+  value: 88.0
   target: ≤25%
 - name: 纯治理轮占比（近50提交）
-  value: 44.0
+  value: 42.0
   target: ≤15%
 - name: 提交信息行 p90（字符）
   value: 60
