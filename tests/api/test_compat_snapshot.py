@@ -10,8 +10,8 @@ v1 的公共面在这里**逐字冻结**：任何 PR 改动这些快照即测试
      monkeypatch engine_config 后行为会变，此断言直接拦下。
   3. ExtractedSegment 7 字段 / ExtractionResult 5 字段（含顺序，允许位置构造）
   4. meta 9 键 + params 16 子键 + timing 3 键（键集合；实际值由金标向量冻结）
-  5. 包导出面与 6 个根模块可顶层导入
-  6. engine_config 的 19 个 *_ENV 常量名（含 SEG_MERGE_DENSE_GATE_ENV）
+  5. 包导出面（根模块 shim 已删，按包内路径）
+  6. config/constants 的 22 个 *_ENV 常量名（含 SEG_MERGE_DENSE_GATE_ENV）
   7. 已删除名字保持不存在（硬失败，不得静默复活）
 
 根模块 shim 已删除：本文件与 `tests/api/test_engine_imports.py` 的

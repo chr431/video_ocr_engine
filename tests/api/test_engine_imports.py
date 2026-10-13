@@ -23,7 +23,7 @@ ENGINE_MODULES = [
     "video_ocr_engine",
 ]
 
-# 应用层（RaceVideoToLog）：引擎不得 import / 引入这些模块
+# 应用层模块：引擎不得 import / 引入这些模块
 APP_MODULES = {
     "config",
     "segment_flow",

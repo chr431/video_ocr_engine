@@ -5,8 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "video-ocr-engine"
 # 版本单一事实源在 engine_config.__version__（上层应用读取同一值）：
-# 此前此处硬编码 0.8.1 而 engine_config 已是 0.9.0，wheel 与运行时版本
-# 不一致会让"装的是哪个版本"无法判断，故改为构建期静态读取。
+# 构建期静态读取该值，避免 wheel 与运行时版本不一致而无法判断安装版本。
 dynamic = ["version"]
 description = "通用视频文本提取引擎：解码 → 像素分段 → 代表帧 → OCR 文本（含置信度）。速度数字识别、字幕提取等通用场景。"
 readme = "README.md"
@@ -15,10 +14,10 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 dependencies = [
     "numpy>=2",
-    # CPU OCR 唯一后端（onnxruntime 已于 2026-09-14 移除，C-48）。
-    # 上界钉 2026.3 系（本机 2026.3.1 全绿）：2026.4.0 发布当天在
+    # CPU OCR 唯一后端（onnxruntime 已移除，C-48）。
+    # 上界钉 <2026.5（本机 2026.4.1 全绿）：2026.4.0 曾
     # windows runner 的 _infer 原生崩溃（同版本上午绿/下午红 = VM 异构
-    # 或间歇崩溃，2026-09-28）。换代评估按 C-48 复评触发另起一轮。
+    # 或间歇崩溃）。换代评估按 C-48 复评触发另起一轮。
     "openvino>=2026.3,<2026.5",
     "psutil>=6",
 ]
@@ -27,11 +26,13 @@ dependencies = [
 
 [project.optional-dependencies]
 # pyyaml：tests/decode/test_contract.py 对账读 tests/golden/decoder_contract.yaml
-dev = ["pytest>=8", "ruff", "mypy", "pyyaml"]   # lint/type 与 CI lint job 同源
+# ruff/mypy 钉版：类型/lint 判定随版本漂移会假红（platform/严格度语义变化，
+# 两起回归先例）；升级=有意识的单点改动，顺手跑全链。
+dev = ["pytest>=8", "ruff==0.16.6", "mypy==2.3.1", "pyyaml"]   # lint/type 与 CI lint job 同源
 
 [tool.setuptools]
-# S9-3：显式列入全部子包——此前仅列顶层包，S9-1 的 config/ domain/
-# ocr/ gpu/ pipeline/ 搬迁后不会进 wheel（缺包安装即 import 失败）
+# 显式列入全部子包：仅列顶层包时 wheel 内子包缺失
+# （缺包安装即 import 失败）
 packages = [
     "video_ocr_engine",
     "video_ocr_engine.config",
@@ -55,62 +56,63 @@ version = {attr = "video_ocr_engine.config.constants.__version__"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# 2026-10-11 测速轮（用户钦定）：每次运行固定打印慢测试榜——总时长已由
-# pytest 尾行给出，此加项保证**新增测试变慢即现形**（0.4s 门槛以下不列，
-# 榜取前 15；本机基线见 docs/log 第十一轮追记）。
+# 每次运行固定打印慢测试榜——总时长已由 pytest 尾行给出，此加项保证
+# **新增测试变慢即现形**（0.4s 门槛以下不列，榜取前 15）。
 addopts = "--durations=15 --durations-min=0.4"
 markers = [
-  "gpu: 需要 GPU + decord fork + 真值视频（S4 双后端等价门禁）",
+  "gpu: 需要 GPU + decord fork + 真值视频（双后端等价门禁）",
 ]
 
 [tool.ruff]
-# 风格政策（2026-10-10 治理改革轮成文——此前"只管正确性"是有意决策但
-# 未成文，引号混用（266 行单引号）与行宽（最长 158 列）无工具管）：
+# 风格政策：
 #   · lint 精选集 E4/E7/E9/F 零违规基线不变；风格类 lint（E501/I001/UP
-#     系）仍不启用——% 格式化与长中文注释行是本仓既有风格，不罚；
-#   · 表面风格交给 formatter 单一执行面：双引号、line-length 100。
-#     2026-10-10 风格轮对全包一次性 `ruff format` 归位（金标复验零行为
-#     变更），此后 CI `ruff format --check` 挡增量漂移；
+#     系）不启用——% 格式化与长中文注释行是本仓既有风格，不罚；
+#   · 风格由 ruff format 单一执行面：双引号、line-length 100；
+#     CI `ruff format --check` 挡增量漂移；
 #   · docstring = 单行中文摘要 + 可选解释段（不强制 Google/NumPy 段落）；
-#     命名 = snake_case 函数/UPPER_CASE 常量/PascalCase 类（现状已统一）。
-# 范围 = video_ocr_engine/ + tools/（standing）+ tests/（裁决 18：standing
-# 质量面=生产代码）；tools/probes/ 为轮内证据，不入 lint/format 面。
-# 执行：ruff check video_ocr_engine/ tools/ tests/ && ruff format --check 同面。
+#     命名 = snake_case 函数/UPPER_CASE 常量/PascalCase 类。
+# 面单源：以 pyproject 为唯一描述源，CI 与本地一律裸命令
+#（ruff check . / ruff format --check .）——默认尊重 .gitignore（bench/ 等
+# 运行产物与未跟踪文件不入面）；tools/probes/（轮内证据）与 Markdown
+# 代码块（README 示例的对齐注释不该被机器重排）不入面。
 target-version = "py311"
 line-length = 100
-extend-exclude = ["tools/probes"]
+extend-exclude = ["tools/probes", "*.md"]
 
 [tool.ruff.lint]
-# S110（try-except-pass）2026-10-12 内联化（裁决 16）：豁免=行内
-# `# noqa: S110 <理由>`，无登记账本。
-select = ["E4", "E7", "E9", "F", "S110"]
+# S110（try-except-pass）豁免=行内 `# noqa: S110 <理由>`，无登记账本。
+# RUF100：未用/未启用的 noqa 即红——豁免必须仍在抑制真实违规（惰性
+# noqa 是豁免腐化族的静态通道，审计实测曾积 95 处）。
+select = ["E4", "E7", "E9", "F", "S110", "RUF100"]
 
 [tool.ruff.format]
 quote-style = "double"
 
 [tool.mypy]
-# domain/ 严格试点（2026-09-20 稳健性轮）+ R2（2026-09-27）扩面
-# pipeline/ + decode/：编排与解码访问层纳入检查（非 strict：惰性初始化的
-# 协作者字段按 Any 容忍，生命周期由 _driver 顺序保证）。
-# 边界：follow_imports=skip——被导入的其他包模块按 Any，不跟随检查
-# （试点成熟后再逐层放开）；无 stubs 的第三方按 Any 容忍。
+# domain/、pipeline/ 与 decode/ 纳入检查：编排与解码访问层（非 strict：
+# 惰性初始化的协作者字段按 Any 容忍，生命周期由 _driver 顺序保证）。
+# 边界：follow_imports=skip——被导入的其他包模块按 Any，不跟随检查；
+# 无 stubs 的第三方按 Any 容忍。
 python_version = "3.11"
 # 平台语义统一为 win32：产品主面是 Windows（winreg DLL 探测 /
 # os.add_dll_directory / TRT / win64 wheel），本地开发即 win32 语义；
 # 不设则 CI 的 Linux runner 会以 linux 语义误报 Windows-only API
 #（gpu/context.py 的 winreg 块即此例），且本地与 CI 判定分歧。
 platform = "win32"
-# 0.17.1 注解轮：+ gpu 与 _gpu_kernels.py（裸指针算术文件的静态面）。
+# gpu 与 _gpu_kernels.py 纳入检查（裸指针算术文件的静态面）。
 # 修法：惰性设备指针/协作者字段显式 `int | None` 注解 + 恒真不变量
-# assert 收窄（零行为变更，金标 28/28 复验）；数组显式 `np.ndarray`。
+# assert 收窄；数组显式 `np.ndarray`。
 files = ["video_ocr_engine/domain", "video_ocr_engine/pipeline",
          "video_ocr_engine/decode", "video_ocr_engine/gpu",
          "video_ocr_engine/_gpu_kernels.py",
-         # 制度重构 Phase D 起新制度 standing 四件入库（裁决 18）；
-         # bench/env 等老工具整改量另测后分批（见 S3 施工进度遗留项）。
+         # 新制度 standing 工具入库；
+         # bench/env 等老工具尚未纳入（整改量另测后分批）。
          "tools/refs.py", "tools/render.py", "tools/version_advice.py",
          "tools/conclusions_sweep.py", "tools/_audit_ext.py", "tools/health.py"]
 follow_imports = "skip"
+# 未用的 type: ignore 即红——与 ruff RUF100 同一原则：豁免必须仍在生效
+#（死 ignore 是豁免腐化族的 mypy 通道，审计实测曾积 6 处）。
+warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
 module = ["decord", "decord.*", "cuda", "cuda.*", "psutil", "psutil.*", "tensorrt", "tensorrt_bindings", "tensorrt_bindings.*"]

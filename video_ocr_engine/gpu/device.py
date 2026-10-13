@@ -12,7 +12,7 @@ import logging
 
 from video_ocr_engine.domain.video_utils import nvdec_available, tensorrt_available  # noqa: F401 —— monkeypatch 点（经 extractor._gpu_pipeline_enabled 使用）
 
-# 旧路径兼容 re-export（规范位置：pools/streams；零逻辑改动搬迁）
+# 旧路径兼容 re-export（规范位置：pools/streams）
 from .pools import (  # noqa: F401
     _CpuFrameRef,
     _DevBatch,

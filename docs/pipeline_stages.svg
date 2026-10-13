@@ -1,3 +1,4 @@
+<!-- 示意图，非规范；事实源=registry/architecture.yaml，由人维护、可能滞后 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1180" height="880" viewBox="0 0 1180 880" font-family="'Segoe UI','Microsoft YaHei',sans-serif">
   <defs>
     <style>
@@ -21,9 +22,9 @@
     </style>
   </defs>
 
-  <text x="24" y="32" class="title">video-ocr-engine 流水线分级与实测瓶颈（0.14.0）</text>
+  <text x="24" y="32" class="title">video-ocr-engine 流水线分级与实测瓶颈</text>
   <rect x="24" y="42" width="952" height="22" class="badge"/>
-  <text x="32" y="58" class="sub">口径：test5.mp4 / 3000 帧 / ROI 843,993,948,1025（106×33）/ 2026-09-17 实测；条长 ∝ 实测秒（同面板共尺度），不表示精确时序对齐</text>
+  <text x="32" y="58" class="sub">口径：test5.mp4 / 3000 帧 / ROI 843,993,948,1025（106×33）/ 实测；条长 ∝ 实测秒（同面板共尺度），不表示精确时序对齐</text>
 
   <!-- ═══ 四级定义条 ═══ -->
   <rect x="24" y="78" width="1132" height="66" class="grp"/>
@@ -72,7 +73,7 @@
 
   <text x="38" y="392" class="note">判定：消费者线程 2.147s ÷ wall 2.330s = <tspan font-weight="700">92%</tspan> —— 墙钟即该线程；L1 解码被它<tspan font-weight="700">串行包在里面</tspan>（非独立重叠），只有 L3 真并行。</text>
   <text x="38" y="412" class="note">绑定实验：L3 推理换零成本 → wall <tspan font-weight="700" fill="#386e49">−18.3%</tspan>（1.931s）；L3 预处理换零成本 → <tspan font-weight="700">−0.27%</tspan>（噪声）⇒ L3 不是绑定级，但仍有可回收余量。</text>
-  <text x="38" y="432" class="note">候选可回收：L2/L4 numpy 判定 0.44s + 解码线程档位（引擎取 10T = 1.539s vs 32T = 1.366s，差 0.173s，见日志「未验证假设」）。</text>
+  <text x="38" y="432" class="note">候选可回收：L2/L4 numpy 判定 0.44s + 解码线程档位（引擎取 10T = 1.539s vs 32T = 1.366s，差 0.173s）。</text>
   <text x="38" y="456" class="note" fill="#8a5a00">⚠ 占比 ≠ 可回收（C-42 判例）：上表条长只说明时间花在哪，能不能回收必须看绑定实验的 Δwall。</text>
 
   <!-- ═══ 面板 B：GPU 路径 ═══ -->
@@ -100,7 +101,7 @@
 
   <text x="38" y="708" class="note">判定：<tspan font-weight="700" fill="#2c5d82">L1 解码是唯一瓶颈</tspan> —— L3 推理换零成本 → wall <tspan font-weight="700" fill="#386e49">−0.02%</tspan>（3.2024→3.2019s，噪声）；预处理换零成本 → +0.18%（噪声，raw 路径本就无宿主预处理）。</text>
   <text x="38" y="728" class="note">L3 全程空等（q_get_wait 3.127s ≈ wall）：消费者从未反超供给，故 L2/L3/L4 的优化在此路径不可能兑现墙钟（C-49）。</text>
-  <text x="38" y="748" class="note">L1 侧已超外部参考（本次 NVDEC ROI 936 fps；ffmpeg 自带 cuvid 901 fps 系 2026-09-15 口径，本轮 ffmpeg 不在 FFMPEG_DIR 未取到），本篇 ROI-first 1.20×（历史 1.75× 见 2026-09-15 日志）。</text>
+  <text x="38" y="748" class="note">L1 侧已超外部参考（本次 NVDEC ROI 936 fps；ffmpeg 自带 cuvid 901 fps 系同批口径，FFMPEG_DIR 未配置时取不到），本篇 ROI-first 1.20×（早期 1.75×）。</text>
 
   <!-- ═══ 结论条 ═══ -->
   <rect x="24" y="782" width="1132" height="80" class="grp" style="stroke:#c47f17;stroke-dasharray:6 3"/>

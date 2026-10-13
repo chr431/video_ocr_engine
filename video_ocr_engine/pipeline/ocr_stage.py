@@ -1,8 +1,8 @@
 """OCR 消费阶段。
 
-OcrSession 只吃显式 SessionSpec——对 FieldExtractor 私有属性的 16 项
-读取至此消除（会话子集有契约）；worker 线程的跨线程回写（backend_used /
-degraded）改为显式输出挂钩，其可见性仍由 finish() 的 join 建立。
+OcrSession 只吃显式 SessionSpec（会话子集有契约）；worker 线程的跨线程
+回写（backend_used / degraded）走显式输出挂钩，其可见性由 finish() 的
+join 建立。
 
 GPU 管线在会话启动**后**给 autocropper 赋值；本阶段保留该属性注入点。
 """
@@ -191,9 +191,9 @@ def warmup_engines(spec: "SessionSpec") -> int:
     把冷启动的 TRT 反序列化/建上下文（0.35–0.44s）挪到调用方选定的
     时机（批量循环之前）。
 
-    只对知情调用方生效——不改变 `extract()` 内部行为（C-24 判死的是"自动
-    prewarm"：总吞吐不变，只是把成本搬了个位置；本函数的价值是把一次性成本
-    从"首个视频的关键路径"移到"调用方显式选择的时刻"）。池 key 稳定性
+    只对知情调用方生效——不改变 `extract()` 内部行为（禁令：不自动 prewarm，
+    总吞吐不变、预热只是把成本提前，C-36）；本函数的价值是把一次性成本
+    从"首个视频的关键路径"移到"调用方显式选择的时刻"。池 key 稳定性
     由此函数与 `acquire_engines` 同源保证。返回预热引擎数。
     """
     from video_ocr_engine.ocr.native import checkin_ocr_engine
@@ -277,7 +277,7 @@ class OcrSession:
       err        — worker 异常（首个）；非空时生产者应中止并上抛
       wall       — [ocr 总耗时]（单元素列表，worker 退出时写入）
       raw_ready  — [bool] 单 TRT 引擎就绪 → 代表帧可全程留显存走 raw 直通
-    方法：put(item)（C7 取消响应式入队）、finish()（哨兵 + join）。
+    方法：put(item)（取消响应式入队）、finish()（哨兵 + join）。
     """
 
     def __init__(self, spec: SessionSpec, _ocr_engines: list | None = None) -> None:
@@ -294,9 +294,8 @@ class OcrSession:
         # emit 为 5 元组 (owner,ptr,h,w,sharp)，autocrop 推迟到 flush 批量
         # 执行。None = emit 内逐段裁切。
         self.autocropper = None
-        # 注入路径：参数此前只用于判定 _owns_engines，从未存入——注入引擎时
-        # worker 恒读空列表 → IndexError，且注入的引擎既不使用也不归还
-        # （GPU 校准失败回退宿主路径的引擎泄漏）。
+        # 注入路径：参数必须存入——否则 worker 读空列表 → IndexError，且
+        # 注入的引擎既不使用也不归还（GPU 校准失败回退宿主路径的引擎泄漏）。
         self._engines: list = list(_ocr_engines) if _ocr_engines else []
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
@@ -310,18 +309,18 @@ class OcrSession:
     def _raise_if_dead(self) -> None:
         """worker 已死或已报错 → 抛出。
 
-        此前三处自旋循环的唯一出口是 `self.err` 非空，而 worker 的
-        `except Exception` 接不住 BaseException（KeyboardInterrupt /
+        自旋循环必须以「线程存活」为主判据：`self.err` 非空不足，因
+        worker 的 `except Exception` 接不住 BaseException（KeyboardInterrupt /
         SystemExit / C 扩展抛出的非 Exception 子类）——那种情况下线程
-        已死而 err 恒空，队列满时 put 永久自旋 = 挂死。现在以
-        「线程存活」为主判据（与 finish 的既有写法对齐）。"""
+        已死而 err 恒空，队列满时 put 永久自旋 = 挂死。与 finish 的
+        写法对齐。"""
         if self.err:
             raise self.err[0]
         if not self._thread.is_alive() and not self.err:
             raise RuntimeError("OCR worker 线程已退出但未记录异常（BaseException 逃逸？）")
 
     def put(self, item) -> None:
-        """入队一个段任务；队列满时保持取消响应（C7）。"""
+        """入队一个段任务；队列满时保持取消响应。"""
         from queue import Full
 
         while True:
@@ -374,7 +373,7 @@ class OcrSession:
             k32 = ctypes.windll.kernel32
             if not k32.SetThreadPriority(k32.GetCurrentThread(), 1):
                 pass  # 设置失败（句柄/权限）：维持 NORMAL，无正确性影响
-        except Exception:  # noqa: BLE001,S110 — ctypes 缺失/调用失败：维持 NORMAL，无正确性影响（见上 docstring）
+        except Exception:  # noqa: S110 — ctypes 缺失/调用失败：维持 NORMAL，无正确性影响（见上 docstring）
             pass  # ctypes 缺失/调用失败：维持 NORMAL，无正确性影响（见上 docstring）
 
     def _worker(self) -> None:
@@ -391,8 +390,8 @@ class OcrSession:
             if not self._owns_engines:
                 engines = list(self._engines)
                 if not engines:
-                    # 契约违反显式化：此前空列表直接走 engines[0] →
-                    # IndexError，错误信息与真实原因无关。
+                    # 契约违反显式化（空列表直接走 engines[0] → IndexError，
+                    # 错误信息与真实原因无关）。
                     raise ValueError("注入引擎路径要求 _ocr_engines 非空（收到空列表）")
                 spec.on_backend_used(
                     "tensorrt+openvino"
@@ -443,7 +442,7 @@ class OcrSession:
             # 切成 6+6+4，**每个 OCR 批一次全流水同步**（实测 test5 全片
             # CPU+TRT：批 16→18 墙钟 -10.3%、ocr_infer -13%）。单 TRT
             # 引擎时分块对齐到 max_batch 整倍数即零 sync；ONNX 路径保持 B
-            # （18=16+2 切伤 ONNX_CHUNK=16 尾批，实测 +3.7%），双实例同理。
+            # （18=16+2 切伤 OCR_OV_CHUNK=16 尾批，实测 +3.7%），双实例同理。
             _trt_max = (
                 engines[0]._trt.max_batch
                 if (len(engines) == 1 and getattr(engines[0], "_trt", None) is not None)
@@ -489,7 +488,7 @@ class OcrSession:
                         from video_ocr_engine.ocr.native import ocr_lane_prep
 
                         _lane_prep = ocr_lane_prep(eng)
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         logger.debug("车道 prep 挂载失败，回退宿主路径", exc_info=True)
                         _lane_prep = None
                 # TRT_DEFER_SYNC（默认关）：单 TRT 引擎 + raw 直通批走深度 2
@@ -560,11 +559,11 @@ class OcrSession:
                 （B=16/W=224 时 172KB/批），相对宿主 resize 的 1.37ms/段
                 是噪声。
 
-                ⚠️ D2H 必须 **pinned + 异步**（实测教训）：首版用同步
-                `cudaMemcpy`（pageable）——它对设备是全局同步，每批都把
-                TRT 车道的在途推理打断，双车道 infer 忙时从 36.9s 涨到
-                69.2s（两车道互相串行化），墙钟只落 −1.6%。pinned 缓冲 +
-                同流异步拷贝 + 事件同步只等本车道 prep，TRT 在途不受影响。
+                ⚠️ D2H 必须 **pinned + 异步**：同步 `cudaMemcpy`（pageable）
+                对设备是全局同步，每批都把 TRT 车道的在途推理打断，双车道
+                infer 忙时从 36.9s 涨到 69.2s（两车道互相串行化），墙钟只落
+                −1.6%。pinned 缓冲 + 同流异步拷贝 + 事件同步只等本车道
+                prep，TRT 在途不受影响。
                 """
                 import numpy as np
                 from cuda.bindings import runtime as cudart
@@ -771,7 +770,7 @@ class OcrSession:
                 b_crops.append(item.crop)
                 b_devs.append(item.dev)
                 b_fracs.append(item.frac)
-                # 攒够"重排窗口"再 flush：窗口 = 1 批时与旧行为一致。
+                # 攒够"重排窗口"再 flush：窗口 = 1 批时即逐批 flush。
                 if len(b_idx) >= max(chunk, spec.reorder_window):
                     flush()
             flush()
@@ -787,7 +786,7 @@ class OcrSession:
                 # 超时对齐 finish() 的 10s 哲学：infer 线程卡设备调用时不无限
                 # 等待，超时后由 daemon 兜底 + err 路径上报。
                 t.join(10.0)
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             # BaseException 而非 Exception：worker 逃逸的异常若不被记录，
             # self.err 恒空 → put/finish 的等待循环失去唯一出口 = 挂死。
             # 此处全接并记录（KeyboardInterrupt 等仍会被 put/finish 以
@@ -797,7 +796,7 @@ class OcrSession:
         finally:
             self.wall[0] = time.perf_counter() - t0
             if self._owns_engines and engines:
-                # C5：池来源的引擎归还复用；失败退出 → release
+                # 池来源的引擎归还复用；失败退出 → release
                 # （引擎状态可能被污染，不回池）。
                 for eng in engines:
                     try:

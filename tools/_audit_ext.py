@@ -1,9 +1,11 @@
 """结构化审计（按名注册；每项失败即违规，事实源 registry/）。
 
-检查项：layering / no_shim_duplication / dead_code / knob_coverage /
+检查项：layering / no_shim_duplication / dead_code_regression / knob_coverage /
 no_import_side_effects / metrics_coverage / rules_schema /
 probe_hooks_resolve / render_consistency / decord_pin /
-deprecation_due / dependency_floors / gate_manifest / injection_budget。
+deprecation_due / dependency_floors / gate_manifest / injection_budget /
+negative_fixtures / probe_age / worktree_clean / no_literal_tmp /
+ignore_liveness / guard_declarations。
 未设检查：docs_budget / baseline_liveness / deprecated_shim_usage——
 对应制度对象已不存在。引用检查项一律按名（编号会重排，名字不会）。
 """
@@ -148,8 +150,8 @@ def check_no_import_side_effects() -> str | None:
 def check_metrics_coverage() -> str | None:
     """指标注册表：上限 + 关键现役键不丢。
 
-    v1 清单更新（2026-09-17）：pipeline.producer 已出清（全仓零产出点，
-    死键只稀释报告），以同代现役键 pipeline.consumer 顶替守卫位。
+    守卫位取现役键；无产出点的键（如 pipeline.producer）不作守卫位——
+    死键只稀释报告。
     """
     from video_ocr_engine.domain.metrics import METRICS, METRIC_CAP
 
@@ -168,7 +170,7 @@ def check_metrics_coverage() -> str | None:
 
 
 def check_rules_schema() -> str | None:
-    """规则注册表 schema-lite（R-registry-schema 的先行版；全量版 Phase D）。
+    """规则注册表 schema-lite（R-registry-schema）。
 
     enforcement ∈ {ci, local-gate, advisory}；非 advisory 须有 executor；
     advisory ≤10（宪章不变量）；每条必有 prevents（举证义务）。
@@ -209,7 +211,7 @@ def check_probe_hooks_resolve() -> str | None:
     _sys.path.insert(0, str(HERE))
     try:
         from _probe_hooks import hooks
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return "tools/_probe_hooks.py 不可导入：%r" % (e,)
     bad = hooks.audit()
     if bad:
@@ -223,9 +225,8 @@ def check_probe_hooks_resolve() -> str | None:
 def check_render_consistency() -> str | None:
     """渲染产物一致性 + 结论路径活性。
 
-    此前 render --check 是独立第三条命令，容易被忘（纪律段只列了两个
-    审计入口）；折进来后全量审计一次跑齐。render 顺带校验结论字段里的
-    仓库内全路径存在性（C-32 教训：包化后旧路径标签静默存活两周+）。
+    render --check 折入本审计一次跑齐（不必单独跑）；render 顺带校验结论
+    字段里的仓库内全路径存在性（C-32）。
     """
     r = subprocess.run(
         [sys.executable, str(ROOT / "tools" / "render.py"), "--check"],
@@ -246,14 +247,12 @@ def check_render_consistency() -> str | None:
 def check_decord_pin() -> str | None:
     """两仓版本口径：registry/environment.yaml 钉版须含实际安装版本。
 
-    2026-10-10 治理改革轮新增（当时对账 DEPENDENCIES.md 的 decord 行，
-    该行曾写 0.8.5 而本机已装 0.9.2）；Phase C 制度重构后事实源迁
-    registry/environment.yaml。CI 不装 decord：import 失败按环境事实
-    跳过（"装了但不一致"才是缺陷）。发版时的全量清扫见 conclusions_sweep。
+    CI 不装 decord：import 失败按环境事实跳过（"装了但不一致"才是缺陷）。
+    发版时的全量清扫见 conclusions_sweep。
     """
     try:
-        import decord  # type: ignore[import-not-found]
-    except Exception:  # noqa: BLE001 — 环境事实
+        import decord
+    except Exception:  # 环境事实
         return None
     ver = decord.__version__
     import yaml
@@ -277,7 +276,7 @@ def check_deprecation_due() -> str | None:
     """弃用到期即红（R-deprecation-due）：remove_in ≤ 当前版本而符号仍活着。
 
     符号活性按 kind 判：env → config 旋钮注册表 env 名；api → import 链取属性。
-    已移除的到期项自然通过（S0-G5 的 VOE_ENV_WINS 顺延事故由此机器兑现）。
+    已移除的到期项自然通过。
     """
     import yaml
 
@@ -308,7 +307,7 @@ def check_deprecation_due() -> str | None:
                 import importlib
 
                 alive = bool(attr) and hasattr(importlib.import_module(mod), attr)
-            except Exception:  # noqa: BLE001 — 模块不存在=已删
+            except Exception:  # 模块不存在=已删
                 alive = False
         if alive:
             return "弃用到期未删：%s（remove_in %s ≤ 当前 %s）" % (name, m.group(1), ver)
@@ -335,8 +334,8 @@ def check_gate_manifest() -> str | None:
             ver,
         )
     try:
-        import decord  # type: ignore[import-not-found]
-    except Exception:  # noqa: BLE001 — CI 无 decord=环境事实
+        import decord
+    except Exception:  # CI 无 decord=环境事实
         return None
     env = (
         yaml.safe_load(io.open(ROOT / "registry" / "environment.yaml", encoding="utf-8").read())
@@ -401,21 +400,248 @@ def check_dependency_floors() -> str | None:
     return None
 
 
+def _probe_stale(tag_counts: dict[str, int], rounds: int = 2) -> list[str]:
+    """超龄判据（纯函数，负测见 tests/registry/test_audit_ext.py）。
+
+    tag_counts=每个探针"最后触达提交之后已发生的发版 tag 数"
+    （`git tag --contains <最后触达提交>`）；≥rounds 即超龄。
+    """
+    return sorted(name for name, n in tag_counts.items() if n >= rounds)
+
+
+def check_probe_age() -> str | None:
+    """探针生命周期（宪章不变量 4：探针留近两轮，轮=发版）。
+
+    超龄即红——红就是出树提醒（出树=删文件进 git 档案，人看过再动）。
+    未跟踪的新探针（无提交）不超龄。
+    """
+    probes_dir = ROOT / "tools" / "probes"
+    counts: dict[str, int] = {}
+    if probes_dir.is_dir():
+        for p in sorted(probes_dir.glob("_probe_*.py")):
+            rel = p.relative_to(ROOT).as_posix()
+            sha = subprocess.run(
+                ["git", "-C", str(ROOT), "log", "-1", "--format=%H", "--", rel],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            ).stdout.strip()
+            if not sha:
+                counts[p.name] = 0
+                continue
+            tags = subprocess.run(
+                ["git", "-C", str(ROOT), "tag", "--contains", sha],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            ).stdout.split()
+            counts[p.name] = len(tags)
+    stale = _probe_stale(counts)
+    if stale:
+        return "探针超龄（留近两轮，轮=发版；出树进 git 档案）：%s" % "、".join(stale)
+    return None
+
+
+def _untracked_from_porcelain(text: str) -> list[str]:
+    """porcelain 输出里的非忽略未跟踪项（`?? ` 行）——纯函数，负测见 test_audit_ext。"""
+    return [ln[3:].strip() for ln in text.splitlines() if ln.startswith("?? ")]
+
+
+def check_worktree_clean() -> str | None:
+    """工作树卫生（R-worktree-clean）：非忽略的未跟踪文件/目录即红。
+
+    宪章 L4"工作树只放现役物"的机器面。三类产物归属：①入库证据（工具写、
+    随发版提交）；②运行产物（只落已忽略路径、可重生）；③一次性草稿落
+    `_scratch/`（已忽略）。副作用：`git add -A` 从此不会把草稿卷进提交。
+    """
+    r = subprocess.run(
+        ["git", "-C", str(ROOT), "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    items = _untracked_from_porcelain(r.stdout or "")
+    if items:
+        shown = "、".join(items[:5])
+        more = "（+%d）" % (len(items) - 5) if len(items) > 5 else ""
+        return "工作树有未纳管文件（入库 / 进 ignore / 删）：%s%s" % (shown, more)
+    return None
+
+
+def _literal_tmp_hits(src: str) -> list[int]:
+    """字符串常量里的字面 /tmp 命中行号（跳过 docstring）——纯函数，负测见 test_audit_ext。"""
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return []
+    doc_lines: set[int] = set()
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            b = getattr(n, "body", [])
+            if (
+                b
+                and isinstance(b[0], ast.Expr)
+                and isinstance(b[0].value, ast.Constant)
+                and isinstance(b[0].value.value, str)
+            ):
+                doc_lines.update(
+                    range(
+                        b[0].value.lineno, getattr(b[0].value, "end_lineno", b[0].value.lineno) + 1
+                    )
+                )
+    return [
+        n.lineno
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Constant)
+        and isinstance(n.value, str)
+        and ("/" + "tmp") in n.value
+        and n.lineno not in doc_lines
+    ]
+
+
+def check_no_literal_tmp() -> str | None:
+    """禁字面 /tmp（R-worktree-clean）：Windows 下它解析为 <当前盘符>\\tmp，
+    与 Git Bash 的 /tmp（%TEMP%）不是同一目录——静默写错地方（实测：D:\\tmp
+    曾积 83MB 探针产物）。临时目录一律 tempfile.gettempdir() / tmp_path。
+    """
+    bad = []
+    files = _product_files()
+    for base in (ROOT / "tests", ROOT / "tools"):
+        if base.is_dir():
+            files += [p for p in base.rglob("*.py") if "__pycache__" not in p.parts]
+    for p in files:
+        if p.name == "_audit_ext.py":
+            continue  # 审计自身定义禁串（同 test_audit_sentinels 的自排除）
+        for ln in _literal_tmp_hits(io.open(p, encoding="utf-8").read())[:1]:
+            bad.append("%s:%d" % (p.relative_to(ROOT).as_posix(), ln))
+    for cfg in ("pyproject.toml", ".gitignore"):
+        p = ROOT / cfg
+        if p.is_file() and ("/" + "tmp") in p.read_text(encoding="utf-8"):
+            bad.append(cfg)
+    # .github/workflows/** 不扫：CI shell 是 bash（ubuntu 与 windows runner 皆然），
+    # /tmp 在那里是正确惯用法；危险面是本地/产品代码里被当成系统临时目录用。
+    if bad:
+        return "字面 /tmp（Windows 落到盘符根；用 tempfile/tmp_path）：%s" % "、".join(bad[:4])
+    return None
+
+
+def _ignore_specific_dead(entries: list[str], root: Path) -> list[str]:
+    """具体路径型 ignore 条目里"匹配不到任何东西且无内联理由"的——纯函数，负测见 test_audit_ext。
+
+    具体路径型 = 去尾斜杠后仍含 "/" 的条目（`tools/xxx`）；裸目录名
+    （build/、.venv/）与通配条目（*.mp4）属预防性，不判。目标消失的
+    具体条目就是腐化豁免——删或补行内 `# 理由`（同 R-exemption-live）。
+    """
+    dead = []
+    for raw in entries:
+        line = raw.split("#", 1)[0].rstrip()
+        s = line.strip()
+        if not s or s.startswith("!") or "*" in s or "?" in s:
+            continue
+        name = s.rstrip("/")
+        if "/" not in name:
+            continue
+        if (root / name).exists():
+            continue
+        if "#" in raw and raw.split("#", 1)[1].strip():
+            continue  # 行内理由（豁免内联化）
+        dead.append(s)
+    return dead
+
+
+def check_ignore_liveness() -> str | None:
+    """ignore 条目活性（R-worktree-clean）：具体路径型条目必须命中目标或带理由。"""
+    dead: list[str] = []
+    for fn in (".gitignore", ".rgignore"):
+        p = ROOT / fn
+        if not p.is_file():
+            continue
+        dead += [
+            "%s:%s" % (fn, s)
+            for s in _ignore_specific_dead(io.open(p, encoding="utf-8").read().split("\n"), ROOT)
+        ]
+    if dead:
+        return "ignore 条目已无目标（删或补行内理由）：%s" % "、".join(dead)
+    return None
+
+
+def check_guard_declarations() -> str | None:
+    """守卫声明完备（R-guard-reliable）：非 advisory 规则必须声明 `env:`
+    （环境依赖）与 `negative:`（负测）——负测为路径时必须存在，或用
+    固定形式之一（工具内建 / 内嵌自检 / 协议内建）。声明本身受审计，
+    守卫的环境依赖不再只活在事故记忆里。
+    """
+    import yaml
+
+    p = ROOT / "registry" / "rules.yaml"
+    if not p.exists():
+        return "registry/rules.yaml 缺失"
+    entries = yaml.safe_load(io.open(p, encoding="utf-8").read()) or []
+    bad = []
+    for e in entries:
+        if not isinstance(e, dict) or "id" not in e or e.get("enforcement") == "advisory":
+            continue
+        rid = e["id"]
+        if not str(e.get("env", "")).strip():
+            bad.append("%s 缺 env" % rid)
+            continue
+        neg = str(e.get("negative", "")).strip()
+        if not neg:
+            bad.append("%s 缺 negative" % rid)
+        elif neg.startswith(("工具内建", "内嵌自检", "协议内建")):
+            continue  # 固定形式（工具自带判据 / 内嵌自检 / 协议内建；可带括注说明）
+        else:
+            path = neg.split("::")[0]
+            if not (ROOT / path).is_file():
+                bad.append("%s negative 路径不存在：%s" % (rid, path))
+    if bad:
+        return "守卫声明不完备（R-guard-reliable）：" + "；".join(bad[:5])
+    return None
+
+
+def check_negative_fixtures() -> str | None:
+    """负测夹具豁免的自证（R-exemption-live）。
+
+    refs.NEGATIVE_FIXTURES 是"整文件免检"的最强豁免形态——它唯一的
+    正当理由是"守卫的坏样例集"（R-guard-negative 自证材料）。因此每个
+    成员必须真实存在、且不带豁免地扫它必须出 ≥1 处违规：夹具一旦不再
+    含坏样例，豁免就变成免检通行证，必须移除。
+    """
+    import refs
+
+    dead = []  # 汇总全部失效成员（不短路——首成员失败会遮住后面的）
+    for name in sorted(refs.NEGATIVE_FIXTURES):
+        cands = sorted((ROOT / "tests").rglob(name)) if (ROOT / "tests").is_dir() else []
+        if not cands:
+            dead.append("%s（文件不存在）" % name)
+        elif not refs.scan_file(cands[0], refs.Index(), exempt=False):
+            dead.append("%s（不再含坏样例）" % name)
+    if dead:
+        return "NEGATIVE_FIXTURES 成员失去豁免依据，须移出集合：" + "、".join(dead)
+    return None
+
+
 CHECKS_EXT = {
     "dead_code_regression": ("dead_code 死代码回归", check_dead_code_regression),
     "decord_pin": ("decord_pin 两仓版本口径", check_decord_pin),
     "dependency_floors": ("dependency_floors 依赖能力 floors", check_dependency_floors),
     "deprecation_due": ("deprecation_due 弃用到期", check_deprecation_due),
     "gate_manifest": ("gate_manifest 门禁时效", check_gate_manifest),
+    "guard_declarations": ("guard_declarations 守卫声明完备", check_guard_declarations),
     "injection_budget": ("injection_budget 注入预算", check_injection_budget),
     "knob_coverage": ("knob_coverage 旋钮依据", check_knob_coverage),
     "layering": ("layering 分层无环", check_layering),
     "metrics_coverage": ("metrics_coverage 指标注册表", check_metrics_coverage),
+    "negative_fixtures": ("negative_fixtures 负测夹具自证", check_negative_fixtures),
     "no_import_side_effects": ("no_import_side_effects", check_no_import_side_effects),
+    "no_literal_tmp": ("no_literal_tmp 禁字面 /tmp", check_no_literal_tmp),
     "no_shim_duplication": ("no_shim_duplication 转发壳", check_no_shim_duplication),
+    "probe_age": ("probe_age 探针生命周期", check_probe_age),
     "probe_hooks_resolve": ("probe_hooks_resolve 打桩点表", check_probe_hooks_resolve),
     "render_consistency": ("render_consistency 渲染一致", check_render_consistency),
     "rules_schema": ("rules_schema 规则注册表", check_rules_schema),
+    "ignore_liveness": ("ignore_liveness ignore 条目活性", check_ignore_liveness),
+    "worktree_clean": ("worktree_clean 工作树卫生", check_worktree_clean),
 }
 
 if __name__ == "__main__":
@@ -427,7 +653,7 @@ if __name__ == "__main__":
     for k, (name, fn) in sorted(CHECKS_EXT.items()):
         try:
             r = fn()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             r = "检查本身异常 %r" % (e,)
         tag = "✓" if r is None else "✗"
         print("%s %s %s%s" % (tag, name, "", "" if r is None else " —— " + r))

@@ -1,11 +1,10 @@
-"""发版清扫 —— 铁律 9「迁移清扫」的脚本化（2026-10-10 治理改革轮）。
+"""发版清扫 —— 依赖升级/大迁移落地时核对结论前提列的脚本化。
 
 动机
 ----
-铁律 9 要求"依赖升级/大迁移落地时 grep 结论前提列、逐条复核"——此前是
-纯人肉动作，0.21.0 清扫前积了 13 条 superseded 没翻状态。本脚本把"哪些
-结论的前提钉了旧版本/哪些复评触发命中当前事件"变成一条命令的清单，
-发版（bump 版本）与 fork 换代时跑。
+依赖升级/大迁移落地时须逐条复核结论前提，否则 superseded 结论会积压不
+翻状态。本脚本把"哪些结论的前提钉了旧版本/哪些复评触发命中当前事件"变成
+一条命令的清单，发版（bump 版本）与 fork 换代时跑。
 
 判据（只列清单，不自动翻状态——翻状态要人看过证据）：
   1. 结论 premises/revisit 里的 X.Y.Z 版本钉，落后于当前引擎或 decord
@@ -29,7 +28,9 @@ import io
 from pathlib import Path
 import os
 import re
+import subprocess
 import sys
+import time
 
 import io as _io
 
@@ -67,6 +68,192 @@ def _load_entries() -> list[dict]:
     return entries
 
 
+def _tombstone_pattern(ids: set[str]) -> re.Pattern[str]:
+    """墓碑 id 匹配模式——词边界防子串误报（如解码契约用例名 DC-06 不是死者编号）。"""
+    return re.compile(r"(?<![A-Za-z0-9@-])(?:%s)\b" % "|".join(re.escape(c) for c in sorted(ids)))
+
+
+# ── 注释历史坐标扫描（adv-comment-present-tense 的机器面：只列清单不拦，发版复核） ──
+# 判据保守：只扫 py 的注释 token 与 docstring 行、配置文件的整行 # 注释——
+# 代码与字符串字面量不扫（数据值里的数字不可判定）。活标识（PI-N、S0-C1、
+# fork@C-NN、decord@x.y.z、R-名/adv-名）不在模式内，不会命中。
+_COMMENT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    (
+        "旧编号",
+        re.compile(
+            r"\bS\d{1,2}-\d{1,2}\b|\b(?:R|D|Q)\d{1,2}\b|铁律\s*\d|裁决\s*\d|Phase\s+[A-E0-9]|第[一二三四五六七八九十]+轮"
+        ),
+    ),
+    (
+        "出树文档",
+        re.compile(
+            r"(?<!rework:)docs/(?:log/|PERFORMANCE\.md|DECISIONS\.md|MIGRATION\.md|ARCHIVE\.md)|(?<!/)knowledge/"
+        ),
+    ),
+    ("日期坐标", re.compile(r"\b20\d{2}-\d{2}-\d{2}\b")),
+]
+# 扫描器自证材料豁免（同 refs NEGATIVE_FIXTURES 哲学：坏样例字符串会命中自身）
+_COMMENT_SCAN_EXEMPT = {"test_sweep_pins.py"}
+
+
+def _comment_hits(seg: str) -> list[tuple[str, str]]:
+    """一段注释文本命中的坐标（kind, match）；空=干净。负测见 test_sweep_pins。"""
+    out = []
+    for kind, pat in _COMMENT_PATTERNS:
+        m = pat.search(seg)
+        if m:
+            out.append((kind, m.group(0)))
+    return out
+
+
+def _iter_comment_segments(text: str):
+    """产出 (行号, 注释段)：tokenize 的 COMMENT + AST 定位的 docstring 行。"""
+    import ast as _ast
+    import tokenize as _tk
+
+    doc_lines: set[int] = set()
+    try:
+        tree = _ast.parse(text)
+        for n in _ast.walk(tree):
+            if isinstance(n, (_ast.Module, _ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef)):
+                b = getattr(n, "body", [])
+                if (
+                    b
+                    and isinstance(b[0], _ast.Expr)
+                    and isinstance(b[0].value, _ast.Constant)
+                    and isinstance(b[0].value.value, str)
+                ):
+                    doc_lines.update(
+                        range(
+                            b[0].value.lineno,
+                            getattr(b[0].value, "end_lineno", b[0].value.lineno) + 1,
+                        )
+                    )
+    except SyntaxError:
+        pass
+    for i, line in enumerate(text.split("\n"), 1):
+        if i in doc_lines:
+            yield i, line
+    try:
+        for t in _tk.generate_tokens(_io.StringIO(text).readline):
+            if t.type == _tk.COMMENT:
+                yield t.start[0], t.string
+    except _tk.TokenError:
+        pass
+
+
+def _hygiene_rows(cands: list[tuple[str, float, int]], now: float, days: int) -> list[str]:
+    """超龄候选（名, mtime, 字节）→ 清单行——纯函数，负测见 test_sweep_pins。"""
+    rows = [
+        "%s（%.1f MB，%.0f 天）" % (rel, sz / 1e6, (now - mt) / 86400)
+        for rel, mt, sz in cands
+        if (now - mt) / 86400 >= days
+    ]
+    return sorted(rows)
+
+
+def _worktree_hygiene_items(days: int = 14) -> list[str]:
+    """忽略域里超龄的运行产物/草稿（仓根与 tools/ 两处；大块运行域与工具缓存不列）。
+
+    忽略 ≠ 退出：宪章 L4"一切对象有退出"覆盖到 ignore 域——发版时清一次。
+    工具缓存（.mypy_cache/.ruff_cache/.pytest_cache/__pycache__）与 agent
+    会话目录自管自清，不属复核对象。
+    """
+    skip = (
+        ".mypy_cache/",
+        ".ruff_cache/",
+        ".pytest_cache/",
+        ".venv/",
+        ".zcode/",
+        ".claude/",
+        ".workbuddy/",
+    )
+    cands: list[tuple[str, float, int]] = []
+    paths: list[tuple[Path, str]] = []
+    for scope, keep_dirs in ((ROOT_PATH, False), (ROOT_PATH / "tools", True)):
+        if not scope.is_dir():
+            continue
+        for p in sorted(scope.glob("*")):
+            if p.is_dir() and not keep_dirs and p.name != "_scratch":
+                continue  # 仓根只扫文件与 _scratch/（bench/ 等子域各有政策）
+            files = [p] if p.is_file() else [q for q in p.rglob("*") if q.is_file()]
+            for q in files:
+                rel = q.relative_to(ROOT_PATH).as_posix()
+                if "__pycache__" in q.parts or rel.startswith(skip) or rel.startswith(".git/"):
+                    continue
+                paths.append((q, rel))
+    # 一次 check-ignore（--stdin -z）批量判定——逐文件 subprocess 在 Windows 上 ~0.2s/次。
+    # 必须 -z + bytes 输入：文本模式会把 \n 翻成 \r\n，git 把 \r 当路径一部分而不匹配。
+    r = subprocess.run(
+        ["git", "-C", ROOT, "check-ignore", "--stdin", "-z"],
+        input="\0".join(rel for _, rel in paths).encode("utf-8"),
+        capture_output=True,
+    )
+    ignored = {x.decode("utf-8") for x in (r.stdout or b"").split(b"\0") if x}
+    for q, rel in paths:
+        if rel not in ignored:
+            continue
+        try:
+            st = q.stat()
+        except OSError:
+            continue
+        cands.append((rel, st.st_mtime, st.st_size))
+    return _hygiene_rows(cands, time.time(), days)
+
+
+def _print_worktree_hygiene() -> None:
+    """工作树卫生清单（发版复核）：忽略域超龄物——忽略≠退出，复核时清一次。"""
+    items = _worktree_hygiene_items()
+    if not items:
+        return
+    print("\n工作树卫生清单（忽略域超龄物，发版复核——忽略≠退出）：")
+    for it in items:
+        print("  " + it)
+
+
+def _print_comment_coordinates() -> None:
+    """注释历史坐标清单（发版复核；历史看 git——本清单是两轮人工清理后的常设网）。"""
+    hits: list[str] = []
+    for d in (ROOT_PATH / "video_ocr_engine", ROOT_PATH / "tools", ROOT_PATH / "tests"):
+        if not d.is_dir():
+            continue
+        for p in sorted(d.rglob("*.py")):
+            if "__pycache__" in p.parts or p.name in _COMMENT_SCAN_EXEMPT:
+                continue
+            try:
+                text = io.open(p, encoding="utf-8").read()
+            except OSError:
+                continue
+            rel = p.relative_to(ROOT_PATH).as_posix()
+            for ln, seg in _iter_comment_segments(text):
+                for kind, mt in _comment_hits(seg):
+                    hits.append("%s:%d  %s  %s" % (rel, ln, kind, mt))
+                    break
+    for cfg in ("pyproject.toml", ".github/workflows/ci.yml", ".gitignore", ".rgignore"):
+        p = ROOT_PATH / cfg
+        if not p.is_file():
+            continue
+        for i, line in enumerate(io.open(p, encoding="utf-8").read().split("\n"), 1):
+            if not line.lstrip().startswith("#"):
+                continue  # 只扫整行注释（保守：行内值不判）
+            for kind, mt in _comment_hits(line):
+                hits.append("%s:%d  %s  %s" % (cfg, i, kind, mt))
+                break
+    # README 是唯一手写散文文档（其余视图由 render 保证）；全文逐行扫——
+    # refs 管 token/裸§N/裸版本，本清单补"旧编号/日期/出树引用"三类。
+    readme = ROOT_PATH / "README.md"
+    if readme.is_file():
+        for i, line in enumerate(io.open(readme, encoding="utf-8").read().split("\n"), 1):
+            for kind, mt in _comment_hits(line):
+                hits.append("README.md:%d  %s  %s" % (i, kind, mt))
+                break
+    if not hits:
+        return
+    print("\n注释历史坐标清单（发版复核——现在时化或删，历史看 git）：")
+    for h in hits:
+        print("  " + h)
+
+
 def _print_tombstone_refs() -> None:
     """墓碑引用清单（adv-comment-present-tense 的 note：出源引用复核同循该原则）。
 
@@ -75,16 +262,17 @@ def _print_tombstone_refs() -> None:
     id 本身永远可解析；本清单管"还有谁在引用死者"。
     """
     sys.path.insert(0, str(ROOT))
-    from refs import Index
+    from refs import NEGATIVE_FIXTURES, Index
 
     ix = Index()
     if not ix.historical:
         return
-    pat = re.compile("|".join(re.escape(c) for c in sorted(ix.historical)))
+    pat = _tombstone_pattern(ix.historical)
     hits: dict[str, list[str]] = {}
     for d in (ROOT_PATH / "video_ocr_engine", ROOT_PATH / "tools", ROOT_PATH / "tests"):
         for p in sorted(d.rglob("*.py")):
-            if "__pycache__" in p.parts:
+            # 守卫负测夹具整文件豁免（同 refs：夹具自带坏样例，否则自证材料被自己的检查当违规）
+            if "__pycache__" in p.parts or p.name in NEGATIVE_FIXTURES:
                 continue
             try:
                 text = io.open(p, encoding="utf-8").read()
@@ -123,7 +311,7 @@ def main() -> int:
         import decord
 
         decord_ver = decord.__version__
-    except Exception:  # noqa: BLE001,S110 — decord 未装=环境事实（CI 只装引擎），该列跳过、不判失败
+    except Exception:  # noqa: S110 — decord 未装=环境事实（CI 只装引擎），该列跳过、不判失败
         pass  # decord 未装=环境事实（CI 只装引擎），该列跳过、不判失败
 
     print("=" * 70)
@@ -139,7 +327,7 @@ def main() -> int:
             continue
         blob = "%s | %s" % (e.get("premises", ""), e.get("revisit", ""))
         # 钉版=显式命名空间前缀（fork/decord/wheel → decord 类；引擎/engine →
-        # engine 类）。裸 x.y.z 不算钉——2026-10-12 清账轮实测：重钉注记里的
+        # engine 类）。裸 x.y.z 不算钉——重钉注记里的时代数字会被上下文词
         # 时代数字被上下文词启发式误判成钉版（与宪章引用规则同一哲学：
         # 数字必须带命名空间，否则不可判定）。单测见 tests/registry/test_sweep_pins.py。
         for m in _PIN.finditer(blob):
@@ -171,6 +359,8 @@ def main() -> int:
         for cid, t in trigger_info:
             print("  %-6s %s" % (cid, t))
     _print_tombstone_refs()
+    _print_worktree_hygiene()
+    _print_comment_coordinates()
 
     print(
         "\n处理：确认失效→状态翻 superseded/dead 并出源（全文随出源提交进"

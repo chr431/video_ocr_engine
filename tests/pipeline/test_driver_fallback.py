@@ -1,7 +1,7 @@
-"""统一驱动骨架的回退/清理分支单测（P1；无需视频/GPU）。
+"""统一驱动骨架的回退/清理分支单测（无需视频/GPU）。
 
-C10 回退（GPU 校准形状不符 → 宿主）与校准异常清理在 P1 前无任何
-测试覆盖（golden/e2e 只走主路径）；本文件用桩 spec/vr/session 直接
+回退（GPU 校准形状不符 → 宿主）与校准异常清理不被 golden/e2e 覆盖
+（后者只走主路径）；本文件用桩 spec/vr/session 直接
 驱动 _driver.run_segment_pipeline 的两个分支，锚定资源语义：
 fallback 分支 **reader 不 close**（宿主路径复用，fallback_vr 移交）、
 会话收尾、设备释放；abort 分支全量清理后原异常上抛。
@@ -76,7 +76,7 @@ class _StubLane(_GpuLane):
         pass  # 免 gpu.device 装配（无 GPU 环境可跑）
 
     def calibrate(self, spec, vr, frames, ocr_session):
-        return False, 0  # 强制走 C10 回退分支
+        return False, 0  # 强制走回退分支
 
 
 class _RaisingLane(_StubLane):
@@ -85,7 +85,7 @@ class _RaisingLane(_StubLane):
 
 
 def test_fallback_branch_preserves_reader_and_releases_device():
-    """C10：校准 False → fell_back_to_host / fallback_vr 移交 / 会话
+    """校准 False → fell_back_to_host / fallback_vr 移交 / 会话
     finish / 设备释放；reader **不 close**（宿主路径复用）。"""
     vr = _FakeVR()
     session = _FakeSession()
@@ -112,7 +112,7 @@ def test_calibrate_exception_cleans_up_and_reraises():
     assert len(lane.releases) == 1
 
 
-# ═════════════ P3：中途失败语义（流中断 / cancel / OCR worker 死）═════════════
+# ═════════════ 中途失败语义（流中断 / cancel / OCR worker 死）═════════════
 
 
 class _OKLane(_StubLane):

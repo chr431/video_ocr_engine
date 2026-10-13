@@ -66,7 +66,7 @@ def test_bare_section_and_version_in_md(tmp_path: Path) -> None:
 
 
 def test_bare_section_in_py_comment(tmp_path: Path) -> None:
-    """负测：py 注释层的裸 §N 同样命中（注释轮后 md/py 一视同仁）。"""
+    """负测：py 注释层的裸 §N 同样命中（md/py 一视同仁）。"""
     idx = Index()
     errors = _scan_content(tmp_path, "bad.py", "# 依据 §8.6 N-2 与 2026-09-12 §3", idx)
     assert any("BARE_SECTION" in e for e in errors)

@@ -1,4 +1,4 @@
-# S0 金标向量清单——录制基准与期望哈希（由 record.py 生成，人不得手改）
+# 金标向量清单——录制基准与期望哈希（由 record.py 生成，人不得手改）
 environment:
   commit: "bc7d31fb0d3f8e796e5b2a6530e02fb15e950a06"
   ocr_engine: "multi_PP-OCRv6_rec_small_sm89_fp32_tf32unset_b18.engine@1ef56e1af4ee6c41"

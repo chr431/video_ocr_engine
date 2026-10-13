@@ -12,7 +12,7 @@ import sys
 from _paths import ROOT
 
 sys.path.insert(0, str(ROOT / "tools"))
-import bench  # noqa: E402  tools/ 惯例：无包结构，路径注入后直名导入
+import bench  # tools/ 惯例：无包结构，路径注入后直名导入
 
 
 def _rep(cyc_decode: int, cyc_e2e: int, thr: dict | None = None) -> dict:

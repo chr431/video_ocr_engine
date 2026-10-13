@@ -1,7 +1,7 @@
 """_probe_ov_version_ab.py —— OpenVINO 换代 A/B（2026.3.1 vs 2026.4.x）。
 
-口径：模型级（生产模型/形状/线程数，与 _probe_ov_cpu_ab 的 OV 侧逐字
-同参）+ 引擎级（FieldExtractor ocr=cpu，test5 2000 帧，段数/文本集 sha
+口径：模型级（生产模型/形状/线程数逐字同参）+ 引擎级（FieldExtractor
+ocr=cpu，test5 2000 帧，段数/文本集 sha
 作准确度门）。跨版本无法同进程交错（同一 site-packages 只有一个版本），
 故为顺序口径：基线版 → pip 升级 → 复测，两次均带机器状态语境列。
 """
@@ -58,17 +58,15 @@ def main() -> int:
         dt = bench(lambda: comp([x])[out])
         rows.append((B, W, dt))
         print("B=%3d W=%4d  %.2fms/batch  %.0f crops/s" % (B, W, dt * 1e3, B / dt))
-    # 引擎级
-    from _measure_lib import ROI, VIDS
+    # 引擎级（R-perf-quiet：后台负载门禁——超阈立即退出，不浪费整轮测量）
+    from _measure_lib import ROI, VIDS, BackgroundLoadError, assert_machine_quiet
     from video_ocr_engine import FieldExtractor
-# R-perf-quiet：后台负载门禁——超阈立即退出，不浪费整轮测量
-from _measure_lib import BackgroundLoadError, assert_machine_quiet
 
-try:
-    assert_machine_quiet()
-except BackgroundLoadError as _e:  # noqa: BLE001 — 门禁语义：超阈退出
-    print(_e)
-    raise SystemExit(2)
+    try:
+        assert_machine_quiet()
+    except BackgroundLoadError as _e:  # noqa: BLE001 — 门禁语义：超阈退出
+        print(_e)
+        return 2
 
     segs_all, texts_all = [], []
     walls = []

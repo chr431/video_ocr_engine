@@ -1,5 +1,5 @@
-tests/golden/** text eol=lf
-AGENTS.md text eol=lf
-knowledge/*.md text eol=lf
-knowledge/*.yaml text eol=lf
-docs/**/*.md text eol=lf
+# 行尾单点策略：仓内对象与工作树检出一律 LF。
+# 字节类度量（注入预算/KPI 语料）从此与平台、检出态解耦——Windows 的
+# core.autocrlf 不再改写工作树（曾致 health --check 在 merge 检出后假红：
+# charter.md 1427B↔1444B 随行尾漂移）。
+* text=auto eol=lf

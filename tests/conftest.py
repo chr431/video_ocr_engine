@@ -3,7 +3,7 @@
 三个作用：
 
 1. 把**仓库根**加入 `sys.path` —— 否则从非仓库根目录跑 pytest 时，
-   `import engine_config` / `import video_ocr_engine` 会
+   `import video_ocr_engine` 会
    `ModuleNotFoundError`（`python -m pytest` 只把 CWD 放进 sys.path）。
 2. 把 `tests/` 加入 `sys.path`，使各子目录的测试都能
    `from _paths import ROOT`（见 `_paths.py`）——不要按目录深度猜仓库根。
@@ -34,7 +34,7 @@ def _videos_ready() -> bool:
         from _measure_lib import has_real_videos
 
         return has_real_videos
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
@@ -46,7 +46,7 @@ def _gpu_ready() -> bool:
         import video_ocr_engine.gpu.device  # noqa: F401
 
         return True
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 

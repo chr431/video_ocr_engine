@@ -1,6 +1,6 @@
 """自诊断（挂死/崩溃现场）门禁。
 
-对应本轮需求「不依赖额外探针就能做死锁/崩溃诊断」：RunReport 只在 extract
+对应需求「不依赖额外探针就能做死锁/崩溃诊断」：RunReport 只在 extract
 正常返回时组装，挂死/硬崩溃时**什么都不输出**——本模块给两条独立通道，
 这里逐条钉死其行为（全部合成，不需要视频/GPU）。
 """
@@ -159,3 +159,17 @@ def test_report_gains_diagnostics_key_only_when_armed():
     assert "diagnostics" not in plain
     armed = build_report(m, wall=1.0, diagnostics={"armed": True, "stalls": 0})
     assert armed["diagnostics"]["armed"] is True
+
+
+def test_journal_report_includes_last_error(tmp_path):
+    """RunJournal.report 含 last_error（且未初始化不再 AttributeError）。"""
+    from video_ocr_engine.domain.diagnostics import RunJournal
+
+    j = RunJournal(tmp_path / "j.jsonl")
+    rep = j.report()
+    assert rep["last_error"] is None, "未失败时应为 None（且不得 AttributeError）"
+    # 注入失败：路径指向目录 → open 抛 IsADirectoryError
+    j2 = RunJournal(tmp_path)
+    j2.add("x")
+    j2.flush()
+    assert j2.report()["last_error"], "落盘失败原因必须出现在报告里"

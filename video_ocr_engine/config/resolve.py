@@ -1,7 +1,6 @@
 """resolve() —— 全仓库唯一的 env 读取点（构造期一次冻结）。
 
-优先级：**显式参数 > env > 注册表默认**。v1 相反（env 盖过构造参数，
-是排查陷阱）；过渡逃生门 `VOE_ENV_WINS=1` 已删除，v1 语义不可恢复。
+优先级：**显式参数 > env > 注册表默认**——env 不得盖过构造参数。
 
 本模块不读 os.environ 之外的任何环境状态；测试传入显式 env 映射。
 解析语义由 tests/config/test_resolve.py 的等价性测试锁死，防止两套
@@ -23,7 +22,7 @@ _TRUTHY = ("1", "true", "yes", "on")
 _FALSY = ("0", "false", "no", "off")
 
 # 枚举型 str 旋钮的已知取值：_parse 对 str 做「忽略大小写后命中」归一，
-# 避免 VOE_TELEMETRY=FULL 这类输入被当成非法档位（此前撞无消息 assert；
+# 避免 VOE_TELEMETRY=FULL 这类输入被当成非法档位（否则撞无消息 assert；
 # -O 下静默降级）。
 _STR_CHOICES = {
     # std 仅为兼容保留的受谴责别名（resolve 映射为 full + 告警）
@@ -42,7 +41,7 @@ def _parse_bool(raw: str, default: bool) -> bool:
 
 
 def _parse(knob, raw: str) -> Any:
-    """按 v1 语义解析一个 env 原始值（非法/空回退默认）。"""
+    """解析一个 env 原始值（非法/空回退默认）。"""
     t = knob.type
     s = raw.strip()
     if t == "bool":
@@ -75,7 +74,7 @@ def _parse(knob, raw: str) -> Any:
             return float(s)
         except ValueError:
             return knob.default
-    return raw  # str：原样（v1 TEXT_SEP_MERGE 是裸 get）
+    return raw  # str：原样（未知值由消费端回落）
 
 
 def resolve(
@@ -84,7 +83,7 @@ def resolve(
     """从 env + 显式参数构造不可变 RunConfig（含 config_digest）。
 
     overrides：键为旋钮规范名（如 "ocr.pad_small"）；值 None = 未给出，
-    不参与优先级竞争（对应 v1 构造参数默认 None 的语义）。
+    不参与优先级竞争。
     """
     env = os.environ if env is None else env
     overrides = overrides or {}
@@ -109,7 +108,7 @@ def resolve(
         values[k.name] = ov if ov is not None else k.default
 
     # 遥测两档化：std 是 full 的受谴责别名——env/overrides 给 std 一律
-    # 映射为 full 并告警（两个版本后从 _STR_CHOICES 删除即彻底拒收）。
+    # 映射为 full 并告警（从 _STR_CHOICES 删除即彻底拒收）。
     # 默认值已是 off（产品=发布全关）。
     if values.get("diag.telemetry") == "std":
         warnings.warn(

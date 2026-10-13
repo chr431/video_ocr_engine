@@ -4,84 +4,84 @@
   env: DECODE_THREADS
   type: int
   default: 0
-  rationale: ec:96-130
+  rationale: config/constants.py:DECODE_THREADS_ENV
   note: 0=自动分档（codec×stride 公式在消费端）
 
 - name: decode.hybrid_cpu_threads
   env: HYBRID_CPU_THREADS
   type: int
   default: 0
-  rationale: ec:87-95
+  rationale: config/constants.py:HYBRID_CPU_THREADS_ENV
   note: 0=自动：与 cpu 后端同一 codec 感知策略（_decode_num_threads）
 
 - name: ocr.threads
   env: OCR_THREADS
   type: int
   default: 0
-  rationale: ec:68
+  rationale: config/constants.py:OCR_THREADS_ENV
   note: 0=全部物理核（消费端派生）
 
 - name: ocr.batch
   env: OCR_BATCH
   type: int
   default: 16
-  rationale: ec:366
+  rationale: config/constants.py:OCR_BATCH_ENV
   note: 默认取 OCR_BATCH_SIZE=16
 
 - name: ocr.gamma
   env: OCR_GAMMA
   type: float
   default: 2.0
-  rationale: ec:216-219
+  rationale: config/constants.py:OCR_GAMMA_ENV
   note: 
 
 - name: ocr.pad_small
   env: OCR_PAD_SMALL
   type: int
   default: 0
-  rationale: ec:235-266
+  rationale: config/constants.py:OCR_PAD_SMALL_ENV
   note: 0=不生效；>fill_width 时抬升 pad 下限
 
 - name: ocr.roi_autocrop
   env: OCR_ROI_AUTOCROP
   type: bool
   default: True
-  rationale: ec:271-311
+  rationale: config/constants.py:OCR_ROI_AUTOCROP_ENV
   note: 
 
 - name: ocr.roi_autocrop_margin
   env: OCR_ROI_AUTOCROP_MARGIN
   type: int
   default: 10
-  rationale: ec:312-336
+  rationale: config/constants.py:OCR_ROI_AUTOCROP_MARGIN_ENV
   note: 
 
 - name: ocr.roi_autocrop_min_gain
   env: OCR_ROI_AUTOCROP_MIN_GAIN
   type: int
   default: 10
-  rationale: ec:359
+  rationale: config/constants.py:OCR_ROI_AUTOCROP_MIN_GAIN_ENV
   note: 
 
 - name: ocr.reorder_window
   env: OCR_REORDER_WINDOW
   type: int
   default: 64
-  rationale: ec:360
+  rationale: config/constants.py:OCR_REORDER_WINDOW_ENV
   note: 消费端 max(1,·)；0 也抬到 1
 
 - name: ocr.instances
   env: OCR_INSTANCES
   type: bool
   default: True
-  rationale: ec:77
+  rationale: config/constants.py:OCR_INSTANCES_ENV
   note: 仅 ONNX 双实例路径
 
 - name: ocr.gpu_ctc
   env: GPU_CTC
   type: bool
   default: True
-  rationale: ec:83
+  rationale: config/constants.py:GPU_CTC_ENV
   note: 仅 TRT 输出归约
 
 - name: ocr.trt_fp16
@@ -89,7 +89,7 @@
   type: bool
   default: False
   rationale: ocr/trt.py:_fp16_on
-  note: fp16 ONNX（keep_io_types）+ STRONGLY_TYPED 引擎（层内 half、IO fp32）；准确率门禁 _probe_acc_ab --knob TRT_FP16=0,1
+  note: fp16 ONNX（keep_io_types）+ STRONGLY_TYPED 引擎（层内 half、IO fp32）；准确率门禁 archive/pre-rework:tools/_probe_acc_ab.py --knob TRT_FP16=0,1
 
 - name: ocr.trt_defer_sync
   env: TRT_DEFER_SYNC
@@ -102,7 +102,7 @@
   env: TEXT_SEP_MERGE
   type: str
   default: 'binary'
-  rationale: ec:229
+  rationale: config/constants.py:TEXT_SEP_MERGE_ENV
   note: 裸 get 非布尔；未知值消费端回落 binary
 
 - name: segment.merge_dense_gate
@@ -116,42 +116,42 @@
   env: GPU_PIPELINE
   type: bool|none
   default: None
-  rationale: ec:81
+  rationale: config/constants.py:GPU_PIPELINE_ENV
   note: 三态：未设 None=规则 / falsy 关 / truthy 强制 / 非法=关（非 None）
 
 - name: pipeline.gpu_stream
   env: GPU_PIPELINE_STREAM
   type: bool
   default: False
-  rationale: ec:82
+  rationale: config/constants.py:GPU_PIPELINE_STREAM_ENV
   note: C-10 判零收益，opt-in
 
 - name: pipeline.gpu_drainer
   env: GPU_PIPELINE_DRAINER
   type: bool
   default: False
-  rationale: gpu/device.py:_batch_iter
+  rationale: gpu/streams.py:_batch_iter
   note: 层4 排空线程（get_batch 独占线程预取深 4 批）；实测零收益默认关（引擎税=线程争用而非排空阻塞，同 C-10 判例）
 
 - name: diag.profile
   env: ENGINE_PROFILE
   type: bool
   default: False
-  rationale: ec:84
+  rationale: config/constants.py:ENGINE_PROFILE_ENV
   note: 构造期一次读取（resolve 冻结）
 
 - name: diag.subprobe
   env: TRT_SUBPROBE
   type: bool
   default: False
-  rationale: ec:85
+  rationale: config/constants.py:TRT_SUBPROBE_ENV
   note: TRT_SUBPROBE 在 trt.py 导入期读一次（进程级；诊断档，不做调用期活读）
 
 - name: diag.bounds_debug
   env: DEBUG_BOUNDS
   type: bool
   default: False
-  rationale: ec:86
+  rationale: config/constants.py:DEBUG_BOUNDS_ENV
   note: 
 
 - name: diag.telemetry

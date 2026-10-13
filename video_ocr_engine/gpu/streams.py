@@ -1,7 +1,6 @@
 """GPU 设备侧协作流。
 
-DevHooks（设备函数显式依赖，
-取代 _SpecView 桥接）、_GpuRunCtx（单次运行共享设备状态）、校准
+DevHooks（设备函数显式依赖）、_GpuRunCtx（单次运行共享设备状态）、校准
 （_gpu_prepare_calibration）、两条帧流（NVDEC 设备直通 / CPU 解码
 H2D）与部分释放（_gpu_release_partial）。编排在 pipeline/gpu_backend.py；
 池机制在 gpu/pools.py；可用性探测留在 gpu/device.py（monkeypatch 点）。
@@ -15,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Callable
 import numpy as np
 
 from video_ocr_engine.config import constants as config
-from video_ocr_engine.domain.segmentation import (  # noqa: F401 —— 等价性由金标向量守护（C-32）
+from video_ocr_engine.domain.segmentation import (  # 等价性由金标向量守护（C-32）
     _otsu_from_hist,
     otsu_median_threshold,
 )
@@ -32,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class DevHooks:
-    """设备侧协作函数的显式依赖（P1 后取代 ex 适配视图 _SpecView 桥接）。
+    """设备侧协作函数的显式依赖。
 
     limited    —— color_range != 1（YUV 的 luma 展开口径）
     batch_luma —— CPU 解码分支的宿主灰度回调 (B,H,W[,C])->(B,h,w)
@@ -58,7 +57,7 @@ class DevHooks:
 
 
 class _GpuRunCtx:
-    """_run_pipelined_gpu 单次运行的共享设备状态（显式替代闭包捕获）。
+    """run_gpu_pipeline 单次运行的共享设备状态（显式替代闭包捕获）。
 
     字段由 _gpu_prepare_calibration 填充，帧流生成器与消费循环只读/推进；
     _gpu_release_partial 负责统一释放。"""
@@ -174,7 +173,7 @@ def _gpu_prepare_calibration(
         else:
             if len(calib_shape) != 4 or calib_shape[-1] != 1:
                 # 灰度帧非 4D 单通道（部分 decord fork 输出 (B,H,W)）：GPU
-                # 分段不支持，回退宿主。直接 _run_pipelined_host（防递归）。
+                # 分段不支持，回退宿主。直接 run_host_pipeline（防递归）。
                 return False, 0
             ctx.src_h, ctx.src_w = calib_shape[1], calib_shape[2]
             ctx.calib_gray = calib_base
@@ -200,11 +199,11 @@ def _gpu_prepare_calibration(
         if g.shape != (calib_n, ctx.src_h, ctx.src_w):
             return False, 0
         # 池子必须容得下**校准批**（SEG_CALIB_FRAMES=50 行）：calib_owner 与
-        # 后续解码批共用本池，校准 H2D/kernel 都按 calib_n 行访问。此前按
-        # DECODE_BATCH 定尺寸，DECODE_BATCH < 50（如调参试过 32）时校准批
-        # 向设备缓冲越界写 18 行 —— 越界破坏同 context 内其他分配（TRT 工作
-        # 缓冲），异步错误延迟到 TRT enqueue 才爆（invalid argument），并
-        # 污染 analyzer 后续结果（段数漂移）。默认 64 ≥ 50 从未触发。
+        # 后续解码批共用本池，校准 H2D/kernel 都按 calib_n 行访问。若按
+        # DECODE_BATCH 定尺寸且 DECODE_BATCH < 50，校准批会向设备缓冲越界
+        # 写 18 行 —— 越界破坏同 context 内其他分配（TRT 工作缓冲），异步
+        # 错误延迟到 TRT enqueue 才爆（invalid argument），并污染 analyzer
+        # 后续结果（段数漂移）。故尺寸取 max(默认 64, calib_n) ≥ 50。
         _pool = _DevBatchPool(max(config.GPU_PIPELINE_DECODE_BATCH, calib_n) * ctx.fnb)
         ctx.pool = _pool
         owner = _pool.acquire(crops)
@@ -293,7 +292,7 @@ def _gpu_frame_stream_nvdec(
             for s0, nds in vr.get_batch_stream(frames[ctx.calib_n :], roi=roi, batch=DECODE_BATCH):
                 yield s0, nds
             return
-        # ── 层4 排空线程（GPU_PIPELINE_DRAINER，默认关，见下）──
+        # ── 排空线程（GPU_PIPELINE_DRAINER，默认关，见下）──
         # get_batch 独占一线程预取（深 4 批），生产者的 analyze/sync 不再
         # 阻塞解码排空——decode.batch 引擎税的构成为"生产者分析期间无人
         # 拉动解码，fork 侧银行反压停转"。线程安全性：get_batch 全部调用
@@ -308,7 +307,7 @@ def _gpu_frame_stream_nvdec(
                 # roi 不随批传：打开 reader 时 SetRoi 已生效；hybrid 原生
                 # 路径每次 get_batch 传 roi 会触发 fork 侧 SetRoi/池深重算
                 # （实测 hybrid av1 2487→2264 fps，-9%；
-                # _probe_roi_decode 已证 CPU 路径两种传法等价）。
+                # archive/pre-rework:tools/_probe_roi_decode.py 已证 CPU 路径两种传法等价）。
                 _t_dec = time.perf_counter()
                 nds = vr.get_batch(frames[bstart : bstart + DECODE_BATCH])
                 hooks.tick("producer", "decode_batch", _t_dec)
@@ -328,7 +327,7 @@ def _gpu_frame_stream_nvdec(
                     nds = vr.get_batch(frames[bstart:bend])
                     hooks.tick("producer", "decode_batch", _t_dec)
                     _q.put((bstart, nds))
-            except BaseException as e:  # noqa: BLE001
+            except BaseException as e:
                 _err.append(e)
             finally:
                 _q.put(None)
@@ -434,9 +433,9 @@ def _gpu_frame_stream_cpu(
     for bstart in range(calib_n, len(frames), DECODE_BATCH):
         bend = min(bstart + DECODE_BATCH, len(frames))
         B = bend - bstart
-        # 覆盖缺口：CPU 解码分支此前零打桩（decode.*/stream_analyze
-        # 只在 NVDEC 分支产出）。键语义与宿主路径对齐：decode_batch =
-        # get_batch + asnumpy（宿主同款）；gray_batch = 灰度转换。
+        # CPU 解码分支也打桩（decode.*/stream_analyze）。键语义与宿主
+        # 路径对齐：decode_batch = get_batch + asnumpy（宿主同款）；
+        # gray_batch = 灰度转换。
         _t_dec = time.perf_counter()
         nds = vr.get_batch(frames[bstart:bend], roi=roi)
         crops = nds.asnumpy()

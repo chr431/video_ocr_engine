@@ -1,9 +1,8 @@
 """分段 + OCR 预处理统一实现（宿主管线与 GPU 全驻留管线共用）。
 
 为什么是这个文件：分段判定（校准/二值/断段/相似合并）、裁切（内容列范围 →
-余量 → 最小收益门槛）与预处理（resize + gamma）的算法实现此前散在
-segmentation 原语 / extractor / _host_pipeline / _gpu_pipeline 四处，宿主与
-GPU 各有一份同构逻辑。本文件是**唯一实现地**：
+余量 → 最小收益门槛）与预处理（resize + gamma）的算法实现集中于此。
+本文件是**唯一实现地**：
 
   - 宿主管线直接调用这些纯函数与 SegmentStateMachine；
   - GPU 全驻留管线的 CUDA kernel（_gpu_kernels.py）是本文件算法的设备侧
@@ -135,7 +134,7 @@ def _cluster_win3(diff: np.ndarray) -> float:
     **用 uint8**（非 int32）：窗口和的数学上界 = 9（3×3 全 1），
     uint8 足够且不会溢出；又因 `np.bool_` 与 `np.uint8` 同为 1 字节，
     `diff.view(np.uint8)` 是**零拷贝**（连类型转换都省掉），切片加法的内存
-    带宽降到 1/4。实测（`tools/_probe_cluster_dtype.py`，63 组随机掩码 +
+    带宽降到 1/4。实测（`archive/pre-rework:tools/_probe_cluster_dtype.py`，63 组随机掩码 +
     结构化图案逐位等价）：
 
     | ROI | 面积 | int32 | uint8 | 加速 |
@@ -266,7 +265,7 @@ class SegmentStateMachine:
         on_similar(a_payload, b_payload) -> bool — 相邻发射段代表帧相似判定；
             仅在已有发射段时被调用（空段列表不调用，等价宿主原 `segs and` 短路）。
         on_cancel / on_progress(k, frac) — 取消与进度钩子（100/500 帧节拍，
-            与两条管线历史节奏一致）。debug_tag 供 DEBUG_BOUNDS 边界行。"""
+        与两条管线节奏一致）。debug_tag 供 DEBUG_BOUNDS 边界行。"""
         self._frames = frames
         self._total = max(len(frames), 1)
         self._C = C
@@ -303,7 +302,7 @@ class SegmentStateMachine:
             if bin is not None:
                 # feed 契约：宿主传 bin / GPU 传 cluster，恰传其一；
                 # _started 后 _prev_bin 必为 ndarray（热路径不加 assert）
-                d = self._prev_bin != bin  # type: ignore[operator]
+                d = self._prev_bin != bin
                 score = _cluster_win3(d)  # type: ignore[arg-type]  # 同上行契约
                 changed = score >= self._C
             else:
@@ -399,7 +398,7 @@ def crop_to_content(
     余量与门槛数学见 `content_range_to_crop`；**不能**靠加大余量规避误裁
     （会把宽 ROI 收益一起削掉），也不能补"裁后会被 pad 回下限就跳过"的
     守卫 —— 裁切让输入更贴近模型训练分布，即使省不到算力也能提准确率
-    （实测 test5 +0.82pp / test6 +0.94pp，见 _probe_roi_whitespace 系列）。
+    （实测 test5 +0.82pp / test6 +0.94pp，见 archive/pre-rework:tools/_probe_roi_whitespace.py）。
     """
     if not autocrop or force_aspect > 0:
         return crop
@@ -474,7 +473,7 @@ def preprocess_standard(
     gamma：灰度对比度增强指数（255*(gray/255)^g）。None = 用 env
     OCR_GAMMA，都没有则 config.OCR_GAMMA（正式默认 2.0）。
     白字黄底等背景色块场景放大高段分离，平滑无裁剪不侵蚀笔画。
-    gamma <= 0 跳过灰度变换（保留 RGB，回退旧行为）；
+    gamma <= 0 跳过灰度变换（保留 RGB）；
     灰度权重与 segment 灰度共用 config.GRAY_RGB_WEIGHTS。
 
     宽度 pad（fill_width）在 OCR 引擎 _resize_norm 层处理（替换固定 224），
@@ -487,13 +486,13 @@ def preprocess_standard(
         new_w = max(1, int(round(target_h * force_aspect)))
     if gamma is None:
         gamma = config.env_float(config.OCR_GAMMA_ENV, float(config.OCR_GAMMA))
-    # 灰度先行（2026-09-13）：双线性是线性算子 →「先灰度后 resize」与
+    # 灰度先行：双线性是线性算子 →「先灰度后 resize」与
     # 「先 resize 后灰度」**数学等价**，但前者只插值 1 个通道 → resize
     # 工作量降到 1/3（实测 resize 占预处理 span 的 80%，其 96% 代价在插值）。
     # 实测输出等价：逐段文本 28/28 相同、段数 0 差异、置信度最大漂移
     # 0.000000（30064 段次）、金标 --verify 28/28。端到端当前无收益
     # （CPU+CPU 墙钟由推理聚合吞吐决定，消费者线程有等待余量），
-    # 按用户裁定保留：其他环节加速后此项可能兑现。
+    # 保留：其他环节加速后此项可能兑现。
     _gray_first = gamma > 0 and crop.ndim == 3 and crop.shape[-1] >= 3
     src = (crop @ _GRAY_W) if _gray_first else crop
     if new_w == w and abs(target_h - h) <= config.OCR_RESIZE_TOL * target_h:
@@ -504,7 +503,7 @@ def preprocess_standard(
         resized = _np_resize(src, new_w, target_h)
     if gamma > 0:
         # 灰度 + gamma（正式预处理）：RGB 逐通道 gamma 视觉差异小、回归多
-        # （tools/_gamma_misread_montage 对比），灰度版视觉更清晰、回归少。
+        # （archive/pre-rework:tools/_gamma_misread_montage 对比），灰度版视觉更清晰、回归少。
         if resized.ndim == 2:
             gray = resized  # 2D (H,W) 灰度输入
         elif resized.shape[-1] == 1:

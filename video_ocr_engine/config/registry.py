@@ -25,7 +25,7 @@ class Knob:
     type: str  # "int" / "float" / "bool" / "str" / "bool|none"
     default: object
     domain: Domain
-    applies_to: tuple[str, ...]  # ("cpu", "gpu") —— 取代散落的门控注释
+    applies_to: tuple[str, ...]  # ("cpu", "gpu")
     rationale_id: str  # → 依据锚点（C-NN 结论 id / 源文件符号 / ec:<行>）
     note: str = ""  # 解析语义备注（三态 / 特殊回退等）
     # 消费者**调用期 env 活读**（子进程 A/B 逐臂切换用），RunConfig 字段

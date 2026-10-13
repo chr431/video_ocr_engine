@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from video_ocr_engine import FieldExtractor  # noqa: E402
+from video_ocr_engine import FieldExtractor
 
 BACKENDS = {
     "nvdec": dict(decode_backend="nvdec", ocr_backend="auto"),
@@ -56,10 +56,10 @@ def run_once(video, roi, frames, cfg, stride=1, envs=None):
 def check_idle(max_pct: float = 20.0, strict: bool = False) -> bool:
     """测量前确认机器空闲；不空闲就大声报警（或中止）。
 
-    为什么需要（2026-09-01 真踩过）：
-    一个探针被中断后留下**孤儿进程**，它的解码线程继续跑，占了 ~48% CPU
-    并把 CPU 从 2501MHz 压到 1987MHz（降频）。之后十几轮 benchmark 全部
-    偏慢 ~2.4s，而**输出看起来完全正常** —— 差点据此得出错误结论。
+    为什么需要：
+    残留进程（如被中断的探针留下的**孤儿进程**）的解码线程会继续跑，占满
+    CPU 并触发降频，使之后所有 benchmark 系统性偏慢，而**输出看起来完全
+    正常** —— 极易据此得出错误结论。
     数字会骗人，但"开跑前先看看机器忙不忙"不会。
     """
     try:
@@ -92,7 +92,7 @@ def main():
 
     try:
         assert_machine_quiet()
-    except BackgroundLoadError as e:  # noqa: BLE001 — 门禁语义：超阈退出
+    except BackgroundLoadError as e:  # 门禁语义：超阈退出
         print(e)
         raise SystemExit(2)
     if hasattr(sys.stdout, "reconfigure"):

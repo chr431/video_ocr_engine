@@ -130,7 +130,7 @@ def test_preprocess_standard_2d_gray_input(monkeypatch):
 
 
 def test_nvdec_available_failure_not_cached(monkeypatch):
-    """瞬态失败不得进缓存（DESIGN-REVIEW C1）：失败重探、成功才缓存。"""
+    """瞬态失败不得进缓存：失败重探、成功才缓存。"""
     import sys
     import types
 
@@ -158,7 +158,7 @@ def test_nvdec_available_failure_not_cached(monkeypatch):
 
 
 def test_nv12_to_rgb_full_range():
-    """color_range=1：full/pc Y 原样展开（DESIGN-REVIEW C9 新增分支）。"""
+    """color_range=1：full/pc Y 原样展开。"""
     h, w = 4, 6
     rows = h + (h + 1) // 2
     crop = np.zeros((rows, w), dtype=np.uint8)

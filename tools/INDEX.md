@@ -1,6 +1,6 @@
 # tools/ 索引（渲染产物；事实源 registry/tools.yaml）
 
-> 分级判据与生命周期见 registry/tools.yaml 头注（裁决 18）。
+> 分级判据与生命周期见 registry/tools.yaml 头注。
 > 历史探针不在树（git 档案，archive/pre-rework 锚点起可溯）。
 
 ## 常备工具（standing，质量面=生产代码）
@@ -22,21 +22,21 @@
 | `e2e_smoke.py` | 端到端冒烟 / 真值验证（真实视频） |
 | `env_doctor.py` | 环境体检/部署/审计（R-path-no-hardcode 执行体） |
 | `env_probe.py` | ffmpeg/decord 解析统一入口（外部依赖路径唯一出口） |
-| `health.py` | KPI 计算→registry/kpi.yaml（S1 §5 自我约束执行体；HEALTH.md 视图源） |
+| `health.py` | KPI 计算→registry/kpi.yaml（自我约束执行体；HEALTH.md 视图源） |
 | `probe_decode_rates.py` | 各后端解码速率基准（bench 家族） |
 | `refs.py` | R-refs-resolve 执行体（引用解析器） |
-| `render.py` | R-render-consistency 执行体（四视图统一渲染） |
+| `render.py` | R-render-consistency 执行体（七视图统一渲染） |
 | `version_advice.py` | R-version-tag/R-version-advice 执行体（API 面 dump/档位判据/verify/金标 manifest/bench 快照） |
 
 ## 在树探针（probe，近两轮；超出即出树）
 
 | 文件 | 说明 |
 |---|---|
-| `tools/probes/_probe_c68_gap` | 近两轮（0.25.x/0.26.x）在用取证（last 2026-10-11） |
-| `tools/probes/_probe_hybrid_acceptance` | 近两轮（0.25.x/0.26.x）在用取证（last 2026-10-11） |
-| `tools/probes/_probe_hybrid_supply` | 近两轮（0.25.x/0.26.x）在用取证（last 2026-10-11） |
-| `tools/probes/_probe_ov_version_ab` | 近两轮（0.25.x/0.26.x）在用取证（last 2026-10-11） |
-| `tools/probes/_probe_quiet_suite` | 近两轮（0.25.x/0.26.x）在用取证（last 2026-10-11） |
+| `tools/probes/_probe_c68_gap.py` | 近两轮（0.25.x/0.26.x）在用取证（last 2026-10-11） |
+| `tools/probes/_probe_hybrid_acceptance.py` | 近两轮（0.25.x/0.26.x）在用取证（last 2026-10-11） |
+| `tools/probes/_probe_hybrid_supply.py` | 近两轮（0.25.x/0.26.x）在用取证（last 2026-10-11） |
+| `tools/probes/_probe_ov_version_ab.py` | 近两轮（0.25.x/0.26.x）在用取证（last 2026-10-11） |
+| `tools/probes/_probe_quiet_suite.py` | 近两轮（0.25.x/0.26.x）在用取证（last 2026-10-11） |
 
 （探针删除协议：结论数字已由 conclusions.yaml 的 commit 锚点承载 → git rm；数字不丢。）
 

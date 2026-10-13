@@ -7,13 +7,11 @@ OCR 会话 → 校准 → 帧流消费 → 收尾），差异只在「帧从哪�
 函数段，这里收完整生命周期），两后端退化为 lane 策略：calibrate /
 frame_items / emit / similar / abort / fallback / stop_consume /
 after_stream / release（宿主侧多为 no-op）。算法原语唯一出处仍在
-segmentation.py（C-32 不变）；「P2c 对齐」式的两路径相位集漂移自此
-结构性消失（键集一致性由 tests/pipeline/test_phase_key_registry.py
+segmentation.py（C-32 不变）；两路径相位集漂移结构性消失（键集一致性由 tests/pipeline/test_phase_key_registry.py
 守护）。
 
 计时口径统一（只影响遥测 span、不影响产物）：calibrate span 的 t0
-取在 OCR 会话启动**之后**（旧宿主口径；旧 GPU 口径含会话启动）——
-两路径同义，L1 per_phase 差分可比。
+取在 OCR 会话启动**之后**——两路径同义，L1 per_phase 差分可比。
 """
 
 from __future__ import annotations
@@ -89,7 +87,7 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None, preopened_vr=None):
     ocr_wall = ocr_session.wall
 
     # ── 校准（宿主 Otsu / GPU 设备侧直方图；False = 形状不符回退宿主）──
-    # P2c 卫生：calibrate 的 t0 从 open 收口处起算（不含 open 相位），
+    # calibrate 的 t0 从 open 收口处起算（不含 open 相位），
     # 与 setup 不重叠双计。
     _t_calib = time.perf_counter()
     try:
@@ -103,16 +101,14 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None, preopened_vr=None):
             pass  # 清理路径：close 失败无需上抛（资源由进程回收）
         raise
     if not _calib_ok:
-        # 形状不符等：回退宿主（C10 语义）——会话收尾（worker 归还引擎）、
+        # 形状不符等：回退宿主——会话收尾（worker 归还引擎）、
         # 释放设备侧临时缓冲，但 **reader 不 close**：宿主路径复用已打开
         # 的 reader（get_batch 随机访问无消费状态，免二次打开/解码器悬挂）。
         return lane.fallback(res, ocr_session, ocr_engines, vr)
     res.bin_thresh = _th
     lane.after_calibrate(_th, ocr_session)  # 阈值即时回写等收尾装配
     if spec.prof_end is not None:
-        # 键统一为 calib_total（旧 GPU 路径的 gpu_calib_total 与其映射
-        # 同一指标 pipeline.calibrate——双键是两驱动各自调用点的历史
-        # 残留，统一后单调用点单键）
+        # 键为 calib_total（映射指标 pipeline.calibrate；单调用点单键）
         spec.prof_end("producer", "calib_total", _t_calib)
     _MET.checkpoint("calibrate")
 
@@ -182,7 +178,7 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None, preopened_vr=None):
             pass  # 清理路径：close 失败无需上抛（资源由进程回收）
         lane.release()
     if ocr_err:
-        # C4：补"OCR worker 失败"上下文并保留原始异常链
+        # 补"OCR worker 失败"上下文并保留原始异常链
         raise RuntimeError(f"OCR worker 失败: {ocr_err[0]!r}") from ocr_err[0]
     # 逐段计数一律在此一次性上报（run 内不再逐段调 Python）
     _MET.counter("segment.segments", len(segs))

@@ -1,15 +1,14 @@
-"""探针子进程 WORKER 公共件（P5+P6，2026-09-20 稳健性轮）。
+"""探针子进程 WORKER 公共件。
 
-三个痛点（均有实证）：
+三个约束（对应三段公共件）：
 
-1. WORKER 以 ``python -c`` 执行、``-c`` 下无 ``__file__`` → 每个探针自己
-   拼 PROBE_ROOT 注入与 utf-8 reconfigure（2026-09-20 裁切轮在参数序上
-   踩过一次）——``worker_prelude`` 统一；
-2. 两轮探针叠加跑污染测量（2026-09-20 奖金池轮事故，数据作废重测）——
-   ``acquire_probe_lock`` 探针级互斥；
-3. 父进程被杀后孤儿 worker 继续烧 CPU（同上事故）——``watchdog_prelude``
-   让 worker 每 5s 查父 pid，父死即 ``os._exit``（psutil 探测，跨平台；
-   Windows 上 os.kill(pid,0) 会真杀进程，不可用）。
+1. WORKER 以 ``python -c`` 执行、``-c`` 下无 ``__file__`` → 每个探针都要
+   自己拼 PROBE_ROOT 注入与 utf-8 reconfigure（易在参数序上出错）——
+   ``worker_prelude`` 统一；
+2. 探针叠加跑会互相污染测量——``acquire_probe_lock`` 提供探针级互斥；
+3. 父进程被杀后孤儿 worker 会继续烧 CPU——``watchdog_prelude`` 让 worker
+   每 5s 查父 pid，父死即 ``os._exit``（psutil 探测，跨平台；Windows 上
+   os.kill(pid,0) 会真杀进程，不可用）。
 
 用法::
 
@@ -123,5 +122,5 @@ def acquire_probe_lock(name: str):
     finally:
         try:
             lock.unlink()
-        except FileNotFoundError:  # noqa: S110 锁已被外部清理
+        except FileNotFoundError:  # 锁已被外部清理
             pass  # 锁已被外部清理

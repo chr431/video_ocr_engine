@@ -3,11 +3,9 @@
 引擎只输出每段原始文本与置信度；速度解析/纠错/CSV 等领域后处理由上层
 应用完成（引擎保持通用性，不携带任何下游领域后处理）。
 
-方法体最初由既有视频项目的历史 tools/archive 生成脚本从 segment_flow.py
-抽取；独立成仓后随引擎维护，不再依赖任何下游仓库。
+本引擎独立维护，不依赖任何下游仓库。
 
-模块划分（现行布局；旧扁平面 `_host_pipeline.py` / `_gpu_pipeline.py` /
-`_ocr_session.py` 均已删除）：
+模块划分：
   extractor.py  — 薄门面：构造/参数校验/run 态重置/结果组装；
                   实现一律下放（本文件只保留委托与状态同步）
   decode/       — port=FrameSource 协议；decord_source=打开决策树 +
@@ -25,9 +23,9 @@
   gpu/          — context=DLL 注册 / device=设备池+帧流+校准 / frame_ref=DeviceRef
   config/       — constants + 旋钮注册表/解析（env 读取唯一入口）
   _helpers.py / _result_types.py / _gpu_kernels.py — 工具 / 轨迹类型 / 设备侧核
-双流水线并行已移除；CPU+NVDEC 双解码（decode_backend="hybrid"）由 decord
-fork 原生实现（≥v0.7.15 的 hybrid/hybrid_gpu ctx），引擎只透传解码参数；
-项目层 hybrid_decode.py 已删除，勿再引用。
+CPU+NVDEC 双解码（decode_backend="hybrid"）由 decord fork 原生实现
+（hybrid/hybrid_gpu ctx；能力 floors 见 registry/environment.yaml），引擎只透传解码参数；勿引用项目层
+hybrid_decode.py。
 """
 
 import logging
@@ -43,7 +41,7 @@ from video_ocr_engine.domain.segmentation import _text_sep_binary
 # 下列 re-export 为引擎内部结构（_helpers/_result_types 均属下划线私有
 # 命名，从 extractor 再导出仅为旧导入路径兼容，勿直接 import；公共入口
 # 是 video_ocr_engine.__init__ 的三件套）。
-from ._result_types import (  # noqa: F401
+from ._result_types import (
     ExtractedSegment,
     ExtractionResult,
 )
@@ -70,8 +68,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     # 仅为 `_start_ocr_session` 的返回注解服务（运行期懒导入，避免
-    # extractor → ocr_stage 的导入环；此前注解裸引 "OcrSession" 是
-    # F821，lint 基线轮修正）
+    # extractor → ocr_stage 的导入环）
     from .pipeline.ocr_stage import OcrSession
 from .domain.diagnostics import NULL_DIAG, open_diagnostics
 from .pipeline.report import finalized_report, write_report_file
@@ -95,8 +92,8 @@ class FieldExtractor:
     RGB 帧；代表帧像素格式由 rep_crop_format 决定（"yuv"=packed NV12 默认 /
     "gray"），外部用 nv12_to_rgb 转 RGB。
     sample_stride：分频采样步长（默认 1 = 逐帧处理）。>1 时只解码/分段每个
-    第 N 帧（字幕等慢更新内容可显著降低处理压力；需要 decord fork ≥0.7.12
-    的等差步长快速路径，否则退化为逐索引 seek）。
+    第 N 帧（字幕等慢更新内容可显著降低处理压力；需要 fork
+    的等差步长快速路径（能力 floors 见 registry/environment.yaml），否则退化为逐索引 seek）。
     """
 
     def __init__(
@@ -136,8 +133,7 @@ class FieldExtractor:
         self._ocr_backend_used = ""  # run 后填实际引擎（供 CSV 头输出）
         self._buffer_size = buffer_size if buffer_size is not None else config.DEFAULT_BUFFER_SIZE
         # 配置构造期一次解析并冻结（resolve 为唯一 env 读取点；构造后改 env
-        # 不再生效——旧 README 曾承诺"仍生效"，属有意行为变更）。优先级：
-        # 显式参数 > env > 默认；逃生门 VOE_ENV_WINS 已删除。
+        # 不再生效）。优先级：显式参数 > env > 默认。
         self._rc = resolve(env=_os.environ)
         _pad_env = self._rc.ocr_pad_small
         if fill_width is not None:
@@ -171,8 +167,7 @@ class FieldExtractor:
             if merge_similar_threshold is not None
             else float(config.SEG_MERGE_SIMILAR_THRESHOLD)
         )
-        # merge_text_sep 构造期解析（参数 > env > 默认）；
-        # 早前 :120 的赋值是初值，此处为最终冻结值
+        # merge_text_sep 构造期解析（参数 > env > 默认）；此处为最终冻结值
         self._merge_text_sep = self._merge_text_sep_resolved
         self._color_range = 0  # run 时从 decoder get_color_range 读取
         self._codec = ""  # run 时从 decoder get_codec 探测
@@ -181,12 +176,12 @@ class FieldExtractor:
         self._degraded: list = []  # 本次提取的降级/回退原因（meta 透出）
         # OCR 输入宽度自适应裁切（宽 ROI 字幕省卷积）+ 跨批按宽度分组。
         # 详见 segmentation.content_range_to_crop 与 config 中的实测注释。
-        # 四个 autocrop/重排旋钮为 property 调用期读 env（A6：与
-        # OCR_PAD_SMALL/OCR_GAMMA 等同时机，构造后改 env 即生效）。
+        # 四个 autocrop/重排旋钮为 property 读 self._rc（构造期一次冻结，与
+        # OCR_PAD_SMALL/OCR_GAMMA 等同时机；构造后改 env 不再生效）。
         self._progress = progress_cb or (lambda m, p: None)
         self._cancel = cancel_check or (lambda: None)
-        # run 态全部私有（ex.timing/crops/frames 兼容副产物已删除，
-        # 读面 = ExtractionResult：timing / frames / segments[*].rep_crop）。
+        # run 态全部私有（读面 = ExtractionResult：
+        # timing / frames / segments[*].rep_crop）。
         # profile 例外保留公开：ENGINE_PROFILE=1 的唯一读面（result 不携带）。
         self._timing: dict = {}
         self._crops: dict = {}
@@ -220,7 +215,7 @@ class FieldExtractor:
         # 稠密簇门（segment.merge_dense_gate）：0=关；>0=差异图 win3 阈值。
         # 构造期一次冻结；与断段判据 SEG_C 共用同一"内容变了"定义。
         self._merge_dense_gate = max(0, int(self._rc.segment_merge_dense_gate))
-        # 后处理参数由子类（SegmentPipeline）在构造时设置；引擎识别链不读。
+        # 后处理参数由调用方在构造时设置；引擎识别链不读。
 
     def _validate_params(self) -> None:
         """构造期静态参数校验（帧范围相对视频总长在打开解码器后校验）。"""
@@ -242,9 +237,8 @@ class FieldExtractor:
                 f"frame_end 必须大于 frame_start（或为 0/None 表示到末尾）: "
                 f"start={self._frame_start}, end={self._frame_end}"
             )
-        # 未知后端构造期硬失败。旧语义是静默兜底——decode_backend 未知值
-        # 静默走 CPU、ocr_backend 未知值当 tensorrt（排查陷阱）；
-        # 合法集与 _open_vr/_ocr_engine_type 的判定一致
+        # 未知后端构造期硬失败——静默兜底会把"未知值"伪装成可用后端
+        # （排查陷阱）；合法集与 _open_vr/_ocr_engine_type 的判定一致
         _dec = (self._decode_backend or "auto").lower()
         if _dec not in ("auto", "cpu", "nvdec", "hybrid"):
             raise ValueError(
@@ -256,8 +250,8 @@ class FieldExtractor:
                 f"ocr_backend 必须为 auto/cpu/tensorrt/hybrid，收到 {self._ocr_backend!r}"
             )
 
-    # ── env 旋钮统一调用期读取（A6：与 OCR_PAD_SMALL/OCR_GAMMA 等同时机，
-    #    构造后改 env 即生效；此前 autocrop 四项在构造期烘焙，语义不一致）──
+    # ── env 旋钮统一读 self._rc（构造期一次冻结，与 OCR_PAD_SMALL/
+    #    OCR_GAMMA 等同时机；构造后改 env 不再生效）──
     @property
     def _ocr_autocrop(self) -> bool:
         return self._rc.ocr_roi_autocrop
@@ -392,8 +386,7 @@ class FieldExtractor:
         """
         _text_mode = self._merge_effective_mode()
         if _text_mode == "binary":
-            # 直连实现（原 _text_sep_gray 转发壳已删；mode 恒 binary，
-            # th 由调用方显式给出——壳的历史默认分支无活调用点）
+            # 直连实现（mode 恒 binary，th 由调用方显式给出）
             a = _text_sep_binary(a, self._bin_thresh)
             b = _text_sep_binary(b, self._bin_thresh)
         if a is None or b is None or a.shape != b.shape:
@@ -430,9 +423,8 @@ class FieldExtractor:
           - frames / fps / timing / meta
         识别层不解析文本含义（速度/数值由上层应用处理）。fps 强制自测。
         """
-        # 每次 extract 全量重置运行态——旧语义只在 __init__ 赋值，同实例
-        # 第二次 extract 会带上一次的降级原因/计时/剖面（README 却声称
-        # "每次全量重跑并覆盖实例状态"）。
+        # 每次 extract 全量重置运行态（否则同实例第二次 extract 会带上
+        # 一次的降级原因/计时/剖面）。
         # 不重置：_fps（同实例同视频，文档化缓存）。
         self._degraded = []
         self._timing = {}
@@ -468,20 +460,19 @@ class FieldExtractor:
                 self._trace.start_hardware()
             else:
                 logger.warning("VOE_TRACE_FILE 需 VOE_TELEMETRY != off，已忽略")
-        # 计时脊柱（原 _profile_enabled/_prof_lock/_metric_totals/_metric_max
-        # 的运行态重置至此一并完成；profile 读面 = 派生 property）
+        # 计时脊柱（profile 读面 = 派生 property）
         self._spine = ProfSpine(self._profile_enabled, self._metrics, self._trace, self._diag)
         try:
             _outcome = self._run_pipelined()  # RunOutcome（裸 5 元组已退场）
         finally:
             self._hardware = self._metrics.hardware_report()
-            # 诊断收尾：此前 _diag.stop() 只在成功路径的 _assemble_report 里
-            # 调用——失败路径看门狗线程泄漏（每 30s 写 stall JSON 并继续排干
-            # 指标桶）。stop 幂等，成功路径再调一次返回 {}。
+            # 诊断收尾：_diag.stop() 必须在成功与失败两路径都调用——否则
+            # 失败路径看门狗线程泄漏（每 30s 写 stall JSON 并继续排干指标桶）。
+            # stop 幂等，成功路径再调一次返回 {}。
             if self._diag.armed:
                 try:
                     self._diag.stop()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     logger.debug("诊断收尾失败（run 失败路径）", exc_info=True)
         _wall = time.perf_counter() - _t_run
         frames, segs, texts, confs, rep_frames = _outcome.as_tuple()
@@ -598,7 +589,7 @@ class FieldExtractor:
         因此随后的 extract 命中热池（实测首个 extract 的 `ocr.engine_init`
         从 0.39s 降到 ~0.0001s）。
 
-        注意 C-24 的边界：**不改变任何 run 的总吞吐**（预热只是把成本提前）；
+        边界（C-36）：**不改变任何 run 的总吞吐**（预热只是把成本提前）；
         本方法不改变 `extract()` 内部行为，也不自动触发。返回预热的引擎数
         （0 = 需要时再建，例如非 TRT/ONNX 双实例路径）。
         """
@@ -698,7 +689,7 @@ class FieldExtractor:
         return self._source.batch_luma_out(crops, out)
 
     def _crop_is_expected(self, c: np.ndarray, roi_h: int, roi_w: int) -> bool:
-        """ROI-first 输出尺寸是否符合当前输出格式（旧路径全帧则 False）。"""
+        """ROI-first 输出尺寸是否符合当前输出格式（全帧则 False）。"""
         return self._source.crop_is_expected(c, roi_h, roi_w)
 
     def _ocr_engine_type(self) -> str:
@@ -714,8 +705,8 @@ class FieldExtractor:
         """入口分发（注入式）：构建 EngineInputs → SegmentEngine。
 
         _ocr_engines 两条 lane 都透传；None = 从进程级 OCR 引擎池取
-        （ocr_native.acquire_ocr_engine）。GPU 门控在此求值一次（输入全为
-        run 内常量）；GPU→宿主回退（C10）在引擎单处处理。lane 结果的状态
+        （ocr/native.py:acquire_ocr_engine）。GPU 门控在此求值一次（输入全为
+        run 内常量）；GPU→宿主回退在引擎单处处理。lane 结果的状态
         同步（fps 缓存经盒读写；其余为本次 run 的输出）收口在此——
         伪造 `_run_pipelined` 的测试（返回 RunOutcome）不受同步影响。
         """
@@ -757,7 +748,7 @@ class FieldExtractor:
             metrics=self._metrics,
         )
         outcome = SegmentEngine(inp).run(_ocr_engines)
-        # 状态同步（原 _run_pipelined_gpu/_host 尾部的双份收口至此单处）
+        # 状态同步
         self._fps = outcome.fps
         self._bin_thresh = outcome.bin_thresh
         self._timing.update(outcome.timing)

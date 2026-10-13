@@ -1,11 +1,11 @@
-"""环境体检 / 部署同步 / 硬编码路径审计（2026-09-19 纪律轮）。
+"""环境体检 / 部署同步 / 硬编码路径审计。
 
 三类事故的根治工具：
   ① 找不到 ffmpeg      → `env_doctor.py` 打印每个依赖的**解析来源+版本+md5**，
                           找不到时列出全部已探测候选；
   ② DLL 非最新         → `--deploy` 把 fork 构建产物同步进 site-packages 并
                           校验 md5；`--check` 检出不一致即非零退出；
-  ③ 硬编码路径回潮     → `--audit` 扫描仓库内的绝对路径字面量（新纪律项）。
+  ③ 硬编码路径         → `--audit` 扫描仓库内的绝对路径字面量（纪律项）。
 
 用法：
   python tools/env_doctor.py            # 体检（依赖事实 + DLL 一致性）
@@ -23,13 +23,14 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-from env_probe import (  # noqa: E402
+from env_probe import (
     decord_fact,
     ffmpeg_fact,
     fork_build_dll,
@@ -40,11 +41,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # 审计：绝对路径字面量（Windows 盘符 / UNC）。白名单按「文件 + 行内容」放行。
 # ⚠️ 预筛字符类须写 [\\/]：[\/] 里反斜杠转义了正斜杠，类中只剩 `/`——
-# 纯反斜杠路径的文件（bench_baseline.py 等）被预筛整文件跳过（2026-10-12 审查轮实测）。
+# 纯反斜杠路径的文件（bench_baseline.py 等）被预筛整文件跳过。
 _ABS_PATH_RE_PLAIN = re.compile(r"[A-Za-z]:[\\/]")  # 文本级预筛（快判有无盘符）
-# ⚠️ 负向后顾不得含引号（2026-10-12 审查轮）：Python 路径字面量必然紧随引号，
-# 旧式 `(?<![\w"'#])` 把全部真实字面量排除、只匹配语法非法的裸路径——审计
-# 恒绿而 bench_baseline.py 三处硬编码路径在场。自检样例见 _PATH_REGEX_SELFTEST。
+# ⚠️ 负向后顾不得含引号：Python 路径字面量必然紧随引号，含引号的后顾会把
+# 全部真实字面量排除、只匹配语法非法的裸路径（审计恒假绿）。自检样例见
+# _PATH_REGEX_SELFTEST。
 _ABS_PATH_RE = re.compile(r"""(?<![\w#])[A-Za-z]:[\\/](?:[\w.\- ]+[\\/])*[\w.\- ]+""")
 #: 审计判据自检（audit 每次先跑）：已知坏的引号内字面量必须命中。
 _PATH_REGEX_SELFTEST_BAD = r'VIDS = {"k": r"D:\Videos\racelog_test\x.mp4"}'
@@ -59,15 +60,17 @@ _AUDIT_SKIP_DIRS = {
     "node_modules",
     "bench",
     "docs",
-}  # docs/log 的历史叙事可提及路径
+}  # docs 内的叙事可提及路径
 _AUDIT_EXTS = {".py", ".bat", ".ps1", ".cmd"}
 # 允许的例外：环境事实源本身（它就是放默认路径/正则自检样例的地方）。
-# 行级豁免：命中行行尾注释含 `hardcode-ok:` 即放行（内联豁免，无登记账本）。
+# 行级豁免：命中行行尾注释含 `hardcode-ok: <非空理由>` 才放行（内联豁免，
+# 无登记账本；无理由的裸 hardcode-ok 不豁免——豁免必须携带依据）。
+_HARDCODE_OK = re.compile(r"#\s*hardcode-ok:\s*\S")
 _AUDIT_ALLOW_FILES = {"tools/env_probe.py", "tools/env_doctor.py"}
 
 
 def _iter_audit_files():
-    # 2026-10-11 测速轮：rglob("*") 全树枚举 + 逐项 suffix/parts 过滤
+    # rglob("*") 全树枚举 + 逐项 suffix/parts 过滤
     # （Windows 上 ≈0.28s）改 os.walk 剪枝（目录不入栈，≈0.01s）；行为
     # 等价（同跳过集、同扩展名集）。
     for dirpath, dirs, files in os.walk(ROOT):
@@ -77,31 +80,17 @@ def _iter_audit_files():
                 yield Path(dirpath) / f
 
 
-_DISCIPLINE_BASELINE = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "_discipline_baseline.json"
-)
-
-
-def _load_baseline_abs() -> dict[str, int]:
-    """存量绝对路径字面量登记（tools/_discipline_baseline.json）。
-
-    同 except-pass 判据：存量豁免、增量严格。键=文件（posix 相对），
-    值=存量处数；超出登记数才算新增违规。
-    """
-    if not os.path.isfile(_DISCIPLINE_BASELINE):
-        return {}
-    with open(_DISCIPLINE_BASELINE, encoding="utf-8") as f:
-        data = json.load(f)
-    d = data.get("abs_path_by_file") if isinstance(data, dict) else None
-    return {k: int(v) for k, v in d.items()} if isinstance(d, dict) else {}
+# 硬编码路径审计的执行形态：正则自检（失明/过宽都拦）+ AST 级 docstring/
+# env-defaults 豁免 + 行级内联豁免（`# hardcode-ok:` + 理由）。无存量登记
+# 账本——审计是全量严格的；"存量豁免"叙事会让增量违规看起来被赦免。
 
 
 def _env_default_lines(tree) -> set[int]:
     """AST 标记「env 带默认值」调用跨及的行（豁免形态：可被覆盖）。
 
     os.environ.get/setdefault 与 getenv 的路径实参即纪律允许的形态；
-    旧实现按**单行**子串豁免，多行调用的字面量行（常在下一行）被误报
-    （2026-10-12 预筛修复后显形）。这里按调用节点整段标行。
+    按**单行**子串豁免会漏掉多行调用的字面量行（常在下一行）——这里按
+    调用节点整段标行。
     """
     lines: set[int] = set()
     for node in ast.walk(tree):
@@ -125,10 +114,9 @@ def _env_default_lines(tree) -> set[int]:
 
 
 def _abs_path_selftest_failed() -> str | None:
-    """正则判据自检：失明/过宽都返回错误描述（2026-10-12 审查轮加）。
+    """正则判据自检：失明/过宽都返回错误描述。
 
-    正则对已知坏例失明时整个审计项都是假绿灯（旧后顾含引号时正是此态，
-    恒绿 26 天无人察觉）。
+    正则对已知坏例失明时整个审计项都是假绿灯（后顾含引号即此态）。
     """
     if not _ABS_PATH_RE.search(_PATH_REGEX_SELFTEST_BAD):
         return "env_doctor._ABS_PATH_RE 自检失败：引号内路径字面量未命中（正则失明）"
@@ -141,7 +129,7 @@ def _abs_path_hits_raw() -> list[tuple[str, int, str]]:
     """全部命中 (文件, 行号, 行文本)——未经 baseline 过滤。
 
     结构化返回：命中行内含 `D:` 盘符冒号，字符串拼接后再 split 会把
-    文件键污染成行内容（2026-10-12 实测），计数一律按元组做。
+    文件键污染成行内容，计数一律按元组做。
     """
     bad: list[tuple[str, int, str]] = []
     for p in _iter_audit_files():
@@ -150,9 +138,9 @@ def _abs_path_hits_raw() -> list[tuple[str, int, str]]:
             continue
         try:
             text = p.read_text(encoding="utf-8", errors="replace")
-        except Exception:  # noqa: BLE001 — 读不了就跳过（非源码）
+        except Exception:  # 读不了就跳过（非源码）
             continue
-        # 2026-10-11 测速轮：全文无盘符字面量时 AST 解析（≈0.2s/246 文件）
+        # 全文无盘符字面量时 AST 解析（≈0.2s/246 文件）
         # 纯属浪费——预筛不过直接跳 doc 行标记（正则逐行仍执行，漏报面=0：
         # 命中必然含盘符，预筛同字符集）。
         if not _ABS_PATH_RE_PLAIN.search(text):
@@ -181,8 +169,8 @@ def _abs_path_hits_raw() -> list[tuple[str, int, str]]:
                 continue
             if line.lstrip().startswith("#"):
                 continue  # 整行注释
-            if "# hardcode-ok:" in line:
-                continue  # 行级内联豁免（带理由）
+            if _HARDCODE_OK.search(line):
+                continue  # 行级内联豁免——必须带非空理由（无理由不豁免，见 R-exemption-live）
             code_part = line.split("#", 1)[0]  # 行尾注释也剔除
             if not _ABS_PATH_RE.search(code_part):
                 continue
@@ -197,26 +185,14 @@ def _abs_path_hits_raw() -> list[tuple[str, int, str]]:
 def audit_hardcoded_paths() -> list[str]:
     """扫描**可执行代码**中的绝对路径字面量（docstring/注释不算）。
 
-    判据：用 AST 标记 docstring 所在行并豁免，再剔除纯注释行——这样
-    docstring 里的用法示例（占误报多数）被排除，而真正写死在代码里的
-    路径会被抓到。存量按文件计数登记在 _discipline_baseline.json 的
-    abs_path_by_file（同 except-pass 判据：存量豁免、增量严格；
-    2026-10-12 预筛修复后存量显形 ≈60 处，多为 frozen 探针）。
+    判据：AST 标记 docstring 所在行并豁免，再剔除纯注释行——docstring 里
+    的用法示例被排除，真正写死在代码里的路径会被抓到。判据可信度由
+    _abs_path_selftest_failed 自检兜底（正则失明/过宽即整项红）。
     """
     fail = _abs_path_selftest_failed()
     if fail:
         return [fail]  # 自检失败（伪命中）原样上报，不做存量过滤
-    hits = _abs_path_hits_raw()
-    # 存量豁免、增量严格（判据同 except_pass_by_file）：按文件计数，
-    # 超出登记数的部分才算新增违规。
-    base = _load_baseline_abs()
-    cnt: dict[str, int] = {}
-    real: list[str] = []
-    for rel, i, line in hits:
-        cnt[rel] = cnt.get(rel, 0) + 1
-        if cnt[rel] > base.get(rel, 0):
-            real.append("%s:%d: %s" % (rel, i, line))
-    return real
+    return ["%s:%d: %s" % (rel, i, line) for rel, i, line in _abs_path_hits_raw()]
 
 
 def deploy_fork_dll(dry: bool = False) -> int:
@@ -224,7 +200,7 @@ def deploy_fork_dll(dry: bool = False) -> int:
 
     取代手工 `cp`——这是「实际使用的 DLL 非最新」的根治手段。
     """
-    # 不 import decord（2026-09-19 纪律轮：import 会把 decord.dll 载入本进程
+    # 不 import decord（import 会把 decord.dll 载入本进程
     # 并锁住，--deploy 随即无法覆盖它——实测"目标 DLL 被占用"）。find_spec
     # 只解析路径不执行包代码。
     import importlib.util
@@ -268,11 +244,10 @@ def deploy_fork_dll(dry: bool = False) -> int:
 
 
 def _sync_libinfo(src: Path, dst: Path) -> int:
-    """版本元数据（libinfo.py）同步（2026-10-11 收口续）。
+    """版本元数据（libinfo.py）同步。
 
-    此前 --deploy 只拷 DLL，site-packages 版本号滞后（0.9.2 vs 已部署
-    0.9.3/0.9.4）只能手工补，decord_pin 审计两度捕获此漂移。DLL 已最新
-    而 libinfo 滞后的形态同样要修（早退路径也要走这里）。源 = fork 仓
+    只拷 DLL 会让 site-packages 版本号滞后，须一并同步。DLL 已最新而
+    libinfo 滞后的形态同样要修（早退路径也要走这里）。源 = fork 仓
     python/decord/_ffi/libinfo.py。
     """
     libinfo_src = src.parents[1] / "python" / "decord" / "_ffi" / "libinfo.py"
@@ -298,8 +273,36 @@ def _md5(p: Path) -> str:
             for chunk in iter(lambda: f.read(1 << 20), b""):
                 h.update(chunk)
         return h.hexdigest()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return ""
+
+
+def _drive_root_tmp_notes() -> list[str]:
+    """盘符根 `<drive>:\\tmp` 非空提示。
+
+    字面 /tmp 在原生 Windows 解析为**当前盘符根**（与 Git Bash 的 /tmp =
+    %TEMP% 是不同目录）——误写产物落在仓外，任何仓内守卫都看不见。
+    这里只提示（非失败）：发现即清空，并把写方改为 tempfile.gettempdir()。
+    """
+    import os as _os
+
+    drives = list(getattr(_os, "listdrives", lambda: [])())
+    if not drives:
+        drives = list({Path.cwd().drive, Path(tempfile.gettempdir()).drive} - {""})
+    notes = []
+    for d in drives:
+        p = Path(d) / "tmp"
+        try:
+            if p.is_dir() and any(p.iterdir()):
+                n = sum(1 for q in p.rglob("*") if q.is_file())
+                sz = sum(q.stat().st_size for q in p.rglob("*") if q.is_file())
+                notes.append(
+                    "%s\\tmp 非空（%d 文件 / %.1f MB）——疑似误写（临时目录应经 tempfile.gettempdir()）"
+                    % (d, n, sz / 1e6)
+                )
+        except OSError:
+            continue
+    return notes
 
 
 def health_report() -> dict:
@@ -325,6 +328,7 @@ def health_report() -> dict:
         },
         "fork_build": {"path": str(build) if build else None, "md5": _md5(build) if build else ""},
         "video_dir": {"path": str(vd), "exists": vd.is_dir()},
+        "drive_tmp_notes": _drive_root_tmp_notes(),
     }
 
 
@@ -388,6 +392,8 @@ def main() -> int:
         print("  修复：python tools/env_doctor.py --deploy")
     vd = rep["video_dir"]
     print("  %-10s %s  %s" % ("视频目录", "✓" if vd["exists"] else "✗", vd["path"]))
+    for note in rep.get("drive_tmp_notes") or []:
+        print("  %-10s ⚠️ %s" % ("盘符根tmp", note))
     ok = ff["ok"] and dc["ok"]
     print("\n%s" % ("✓ 环境就绪" if ok else "✗ 环境有问题（见上）"))
     return 0 if ok else 1

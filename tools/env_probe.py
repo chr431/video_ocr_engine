@@ -1,6 +1,6 @@
 """环境事实源（environment provenance）：外部依赖的**唯一解析入口**。
 
-背景（2026-09-19 纪律轮）：反复发生两类事故——
+要解决的两类问题——
   ① 「找不到 ffmpeg」：路径硬编码散落 4+ 处，目录改名/迁移后无人察觉；
   ② 「用的 decord DLL 不是最新」：构建产物 → site-packages 的部署靠手工
      `cp`，改了 C++ 却忘了部署，测量结果静默用旧 DLL。
@@ -13,7 +13,7 @@
   · **部署链自动化**：`tools/env_doctor.py --deploy` 把构建产物同步到
     site-packages 并校验 md5 一致（消除手工 cp）；
   · **审计守门**：`tools/env_doctor.py --audit`（R-path-no-hardcode）
-    检查硬编码路径（新纪律：仓库内不得出现绝对路径字面量）。
+    检查硬编码路径（纪律：仓库内不得出现绝对路径字面量）。
 
 设计原则：**不引入新旋钮**（复用既有 FFMPEG_DIR / RACELOG_* env）；
 找不到就**显式失败并列出已探测的候选**，绝不静默回落。
@@ -123,7 +123,7 @@ def _version_of(exe: Path, args: tuple[str, ...] = ("-version",)) -> str:
                 if t == "version" and i + 1 < len(toks):
                     return toks[i + 1]
             return toks[0][:40]
-    except Exception:  # noqa: BLE001,S110 — 无版本号只影响显示，不改变依赖可用性结论
+    except Exception:  # noqa: S110 — 无版本号只影响显示，不改变依赖可用性结论
         pass  # 无版本号只影响显示，不改变依赖可用性结论
     return ""
 
@@ -135,7 +135,7 @@ def _md5(path: Path) -> str:
             for chunk in iter(lambda: f.read(1 << 20), b""):
                 h.update(chunk)
         return h.hexdigest()
-    except Exception:  # noqa: BLE001 — 读不到就不给摘要
+    except Exception:  # 读不到就不给摘要
         return ""
 
 
@@ -167,7 +167,7 @@ def ffmpeg_fact() -> EnvFact:
 def decord_fact(expect_dll: Path | None = None, *, install_mode: str = "auto") -> EnvFact:
     """decord 包与其 DLL 的事实。
 
-    ``install_mode``（2026-09-19 起 decord 有正式 wheel 发布，两种形态）：
+    ``install_mode``（decord 有两种发布形态）：
       · ``"wheel"``  —— 从 GitHub Release 的 wheel 安装（**推荐/默认路径**）。
         此时 DLL 由 wheel 自带，**不该**与本地 dev 构建比对 md5——
         两者本就是不同产物（wheel 有独立的构建链与版本号）。
@@ -178,7 +178,7 @@ def decord_fact(expect_dll: Path | None = None, *, install_mode: str = "auto") -
 
     ``--deploy`` 只在 dev 形态下有意义（wheel 形态应 `pip install` 升级）。
     """
-    # ⚠️ 用 find_spec 定位而**不 import**（2026-09-19 纪律轮）：import decord
+    # ⚠️ 用 find_spec 定位而**不 import**：import decord
     # 会把 decord.dll 载入本进程并锁住，--deploy 随即无法覆盖它
     # （实测："目标 DLL 被占用"）。find_spec 只解析路径不执行包代码。
     import importlib.util
@@ -188,7 +188,7 @@ def decord_fact(expect_dll: Path | None = None, *, install_mode: str = "auto") -
         if spec is None or not spec.submodule_search_locations:
             raise ImportError("decord 未安装")
         pkg = Path(list(spec.submodule_search_locations)[0])
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return EnvFact("decord", None, "", note="定位 decord 失败: %r" % (e,))
     dll = pkg / "decord.dll"
     if not dll.is_file():
@@ -198,7 +198,7 @@ def decord_fact(expect_dll: Path | None = None, *, install_mode: str = "auto") -
         from importlib.metadata import version as _v
 
         ver = _v("decord")
-    except Exception:  # noqa: BLE001 — 元数据缺失不影响事实记录
+    except Exception:  # 元数据缺失不影响事实记录
         ver = "?"
     fact = EnvFact(
         "decord",
@@ -214,7 +214,7 @@ def decord_fact(expect_dll: Path | None = None, *, install_mode: str = "auto") -
 
             files = _dist("decord").files or []
             install_mode = "wheel" if any(str(f).endswith("decord.dll") for f in files) else "dev"
-        except Exception:  # noqa: BLE001 — 元数据不可用则按 dev 保守处理
+        except Exception:  # 元数据不可用则按 dev 保守处理
             install_mode = "dev"
     if install_mode == "wheel":
         fact.note = ""  # wheel 自带 DLL，无"过期"概念

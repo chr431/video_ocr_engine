@@ -1,4 +1,4 @@
-# ci-watchdog —— CI 红了不再无声（2026-10-09 纪律松绑轮）
+# ci-watchdog —— CI 红了不再无声
 #
 # 痛点：CI 跑数分钟，推送后不可能每次盯着；红了经常事后多日才发现。
 # 机制：workflow_run 在被监视工作流**完成时**触发（零轮询、零等待）——
@@ -14,7 +14,7 @@ name: ci-watchdog
 on:
   workflow_run:
     # ⚠️ workflows 过滤键必填——缺省整文件不合法（GitHub 判 workflow
-    # file issue，事件静默不投递，实测 2026-10-09）。名字含斜杠匹配
+    # file issue，事件静默不投递）。名字含斜杠匹配
     # 不了（fork 的 "C/C++ CI" 实测 startup_failure 5 连）——含斜杠的
     # 被监视工作流须先改名。
     workflows: [CI]

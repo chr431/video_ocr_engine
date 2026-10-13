@@ -28,8 +28,8 @@
 - id: C-04
   conclusion: 解码后端按编码选：h264 CPU 快 ~2.9×，av1 慢 ~2.6×
   status: active
-  premises: fork 0.7.x；av1 见 C-31
-  revisit: 并行场景重测（C-31 策略修复后）
+  premises: fork 0.7.x 口径
+  revisit: 并行场景重测 / fork 换代
   evidence:
   - commit: c5d64eb
     path: docs/log/PERFORMANCE.md
@@ -315,7 +315,7 @@
     path: docs/log/2026-09-20-hybridOCR奖金池裁决.md
     anchor: hybridOCR裁决
 - id: C-62
-  conclusion: '**硬窗架构重做（0.9.0）：绝对帧区间+marker 分离+会话对象化+窗禁替补（win_subs 恒 0）**——根除 C-57 族。矩阵 12/12×5+哈希逐位+七套件'
+  conclusion: '**硬窗架构重做（0.9.0）：绝对帧区间+marker 分离+会话对象化+窗禁替补（win_subs 恒 0）**——根除硬窗缺陷族。矩阵 12/12×5+哈希逐位+七套件'
   status: active
   premises: fork 0.9.8；金标 D 组晚起点 5 用例；历代钉版均矩阵×5 复验
   revisit: fork 换代/窗口路径改动（matrix --repeat 5 + window 套件）/换卡/竞态再现
@@ -433,3 +433,10 @@
   evidence:
   - commit: c5d64eb
     note: log 同日
+- id: C-81
+  conclusion: '**CI 不配置 GPU runner（封案）**——单机单贡献者，发布证据随 tag 归档（金标 manifest+bench 快照+kpi）；GPU/视频门禁保持 local-gate，CI 只跑机器无关面'
+  status: active
+  premises: 单机单贡献者；GPU/视频门禁依赖本机 fork DLL 与真值视频语料
+  revisit: 第二台机器或第二贡献者出现；local-gate 长期无人执行
+  evidence:
+  - path: .github/workflows/ci.yml

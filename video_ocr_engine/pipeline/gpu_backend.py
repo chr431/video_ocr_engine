@@ -4,15 +4,14 @@
 GpuRunSpec 声明字段；判定回调（merge/autocrop/裁切区间）显式注入；
 运行态只写 GpuRunResult 与 fps 缓存盒。
 
-autocropper 与 y_pool 从"事后赋值、worker/GC 无锁读"改为**构造注入**
-——会话启动前/生产者线程启动前构建完毕（线程可见性由 Thread.start()
-的 happens-before 保证）。池帧归还仍走 __del__ → 池 free-list（溢出
-才 cudaFree），设备侧模块拆分后归位到显式归还路径。
+autocropper 与 y_pool 为**构造注入**——会话启动前/生产者线程启动前
+构建完毕（线程可见性由 Thread.start() 的 happens-before 保证）。池帧
+归还走 __del__ → 池 free-list（溢出才 cudaFree）或显式归还路径。
 
 生命周期（open→fps→会话→校准→消费→收尾）上收到
 _driver.run_segment_pipeline 单出处，本模块只剩 GPU 侧策略
 （_GpuLane）：设备侧校准、生产者线程+队列帧流、DeviceRef emit、
-sim_pair 合并判定，以及形状不符回退宿主（C10）。
+sim_pair 合并判定，以及形状不符回退宿主。
 """
 
 from __future__ import annotations
@@ -90,7 +89,7 @@ class GpuRunResult:
     fork_stats: dict | None = None  # fork 遥测穿透（hybrid 解码器才有）
     fell_back_to_host: bool = False
     fallback_engines: list | None = None  # 回退宿主时透传（避免二次 acquire）
-    fallback_vr: object = None  # C10：复用已打开的 reader
+    fallback_vr: object = None  # 复用已打开的 reader
 
     def as_tuple(self) -> tuple:
         return (self.frames, self.segs, self.texts, self.confs, self.rep_frames)
@@ -157,7 +156,7 @@ class _GpuLane:
     debug_tag = "GB"
 
     def __init__(self, spec: GpuRunSpec) -> None:
-        from ..gpu.streams import _gpu_release_partial  # 设备侧机制（gpu/ 拆分后规范位置）
+        from ..gpu.streams import _gpu_release_partial  # 设备侧机制（规范位置 gpu/streams.py）
 
         self._spec = spec
         self._release = _gpu_release_partial
@@ -214,7 +213,7 @@ class _GpuLane:
         self._prepare = _gpu_prepare_calibration
         self._stream_fn = (_gpu_frame_stream_nvdec, _gpu_frame_stream_cpu)
         # on_gpu 必须在 open_vr **之后**判定——backend 标签由 open 写入
-        # （旧代码同序；门面若在 spec 构造期求值，后端重置后的空标签会使其
+        # （门面若在 spec 构造期求值，后端重置后的空标签会使其
         # 恒为 False → 误走 CPU 解码分支，stride>1 时 rep_frame 帧号漂移）。
         _label = spec.backend_label()
         # 依据 C-76：hybrid 恒走宿主帧流——gpu-out 的解码器内上载中转实测
@@ -275,7 +274,7 @@ class _GpuLane:
         return res
 
     def release(self) -> None:
-        # C5：释放本次 extract 的临时设备缓冲；OCR 引擎缓冲归引擎池。
+        # 释放本次 extract 的临时设备缓冲；OCR 引擎缓冲归引擎池。
         self._release(self._ctx)
 
     def report_counters(self) -> None:
@@ -306,7 +305,7 @@ class _GpuLane:
             try:
                 item = self._producer_q.get(timeout=0.2)
             except Empty:
-                # C7：解码停滞/等待期间保持取消响应。
+                # 解码停滞/等待期间保持取消响应。
                 spec.cancel()
                 continue
             if item is None:
@@ -319,8 +318,7 @@ class _GpuLane:
             yield fi, sharp, dict(payload=(fi, dev, sharp), cluster=float(cluster))
 
     def _put_q(self, item) -> bool:
-        # P2c 覆盖：生产者侧背压此前无对应物（宿主路径 q_put_block 一直
-        # 有）——FULL 重试等待正是"OCR 消费不动生产者"的直接证据。
+        # 生产者侧背压：FULL 重试等待正是"OCR 消费不动生产者"的直接证据。
         spec = self._spec
         q = self._producer_q
         assert q is not None  # frame_items 先于 producer 线程启动装配
@@ -342,8 +340,8 @@ class _GpuLane:
             for item in self._stream:
                 if not self._put_q(item):
                     return
-        except BaseException as e:  # noqa: BLE001
-            # BaseException 而非 Exception（与 gpu/device.py 排空线程对齐）：
+        except BaseException as e:
+            # BaseException 而非 Exception（与 gpu/streams.py 排空线程对齐）：
             # 逃逸的 BaseException 会让 producer_err 恒空 → 消费循环见哨兵即
             # 正常收尾 → run 报成功但帧数静默截断。
             self.producer_err.append(e)
@@ -358,7 +356,7 @@ class _GpuLane:
             ) from self.producer_err[0]
 
     def stop_consume(self) -> None:
-        self.producer_stop.set()  # C6：任何退出路径都叫停 producer
+        self.producer_stop.set()  # 任何退出路径都叫停 producer
         self._resolve_keep_crops()  # 尾窗收口（rep_crops 必须完整）
         if self._producer is not None:
             try:
@@ -399,9 +397,9 @@ class _GpuLane:
         return arr
 
     def _resolve_keep_crops(self) -> None:
-        # ── keep_crops 的 D2H 并批（每段一次 async D2H + 一次流同步，
-        # 3000 帧/1083 段 = 1083 次同步全落在消费线程上）。改为有界窗口收集 +
-        # 每窗一次流同步；窗口 = 16 段，避免把过多 decord 批 owner 钉住。
+        # ── keep_crops 的 D2H 并批：有界窗口收集 + 每窗一次流同步
+        # （否则每段一次 async D2H + 一次流同步，3000 帧/1083 段 = 1083
+        # 次同步全落在消费线程上）；窗口 = 16 段，避免钉住过多 decord 批 owner。
         if not self._pending_crops:
             return
         from cuda.bindings import runtime as cudart
@@ -607,7 +605,7 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
 
     生命周期由 _driver.run_segment_pipeline 承载；本模块提供
     GPU lane 策略：设备侧校准 → 生产者线程（解码+GPU analyze 与主线程
-    分段/OCR 重叠）→ 消费循环 → 清理；形状不符回退宿主（C10）。
+    分段/OCR 重叠）→ 消费循环 → 清理；形状不符回退宿主。
     """
     from ._driver import run_segment_pipeline
 

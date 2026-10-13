@@ -1,7 +1,7 @@
 """宿主帧流批量灰度缓冲复用（Spec 版）。
 
-yuv(NV12) 的 g_buf 初值/复用条件曾双双写错（2//3 乘在宽度上、两元比一元
-永假）→ yuv 模式从未复用、每批重新分配。本测试统计 batch_luma（重新分配
+yuv(NV12) 的 g_buf 若初值/复用条件写错（2//3 乘在宽度上、两元比一元
+永假）→ yuv 模式不复用、每批重新分配。本测试统计 batch_luma（重新分配
 路径）与 batch_luma_out（复用路径）回调次数：复用条件成立时前者不该被调。
 """
 
@@ -87,7 +87,7 @@ def _run(ct, crop_shape, n_frames=40, batch_marker=False):
 
 
 def test_yuv_gray_buffer_reused():
-    """yuv 模式：luma 输出形状应为 (B, rows*2//3, W) 且全程复用（C3 回归）。"""
+    """yuv 模式：luma 输出形状应为 (B, rows*2//3, W) 且全程复用（回归）。"""
     rows, w = 15, 8  # rows*2//3 = 10
     ct = _run(_Counters(yuv=True), (16, rows, w))
     assert ct.luma_calls == 0, "yuv 复用失效：走了重新分配路径"
@@ -104,10 +104,10 @@ def test_gray_gray_buffer_reused():
 
 
 def test_yielded_grays_survive_batch_advance():
-    """yield 的灰度跨批保持稳定（修复回归）。
+    """yield 的灰度跨批保持稳定（回归）。
 
-    复用缓冲只服务批内计算；逃逸进 payload 的代表帧灰度必须是独立拷贝。
-    修复前 host 侧 45/1089 合并判定失真（段数 1042 vs GPU 正确值 1083）。
+    复用缓冲只服务批内计算；逃逸进 payload 的代表帧灰度必须是独立拷贝——
+    否则 host 侧 45/1089 合并判定失真（段数 1042 vs GPU 正确值 1083）。
     """
     ct = _Counters(yuv=False)
     ct.batch = -1

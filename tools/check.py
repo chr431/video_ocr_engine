@@ -1,17 +1,17 @@
-"""两级标准化测试入口 —— 日常 / 发版各跑什么，一条命令（2026-10-10）。
+"""两级标准化测试入口 —— 日常 / 发版各跑什么，一条命令。
 
 动机
 ----
 测试面分散在 pytest、守卫组、金标 verify、发版清扫、版本/KPI 多处，"现在该跑哪
-些"靠记纪律段；且金标 full（72s）与 smoke（6.7s）的分层此前只写在
-AGENTS 里。本脚本把两级合规固化成一条命令，每步带计时与结果汇总：
+些"靠记纪律段；金标 full（72s）与 smoke（6.7s）的分层也在此固化。本脚本把
+两级合规固化成一条命令，每步带计时与结果汇总：
 
     python tools/check.py               # 日常（≈36s）：迭代期默认
     python tools/check.py --tier release  # 发版/合并（≈2min，含全量金标+清扫）
 
-分级依据（实测，本机 2026-10-10，见 docs/log/2026-10-10-测试减负实验轮.md）：
-  pytest 29.3s；audit --since 秒级；金标 smoke 6.7s / full 71.9s；
-  window matrix（fork 门禁，decord 侧）41.9s×5；run_fast 七套件 346s。
+分级依据（本机实测，量级参考）：
+  pytest 29.3s；audit 秒级；金标 smoke 6.7s / full 71.9s；
+  window matrix（fork 门禁，decord 侧）41.9s×5。
   telemetry-check / ab 不进两级链（只在改遥测/做 A/B 时按 rules.yaml 跑）。
 
 降级：无真值视频环境（CI/新机）自动跳过金标步并标注 SKIP；步骤失败
@@ -37,7 +37,7 @@ def _has_videos() -> bool:
         from env_probe import video_dir
 
         return os.path.isfile(os.path.join(video_dir(), "test5.mp4"))
-    except Exception:  # noqa: BLE001 — 环境事实
+    except Exception:  # 环境事实
         return False
 
 
@@ -53,9 +53,15 @@ def _golden_case_count() -> str:
 
 
 STEPS = {
+    "lint": ("ruff check（面=pyproject）", [sys.executable, "-m", "ruff", "check", "."]),
+    "fmt": (
+        "ruff format --check（面=pyproject）",
+        [sys.executable, "-m", "ruff", "format", "--check", "."],
+    ),
+    "type": ("mypy（面=pyproject files）", [sys.executable, "-m", "mypy"]),
     "pytest": ("pytest -q（全量单测）", [sys.executable, "-m", "pytest", "tests/", "-q"]),
     "refs": ("引用解析（substrate）", [sys.executable, "tools/refs.py", "check"]),
-    "render": ("渲染一致性（六视图）", [sys.executable, "tools/render.py", "--check"]),
+    "render": ("渲染一致性（七视图）", [sys.executable, "tools/render.py", "--check"]),
     "ext": ("结构化审计（按名注册）", [sys.executable, "tools/_audit_ext.py"]),
     "golden_smoke": (
         "金标 smoke（3 用例）",
@@ -78,8 +84,22 @@ STEPS = {
         [sys.executable, "tools/health.py", "--check"],
     ),
 }
-DAILY = ["pytest", "refs", "render", "ext", "golden_smoke"]
-RELEASE = ["pytest", "refs", "render", "ext", "golden_full", "sweep", "version", "health"]
+# 静态步前置（秒级、快失败）；daily 链与 CI lint+institution+test 三 job 同构——
+# 守卫信号必须在本地工作发生处到达，CI-only 守卫在本仓长不推的工作流里形同装饰。
+DAILY = ["lint", "fmt", "type", "pytest", "refs", "render", "ext", "golden_smoke"]
+RELEASE = [
+    "lint",
+    "fmt",
+    "type",
+    "pytest",
+    "refs",
+    "render",
+    "ext",
+    "golden_full",
+    "sweep",
+    "version",
+    "health",
+]
 
 
 def run_step(name: str, cmd: list, timeout: int) -> tuple[str, float, str]:
@@ -123,7 +143,7 @@ def main() -> int:
             print(out[-1200:])
         elif name == "sweep" and out.strip():
             # 清扫清单即使通过也可见：落后钉版/触发词命中是发版前的决策输入，
-            # 只在失败时打印会让"通过但带清单"的输出被吞（2026-10-12 审查轮）。
+            # 只在失败时打印会让"通过但带清单"的输出被吞。
             print(out.rstrip())
     print("\n汇总：")
     for name, label, ok, dt in results:
@@ -133,7 +153,7 @@ def main() -> int:
         print("\n✗ 失败：%s" % ", ".join(failed))
         return 1
     if skipped:
-        # SKIP 不冒充通过：金标未验证这一事实必须出现在汇总末行（2026-10-12）。
+        # SKIP 不冒充通过：金标未验证这一事实必须出现在汇总末行。
         print("\n△ %s 链部分通过（跳过：%s——金标未验证）" % (args.tier, ", ".join(skipped)))
         return 0
     print("\n✓ %s 链全部通过（总 %.1fs）" % (args.tier, sum(d for _, _, _, d in results)))

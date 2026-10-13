@@ -16,9 +16,14 @@ python:
 
 dependencies:
   decord_pin: "0.9.8"        # 本地构建部署；R-decord-pin 与本行对账；PyPI 官方版缺 fork 能力
-  cuda_python: "13.x"
-  mypy: "2.3.1"
-  openvino: "2026.4.1"
+  decord_source: chr431/decord GitHub Release（cp39–cp314 wheel；本地构建走 fork 仓 rebuild_dev.bat）
+  numpy: "2.x"
+  psutil: "6+"
+  openvino: "2026.4.1"       # 兼容约束在 pyproject（>=2026.3,<2026.5）；换代评估按 C-48 复评触发
+  cuda_python: "13.x"        # TRT 执行 + decord GPU DLL 注册
+  tensorrt: "11.2"           # bindings ~1MB（thin）；运行 DLL 从系统 PATH 加载；元包与 ~2.2GB libs 有意排除
+  ffmpeg: "9（avcodec-63）"  # fork 硬性要求；wheel 已打包运行库
+  # dev 工具（ruff/mypy）钉版唯一住 pyproject dev extras，不在此重复
 
 # 外部依赖能力 floors（R-dependency-floors）：产品代码依赖的 fork 最低版本。
 # 注释不再写"需 fork ≥x.y.z"——此处是唯一事实源；CI 校验 pin ≥ 每个 floor。
@@ -27,6 +32,22 @@ dependency_floors:
   decord_env_passthrough: "0.7.13"   # DECORD_* env 透传支持
   decord_hybrid_native: "0.7.15"     # hybrid/hybrid_gpu 设备上下文原生支持
   decord_setroi_deepbank: "0.8.5"    # SetRoi 深银行出 out_cuda_ 门（C-76 配套）
+
+# 操作性事实（渲染进 docs/DEPENDENCIES.md；现状口径，历史叙事在 git 档案）
+runtime_notes:
+  gpu:
+    - CUDA Toolkit 与 TensorRT 的 DLL 从系统 PATH 加载（不打包）；gpu_setup.ensure_gpu_initialized() 扫描 PATH 注册 DLL 目录并前置 PATH（tensorrt 的 find_lib() 只搜 PATH）
+    - TRT 引擎与构建版本不兼容（旧产物不可加载）；加载失败自动删缓存重建，不静默回退；FP32 首建约 1 分钟，FP16 慢 2.2× 且推理无提升；GPTuner 在 Windows 不可用
+  decord:
+    - 无 NVIDIA GPU 自动回退 CPU 软解；强制 CPU 用 decode_backend="cpu" 构造参数
+    - h264 NVDEC 是本机硬件天花板（三码 NVDEC 982/2103/1749 fps）——h264 峰值走 CPU 软解或显式 hybrid
+    - fork 能力 floors（步长快速路径/env 透传/hybrid 原生/SetRoi 深银行）唯一住本表 dependency_floors
+  models:
+    - assets/ocr_models/PP-OCRv6_rec_small.onnx（fp16 权重版，唯一分发模型）+ ppocrv6_dict.txt；_models_dir() 支持 frozen（_MEIPASS）/源码树/wheel（data-files）三布局
+  fork_build:
+    - 构建命令的事实源在 fork 仓（CMakePresets.json + rebuild_dev.bat 构建即部署含 md5 校验 + make_wheel.bat 发 wheel）；rebuild_dev.bat 会 taskkill python，先停本地测试
+    - git-bash 直调 .bat 的引号转义会废 vcvars——脚本落盘后经 cmd //c 跑；MSVC 升级后清 CMakeCache.txt + CMakeFiles/ 重配
+    - 改 hybrid_threaded_decoder.h / ffmpeg/threaded_decoder.h 的类布局后必须删 video_reader.cc.obj 再构建（增量构建不重编=静默行为损坏，两起事故）；换 DLL 的 A/B 两臂都要全对象干净重建
 
 corpus:
   video_dir: "D:/Videos/racelog_test"     # 经 RACELOG_VIDEO_DIR 覆盖；批量集经 RACELOG_BATCH_DIR

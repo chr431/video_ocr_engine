@@ -37,8 +37,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
-from video_ocr_engine import FieldExtractor  # noqa: E402
-from video_ocr_engine.domain.video_utils import nvdec_available, tensorrt_available  # noqa: E402
+from video_ocr_engine import FieldExtractor
+from video_ocr_engine.domain.video_utils import nvdec_available, tensorrt_available
 
 CONFIGS = {
     "gpu_yuv": dict(ocr_backend="auto", rep_crop_format="yuv"),
@@ -75,8 +75,7 @@ def parse_truth(path: Path):
     """Race CSV：解析 '#' 头元数据 + (frame, text) 行。
 
     roi 头（# roi=x1,y1,x2,y2, ...）必须按正则取四个整数——头部本身按
-    逗号分节，通用 kv 切分只会拿到第一个数（AGENTS.md 已警告的坑，
-    2026-09-10 在 --roi-from-truth 实测踩中并修复）。
+    逗号分节，通用 kv 切分只会拿到第一个数。
     """
     import re
 
@@ -220,7 +219,7 @@ def main():
         type=int,
         default=1,
         help="采样步长（默认 1；⚠️ racelog_test 全部视频一律 "
-        "stride=1 防漏信息——2026-09-10 用户重申；stride>1 "
+        "stride=1 防漏信息；stride>1 "
         "仅用于字幕场景：字幕更新频率慢，允许稀疏采样）",
     )
     ap.add_argument("--configs", default=",".join(CONFIGS), help="功能矩阵配置名，逗号分隔")

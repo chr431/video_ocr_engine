@@ -1,12 +1,12 @@
-"""解码器契约协商（R4 跨仓契约机器化，2026-09-28）。
+"""解码器契约协商（跨仓契约机器化）。
 
-decord fork 自 0.8.5 起暴露契约面（`decord.CONTRACT_VERSION` +
+decord fork ≥0.8.5 才暴露契约面（`decord.CONTRACT_VERSION` +
 `decord.features()`），把引擎侧 decoder_contract.yaml（DC-01..10）的
 隐式假设变成可对账的机器面。本模块是引擎侧的协商入口：
 
 - `probe_contract()`：读取契约面；无契约面（上游原版 decord / 旧 fork
-  wheel）返回 None——这不是错误，引擎回退既有结构性探测（hasattr /
-  try-open 降级链），行为与 R4 之前逐位一致。
+  wheel）返回 None——这不是错误，引擎回退结构性探测（hasattr /
+  try-open 降级链）。
 - 契约面存在且版本**新于**引擎已知：告警不拒绝（新 fork + 旧引擎的
   正常组合，唯一诚实动作是让人看见）。
 - `FeatureView.require()`：能力缺失时抛 `DecoderContractError`（带
@@ -74,7 +74,7 @@ def probe_contract() -> FeatureView | None:
         return None
     try:
         feats = features_fn()
-    except Exception:  # noqa: BLE001 - 契约面自身故障按无契约处理
+    except Exception:  # 契约面自身故障按无契约处理
         logger.warning("decord.features() 调用失败，按无契约面处理", exc_info=True)
         return None
     view = FeatureView(version, feats if isinstance(feats, Mapping) else {})

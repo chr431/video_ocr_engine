@@ -1,11 +1,10 @@
 """解码口径单一事实源：引擎与 tools/ 探针共用的打开参数派生。
 
-背景（2026-09-18 口径轮）：fork 级探针曾各自硬编码线程档与 ROI 换算
-——实测 5 个 live 探针 ROI 少 ``+1``（解码窗比引擎小 1px）、THREADS
-表复制策略且不吃 ``DECODE_THREADS`` 覆盖、新探针 format 误用 yuv420
-（引擎 GPU 管线缺省 gray）。引擎档位一改探针即漂移，「探针口径 ≠
-生产口径」的测量结论不可比。本模块把派生逻辑收敛到一处：探针
-import 这里，永远与 ``FieldExtractor`` 同口径。
+fork 级探针不得各自硬编码线程档与 ROI 换算——ROI 少 ``+1``（解码窗
+比引擎小 1px）、THREADS 表复制策略且不吃 ``DECODE_THREADS`` 覆盖、
+format 误用 yuv420（引擎 GPU 管线缺省 gray）都会让探针与引擎漂移，
+「探针口径 ≠ 生产口径」的测量结论不可比。本模块把派生逻辑收敛到
+一处：探针 import 这里，永远与 ``FieldExtractor`` 同口径。
 
 探针用法::
 
@@ -28,9 +27,9 @@ import os
 def cpu_physical_cores() -> int:
     """物理核数（psutil 缺失时用逻辑核/2 估算，最小 2）。
 
-    2026-09-18 自 ``ocr.native`` 迁入（单一事实源；native 反向引用保持
-    兼容）：解码口径模块不得依赖 OCR 装载链（native→trt→cuda），
-    探针 worker 才能零负担 import 本模块。
+    本模块是物理核数唯一出处（native 反向引用保持兼容）：解码口径模块
+    不得依赖 OCR 装载链（native→trt→cuda），探针 worker 才能零负担
+    import 本模块。
     """
     try:
         import psutil  # type: ignore[import-not-found]
@@ -64,7 +63,7 @@ def decode_num_threads(
     """CPU 软解（cpu 后端 / hybrid CPU 臂）的 decord FFmpeg 帧线程数。
 
     完整分档依据与实测表见 ``FieldExtractor._decode_num_threads``
-    （extractor.py，2026-09-18 起委托本函数——同源派生）。要点：
+    （extractor.py 委托本函数——同源派生）。要点：
     - ``override > 0``（``DECODE_THREADS`` env / RunConfig）直返；
     - av1：逻辑核 3/4 钳 [8,24]（stride>1 放宽到 48 上限）；
     - hevc：钳 [8,32]（stride>1 放宽到 48；不分 OCR 位置）；
@@ -97,10 +96,10 @@ def decode_num_threads(
         return max(2, cores // 2)
     if sample_stride > 1:
         return max(8, min(config.DECODE_THREADS_CPU_OCR_MAX, logical * 3 // 4))
-    # h264 纯 CPU 路径独档（2026-10-10 争用配平轮，C-67）：h264 解码
+    # h264 纯 CPU 路径独档（C-67）：h264 解码
     # 算力轻（CPU 解码最快码，C-04）而并行度收益陡——10 档下解码饿
     # （全长实测 1379fps），24 档 +17%；hevc/av1 解码重保持低档
-    # （24/12 反降，同轮实测）。与 av1 独档同构：编码感知分档。
+    # （24/12 反降）。与 av1 独档同构：编码感知分档。
     if codec == "h264":
         return max(8, min(config.DECODE_THREADS_CPU_OCR_H264_MAX, logical * 3 // 2))
     return max(8, min(config.DECODE_THREADS_CPU_OCR_STRIDE1_MAX, logical // 3))

@@ -1,14 +1,14 @@
 """金标向量录制器。
 
 对固定视频窗口跑 v1 全链提取，把**阶段输出摘要**（段结构 / 文本 / 置信度 /
-校准阈值 / 降级原因 + 哈希）落成机器可读 JSON——不存像素。这些向量是 v2
-strangler 迁移（S3/S4/S5）的逐位对账参照系。
+校准阈值 / 降级原因 + 哈希）落成机器可读 JSON——不存像素。这些向量是
+全链行为变更的逐位对账参照系。
 
 用法：
   python tests/golden/record.py                # 录制全部用例
-  python tests/golden/record.py --case A2      # 只录指定用例
+  python tests/golden/record.py --case A-cpu-p0-cpu   # 只录指定用例
   python tests/golden/record.py --verify       # 重跑全部用例并与已录向量逐位比对
-  python tests/golden/record.py --verify --case A2
+  python tests/golden/record.py --verify --case A-cpu-p0-cpu
 
 比对口径：timing 仅供参考不比对；其余字段（段结构 / 文本 / 置信度全精度 /
 阈值 / 降级 / crop sha）必须逐位一致。分歧处理默认当 bug。
@@ -30,7 +30,7 @@ GOLDEN = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
 
-# 视频注册表单一事实源 = tools/_measure_lib.py（2026-10-11 收敛，与 bench 同源）
+# 视频注册表单一事实源 = tools/_measure_lib.py（与 bench 同源）
 from _measure_lib import ROI, VIDS  # noqa: E402
 
 WIN = (0, 3000)
@@ -53,7 +53,7 @@ MATRIX = []
 # A：test5 上 decode × pipeline × ocr 全网格（12）
 for dec in ("cpu", "nvdec", "hybrid"):
     for pipe in (0, 1):
-        for ocr in ("cpu", "tensorrt"):  # S3-1 勘误:"onnx"非合法值,v1 静默当 TRT(B3 活案例)
+        for ocr in ("cpu", "tensorrt"):  # "onnx" 非合法值：v1 静默当 TRT
             MATRIX.append(
                 _mk(
                     "A-%s-p%d-%s" % (dec, pipe, ocr),
@@ -122,14 +122,13 @@ for vid in ("test6_av1", "test6_h264", "test6_hevc"):
                 env={"GPU_PIPELINE": "1"},
             )
         )
-# D：晚起点硬窗（2026-10-08 窗口架构重做补录；关闭金标盲区——09-19 缺陷
-# 正是从"金标只有 [0,3000) 早起点"的盲区穿透的，C-57 两缺陷形态同为
-# 晚起点）。hybrid + seek(5000) + 窗：引擎谓词在 window_seek_safe 键在
-# 场下设窗（旧 wheel 无键走无窗路径，输出应逐位同——窗语义=供给
-# 边界，不是输出语义）。test5 尾格 (5000, 7761) 顺带覆盖片尾窗。
-# ⚠️ D-h264-w1000 曾录入后撤销：rep 帧像素逐位稳定但 seg[7] 置信度
-# 运行间翻动（0.99561↔0.99609，3 轮 1 翻；OCR 侧批形状效应），
-# 逐位门禁对它恒红——h264 晚起点由 w2761-tail 格覆盖。
+# D：晚起点硬窗——关闭金标盲区：硬窗缺陷族两形态均为晚起点，只测
+# [0,3000) 早起点会漏（C-62）。hybrid + seek(5000) + 窗：引擎谓词在
+# window_seek_safe 键在场下设窗（无键 wheel 走无窗路径，输出应逐位同——
+# 窗语义=供给边界，不是输出语义）。test5 尾格 (5000, 7761) 顺带覆盖片尾窗。
+# ⚠️ D-h264-w1000 不入矩阵：rep 帧像素逐位稳定但 seg[7] 置信度运行间翻动
+# （0.99561↔0.99609，3 轮 1 翻；OCR 侧批形状效应），逐位门禁对它恒红——
+# h264 晚起点由 w2761-tail 格覆盖。
 MATRIX.append(
     _mk(
         "D-h264-w2761-tail",
@@ -183,11 +182,10 @@ MATRIX.append(
 
 TIMING_ONLY = ("timing",)  # verify 时跳过的字段（非确定性）
 
-# smoke 层（2026-10-09 纪律松绑轮）：3 用例 ≈30s，覆盖三条关键路径
-# （cpu 纯路径 / hybrid 晚起点窗 / hybrid 常规）——迭代轮次用；
-# 33 全量只在发布与合并前跑。路径选择依据：A-cpu = 最快最稳的基线锚，
-# C-hevc-hybrid = hybrid+窗+TRT 主路径，D-hevc-w1000 = 窗架构的
-# 晚起点形态（C-57/C-62 一族缺陷的载体）。
+# smoke 层：3 用例 ≈30s，覆盖三条关键路径（cpu 纯路径 / hybrid 晚起点窗 /
+# hybrid 常规）——迭代用；33 全量只在发布与合并前跑。路径选择依据：
+# A-cpu = 最快最稳的基线锚，C-hevc-hybrid = hybrid+窗+TRT 主路径，
+# D-hevc-w1000 = 窗架构的晚起点形态（硬窗缺陷族载体，C-62）。
 SMOKE_IDS = ("A-cpu-p0-cpu", "C-hevc-hybrid", "D-hevc-w1000")
 
 
@@ -219,7 +217,7 @@ def environment() -> dict:
                 break
         else:
             env["ocr_engine"] = None
-    except Exception:  # noqa: BLE001 无 TRT/无引擎时只记 None，不阻塞录制
+    except Exception:  # 无 TRT/无引擎时只记 None，不阻塞录制
         env["ocr_engine"] = None
     try:
         import decord
@@ -244,7 +242,7 @@ def environment() -> dict:
 def summarize(case: dict) -> tuple[dict, dict]:
     """跑一次提取，返回 (stage-calib, stage-ocr) 两份摘要。
 
-    v1 的 env 是调用期读取（README:236-238），因此按用例临时改写再复原。
+    env 于构造期一次冻结，故按用例临时改写 env 后构造新实例。
     """
     from video_ocr_engine import FieldExtractor
 
@@ -275,7 +273,7 @@ def summarize(case: dict) -> tuple[dict, dict]:
             for s in r.segments
         ]
 
-    # 指纹摘要单一实现 = tools/_measure_lib.capture_shas（2026-10-11 收敛）
+    # 指纹摘要单一实现 = tools/_measure_lib.capture_shas
     from _measure_lib import capture_shas
 
     fp = capture_shas(r, keep_crops=bool(case["kwargs"].get("keep_crops")))
@@ -322,6 +320,19 @@ def load_case(case: dict) -> tuple[dict, dict]:
     )
 
 
+def _verdict(first: list[str], second: list[str]) -> tuple[list[str], bool]:
+    """翻动判定（纯函数，负测见 tests/golden/test_flap_verdict.py）。
+
+    首跑无差异 → 一致；首跑差异而复跑一致 → 翻动（F-12，放行并计数）；
+    两轮都差 → 真回归（必红）。
+    """
+    if not first:
+        return [], False
+    if not second:
+        return first, True
+    return second, False
+
+
 def verify_case(case: dict) -> tuple[list[str], bool]:
     """复验并比对。返回 (差异字段, flap)。
 
@@ -348,15 +359,12 @@ def verify_case(case: dict) -> tuple[list[str], bool]:
     diffs = diff_once()
     if not diffs:
         return [], False
-    diffs2 = diff_once()
-    if not diffs2:
-        return diffs, True  # 一次性差异 → 翻动
-    return diffs2, False
+    return _verdict(diffs, diff_once())
 
 
 def write_manifest(env: dict, vids_sha: dict) -> None:
     lines = [
-        "# S0 金标向量清单——录制基准与期望哈希（由 record.py 生成，人不得手改）",
+        "# 金标向量清单——录制基准与期望哈希（由 record.py 生成，人不得手改）",
         "environment:",
     ]
     for k, v in env.items():
@@ -400,9 +408,7 @@ def main() -> int:
         choices=("full", "smoke"),
         help="smoke=3 用例 ≈30s（迭代用）；full=全量（发布/合并）",
     )
-    ap.add_argument(
-        "--verify", action="store_true", help="重跑并与已录向量比对（S0 门禁：哈希一致）"
-    )
+    ap.add_argument("--verify", action="store_true", help="重跑并与已录向量比对（门禁：哈希一致）")
     args = ap.parse_args()
     cases = [c for c in MATRIX if not args.case or args.case in c["id"]]
     if args.tier == "smoke":

@@ -18,7 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
-from env_probe import video_dir  # noqa: E402  环境事实源（2026-10-12 审查轮）
+from env_probe import video_dir  # noqa: E402  环境事实源
 
 
 def tick(label: str, t0: float) -> float:

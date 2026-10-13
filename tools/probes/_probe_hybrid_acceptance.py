@@ -1,8 +1,8 @@
-"""hybrid 验收口径（2026-10-11 性能收口轮）：三码全片（23970 帧）引擎 e2e。
+"""hybrid 验收口径：三码全片（23970 帧）引擎 e2e。
 
 分子 = hybrid e2e（extract 墙钟，含校准/管线开销）；分母 = 同会话同口径
 纯臂 e2e 之和（cpu 后端 + nvdec 后端）。warmup 1 + 2 reps 中位。
-C-76 后基线：h264 93.2% / hevc 94.9% / av1 94.1%（验收线 ≥90%）。
+C-76 基线：h264 93.2% / hevc 94.9% / av1 94.1%（验收线 ≥90%）。
 """
 import os, statistics, sys, time, json
 sys.path.insert(0,'tools'); sys.path.insert(0,'.')

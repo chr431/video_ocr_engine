@@ -3,8 +3,8 @@
 ## 要解决的问题
 探针靠 monkeypatch 私有符号取数（`_cluster_win3` / `_segment_frames` /
 `SegmentStateMachine`…），这些符号无任何稳定性承诺 → 每次重构批量破。
-2026-09-13 实测：S9 模块化一次打破 4 个探针，且**每个都要重新读代码找
-新调用方**（旧点位 `_host_pipeline.py` 已删，新点位分散在两个后端模块）。
+重构一次就会打破多个探针（点位分散在多个后端模块），且**每个都要重新
+读代码找新调用方**。
 
 本层把该成本从 O(探针数 × 重构次数) 降到 **O(重构次数)**：重构后只改本表
 的 `POINTS`，全部探针不动。
@@ -42,13 +42,11 @@ if _ROOT not in sys.path:
 #: 内部调用。注意 `extractor` 走函数内 `from ... import`（每次调用重解析），
 #: 所以打 `domain.segmentation` 的模块属性即可拦住它，无需另打一处。
 POINTS: dict[str, tuple[str, str]] = {
-    # 分段状态机：P1 驱动合一后唯一构造点在 _driver（旧两后端各自的
-    # 构造点已上收；STATE_MACHINE_GPU 随之失效删除——不再有第二个点）
+    # 分段状态机：唯一构造点在 _driver
     "STATE_MACHINE": ("video_ocr_engine.pipeline._driver", "SegmentStateMachine"),
     # 宿主分段接线（domain.segmentation 的入口）：
-    # P1 后机器接线内联进 _driver.run_segment_pipeline，无函数边界可打；
-    # 需要宿主帧流/消费侧取数时用 _HostLane.frame_items（SEGMENT_FRAMES
-    # 条目随之删除，2026-09-20 无消费方核实）
+    # 机器接线内联进 _driver.run_segment_pipeline，无函数边界可打；
+    # 需要宿主帧流/消费侧取数时用 _HostLane.frame_items
     # 分段原语（调用点即 segmentation 内的模块全局）
     "CLUSTER_WIN3": ("video_ocr_engine.domain.segmentation", "_cluster_win3"),
     "OTSU": ("video_ocr_engine.domain.segmentation", "_otsu"),
@@ -118,7 +116,7 @@ class _Hooks:
         for name, (mod, sym) in sorted(POINTS.items()):
             try:
                 m = importlib.import_module(mod)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 bad.append("%s: 模块 %s 不可导入（%s）" % (name, mod, e))
                 continue
             if not hasattr(m, sym):

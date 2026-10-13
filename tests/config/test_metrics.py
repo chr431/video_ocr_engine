@@ -121,7 +121,7 @@ def test_profile_mapping_targets_are_registered():
 
 
 def test_totals_n_max_cover_all_totals_keys():
-    """P2b：TOTALS 全键分诊——N/MAX/HIST 映射与 TOTALS 键集合一致。"""
+    """TOTALS 全键分诊——N/MAX/HIST 映射与 TOTALS 键集合一致。"""
     from video_ocr_engine.domain.metrics import (
         HIST_N_BUCKETS,
         PROFILE_TOTALS,
@@ -180,9 +180,9 @@ def test_gauge_max_merges_by_max_across_threads():
     ta = threading.Thread(target=worker, args=(0.9,))  # 先触桶：写大值
     tb = threading.Thread(target=worker, args=(0.1,))
     ta.start()
-    ta.join()  # noqa: E702 — 启动即汇合的紧凑写法
+    ta.join()  # 启动即汇合的紧凑写法
     tb.start()
-    tb.join()  # noqa: E702
+    tb.join()
     assert m.snapshot()["gauges"][name] == pytest.approx(0.9)
 
 
@@ -196,3 +196,33 @@ def test_registry_cap():
     from video_ocr_engine.domain.metrics import METRICS
 
     assert len(METRICS.names()) <= METRIC_CAP * 0.8
+
+
+# ── snapshot drain 语义（看门狗取快照不得排干桶）─────────────────
+
+
+def test_snapshot_drain_false_is_readonly():
+    """只读快照回归钉子：看门狗取快照不得排干指标桶。"""
+    m = Metrics(tier="full")
+    m.counter("pipeline.consume_feed_n")
+    peek = m.snapshot(drain=False)
+    assert peek["counters"].get("pipeline.consume_feed_n") == 1
+    # 排干后仍能看到同一条（说明 drain=False 没有清桶）
+    drained = m.snapshot(drain=True)
+    assert drained["counters"].get("pipeline.consume_feed_n") == 1, (
+        "drain=False 的快照把桶吃掉了——停顿后的最终报告将丢失指标"
+    )
+
+
+def test_snapshot_drain_true_still_drains():
+    m = Metrics(tier="full")
+    m.counter("pipeline.consume_feed_n")
+    assert m.snapshot()["counters"].get("pipeline.consume_feed_n") == 1
+    assert not m.snapshot()["counters"].get("pipeline.consume_feed_n")
+
+
+def test_metrics_invalid_tier_raises_valueerror():
+    """非法档位：显式 ValueError（原 assert 无消息、-O 下消失）。"""
+    with pytest.raises(ValueError) as ei:
+        Metrics(tier="FULL")
+    assert "off/full" in str(ei.value)

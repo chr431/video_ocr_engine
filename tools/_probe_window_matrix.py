@@ -1,4 +1,4 @@
-"""hard-window 位级对照矩阵（C-57 根治门禁，2026-09-28 发布轮）。
+"""hard-window 位级对照矩阵（C-62 门禁：硬窗位级对照）。
 
 对三编码 × start×win 网格逐格跑三种读法（gray+ROI，引擎口径）：
   A. hybrid + set_decode_window（引擎时序：设窗 → seek_accurate → 读）
@@ -6,14 +6,13 @@
   C. nvdec（gpu ctx）无窗（基线）
 断言三者帧 md5 逐位一致 + A 的 hybrid_stats win_subs==0（窗替补哨兵
 零触发）。任何一格不一致即缺陷（退出码非 0）——晚起点格（start=5000）
-是 C-57 缺陷形态（修复前：尾帧 EOF 容错替补，md5 ≠ 基线 + win_subs>0）。
+是硬窗缺陷形态（尾帧 EOF 容错替补：md5 ≠ 基线 + win_subs>0）。
 
 用法：
   python tools/_probe_window_matrix.py            # 全矩阵（3 码 × 4 格）
   python tools/_probe_window_matrix.py --quick    # 只跑 test5（h264）
   python tools/_probe_window_matrix.py --repeat 5 # 连续 5 轮（发布门禁
-                                                  # 口径；单轮 12/12 在
-                                                  # 2026-10-08 被证明可被
+                                                  # 口径；单轮 12/12 可被
                                                   # 概率竞态 lucky-pass）
 环境：RACELOG_VIDEO_DIR（默认 D:/Videos/racelog_test）；
 DECORD_LIBRARY_PATH 指向待验 DLL（默认 D:/Repo/decord/build-dev）。
@@ -24,11 +23,11 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from env_probe import fork_build_dll, video_dir  # noqa: E402  环境事实源（纪律检查 1）
+from env_probe import fork_build_dll, video_dir  # 环境事实源
 
 sys.stdout.reconfigure(encoding="utf-8")
-# DLL 目录走环境事实源（旧为写死 build-dev；fork_build_dll 取最新构建产物，
-# env 仍可经 DECORD_LIBRARY_PATH 覆盖——setdefault 语义不变）
+# DLL 目录走环境事实源（fork_build_dll 取最新构建产物，env 仍可经
+# DECORD_LIBRARY_PATH 覆盖——setdefault 语义不变）
 _fbd = fork_build_dll()
 if _fbd is not None:
     os.environ.setdefault("DECORD_LIBRARY_PATH", str(_fbd.parent))
@@ -66,11 +65,11 @@ def main():
 
     try:
         assert_machine_quiet()
-    except BackgroundLoadError as e:  # noqa: BLE001 — 门禁语义：超阈退出
+    except BackgroundLoadError as e:  # 门禁语义：超阈退出
         print(e)
         raise SystemExit(2)
     quick = "--quick" in sys.argv
-    repeat = 5  # R-window-gate：单轮通过不作数（2026-10-08 flake 教训）
+    repeat = 5  # R-window-gate：单轮通过不作数（概率竞态可 lucky-pass）
     if "--repeat" in sys.argv:
         repeat = int(sys.argv[sys.argv.index("--repeat") + 1])
     vdir = video_dir()

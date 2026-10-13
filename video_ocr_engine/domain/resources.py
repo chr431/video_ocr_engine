@@ -62,7 +62,7 @@ def nvml_handle():
         h = ctypes.c_void_p()
         if int(nvml.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(h))) != 0:
             raise OSError("nvmlDeviceGetHandleByIndex_v2 rc!=0")
-    except Exception as e:  # noqa: BLE001 一次性判定，不重复尝试
+    except Exception as e:  # 一次性判定，不重复尝试
         st["state"], st["why"] = False, repr(e)[:120]
         raise OSError(st["why"])
     st["state"] = (nvml, h)
@@ -91,7 +91,7 @@ def gpu_identity():
         if int(nvml.nvmlSystemGetDriverVersion(drv, 80)) != 0:
             return None
         return (name.value.decode("utf-8", "replace"), drv.value.decode("utf-8", "replace"))
-    except Exception:  # noqa: BLE001 老驱动缺入口 → 让调用方回退 nvidia-smi
+    except Exception:  # 老驱动缺入口 → 让调用方回退 nvidia-smi
         return None
 
 
@@ -122,8 +122,7 @@ class ThreadLedger:
         import ctypes
 
         # 显式注解：mypy 面对这两个惰性字段报 "expression has type
-        # bool/WinDLL, variable has type None"——不注解则 mypy 步在 HEAD
-        # 上即为红。
+        # bool/WinDLL, variable has type None"——不注解则 mypy 报错。
         self._ntdll: "ctypes.WinDLL | None" = None  # NtQuerySystemInformation 快路径（惰性）
         self._nt_trusted: "bool | None" = None  # None=未对账 / True=NT 转正 / False=永久回退
 
@@ -197,7 +196,7 @@ class ThreadLedger:
         if self._nt_trusted is not False:
             try:
                 out = self._sample_all_nt()
-            except Exception:  # noqa: BLE001 — 遥测绝不让 run 失败
+            except Exception:  # 遥测绝不让 run 失败
                 out = None
             if out:
                 if self._nt_trusted is None:
@@ -364,7 +363,7 @@ def register_thread(name: str, t=None) -> None:
         return
     try:
         ident = t.ident if t is not None else threading.current_thread().ident
-    except Exception:  # noqa: BLE001 线程对象尚未 start：无从登记
+    except Exception:  # 线程对象尚未 start：无从登记
         return
     if ident:
         led.register(name, int(ident))
@@ -392,7 +391,7 @@ class _HostCounters:
         import ctypes
 
         try:
-            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            kernel32 = ctypes.windll.kernel32
 
             class _IO(ctypes.Structure):
                 _fields_ = [
@@ -414,10 +413,10 @@ class _HostCounters:
 
             self._get_io = get_io
             self.sources["disk"] = "kernel32.GetProcessIoCounters"
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self.sources["disk"] = "unavailable:%s" % repr(e)[:60]
         try:
-            psapi = ctypes.windll.psapi  # type: ignore[attr-defined]
+            psapi = ctypes.windll.psapi
 
             class _PMC(ctypes.Structure):
                 _fields_ = [
@@ -443,7 +442,7 @@ class _HostCounters:
 
             self._get_rss = get_rss
             self.sources["rss"] = "psapi.GetProcessMemoryInfo"
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self.sources["rss"] = "unavailable:%s" % repr(e)[:60]
         try:
             # process_time 有 15.625ms（1/64s）tick 量化，短相位（<0.5s）
@@ -464,7 +463,7 @@ class _HostCounters:
 
             self._get_cycles = get_cycles
             self.sources["cycles"] = "kernel32.QueryProcessCycleTime"
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self.sources["cycles"] = "unavailable:%s" % repr(e)[:60]
 
     def sample(self) -> dict:
@@ -541,7 +540,7 @@ def _vram_bytes():
             return None
         _VRAM_STATE.update(ok=True, why="cudaMemGetInfo")
         return int(total) - int(free), int(total)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         _VRAM_STATE["why"] = "unavailable:%s" % repr(e)[:60]
         return None
 
@@ -587,7 +586,7 @@ class ResourceProbe:
                     _ta = led.sample_all()
                     if _ta:
                         sample["thr_all"] = _ta
-        except Exception:  # noqa: BLE001 遥测绝不让 run 失败
+        except Exception:  # 遥测绝不让 run 失败
             return
         with self._lock:
             if len(self._rows) >= self._MAX_PHASES:
@@ -610,10 +609,10 @@ class ResourceProbe:
             if dcpu_all > 0 and fa.get("cycles") is not None and fb.get("cycles") is not None:
                 f_run = (fb["cycles"] - fa["cycles"]) / dcpu_all
         out: dict = {}
-        # v10.1 出生删失修复：解码池线程常在相位中段才出生（hybrid 的
-        # CPU 臂池取决于校准走了哪条路），边界交集会把它们整体剔除
-        # （h264 hybrid 外来簇 0.3M/帧=删失假象 vs 纯臂 13.6M）。改为
-        # 携带 seen 表：本区间新出生（此前从未见过）的 TID 基线记 0。
+        # 携带 seen 表：本区间新出生（此前从未见过）的 TID 基线记 0——
+        # 否则解码池线程（常在相位中段才出生，hybrid 的 CPU 臂池取决于
+        # 校准走了哪条路）会被边界交集整体剔除
+        # （h264 hybrid 外来簇 0.3M/帧=删失假象 vs 纯臂 13.6M）。
         seen_tids: set = set()
         for (a, sa), (_b, sb) in zip(rows, rows[1:]):
             name = _b if _b not in out else "%s→%s" % (a, _b)
@@ -654,7 +653,7 @@ class ResourceProbe:
                 led = thread_ledger()
                 name2tid = {}
                 if led is not None:
-                    with led._lock:  # noqa: SLF001 - 同模块内部访问
+                    with led._lock:  # 同模块内部访问
                         name2tid = dict(led._idents)
                 tids_named = set(name2tid.values())
                 foreign = {}
@@ -771,7 +770,7 @@ class NvmlSampler:
 
         try:
             nvml, h = self._open()
-        except Exception as e:  # noqa: BLE001 驱动无 NVML → 整体不可用
+        except Exception as e:  # 驱动无 NVML → 整体不可用
             self._err = repr(e)[:160]
             self.sources = "nvml_unavailable"
             return
@@ -819,7 +818,7 @@ class NvmlSampler:
                         row[6] = int(vclk.value)
                     if throttle is not None and int(throttle(h, ctypes.byref(reasons))) == 0:
                         row[7] = int(reasons.value)
-                except Exception:  # noqa: BLE001 单次调用失败计入 _fails
+                except Exception:  # 单次调用失败计入 _fails
                     self._fails += 1
                     continue
                 if any(v is not None for v in row[1:]):
@@ -834,7 +833,7 @@ class NvmlSampler:
         self._th.start()
 
     def points(self) -> list:
-        """原始时间点列的只读拷贝（P4 trace 用；stop() 后仍可取）。
+        """原始时间点列的只读拷贝（trace 用；stop() 后仍可取）。
 
         行结构：(t, gpu%, nvdec%, vram_mib, sm_mhz, mem_mhz, vid_mhz,
         throttle_mask)——聚合摘要之外唯一的带时间戳序列。

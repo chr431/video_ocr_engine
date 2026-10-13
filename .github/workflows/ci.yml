@@ -14,17 +14,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      # 面扩展（S3 Phase D，裁决 18）：产品 + standing 工具 + tests；
-      # tools/probes/ 由 pyproject extend-exclude 排除（轮内证据）。
-      # S110（2026-10-12 内联化，裁决 16）：豁免=行内 noqa+理由，无登记账本。
+      # 检查面单源 = pyproject [tool.ruff]/[tool.mypy]：一律裸命令（ruff 默认
+      # 尊重 .gitignore；tools/probes/ 与 *.md 由 extend-exclude 排除）。
+      # S110 豁免=行内 noqa+理由，无登记账本。
       # numpy/pyyaml：mypy/refs/render 面的依赖（refs/render 读 registry yaml）。
       - run: pip install ruff mypy numpy pyyaml
-      - run: ruff check video_ocr_engine/ tools/ tests/
-      - run: ruff format --check video_ocr_engine/ tools/ tests/
+      - run: ruff check .
+      - run: ruff format --check .
       - run: mypy
 
   institution:
-    # 制度面（S1 分层 L2）：引用可解析 + 视图一致 + 注册表/弃用/manifest 审计。
+    # 制度面：引用可解析 + 视图一致 + 注册表/弃用/manifest 审计。
     # fetch-depth: 0——refs 的墓碑索引与 render 的证据锚点要读全历史与 tag。
     runs-on: ubuntu-latest
     steps:
@@ -48,7 +48,11 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
+      # fetch-depth: 0——pytest 内含守卫（refs/render/audit），墓碑索引与
+      # 证据锚点要读全历史与 tag；depth-1 下三守卫必假红（实测）。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'

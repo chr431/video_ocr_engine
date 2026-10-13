@@ -1,4 +1,4 @@
-"""FieldExtractor 参数校验与内存选项测试（无需解码器/视频）。"""
+"""FieldExtractor 参数校验 / 构造期冻结 / 内存与合并选项（无需解码器/视频）。"""
 
 from __future__ import annotations
 
@@ -108,16 +108,16 @@ def test_rep_crop_format_resolution_and_alias():
 
 
 def test_segments_similar_requires_small_changed_area():
-    # _make 的 ROI=(0,0,100,50)，面积 5050，max_changed=50
+    # _make 的 ROI=(0,0,100,50) → 101×51，面积 5151，max_changed=51
     ex = _make(merge_similar=True)
     a = np.zeros((50, 100), dtype=np.uint8)
     b_small = a.copy()
-    b_small[:10, :10] = 200  # 100 像素显著变化 > 50 -> 不相似
+    b_small[:10, :10] = 200  # 100 像素显著变化 > 51 -> 不相似
     assert not ex._segments_similar(a, b_small)
-    # 稀疏小变化（不构成 3×3 稠密簇）<= 50 -> 相似：像素数上限本身仍生效
+    # 稀疏小变化（不构成 3×3 稠密簇）<= 51 -> 相似：像素数上限本身仍生效
     b_sparse = a.copy()
     for i in range(0, 50, 2):
-        b_sparse[i, 0] = 200  # 25 像素显著变化，1px 宽 → win3 = 3
+        b_sparse[i, 0] = 200  # 25 像素显著变化，1px 宽 → win3 = 2
     assert ex._segments_similar(a, b_sparse)
     # 平均差超阈值也判不相似
     b_mean = a.copy()
@@ -140,3 +140,114 @@ def test_segments_similar_dense_gate(monkeypatch):
     # gate=0 关闭 → 回到纯两阈值判定（16 ≤ 51 → 相似）
     monkeypatch.setenv("SEG_MERGE_DENSE_GATE", "0")
     assert _make(merge_similar=True)._segments_similar(a, b_dense)
+
+
+# ── 构造期冻结与"显式参数 > env > 默认"优先级（v1 env-wins 不得复活）──
+
+
+def test_env_frozen_at_construction(monkeypatch):
+    ex = _make()
+    assert ex._ocr_autocrop is True  # 默认
+    monkeypatch.setenv("OCR_ROI_AUTOCROP", "0")
+    assert ex._ocr_autocrop is True  # 构造后改 env：不再生效
+    monkeypatch.setenv("OCR_REORDER_WINDOW", "8")
+    assert ex._ocr_reorder_window == 64  # 冻结
+    monkeypatch.setenv("GPU_PIPELINE", "1")
+    assert ex._rc.pipeline_gpu is None  # 三态仍为"规则"
+    # 构造前设 env → 新实例参与解析
+    fresh = _make()
+    assert fresh._ocr_reorder_window == 8
+    assert fresh._rc.pipeline_gpu is True
+    monkeypatch.setenv("OCR_REORDER_WINDOW", "16")
+    assert _make()._ocr_reorder_window == 16
+
+
+def test_fill_width_param_beats_env(monkeypatch):
+    monkeypatch.setenv("OCR_PAD_SMALL", "320")
+    ex = _make(fill_width=224)
+    assert ex._fill_width == 224  # 显式参数锁定（v1 会变 320）
+    assert ex._pad_floor_env == 0
+
+
+def test_fill_width_env_applies_when_param_absent(monkeypatch):
+    monkeypatch.setenv("OCR_PAD_SMALL", "320")
+    ex = _make()  # fill_width 缺省
+    assert ex._fill_width == 224  # 参数缺省 → 默认 224
+    assert ex._pad_floor_env == 320  # env 抬升下限（在引擎内生效）
+
+
+def test_merge_text_sep_param_beats_env(monkeypatch):
+    monkeypatch.setenv("TEXT_SEP_MERGE", "off")
+    ex = _make(merge_text_sep="binary")
+    assert ex._merge_effective_mode() == "binary"  # 参数锁定
+    assert _make()._merge_effective_mode() == ""  # 缺省 → env 生效
+
+
+def test_session_spec_carries_frozen_rc(monkeypatch):
+    """注入口贯通（rc → SessionSpec，纯构建无线程）。"""
+    monkeypatch.setenv("OCR_GAMMA", "1.8")
+    monkeypatch.setenv("OCR_BATCH", "24")
+    ex = _make()
+    spec = ex._build_session_spec()
+    assert spec.gamma == 1.8
+    assert spec.ocr_batch == 24
+    # reorder_window 是**生效值**——本 ROI（101×51）的宽高比 1.98 够不到
+    # pad 下限比 224/48=4.67 → 按宽分组不可能改变 pad 宽 → 收敛到 1
+    assert spec.reorder_window == 1
+    assert ex._ocr_reorder_window == 64  # 旋钮本身仍解析为 64
+
+
+def test_reorder_window_kept_for_wide_roi():
+    """判据是"ROI 上界宽高比"：宽 ROI（内容能超过下限）保留原窗口。"""
+    from video_ocr_engine.pipeline.ocr_stage import effective_reorder_window
+
+    # 407×25 字幕 ROI：16.3 > 4.67 → 分组有效，保留 64
+    assert effective_reorder_window(407, 25, 224, 0.0, 64) == 64
+    # force_aspect>0：输入被压到固定宽高比 → 分组无意义
+    assert effective_reorder_window(407, 25, 224, 1.5, 64) == 1
+
+
+# ── 未知后端构造期报错 + 二次 extract 重置运行态 ──────────────────
+
+
+@pytest.mark.parametrize(
+    "kw,match",
+    [({"decode_backend": "cuda"}, "decode_backend"), ({"ocr_backend": "tesseract"}, "ocr_backend")],
+)
+def test_unknown_backend_raises(kw, match):
+    """未知 decode_backend / ocr_backend 构造期 ValueError（v1 静默兜底已废除）。"""
+    with pytest.raises(ValueError, match=match):
+        _make(**kw)
+
+
+def test_valid_backends_accepted():
+    for dec in ("auto", "cpu", "nvdec", "hybrid"):
+        _make(decode_backend=dec)
+    for ocr in ("auto", "cpu", "tensorrt"):
+        _make(ocr_backend=ocr)
+
+
+def test_second_extract_resets_run_state(monkeypatch):
+    """同实例第二次 extract 不再带上一次的降级原因/计时/剖面。"""
+    ex = _make()
+    # 污染运行态（模拟上一次 extract 的残留；profile 读面已为只读
+    # property——直接污染 spine 内字典）
+    ex._degraded = ["上次的原因"]
+    ex._timing = {"decode": 9.9}
+    ex._spine.profile["ocr"] = {"x": 1}
+    ex._backend = "decord/CPU"
+    ex._ocr_backend_used = "tensorrt"
+    ex._bin_thresh = 77
+    ex._n_segments = 5
+    # _fps 不在重置范围（同实例同视频的文档化缓存）
+
+    monkeypatch.setattr(FieldExtractor, "_run_pipelined", lambda self: RunOutcome())
+    r = ex.extract()
+    assert ex._degraded == []
+    assert ex._timing == {}
+    assert ex.profile == {}
+    assert ex._backend == ""
+    assert ex._ocr_backend_used == ""
+    assert ex._bin_thresh == 0
+    assert r.meta["degraded_reason"] is None
+    assert len(r.segments) == 0

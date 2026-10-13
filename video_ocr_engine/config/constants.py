@@ -1,6 +1,6 @@
 """管线引擎配置（engine_config）— 解码/OCR/分段域常量。
 
-独立引擎仓库的配置单一事实源，供 engine 内 ocr_native / ocr_trt /
+独立引擎仓库的配置单一事实源，供 engine 内 ocr/native.py / ocr/trt.py /
 segmentation / video_utils 与引擎外的上层应用直接引用。
 上层应用可通过 `from video_ocr_engine.config.constants import *` 聚合再导出（GUI 与
 `import config` 兼容），应用侧专属常量（颜色/窗口/图表/领域后处理参数）
@@ -22,7 +22,7 @@ __version__ = "0.26.2"
 
 # ═══════════════════ 环境变量助手与名称常量 ═══════════════════
 # 引擎全部 env 开关/覆写在此收敛（单一事实源）。布尔开关统一走 env_bool：
-# 缺省取 default，值匹配真集/假集，未识别值回退 default——与各路径历史
+# 缺省取 default，值匹配真集/假集，未识别值回退 default——与各路径
 # 语义一致；数值型 env（OCR_THREADS / HYBRID_MAX_CHUNKS 等）只在此定义名称，
 # 解析在调用点。
 
@@ -84,7 +84,7 @@ GPU_PIPELINE_STREAM_ENV: str = (
     "GPU_PIPELINE_STREAM"  # 1 开启 decord get_batch_stream chunk 粒度流水发射（默认关，C-10）
 )
 GPU_PIPELINE_DRAINER_ENV: str = (
-    "GPU_PIPELINE_DRAINER"  # 1 = get_batch 独占排空线程预取（层4；实测零收益默认关，同 C-10 判例）
+    "GPU_PIPELINE_DRAINER"  # 1 = get_batch 独占排空线程预取（实测零收益默认关，同 C-10 判例）
 )
 GPU_CTC_ENV: str = "GPU_CTC"  # 0 关闭 TRT 输出 GPU 归约
 ENGINE_PROFILE_ENV: str = "ENGINE_PROFILE"  # 1 开启引擎级性能剖面
@@ -100,9 +100,9 @@ HYBRID_CPU_THREADS_ENV: str = "HYBRID_CPU_THREADS"  # CPU reader 线程数；
 # ═══════════════════ CPU 软解线程预算（按 OCR 是否在 GPU 分档）═══════════════
 # 背景：引擎不显式传 num_threads 时，CPU 解码线程数由 decord fork 的
 # DECORD_FFMPEG_THREAD_COUNT 决定（fork 源码 src/video/video_reader.cc）——
-# 引擎侧不依赖该默认值，全部路径都显式传 num_threads。显式分档的由来：
-# "OCR 跑 ONNX 占满物理核"的时代 fork 默认把软解钉在低线程；TensorRT 成为
-# 默认后 host CPU 在解码阶段基本空闲，旧上限反而成为瓶颈。
+# 引擎侧不依赖该默认值，全部路径都显式传 num_threads。显式分档的理由：
+# TensorRT 为默认后 host CPU 在解码阶段基本空闲，fork 的软解低线程默认
+# 上限反而是瓶颈。
 # 实测（7945HX 16C32T + RTX 4060 Laptop，TRT；段数/唯一文本逐位一致）：
 #   test5 1080p h264 全片 7223 帧  ：8 线程 6.452s → 16 线程 4.875s
 #   新三国01 标清整集 73430 帧 s8  ：8 线程 15.897s → 32 线程 10.812s
@@ -156,7 +156,7 @@ def app_logs_dir() -> Path:
 def models_dir() -> Path:
     """模型资产目录（源码 / wheel 安装 / frozen 多路径兼容；唯一实现）。
 
-    OCR 模型与 TRT 引擎缓存查找共用（ocr_native / ocr_trt 经别名引用，
+    OCR 模型与 TRT 引擎缓存查找共用（ocr/native.py / ocr/trt.py 经别名引用，
     原先两份拷贝靠注释锁同步，曾构成漂移风险）。查找顺序：
       1. frozen: PyInstaller _MEIPASS/ocr_models
       2. 源码树: <repo>/assets/ocr_models（也兼容未来包内 assets）
@@ -182,7 +182,7 @@ def models_dir() -> Path:
 
 
 # ═══════════════════ 用户可配置默认值 ═══════════════════
-DEFAULT_OCR_MODEL: str = "v6_small"  # 唯一 OCR 模型（v2.13 起移除 tiny / 重 OCR）
+DEFAULT_OCR_MODEL: str = "v6_small"  # 唯一 OCR 模型（无 tiny / 重 OCR）
 
 DEFAULT_REP_CROP_FORMAT: str = "yuv"  # 代表帧 keep_crops 默认格式：
 # "yuv"=packed NV12（内部只取 Y 平面，
@@ -193,19 +193,17 @@ DEFAULT_BUFFER_SIZE: int = 128  # 解码∥OCR 流水线队列缓冲（段数）
 # 解码线程 q.put 阻塞等待（GPU+CPU wall
 # -0.3s；256 无进一步收益）
 DEFAULT_DECODE_BACKEND: str = "auto"  # 解码后端 (auto / cpu / nvdec / hybrid)
-# GPU 全驻留管线（_gpu_pipeline）解码批大小：64 为 GPU 分段实验最优（更大批
+# GPU 全驻留管线解码批大小：64 为 GPU 分段实验最优（更大批
 # 减少 kernel/同步次数），与宿主 DECODE_BATCH_SIZE=16 刻意不同——两条路径
 # 独立调参，勿统一为一个常量。
 GPU_PIPELINE_DECODE_BATCH: int = 64
 DEFAULT_OCR_BACKEND: str = "auto"  # OCR 推理后端 (auto / cpu / tensorrt)
 DEFAULT_FORCE_ASPECT: float = 0.0  # 强制横向宽高比（0=不启用；>0 时宽度
 # 强制 = 48×此值，纠正扁宽字体）
-# **已回退：160 → 224**（与 OCR_PAD_WIDTH_MIN 同步，详见下方
-# "OCR 输入 pad 宽度下限"的对照表）。extractor 默认把它传给
-# OcrEngine(fill_width=...)，因此这**才是实际生效的默认值**。
-# 下调到 160 是错的：只测了 force_aspect=0，而生产用 force_aspect>0，那里
-# 160 使原始误读 7→26。224 的依据（320 raw 最优 0.53% vs 224 0.67%，但
-# 端到端 224 最优 13 vs 16）**依然成立，不该推翻**。
+# 224 为基线（与 OCR_PAD_WIDTH_MIN 同步，见下方"OCR 输入 pad 宽度下限"
+# 对照表）。extractor 默认把它传给 OcrEngine(fill_width=...)，因此这
+# **才是实际生效的默认值**。**勿下调**：只测过 force_aspect=0 会遗漏生产
+# 的 force_aspect>0，那里 160 使原始误读 7→26；224 端到端最优 13 vs 16。
 DEFAULT_FILL_WIDTH: int = 224  # OCR 输入 pad 宽度下限（引擎 _resize_norm
 # pad 到该总宽）。GUI 可调 160-320，
 # 默认 224。取值依赖 force_aspect：
@@ -237,7 +235,7 @@ SEG_MERGE_MAX_CHANGED_RATIO: float = 0.01
 # 稠密簇门（C-38）：合并判定的差异图若含 win3 ≥ 此值的 3×3
 # 稠密簇，恒判不相似。动机：末位单数字变化只动 12-14px（< 1% 面积上限），
 # 被 merge 吞掉 2 帧短状态（test5 33/33、test6 94/94 合并全为此类，
-# _probe_merge_log）；断段判据用同一 win3 定义“内容变了”，合并放行稠密簇
+# archive/pre-rework:tools/_probe_merge_log.py）；断段判据用同一 win3 定义“内容变了”，合并放行稠密簇
 # 等于自相矛盾。**这是单侧安全闸而非分类器**：实测 test5/test6 的合并全部
 # win3=9（在那里等于关闭合并）——仍稳定增益是因为代价不对称（挡无害合并
 # 只多一次 OCR 调用，挡有害合并回收帧），详见 segmentation.similar_decision
@@ -246,11 +244,11 @@ SEG_MERGE_DENSE_GATE_ENV: str = "SEG_MERGE_DENSE_GATE"
 SEG_MERGE_DENSE_GATE: int = 5  # 默认 = SEG_C，与断段判据同源
 
 # ═══════════════════ OCR 输入 pad 宽度下限 ═══════════════════
-# **已回退：160 → 224。"下调到 160"是错的，勿再改。**
+# **224 为基线，勿下调。**
 #
-# 出错原因：我全程用 `force_aspect=0.0`（引擎默认）评估，而生产（RaceVideoToLog
-# 2.17.x）传 `force_aspect=mw`（真值头里 test5 = 1.5）。**两者下 pad 下限的
-# 作用方向完全相反**：
+# 评估口径：`force_aspect=0.0`（引擎默认）与生产调用传的
+# `force_aspect=mw`（真值头里 test5 = 1.5）下，pad 下限的
+# 作用方向完全相反：
 #
 # | pad | force_aspect=0（内容 154px）| force_aspect=1.5（内容被压到 72px）|
 # |---|---:|---:|
@@ -264,10 +262,10 @@ SEG_MERGE_DENSE_GATE: int = 5  # 默认 = SEG_C，与断段判据同源
 # 机制：pad 下限的优劣取决于**内容宽度**，不能一刀切。
 #   · force_aspect=0：内容按原宽高比缩放，较宽（154px）→ **偏小 pad 更好**
 #   · force_aspect>0：内容被压到固定窄宽（72px）→ **pad 越大留白越多、越准**
-# 这与旧注释的经验（"窄图在宽 pad 下更准"）一致——**旧注释是对的，
-# 是我的评估口径错了**，不该推翻它。
+# 这与"窄图在宽 pad 下更准"的经验一致——不应据 force_aspect=0 的评估
+# 推翻它。
 #
-# 生产侧已验证（tools/accuracy_breakdown.py，5 视频全量帧，单变量
+# 生产侧已验证（archive/pre-rework:tools/accuracy_breakdown.py，5 视频全量帧，单变量
 # OCR_PAD_SMALL）：160 使总原始误读 150→190（test5 7→26、test6 17→32），
 # 224 恢复基线 ≈149。故保持 224。
 #
@@ -321,14 +319,14 @@ OCR_TARGET_H: int = 48
 #
 # test5/test6 左留白是右留白的约 4 倍 —— 数字右对齐、ROI 按最长状态取，
 # 短数字时空白全堆在左侧。留白越多，裁掉的收益越大、切到笔画的风险越小。
-# 测量工具：`tools/_probe_roi_whitespace.py`。
+# 测量工具：`archive/pre-rework:tools/_probe_roi_whitespace.py`。
 # 余量 = ROI 宽的百分比（每侧），默认 10，依据见下。
 #
 # 余量是「裁掉空白」与「切到笔画」之间的权衡，两侧都错得起：
 #   · 太小 → 切掉字符边缘笔画（紧凑 ROI 上明显）
 #   · 太大 → 把留白又放回来，收益被吃掉（宽 ROI 上 30% 反而变差）
 #
-# 生产路径实测（tools/_probe_truth_env.py --dbe auto，段代表帧 + 数值
+# 生产路径实测（archive/pre-rework:tools/_probe_truth_env.py --dbe auto，段代表帧 + 数值
 # tol=1 误读数，越低越好）：
 #
 # | 视频 | ROI宽高比 | 左留白 | 不裁 | 余量10 | 余量20 | 余量30 |
@@ -348,7 +346,7 @@ OCR_TARGET_H: int = 48
 #
 # 最小收益门槛：裁掉宽度占 ROI 宽的比例低于此值就**整段不裁**。
 #
-# 依据（`tools/_probe_crop_miscut.py`，前 3000 帧，误裁 = 被裁区间在宽松
+# 依据（`archive/pre-rework:tools/_probe_crop_miscut.py`，前 3000 帧，误裁 = 被裁区间在宽松
 # 判据「列墨迹 ≥1」下仍有内容，即引擎判据漏掉了真实笔画）：
 #
 # | 视频 | 余量 | 裁切率 | 裁掉量中位 | 误裁左 | 裁掉<10%的段 |
@@ -387,11 +385,11 @@ OCR_OV_CHUNK: int = 16
 OCR_CTC_CHUNK: int = 64
 # TensorRT 引擎构建：默认 batch profile、输入宽 profile 与 workspace
 #
-# TRT_PROFILE_BATCH = 18（实测；原值 6）：
+# TRT_PROFILE_BATCH = 18（实测）：
 #   OCR 推理的**每子批提交开销**（launch + 归约 kernel + D2H + 形状 sync）
 #   与 profile batch 成反比：同一批 1116 张 48×224 走同一条 TRT 提交路径，
 #   batch=6（186 子批，每次同步）0.663s → batch=18（62 子批）0.557s = **−16.0%**
-#   （tools/_probe_trt_maxbatch.py；两个引擎由同一份 ONNX 构建，仅 profile 不同）。
+#   （archive/pre-rework:tools/_probe_trt_maxbatch.py；两个引擎由同一份 ONNX 构建，仅 profile 不同）。
 #   真实管线口径：ocr.infer 1.006s/1083 张（batch=6）→ 消费端提交开销按
 #   子批数等比缩小；对齐后 chunk = B 的整倍数且每 chunk 仅 1 次同步。
 #   ⚠️ 该值进**引擎文件名**（见 trt._engine_candidates）：改它 = 换引擎产物，
@@ -399,7 +397,7 @@ OCR_CTC_CHUNK: int = 64
 TRT_PROFILE_BATCH: int = 18
 # TRT_FP16（env，默认关）：fp16 ONNX（keep_io_types）+ STRONGLY_TYPED 网络
 # 构建半精度引擎（层内 half、IO fp32）。文件名带 sttyped_fp16 标记。
-# 准确率门禁：_probe_acc_ab.py --knob TRT_FP16=0,1（逐帧对齐真值）。
+# 准确率门禁：archive/pre-rework:tools/_probe_acc_ab.py --knob TRT_FP16=0,1（逐帧对齐真值）。
 TRT_FP16_ENV: str = "TRT_FP16"
 # TRT_DEFER_SYNC（env，默认关）：raw 直通批深度 2 延迟收集——整批提交
 # （TRT+argmax+D2H 到 pinned 双环槽）不等待，下一批提交后才同步上一批
