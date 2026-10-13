@@ -112,6 +112,18 @@ def _warm_env_fingerprint() -> None:
 
 def test_environment_fingerprint_is_cached():
     """首 run 付一次指纹成本，之后必须接近零（否则每 run +20–43ms）。"""
+    import sys as _sys
+    from pathlib import Path as _P
+
+    _sys.path.insert(0, str(_P(__file__).resolve().parents[2] / "tools"))
+    from _measure_lib import BackgroundLoadError, assert_machine_quiet
+
+    try:  # 时敏测量：后台大负载下"首调 <300ms"不可分辨，报负载而非假红
+        assert_machine_quiet(cpu_pct=40.0, samples=2, interval=0.5, gpu=False)
+    except BackgroundLoadError as e:
+        import pytest as _pt
+
+        _pt.fail(str(e))
     from video_ocr_engine.pipeline import report as R
 
     R._ENV_CACHE = None  # 模拟新进程

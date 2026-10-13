@@ -14,13 +14,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      # 检查面：产品 + standing 工具 + tests；
-      # tools/probes/ 由 pyproject extend-exclude 排除（轮内证据）。
+      # 检查面单源 = pyproject [tool.ruff]/[tool.mypy]：一律裸命令（ruff 默认
+      # 尊重 .gitignore；tools/probes/ 与 *.md 由 extend-exclude 排除）。
       # S110 豁免=行内 noqa+理由，无登记账本。
       # numpy/pyyaml：mypy/refs/render 面的依赖（refs/render 读 registry yaml）。
       - run: pip install ruff mypy numpy pyyaml
-      - run: ruff check video_ocr_engine/ tools/ tests/
-      - run: ruff format --check video_ocr_engine/ tools/ tests/
+      - run: ruff check .
+      - run: ruff format --check .
       - run: mypy
 
   institution:

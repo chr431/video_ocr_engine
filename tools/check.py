@@ -53,6 +53,12 @@ def _golden_case_count() -> str:
 
 
 STEPS = {
+    "lint": ("ruff check（面=pyproject）", [sys.executable, "-m", "ruff", "check", "."]),
+    "fmt": (
+        "ruff format --check（面=pyproject）",
+        [sys.executable, "-m", "ruff", "format", "--check", "."],
+    ),
+    "type": ("mypy（面=pyproject files）", [sys.executable, "-m", "mypy"]),
     "pytest": ("pytest -q（全量单测）", [sys.executable, "-m", "pytest", "tests/", "-q"]),
     "refs": ("引用解析（substrate）", [sys.executable, "tools/refs.py", "check"]),
     "render": ("渲染一致性（六视图）", [sys.executable, "tools/render.py", "--check"]),
@@ -78,8 +84,22 @@ STEPS = {
         [sys.executable, "tools/health.py", "--check"],
     ),
 }
-DAILY = ["pytest", "refs", "render", "ext", "golden_smoke"]
-RELEASE = ["pytest", "refs", "render", "ext", "golden_full", "sweep", "version", "health"]
+# 静态步前置（秒级、快失败）；daily 链与 CI lint+institution+test 三 job 同构——
+# 守卫信号必须在本地工作发生处到达，CI-only 守卫在本仓长不推的工作流里形同装饰。
+DAILY = ["lint", "fmt", "type", "pytest", "refs", "render", "ext", "golden_smoke"]
+RELEASE = [
+    "lint",
+    "fmt",
+    "type",
+    "pytest",
+    "refs",
+    "render",
+    "ext",
+    "golden_full",
+    "sweep",
+    "version",
+    "health",
+]
 
 
 def run_step(name: str, cmd: list, timeout: int) -> tuple[str, float, str]:

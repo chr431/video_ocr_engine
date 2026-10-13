@@ -14,16 +14,16 @@
 # ── ci：线上 CI（机器无关） ────────────────────────────────────────────
 
 - id: R-lint-format
-  statement: 代码风格单一执行面——ruff format（双引号、行宽 100）+ lint 精选集；面=产品代码+全部 standing 工具+tests（probes/ 除外）
+  statement: 代码风格单一执行面——ruff format（双引号、行宽 100）+ lint 精选集；面以 pyproject [tool.ruff] 为唯一描述源（裸命令跑全仓，尊重 .gitignore；probes/ 与 *.md 不入）
   enforcement: ci
-  executor: .github/workflows/ci.yml#lint
+  executor: pyproject.toml#[tool.ruff]（CI lint job 与本地 daily 链均裸命令）
   prevents: S0-I1（52 天无风格约束、42 文件返工、tools/tests 豁免）
   since: 2026-10-10
 
 - id: R-mypy
-  statement: 类型面=产品代码+standing 工具（probes/ 除外）；以 pyproject files 为唯一描述源
+  statement: 类型面以 pyproject [tool.mypy].files 为唯一描述源（面内文件显式列举；probes/ 不在面内，未列入模块按 Any 不跟随）
   enforcement: ci
-  executor: .github/workflows/ci.yml#mypy
+  executor: pyproject.toml#[tool.mypy]（CI lint job 与本地 daily 链同命令）
   prevents: S0-I1（工具层无类型面）
   since: 2026-10-12
 

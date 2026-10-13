@@ -69,12 +69,13 @@ markers = [
 #     CI `ruff format --check` 挡增量漂移；
 #   · docstring = 单行中文摘要 + 可选解释段（不强制 Google/NumPy 段落）；
 #     命名 = snake_case 函数/UPPER_CASE 常量/PascalCase 类。
-# 范围 = video_ocr_engine/ + tools/（standing）+ tests/（standing 质量面=生产代码）；
-# tools/probes/ 为轮内证据，不入 lint/format 面。
-# 执行：ruff check video_ocr_engine/ tools/ tests/ && ruff format --check 同面。
+# 面单源：以 pyproject 为唯一描述源，CI 与本地一律裸命令
+#（ruff check . / ruff format --check .）——默认尊重 .gitignore（bench/ 等
+# 运行产物与未跟踪文件不入面）；tools/probes/（轮内证据）与 Markdown
+# 代码块（README 示例的对齐注释不该被机器重排）不入面。
 target-version = "py311"
 line-length = 100
-extend-exclude = ["tools/probes"]
+extend-exclude = ["tools/probes", "*.md"]
 
 [tool.ruff.lint]
 # S110（try-except-pass）豁免=行内 `# noqa: S110 <理由>`，无登记账本。
