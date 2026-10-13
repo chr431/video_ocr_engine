@@ -142,7 +142,7 @@ def test_phase_key_sets_match_registry():
                 problems.append(
                     f"{rel}: 出现未注册键 {sorted(keys - declared)}"
                     f"（先更新 PHASE_KEYS_BY_MODULE，并检查另一条路径"
-                    f"是否应同键——P2c 类漂移的检查时刻就是现在）"
+                    f"是否应同键——两条路径键集合漂移的检查时刻就是现在）"
                 )
             if declared - keys:
                 problems.append(

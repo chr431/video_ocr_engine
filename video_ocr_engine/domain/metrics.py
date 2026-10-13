@@ -16,7 +16,7 @@
     告警）。ENGINE_PROFILE=1 的 13 相位原始字典是独立调试读面，非遥测
     轨道：别往这里加新观测。
 
-规则：未注册的名字不得上报；注册表上限 64；粗档 span（相位级）随非 off
+规则：未注册的名字不得上报；注册表上限 96；粗档 span（相位级）随非 off
 档恒开；counter 恒开；telemetry=off 时一切空调用（NullMetrics，由 bench
 三档互比门禁背书）。线程口径：**每线程局部累积、drain 时合并**（无锁
 共享写会丢更新）。
@@ -52,7 +52,7 @@ HIST_N_BUCKETS = 32
 #: ⚠️ 指数须再减 1：桶号 = frexp(x)[1]+BIAS，而 frexp 给
 #: x∈[2^(e-1), 2^e)——旧式 2^(i-BIAS) 实为该桶**上界**，整表偏 2×
 #: （report.bucket_lower_s 的判读随之错位）。性质测试见
-#: tests/domain/test_metrics.py::test_hist_bucket_lower_bounds。
+#: tests/config/test_metrics.py::test_hist_bucket_lower_bounds。
 HIST_BUCKET_LOWER = tuple(
     (2.0 ** (i - 1 - HIST_EXP_BIAS)) if i > 0 else 0.0 for i in range(HIST_N_BUCKETS)
 )
@@ -197,7 +197,7 @@ METRICS = MetricRegistry(
 
 # ── 单一计时脊柱 ─────────────────────────────────────────────────────
 # 编排三段与 Protocol 边界的计时点（`_prof_end(group, key, t0)`）直接
-# 映射为注册指标名——13 个细粒度相位。
+# 映射为注册指标名——14 个细粒度相位。
 PROFILE_SPANS = {
     # 有界（每次 run ≤ ~200 次）：非 off 档即逐次采样
     ("producer", "open_and_fps"): "pipeline.setup",

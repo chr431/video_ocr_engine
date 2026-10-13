@@ -417,4 +417,4 @@ if __name__ == "__main__":
         for e in errs:
             print("  " + e)
         raise SystemExit(1)
-    print("render check：六视图一致 + 路径/锚点活性 + 裸 CR ✓")
+    print("render check：七视图一致 + 路径/锚点活性 + 裸 CR ✓")

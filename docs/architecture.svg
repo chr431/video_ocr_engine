@@ -29,7 +29,7 @@
 
   <!-- 解码层 -->
   <rect x="196" y="80" width="264" height="96" class="grp" rx="12"/>
-  <text x="328" y="102" text-anchor="middle" class="lbl">decord fork（chr431/decord 0.8.3，pip wheel）</text>
+  <text x="328" y="102" text-anchor="middle" class="lbl">decord fork（chr431/decord；钉版见 registry/environment.yaml）</text>
   <text x="328" y="121" text-anchor="middle" class="sub">ctx：cpu(24T·av1) / gpu(NVDEC) / hybrid / hybrid_gpu</text>
   <text x="328" y="138" text-anchor="middle" class="sub">ROI-first 裁切 · gray / yuv420 输出 · stride 等差快径</text>
   <text x="328" y="158" text-anchor="middle" class="code">decode_backend = auto | cpu | nvdec | hybrid</text>
@@ -78,7 +78,7 @@
   <rect x="762" y="352" width="178" height="58" class="box" rx="8"/>
   <text x="851" y="370" text-anchor="middle" class="sub" fill="#2b3440" font-size="12.5">OCR 会话（宽度重排分批）</text>
   <text x="851" y="388" text-anchor="middle" class="sub" font-size="12">TensorRT：GPU 预处理 + CTC 归约</text>
-  <text x="851" y="403" text-anchor="middle" class="sub" font-size="12">ONNX：双实例并行（CPU 后端）</text>
+  <text x="851" y="403" text-anchor="middle" class="sub" font-size="12">OpenVINO：双实例并行（CPU 后端）</text>
   <line x1="746" y1="381" x2="758" y2="381" class="flow"/>
 
   <!-- 结果 -->
@@ -102,12 +102,12 @@
   <rect x="24" y="352" width="500" height="118" class="grp" rx="12" style="stroke:#9aa7b4"/>
   <text x="274" y="374" text-anchor="middle" class="lbl">OCR 引擎池（进程级）与引擎</text>
   <text x="40" y="396" class="sub">acquire_ocr_engine / checkin —— 按 model+backend+fill_width+threads 复用（跨视频免重建 TRT）</text>
-  <text x="40" y="416" class="sub">OcrEngine：ONNX(ORT 动态批) / TensorRT（GPU 预处理 + 显存全驻留 CTC 归约）</text>
+  <text x="40" y="416" class="sub">OcrEngine：OpenVINO(CPU，动态批) / TensorRT（GPU 预处理 + 显存全驻留 CTC 归约）</text>
   <text x="40" y="436" class="sub">CTC：argmax → 相邻去重 → 去 blank → 字符表（与 rapidocr 逐位对齐）</text>
   <text x="40" y="458" class="sub">模型单一出处 assets/ocr_models（PP-OCRv6_rec_small + 字符表）</text>
 
   <!-- 底部结论条 -->
   <rect x="24" y="580" width="932" height="56" class="grp" rx="12" style="stroke:#c47f17;stroke-dasharray:6 3"/>
-  <text x="40" y="603" class="lbl" fill="#8a5a00" font-size="13">统一实现约定（0.11.0）</text>
-  <text x="40" y="623" class="sub">分段判定/状态机/裁切/预处理只住 segmentation.py；GPU kernel 为其设备侧逐位镜像（回归由真值用例守护）；engine_config 为参数/env 单一事实源</text>
+  <text x="40" y="603" class="lbl" fill="#8a5a00" font-size="13">统一实现约定</text>
+  <text x="40" y="623" class="sub">分段判定/状态机/裁切/预处理只住 segmentation.py；GPU kernel 为其设备侧逐位镜像（回归由真值用例守护）；config/constants.py 为参数/env 单一事实源</text>
 </svg>

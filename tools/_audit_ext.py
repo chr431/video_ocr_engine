@@ -1,6 +1,6 @@
 """结构化审计（按名注册；每项失败即违规，事实源 registry/）。
 
-检查项：layering / no_shim_duplication / dead_code / knob_coverage /
+检查项：layering / no_shim_duplication / dead_code_regression / knob_coverage /
 no_import_side_effects / metrics_coverage / rules_schema /
 probe_hooks_resolve / render_consistency / decord_pin /
 deprecation_due / dependency_floors / gate_manifest / injection_budget /

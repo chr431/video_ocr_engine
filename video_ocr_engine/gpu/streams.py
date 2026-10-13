@@ -57,7 +57,7 @@ class DevHooks:
 
 
 class _GpuRunCtx:
-    """_run_pipelined_gpu 单次运行的共享设备状态（显式替代闭包捕获）。
+    """run_gpu_pipeline 单次运行的共享设备状态（显式替代闭包捕获）。
 
     字段由 _gpu_prepare_calibration 填充，帧流生成器与消费循环只读/推进；
     _gpu_release_partial 负责统一释放。"""
@@ -173,7 +173,7 @@ def _gpu_prepare_calibration(
         else:
             if len(calib_shape) != 4 or calib_shape[-1] != 1:
                 # 灰度帧非 4D 单通道（部分 decord fork 输出 (B,H,W)）：GPU
-                # 分段不支持，回退宿主。直接 _run_pipelined_host（防递归）。
+                # 分段不支持，回退宿主。直接 run_host_pipeline（防递归）。
                 return False, 0
             ctx.src_h, ctx.src_w = calib_shape[1], calib_shape[2]
             ctx.calib_gray = calib_base

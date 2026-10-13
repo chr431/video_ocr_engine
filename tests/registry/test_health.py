@@ -1,4 +1,4 @@
-"""health --check 的负测（C2）：KPI 对账必须能红。
+"""health --check 的负测：KPI 对账必须能红。
 
 `check()` 比对「落盘 kpi.yaml」与「重算实态」的稳定指标；两者不一致即非零
 退出。这里用最小 kpi 结构 + 替换 compute() 分别构造一致/漂移两种输入。

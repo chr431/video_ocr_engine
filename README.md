@@ -177,7 +177,7 @@ GPU 管线的现状描述（渲染视图）见 [AGENTS.md](AGENTS.md) 与
 
 ## 文档
 
-制度分层：宪章（不变量）→ registry（唯一事实源）→ 视图（全渲染）→ git（唯一档案）。
+制度分层：宪章（不变量）→ registry（唯一事实源）→ 执行（CI+本机门禁）→ 视图（全渲染）→ git（唯一档案）。
 
 - [现役结论索引](docs/CONCLUSIONS.md) —— **动手前先查**：每条结论带前提与复评触发（渲染产物；事实源 `registry/conclusions.yaml`）。
 - [旋钮表](docs/KNOBS.md) / [依赖与运行环境](docs/DEPENDENCIES.md) —— 渲染视图（事实源分别为 `config/knobs.py` 与 pyproject+registry）。

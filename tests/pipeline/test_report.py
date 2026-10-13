@@ -185,8 +185,10 @@ def test_host_consume_feed_relations_and_histograms():
     h = repf["histograms"]["pipeline.consume_feed_hist"]
     assert h["n"] == 3 and sum(h["buckets"]) == 3
     assert repf["histograms_meta"]["n_buckets"] == len(h["buckets"])
-    # 1ms 与 2ms 同桶（×2 分箱），0.5s 远离
-    assert h["buckets"] == h["buckets"] and h["buckets"][-1] == 0
+    # 0.001s 与 0.002s 落相邻桶（×2 分箱），0.5s 与它们隔开、不在末桶
+    idx = [i for i, c in enumerate(h["buckets"]) if c]
+    assert len(idx) == 3 and idx[1] - idx[0] == 1 and idx[2] - idx[1] > 1
+    assert h["buckets"][-1] == 0
 
 
 def test_off_tier_emits_no_report():

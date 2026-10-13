@@ -289,7 +289,6 @@ class StallWatchdog:
         out: dict[str, object] = {
             "armed": True,
             "stall_s": self._stall_s,
-            "polls": int(self._stalls),
             "stalls": self._stalls,
         }
         if self._stall_reports:

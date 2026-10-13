@@ -254,11 +254,15 @@ def test_engine_pool_checkout_removes_from_order():
     import video_ocr_engine.ocr.native as ocr_native
 
     _reset_pool()
-    e = _FakeEngine(("v6_small", "tensorrt", 224, 0))
+    # 池 key 是 7 元组（variant, engine_type, fill_width, num_threads,
+    # pad_floor_env, gamma, gpu_ctc）——假件的 key 必须同形，否则 acquire
+    # 恒未命中（走新建分支），本用例会退化成恒真、测不到 checkout。
+    e = _FakeEngine(("v6_small", "tensorrt", 224, 0, -1, -1.0, -1))
     ocr_native.checkin_ocr_engine(e)
     assert id(e) in ocr_native._POOL_IDLE_ORDER
     e2 = ocr_native.acquire_ocr_engine("v6_small", "tensorrt", fill_width=224, num_threads=0)
-    assert id(e2) not in ocr_native._POOL_IDLE_ORDER
+    assert e2 is e, "同参 acquire 必须复用池内引擎（否则用例测不到 checkout）"
+    assert id(e2) not in ocr_native._POOL_IDLE_ORDER, "checkout 应从 LRU 序移除"
     _reset_pool()
 
 

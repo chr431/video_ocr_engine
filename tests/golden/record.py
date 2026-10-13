@@ -2,13 +2,13 @@
 
 对固定视频窗口跑 v1 全链提取，把**阶段输出摘要**（段结构 / 文本 / 置信度 /
 校准阈值 / 降级原因 + 哈希）落成机器可读 JSON——不存像素。这些向量是
-strangler 迁移的逐位对账参照系。
+全链行为变更的逐位对账参照系。
 
 用法：
   python tests/golden/record.py                # 录制全部用例
-  python tests/golden/record.py --case A2      # 只录指定用例
+  python tests/golden/record.py --case A-cpu-p0-cpu   # 只录指定用例
   python tests/golden/record.py --verify       # 重跑全部用例并与已录向量逐位比对
-  python tests/golden/record.py --verify --case A2
+  python tests/golden/record.py --verify --case A-cpu-p0-cpu
 
 比对口径：timing 仅供参考不比对；其余字段（段结构 / 文本 / 置信度全精度 /
 阈值 / 降级 / crop sha）必须逐位一致。分歧处理默认当 bug。
@@ -242,7 +242,7 @@ def environment() -> dict:
 def summarize(case: dict) -> tuple[dict, dict]:
     """跑一次提取，返回 (stage-calib, stage-ocr) 两份摘要。
 
-    v1 的 env 是调用期读取（README:236-238），因此按用例临时改写再复原。
+    env 于构造期一次冻结，故按用例临时改写 env 后构造新实例。
     """
     from video_ocr_engine import FieldExtractor
 

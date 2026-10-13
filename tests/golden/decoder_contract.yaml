@@ -6,17 +6,17 @@ assumptions:
   - id: DC-01
     capability: ROI-first 解码（VideoReader 构造期 SetRoi 一次，get_batch 不再传 roi）
     engine_usage: "extractor._open_vr → roi_kw；实测每次传 roi 慢 9%（2487→2264 fps）"
-    current_guard: "_ensure_roi_capable_decoder 探测 _CAPI_VideoReaderSetRoi 存在性后硬拒绝"
+    current_guard: "ensure_roi_capable_decoder 探测 _CAPI_VideoReaderSetRoi 存在性后硬拒绝"
     contract: "FrameSource.roi_format() + 启动期一次校验 ROI 生效"
   - id: DC-02
     capability: next_roi 顺序流（stride==1 宿主校准路径）
-    engine_usage: _host_pipeline._host_calibrate
+    engine_usage: pipeline/host_backend.py:run_host_pipeline
     current_guard: none
     contract: "端口方法显式声明能力；缺失时走 batch(frames) 等价路径并记 degradations"
   - id: DC-03
     capability: "hybrid / hybrid_gpu 设备上下文（fork ≥0.7.15；hybrid_gpu 输出驻留显存）"
     engine_usage: "decode_backend=hybrid；hybrid_gpu 直进零拷贝 GPU 管线"
-    current_guard: "_decord_has_hybrid_preroute() 版本号比较（≥0.8.3；换 dll 不改版本号即失效）"
+    current_guard: "probe_contract().require('hybrid_ctx','DC-03')（能力查询；换 dll 不改版本号即失效）"
     contract: "ctx.capabilities() 能力查询取代版本号门控"
   - id: DC-04
     capability: yuv420 packed NV12 输出（默认 rep_crop_format 路径）
@@ -45,7 +45,7 @@ assumptions:
     contract: "端口属性 + 失败大声上抛进 degradations"
   - id: DC-09
     capability: 析构/生命周期语义（引擎持有 nds 引用保活设备缓冲）
-    engine_usage: "_gpu_pipeline.py:306,472 持引用防帧被回收（fork 已知析构 UAF 同类）"
+    engine_usage: "pipeline/gpu_backend.py 持引用防帧被回收（fork 已知析构 UAF 同类）"
     current_guard: none（靠持有引用的约定）
     contract: "FrameBuffer(owner=...) 显式所有权；禁 __del__ 释放"
   - id: DC-10

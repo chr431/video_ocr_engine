@@ -4,7 +4,7 @@
 - ocr_backend='hybrid' 合法（构造期不炸）且映射 engine_type='hybrid'
 - acquire_engines('hybrid') 取双擎（tensorrt + openvino 各一，池 key 同参）
 性能/正确性实测（v0 = OCR-bound 负载 +51% 回归、文本 3/26461 差异）由
-tools/_probe_hybrid_ocr.py 承载，不入单测。
+tools/probes/_probe_hybrid_acceptance.py 承载，不入单测。
 """
 
 from __future__ import annotations

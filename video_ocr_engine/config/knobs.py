@@ -10,7 +10,7 @@
   （派生计算留在消费端，resolve 只产出原始值）；
   pipeline.gpu —— 三态：未设 None（规则判定）/ falsy False / **非法值也 False**
   （经 env_bool(default=False)，非法≠未设）；
-  ocr.pad_small —— 0 = 不生效，链路 0→fill_width→模型下限（消费端 ocr_native）。
+  ocr.pad_small —— 0 = 不生效，链路 0→fill_width→模型下限（消费端 ocr/native.py）。
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ KNOBS = Registry(
             0,
             "decode",
             _ALL,
-            "ec:96-130",
+            "config/constants.py:DECODE_THREADS_ENV",
             note="0=自动分档（codec×stride 公式在消费端）",
         ),
         Knob(
@@ -41,7 +41,7 @@ KNOBS = Registry(
             0,
             "decode",
             _ALL,
-            "ec:87-95",
+            "config/constants.py:HYBRID_CPU_THREADS_ENV",
             note="0=自动：与 cpu 后端同一 codec 感知策略（_decode_num_threads）",
         ),
         # ── ocr ──
@@ -53,7 +53,7 @@ KNOBS = Registry(
             0,
             "ocr",
             _ALL,
-            "ec:68",
+            "config/constants.py:OCR_THREADS_ENV",
             note="0=全部物理核（消费端派生）",
         ),
         Knob(
@@ -64,10 +64,19 @@ KNOBS = Registry(
             16,
             "ocr",
             _ALL,
-            "ec:366",
+            "config/constants.py:OCR_BATCH_ENV",
             note="默认取 OCR_BATCH_SIZE=16",
         ),
-        Knob("ocr.gamma", "OCR_GAMMA_ENV", "OCR_GAMMA", "float", 2.0, "ocr", _ALL, "ec:216-219"),
+        Knob(
+            "ocr.gamma",
+            "OCR_GAMMA_ENV",
+            "OCR_GAMMA",
+            "float",
+            2.0,
+            "ocr",
+            _ALL,
+            "config/constants.py:OCR_GAMMA_ENV",
+        ),
         Knob(
             "ocr.pad_small",
             "OCR_PAD_SMALL_ENV",
@@ -76,7 +85,7 @@ KNOBS = Registry(
             0,
             "ocr",
             _ALL,
-            "ec:235-266",
+            "config/constants.py:OCR_PAD_SMALL_ENV",
             note="0=不生效；>fill_width 时抬升 pad 下限",
         ),
         Knob(
@@ -87,7 +96,7 @@ KNOBS = Registry(
             True,
             "ocr",
             _ALL,
-            "ec:271-311",
+            "config/constants.py:OCR_ROI_AUTOCROP_ENV",
         ),
         Knob(
             "ocr.roi_autocrop_margin",
@@ -97,7 +106,7 @@ KNOBS = Registry(
             10,
             "ocr",
             _ALL,
-            "ec:312-336",
+            "config/constants.py:OCR_ROI_AUTOCROP_MARGIN_ENV",
         ),
         Knob(
             "ocr.roi_autocrop_min_gain",
@@ -107,7 +116,7 @@ KNOBS = Registry(
             10,
             "ocr",
             _ALL,
-            "ec:359",
+            "config/constants.py:OCR_ROI_AUTOCROP_MIN_GAIN_ENV",
         ),
         Knob(
             "ocr.reorder_window",
@@ -117,7 +126,7 @@ KNOBS = Registry(
             64,
             "ocr",
             _ALL,
-            "ec:360",
+            "config/constants.py:OCR_REORDER_WINDOW_ENV",
             note="消费端 max(1,·)；0 也抬到 1",
         ),
         Knob(
@@ -128,7 +137,7 @@ KNOBS = Registry(
             True,
             "ocr",
             ("cpu",),
-            "ec:77",
+            "config/constants.py:OCR_INSTANCES_ENV",
             note="仅 ONNX 双实例路径",
         ),
         Knob(
@@ -139,7 +148,7 @@ KNOBS = Registry(
             True,
             "ocr",
             ("gpu",),
-            "ec:83",
+            "config/constants.py:GPU_CTC_ENV",
             note="仅 TRT 输出归约",
         ),
         Knob(
@@ -152,7 +161,7 @@ KNOBS = Registry(
             ("gpu",),
             "ocr/trt.py:_fp16_on",
             note="fp16 ONNX（keep_io_types）+ STRONGLY_TYPED 引擎（层内 half、"
-            "IO fp32）；准确率门禁 _probe_acc_ab --knob TRT_FP16=0,1",
+            "IO fp32）；准确率门禁 archive/pre-rework:tools/_probe_acc_ab.py --knob TRT_FP16=0,1",
             env_live_only=True,
         ),  # env-live-only：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
         Knob(
@@ -178,7 +187,7 @@ KNOBS = Registry(
             "binary",
             "segment",
             _ALL,
-            "ec:229",
+            "config/constants.py:TEXT_SEP_MERGE_ENV",
             note="裸 get 非布尔；未知值消费端回落 binary",
         ),
         Knob(
@@ -203,7 +212,7 @@ KNOBS = Registry(
             None,
             "pipeline",
             ("gpu",),
-            "ec:81",
+            "config/constants.py:GPU_PIPELINE_ENV",
             note="三态：未设 None=规则 / falsy 关 / truthy 强制 / 非法=关（非 None）",
         ),
         Knob(
@@ -214,7 +223,7 @@ KNOBS = Registry(
             False,
             "pipeline",
             ("gpu",),
-            "ec:82",
+            "config/constants.py:GPU_PIPELINE_STREAM_ENV",
             note="C-10 判零收益，opt-in",
             env_live_only=True,
         ),  # env-live-only：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
@@ -226,7 +235,7 @@ KNOBS = Registry(
             False,
             "pipeline",
             ("gpu",),
-            "gpu/device.py:_batch_iter",
+            "gpu/streams.py:_batch_iter",
             note="层4 排空线程（get_batch 独占线程预取深 4 批）；实测零收益"
             "默认关（引擎税=线程争用而非排空阻塞，同 C-10 判例）",
             env_live_only=True,
@@ -240,7 +249,7 @@ KNOBS = Registry(
             False,
             "diag",
             _ALL,
-            "ec:84",
+            "config/constants.py:ENGINE_PROFILE_ENV",
             note="构造期一次读取（resolve 冻结）",
         ),
         Knob(
@@ -251,7 +260,7 @@ KNOBS = Registry(
             False,
             "diag",
             ("gpu",),
-            "ec:85",
+            "config/constants.py:TRT_SUBPROBE_ENV",
             note="TRT_SUBPROBE 在 trt.py 导入期读一次（进程级；诊断档，不做调用期活读）",
             env_live_only=True,
         ),  # env-live-only：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
@@ -263,7 +272,7 @@ KNOBS = Registry(
             False,
             "diag",
             _ALL,
-            "ec:86",
+            "config/constants.py:DEBUG_BOUNDS_ENV",
             env_live_only=True,
         ),  # env-live-only：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
         Knob(

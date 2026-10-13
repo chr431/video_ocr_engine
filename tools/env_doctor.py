@@ -278,7 +278,7 @@ def _md5(p: Path) -> str:
 
 
 def _drive_root_tmp_notes() -> list[str]:
-    """盘符根 `<drive>:\\tmp` 非空提示（B7）。
+    """盘符根 `<drive>:\\tmp` 非空提示。
 
     字面 /tmp 在原生 Windows 解析为**当前盘符根**（与 Git Bash 的 /tmp =
     %TEMP% 是不同目录）——误写产物落在仓外，任何仓内守卫都看不见。

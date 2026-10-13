@@ -318,7 +318,7 @@ class RunReport:
         """序列化形态（浅拷贝；嵌套 section 仍与视图共享）。"""
         return dict(self.data)
 
-    # ── 恒有段（build_report 的核心 12 键）────────────────────────
+    # ── 恒有段（build_report 的核心 11 键）────────────────────────
     @property
     def report_version(self) -> int:
         return self.data["report_version"]

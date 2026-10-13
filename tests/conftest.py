@@ -3,7 +3,7 @@
 三个作用：
 
 1. 把**仓库根**加入 `sys.path` —— 否则从非仓库根目录跑 pytest 时，
-   `import engine_config` / `import video_ocr_engine` 会
+   `import video_ocr_engine` 会
    `ModuleNotFoundError`（`python -m pytest` 只把 CWD 放进 sys.path）。
 2. 把 `tests/` 加入 `sys.path`，使各子目录的测试都能
    `from _paths import ROOT`（见 `_paths.py`）——不要按目录深度猜仓库根。

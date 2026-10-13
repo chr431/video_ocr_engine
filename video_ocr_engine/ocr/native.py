@@ -2,7 +2,7 @@
 
 与 rapidocr 的 TextRecognizer 输出逐字节对齐（预处理/CTC 后处理复刻）：
 - 预处理: resize 到 48 高 + (x/255 - 0.5) / 0.5 归一化 + pad 到 batch 最大宽
-- 推理:   OpenVINO（CPU，动态 batch）/ TensorRT（GPU，引擎实现见 ocr_trt.py）
+- 推理:   OpenVINO（CPU，动态 batch）/ TensorRT（GPU，引擎实现见 ocr/trt.py）
 - 后处理: argmax(axis=2) + max(axis=2) + CTC 去重 + blank(0) 过滤 + 字符映射
 - 字符表: assets/ocr_models/ppocrv6_dict.txt（18708 字符 + 末尾空格 + 开头 blank = 18710）
 
@@ -264,7 +264,7 @@ class OcrEngine:
     ) -> np.ndarray:
         """resize 到固定高 + (x/255-0.5)/0.5 归一化 + pad 到 batch 最大宽。
 
-        输入已是目标高度 float32（pipeline._preprocess_standard 输出）时跳过
+        输入已是目标高度 float32（pipeline.preprocess_standard 输出）时跳过
         _np_resize —— 其等尺寸路径的 astype 拷贝是无谓开销。数值路径不变
         （省略的是同一 float32 数据的整块拷贝），逐位一致。
         """
@@ -485,7 +485,7 @@ class OcrEngine:
         [x_off, x_off+crop_w) 参与 OCR（宽度自适应裁切的 GPU 直通，
         区间来自 GPU col_ink + 宿主同一余量规则）。
         force_aspect > 0：强制 OCR 输入宽 = OCR_TARGET_H × force_aspect
-        （与宿主 _preprocess_standard 的 force_aspect 语义一致；此时忽略
+        （与宿主 preprocess_standard 的 force_aspect 语义一致；此时忽略
         逐项裁切区间，与宿主 _crop_to_content 的跳过语义一致）。
         GPU_CTC=1 时进一步在 GPU 上完成 vocab 维 argmax/max，输出
         不落 RAM（DtoH 仅 B*seq*8 字节），宿主 CTC 直接吃小数组。

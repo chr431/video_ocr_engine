@@ -66,24 +66,24 @@
   why: R-refs-resolve 执行体（引用解析器）
 - id: render.py
   tier: standing
-  why: R-render-consistency 执行体（四视图统一渲染）
-- id: _probe_c68_gap
+  why: R-render-consistency 执行体（七视图统一渲染）
+- id: _probe_c68_gap.py
   tier: probe
   why: 近两轮（0.25.x/0.26.x）在用取证
   last_touched: '2026-10-11'
-- id: _probe_hybrid_acceptance
+- id: _probe_hybrid_acceptance.py
   tier: probe
   why: 近两轮（0.25.x/0.26.x）在用取证
   last_touched: '2026-10-11'
-- id: _probe_hybrid_supply
+- id: _probe_hybrid_supply.py
   tier: probe
   why: 近两轮（0.25.x/0.26.x）在用取证
   last_touched: '2026-10-11'
-- id: _probe_ov_version_ab
+- id: _probe_ov_version_ab.py
   tier: probe
   why: 近两轮（0.25.x/0.26.x）在用取证
   last_touched: '2026-10-11'
-- id: _probe_quiet_suite
+- id: _probe_quiet_suite.py
   tier: probe
   why: 近两轮（0.25.x/0.26.x）在用取证
   last_touched: '2026-10-11'

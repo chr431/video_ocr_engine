@@ -10,8 +10,8 @@
     python tools/check.py --tier release  # 发版/合并（≈2min，含全量金标+清扫）
 
 分级依据（本机实测，量级参考）：
-  pytest 29.3s；audit --since 秒级；金标 smoke 6.7s / full 71.9s；
-  window matrix（fork 门禁，decord 侧）41.9s×5；run_fast 七套件 346s。
+  pytest 29.3s；audit 秒级；金标 smoke 6.7s / full 71.9s；
+  window matrix（fork 门禁，decord 侧）41.9s×5。
   telemetry-check / ab 不进两级链（只在改遥测/做 A/B 时按 rules.yaml 跑）。
 
 降级：无真值视频环境（CI/新机）自动跳过金标步并标注 SKIP；步骤失败
@@ -61,7 +61,7 @@ STEPS = {
     "type": ("mypy（面=pyproject files）", [sys.executable, "-m", "mypy"]),
     "pytest": ("pytest -q（全量单测）", [sys.executable, "-m", "pytest", "tests/", "-q"]),
     "refs": ("引用解析（substrate）", [sys.executable, "tools/refs.py", "check"]),
-    "render": ("渲染一致性（六视图）", [sys.executable, "tools/render.py", "--check"]),
+    "render": ("渲染一致性（七视图）", [sys.executable, "tools/render.py", "--check"]),
     "ext": ("结构化审计（按名注册）", [sys.executable, "tools/_audit_ext.py"]),
     "golden_smoke": (
         "金标 smoke（3 用例）",

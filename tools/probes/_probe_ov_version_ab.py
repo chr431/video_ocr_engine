@@ -58,17 +58,15 @@ def main() -> int:
         dt = bench(lambda: comp([x])[out])
         rows.append((B, W, dt))
         print("B=%3d W=%4d  %.2fms/batch  %.0f crops/s" % (B, W, dt * 1e3, B / dt))
-    # 引擎级
-    from _measure_lib import ROI, VIDS
+    # 引擎级（R-perf-quiet：后台负载门禁——超阈立即退出，不浪费整轮测量）
+    from _measure_lib import ROI, VIDS, BackgroundLoadError, assert_machine_quiet
     from video_ocr_engine import FieldExtractor
-# R-perf-quiet：后台负载门禁——超阈立即退出，不浪费整轮测量
-from _measure_lib import BackgroundLoadError, assert_machine_quiet
 
-try:
-    assert_machine_quiet()
-except BackgroundLoadError as _e:  # noqa: BLE001 — 门禁语义：超阈退出
-    print(_e)
-    raise SystemExit(2)
+    try:
+        assert_machine_quiet()
+    except BackgroundLoadError as _e:  # noqa: BLE001 — 门禁语义：超阈退出
+        print(_e)
+        return 2
 
     segs_all, texts_all = [], []
     walls = []

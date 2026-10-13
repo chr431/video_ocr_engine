@@ -73,7 +73,7 @@
 
   <text x="38" y="392" class="note">判定：消费者线程 2.147s ÷ wall 2.330s = <tspan font-weight="700">92%</tspan> —— 墙钟即该线程；L1 解码被它<tspan font-weight="700">串行包在里面</tspan>（非独立重叠），只有 L3 真并行。</text>
   <text x="38" y="412" class="note">绑定实验：L3 推理换零成本 → wall <tspan font-weight="700" fill="#386e49">−18.3%</tspan>（1.931s）；L3 预处理换零成本 → <tspan font-weight="700">−0.27%</tspan>（噪声）⇒ L3 不是绑定级，但仍有可回收余量。</text>
-  <text x="38" y="432" class="note">候选可回收：L2/L4 numpy 判定 0.44s + 解码线程档位（引擎取 10T = 1.539s vs 32T = 1.366s，差 0.173s，见日志「未验证假设」）。</text>
+  <text x="38" y="432" class="note">候选可回收：L2/L4 numpy 判定 0.44s + 解码线程档位（引擎取 10T = 1.539s vs 32T = 1.366s，差 0.173s）。</text>
   <text x="38" y="456" class="note" fill="#8a5a00">⚠ 占比 ≠ 可回收（C-42 判例）：上表条长只说明时间花在哪，能不能回收必须看绑定实验的 Δwall。</text>
 
   <!-- ═══ 面板 B：GPU 路径 ═══ -->

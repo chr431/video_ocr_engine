@@ -1,6 +1,6 @@
 """管线引擎配置（engine_config）— 解码/OCR/分段域常量。
 
-独立引擎仓库的配置单一事实源，供 engine 内 ocr_native / ocr_trt /
+独立引擎仓库的配置单一事实源，供 engine 内 ocr/native.py / ocr/trt.py /
 segmentation / video_utils 与引擎外的上层应用直接引用。
 上层应用可通过 `from video_ocr_engine.config.constants import *` 聚合再导出（GUI 与
 `import config` 兼容），应用侧专属常量（颜色/窗口/图表/领域后处理参数）
@@ -156,7 +156,7 @@ def app_logs_dir() -> Path:
 def models_dir() -> Path:
     """模型资产目录（源码 / wheel 安装 / frozen 多路径兼容；唯一实现）。
 
-    OCR 模型与 TRT 引擎缓存查找共用（ocr_native / ocr_trt 经别名引用，
+    OCR 模型与 TRT 引擎缓存查找共用（ocr/native.py / ocr/trt.py 经别名引用，
     原先两份拷贝靠注释锁同步，曾构成漂移风险）。查找顺序：
       1. frozen: PyInstaller _MEIPASS/ocr_models
       2. 源码树: <repo>/assets/ocr_models（也兼容未来包内 assets）
@@ -235,7 +235,7 @@ SEG_MERGE_MAX_CHANGED_RATIO: float = 0.01
 # 稠密簇门（C-38）：合并判定的差异图若含 win3 ≥ 此值的 3×3
 # 稠密簇，恒判不相似。动机：末位单数字变化只动 12-14px（< 1% 面积上限），
 # 被 merge 吞掉 2 帧短状态（test5 33/33、test6 94/94 合并全为此类，
-# _probe_merge_log）；断段判据用同一 win3 定义“内容变了”，合并放行稠密簇
+# archive/pre-rework:tools/_probe_merge_log.py）；断段判据用同一 win3 定义“内容变了”，合并放行稠密簇
 # 等于自相矛盾。**这是单侧安全闸而非分类器**：实测 test5/test6 的合并全部
 # win3=9（在那里等于关闭合并）——仍稳定增益是因为代价不对称（挡无害合并
 # 只多一次 OCR 调用，挡有害合并回收帧），详见 segmentation.similar_decision

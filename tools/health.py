@@ -5,7 +5,7 @@ compute → registry/kpi.yaml（数据事实源）；docs/HEALTH.md 由 render.p
 
   injection_bytes   注入核字节（AGENTS.md ≤6144，宪章不变量 5——触碰=警报）
   charter_bytes     宪章 ≤2048（手写制度文本的唯一处）
-  gov_corpus_bytes  树内治理语料（charter+registry+视图+当轮 log+artifacts）
+  gov_corpus_bytes  树内治理语料（charter+registry+视图+INDEX）
   gov_commit_share  治理类提交占比（近 50 提交窗口；pathspec 口径）
   pure_gov_share    纯治理轮占比（近 50 提交窗口；不触产品/测试代码）
   body_p90          提交正文长度 p90（adv-commit-slim ≤600）
@@ -33,7 +33,6 @@ GOV_CORPUS = [
     "AGENTS.md",
     "docs/CONCLUSIONS.md",
     "docs/KNOBS.md",
-    "docs/log/",
     "tools/INDEX.md",
 ]
 # 提交占比口径：语料 + 制度执行体改动均算治理提交。

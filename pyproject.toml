@@ -15,7 +15,7 @@ license-files = ["LICENSE"]
 dependencies = [
     "numpy>=2",
     # CPU OCR 唯一后端（onnxruntime 已移除，C-48）。
-    # 上界钉 2026.3 系（本机 2026.3.1 全绿）：2026.4.0 在
+    # 上界钉 <2026.5（本机 2026.4.1 全绿）：2026.4.0 曾
     # windows runner 的 _infer 原生崩溃（同版本上午绿/下午红 = VM 异构
     # 或间歇崩溃）。换代评估按 C-48 复评触发另起一轮。
     "openvino>=2026.3,<2026.5",

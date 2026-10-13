@@ -46,5 +46,5 @@ facts:
   - 相似段合并在分离图上进行，默认 binary（TEXT_SEP_MERGE=binary|off，稠密簇门见 C-38）
   - GPU 管线门控：gray + decode∈{auto,nvdec,cpu} + ocr≠cpu + NVDEC/TRT 可用时自动启用；GPU+ONNX 无净收益（C-09）
   - auto 恒 NVDEC 优先=刻意决策（C-08）；批量吞吐=逐文件顺序跑（C-53，pool 已删）
-  - 遥测两档（D30）：off=发布默认；full=调试/bench 默认；std 别名已拒收
+  - 遥测两档：off=发布默认；full=调试/bench 默认；std 别名已拒收
   - fp16 已产品化（TRT_FP16=1，opt-in）；CUDA Graph 无收益已移除

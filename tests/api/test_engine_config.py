@@ -29,7 +29,7 @@ def test_key_engine_constants_present():
         "OCR_PAD_WIDTH_MIN",
         "CPU_CORES_SPLIT_THRESHOLD",
     ):
-        assert hasattr(config, name), f"engine_config 缺少 {name}"
+        assert hasattr(config, name), f"config/constants 缺少 {name}"
 
 
 def test_ocr_model_assets_exist():

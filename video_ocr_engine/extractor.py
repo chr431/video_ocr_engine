@@ -24,7 +24,7 @@
   config/       — constants + 旋钮注册表/解析（env 读取唯一入口）
   _helpers.py / _result_types.py / _gpu_kernels.py — 工具 / 轨迹类型 / 设备侧核
 CPU+NVDEC 双解码（decode_backend="hybrid"）由 decord fork 原生实现
-（≥v0.7.15 的 hybrid/hybrid_gpu ctx），引擎只透传解码参数；勿引用项目层
+（hybrid/hybrid_gpu ctx；能力 floors 见 registry/environment.yaml），引擎只透传解码参数；勿引用项目层
 hybrid_decode.py。
 """
 
@@ -92,8 +92,8 @@ class FieldExtractor:
     RGB 帧；代表帧像素格式由 rep_crop_format 决定（"yuv"=packed NV12 默认 /
     "gray"），外部用 nv12_to_rgb 转 RGB。
     sample_stride：分频采样步长（默认 1 = 逐帧处理）。>1 时只解码/分段每个
-    第 N 帧（字幕等慢更新内容可显著降低处理压力；需要 decord fork ≥0.7.12
-    的等差步长快速路径，否则退化为逐索引 seek）。
+    第 N 帧（字幕等慢更新内容可显著降低处理压力；需要 fork
+    的等差步长快速路径（能力 floors 见 registry/environment.yaml），否则退化为逐索引 seek）。
     """
 
     def __init__(
@@ -176,8 +176,8 @@ class FieldExtractor:
         self._degraded: list = []  # 本次提取的降级/回退原因（meta 透出）
         # OCR 输入宽度自适应裁切（宽 ROI 字幕省卷积）+ 跨批按宽度分组。
         # 详见 segmentation.content_range_to_crop 与 config 中的实测注释。
-        # 四个 autocrop/重排旋钮为 property 调用期读 env（与
-        # OCR_PAD_SMALL/OCR_GAMMA 等同时机，构造后改 env 即生效）。
+        # 四个 autocrop/重排旋钮为 property 读 self._rc（构造期一次冻结，与
+        # OCR_PAD_SMALL/OCR_GAMMA 等同时机；构造后改 env 不再生效）。
         self._progress = progress_cb or (lambda m, p: None)
         self._cancel = cancel_check or (lambda: None)
         # run 态全部私有（读面 = ExtractionResult：
@@ -215,7 +215,7 @@ class FieldExtractor:
         # 稠密簇门（segment.merge_dense_gate）：0=关；>0=差异图 win3 阈值。
         # 构造期一次冻结；与断段判据 SEG_C 共用同一"内容变了"定义。
         self._merge_dense_gate = max(0, int(self._rc.segment_merge_dense_gate))
-        # 后处理参数由子类（SegmentPipeline）在构造时设置；引擎识别链不读。
+        # 后处理参数由调用方在构造时设置；引擎识别链不读。
 
     def _validate_params(self) -> None:
         """构造期静态参数校验（帧范围相对视频总长在打开解码器后校验）。"""
@@ -250,8 +250,8 @@ class FieldExtractor:
                 f"ocr_backend 必须为 auto/cpu/tensorrt/hybrid，收到 {self._ocr_backend!r}"
             )
 
-    # ── env 旋钮统一调用期读取（与 OCR_PAD_SMALL/OCR_GAMMA 等同时机，
-    #    构造后改 env 即生效）──
+    # ── env 旋钮统一读 self._rc（构造期一次冻结，与 OCR_PAD_SMALL/
+    #    OCR_GAMMA 等同时机；构造后改 env 不再生效）──
     @property
     def _ocr_autocrop(self) -> bool:
         return self._rc.ocr_roi_autocrop
@@ -705,7 +705,7 @@ class FieldExtractor:
         """入口分发（注入式）：构建 EngineInputs → SegmentEngine。
 
         _ocr_engines 两条 lane 都透传；None = 从进程级 OCR 引擎池取
-        （ocr_native.acquire_ocr_engine）。GPU 门控在此求值一次（输入全为
+        （ocr/native.py:acquire_ocr_engine）。GPU 门控在此求值一次（输入全为
         run 内常量）；GPU→宿主回退在引擎单处处理。lane 结果的状态
         同步（fps 缓存经盒读写；其余为本次 run 的输出）收口在此——
         伪造 `_run_pipelined` 的测试（返回 RunOutcome）不受同步影响。

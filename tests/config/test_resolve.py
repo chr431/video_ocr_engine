@@ -25,8 +25,7 @@ def test_env_contract_covers_all_v1_knobs():
 
 
 def test_knob_registry_shape():
-    # 18 v1 + merge_dense_gate + telemetry + report_file + trt_defer_sync
-    # + trace_file
+    # 22 v1 旋钮 + VOE_TELEMETRY / VOE_REPORT_FILE / VOE_TRACE_FILE
     assert len(KNOBS.knobs) == 25
     for k in KNOBS.knobs:
         assert k.rationale_id, k.name  # 每个旋钮有依据锚点

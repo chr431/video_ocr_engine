@@ -2,8 +2,8 @@
 
 GpuPreprocessor（resize+gamma+normalize+pad 内核）、GpuOutputReducer
 （vocab 维 argmax 归约）、GpuFrameAnalyzer（sharp/cluster 逐帧分析 +
-逐帧直方图 + merge_similar 差异标量）。TrtEngine 保留在 ocr_trt.py；
-ocr_trt 顶部 re-export 本模块三个类，保持旧导入路径兼容。
+逐帧直方图 + merge_similar 差异标量）。TrtEngine 保留在 ocr/trt.py；
+ocr/trt.py 顶部 re-export 本模块三个类，保持旧导入路径兼容。
 """
 
 from __future__ import annotations
@@ -155,7 +155,7 @@ class GpuPreprocessor:
     """TRT 路径的 GPU 预处理：把已 48 高的 float32 HWC 图直接变成模型输入。
 
     只在 GPU 上完成最后一层 transpose + normalize + pad：
-    - 输入：list[float32 ndarray] (H, W_i, C)，已由 _preprocess_standard 缩到 48 高
+    - 输入：list[float32 ndarray] (H, W_i, C)，已由 preprocess_standard 缩到 48 高
     - 输出：device float32 tensor (B, C, H, W_out)，可被 TrtEngine 直接执行
     该路径避免在 host 上构造完整 padded batch，并让 DtoH 前始终是显存数据。
     """
@@ -197,7 +197,7 @@ extern "C" __global__ void prep_gray_raw(
     int dst_h, int dst_w, float gamma) {
     // 逐项宽度裁切（GPU 直通）：xoffs[b]/crop_ws[b] = 该帧参与 OCR 的
     // 源列区间 [xoff, xoff+crop_w)，content_ws[b] = 裁后按 dst_h/src_h 缩放
-    // 的目标内容宽（host 侧按宿主 _preprocess_standard 同一 int 截断式计算）。
+    // 的目标内容宽（host 侧按宿主 preprocess_standard 同一 int 截断式计算）。
     // 未裁切项 xoff=0、crop_w=src_w → 与全宽内核逐位一致。
     int total = B * 3 * dst_h * dst_w;
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -369,7 +369,7 @@ extern "C" __global__ void prep_gray_raw(
         ——DeviceRef.span 给出参与缩放的源列区间（未裁切 = 全宽；
         宽度自适应裁切的 GPU 直通，区间由 GPU col_ink + 宿主余量规则）。
         force_aspect > 0：强制 OCR 输入宽 = OCR_TARGET_H × force_aspect
-        （内容整体拉伸到该宽度，与宿主 _preprocess_standard 的 force_aspect
+        （内容整体拉伸到该宽度，与宿主 preprocess_standard 的 force_aspect
         语义一致；边界吸附用 round），此时忽略逐项裁切区间（与宿主
         _crop_to_content 的 force_aspect 跳过语义一致）。
         返回 (device_ptr, output_shape)。调用方必须保持 owner/本对象存活。
@@ -407,7 +407,7 @@ extern "C" __global__ void prep_gray_raw(
                 xo, cwid = t.span
                 xoffs[i] = xo
                 crop_ws[i] = cwid
-                # 与宿主 _preprocess_standard 的 new_w 同式（int 截断），
+                # 与宿主 preprocess_standard 的 new_w 同式（int 截断），
                 # 未裁切项与全宽内核的 content_w 计算逐位一致。
                 content_ws[i] = max(1, int(cwid * dst_h / src_h))
         dst_w = int(out_width)
@@ -1347,7 +1347,7 @@ extern "C" __global__ void luma_nv12(
         count(|a-b|>10)。整数精确累加（double 归约，值域 < 2^53），
         与宿主 _segments_similar 的两个条件一一对应。
         win3_max = 差异图最大 3×3 窗口和，与宿主 _cluster_win3 逐位一致
-        （稠密簇门，见 segmentation.merge_dense_gate）。
+        （稠密簇门，见 domain/segmentation.py:similar_decision）。
         stream：消费端传 _stream_c（消费专用流）。"""
         import numpy as np
         from cuda.bindings import runtime as cudart

@@ -1,6 +1,6 @@
 """轻量泄漏回归：多轮 extract 的 RSS/VRAM 斜率。
 
-`tools/_probe_leak_longrun.py` 的 pytest 化核心——C-55 池复活泄漏
+`archive/pre-rework:tools/_probe_leak_longrun.py` 的 pytest 化核心——C-55 池复活泄漏
 （旧 Y 池 +2.0 MiB/轮）的防复发锚。
 
 **子进程隔离**：泄漏测量必须在干净进程里做（测试进程内直接量 RSS 会被

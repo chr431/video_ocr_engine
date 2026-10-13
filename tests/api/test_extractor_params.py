@@ -108,16 +108,16 @@ def test_rep_crop_format_resolution_and_alias():
 
 
 def test_segments_similar_requires_small_changed_area():
-    # _make 的 ROI=(0,0,100,50)，面积 5050，max_changed=50
+    # _make 的 ROI=(0,0,100,50) → 101×51，面积 5151，max_changed=51
     ex = _make(merge_similar=True)
     a = np.zeros((50, 100), dtype=np.uint8)
     b_small = a.copy()
-    b_small[:10, :10] = 200  # 100 像素显著变化 > 50 -> 不相似
+    b_small[:10, :10] = 200  # 100 像素显著变化 > 51 -> 不相似
     assert not ex._segments_similar(a, b_small)
-    # 稀疏小变化（不构成 3×3 稠密簇）<= 50 -> 相似：像素数上限本身仍生效
+    # 稀疏小变化（不构成 3×3 稠密簇）<= 51 -> 相似：像素数上限本身仍生效
     b_sparse = a.copy()
     for i in range(0, 50, 2):
-        b_sparse[i, 0] = 200  # 25 像素显著变化，1px 宽 → win3 = 3
+        b_sparse[i, 0] = 200  # 25 像素显著变化，1px 宽 → win3 = 2
     assert ex._segments_similar(a, b_sparse)
     # 平均差超阈值也判不相似
     b_mean = a.copy()

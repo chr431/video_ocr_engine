@@ -442,7 +442,7 @@ class OcrSession:
             # 切成 6+6+4，**每个 OCR 批一次全流水同步**（实测 test5 全片
             # CPU+TRT：批 16→18 墙钟 -10.3%、ocr_infer -13%）。单 TRT
             # 引擎时分块对齐到 max_batch 整倍数即零 sync；ONNX 路径保持 B
-            # （18=16+2 切伤 ONNX_CHUNK=16 尾批，实测 +3.7%），双实例同理。
+            # （18=16+2 切伤 OCR_OV_CHUNK=16 尾批，实测 +3.7%），双实例同理。
             _trt_max = (
                 engines[0]._trt.max_batch
                 if (len(engines) == 1 and getattr(engines[0], "_trt", None) is not None)
