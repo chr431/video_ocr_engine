@@ -1,3 +1,4 @@
+<!-- 示意图，非规范；事实源=registry/architecture.yaml，由人维护、可能滞后 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="660" viewBox="0 0 980 660" font-family="'Segoe UI','Microsoft YaHei',sans-serif">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
