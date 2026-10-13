@@ -48,7 +48,11 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
+      # fetch-depth: 0——pytest 内含守卫（refs/render/audit），墓碑索引与
+      # 证据锚点要读全历史与 tag；depth-1 下三守卫必假红（实测）。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
