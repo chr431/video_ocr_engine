@@ -22,18 +22,18 @@
 
 链路：解码 → 像素分段 → 代表帧 → OCR → 相似段合并
 
-- 解码 → `video_ocr_engine/decode/decord_source.py`：decord.VideoReader.get_batch 唯一入口；hybrid 走 decord 原生 ctx（引擎
+- 解码 → `video_ocr_engine/decode/decord_source.py`：decord.VideoReader.get_batch 唯一入口；hybrid 走 decord 原生…
 - 分段 → `video_ocr_engine/domain/segmentation.py`
-- 编排引擎 → `video_ocr_engine/pipeline/engine.py`：SegmentEngine 唯一入口；EngineInputs 显式 run 契约；生命周期单出处 _driver.p
+- 编排引擎 → `video_ocr_engine/pipeline/engine.py`：SegmentEngine 唯一入口；EngineInputs 显式 run 契约…
 - 宿主后端 → `video_ocr_engine/pipeline/host_backend.py`
 - GPU 后端 → `video_ocr_engine/pipeline/gpu_backend.py`：gray+NVDEC+TRT 默认；设备侧拆分 gpu/ 包（pools/streams/device）
 - OCR 会话 → `video_ocr_engine/pipeline/ocr_stage.py`：SessionSpec 契约；CPU 引擎=OpenVINO 唯一（C-48）
-- OCR 调度/引擎池 → `video_ocr_engine/ocr/native.py`：池上限 _POOL_MAX_PER_KEY=4 / _POOL_MAX_TOTAL=16，key=(model,typ
+- OCR 调度/引擎池 → `video_ocr_engine/ocr/native.py`：池上限 _POOL_MAX_PER_KEY=4 / _POOL_MAX_TOTAL=16…
 - TRT → `video_ocr_engine/ocr/trt.py`
 - 配置常量/旋钮 → `video_ocr_engine/config/constants.py`
-- 运行报告 → `video_ocr_engine/pipeline/report.py`：RunReport schema v10（REPORT_VERSION 单源于代码；指标注册表 domain/metr
+- 运行报告 → `video_ocr_engine/pipeline/report.py`：RunReport schema v10（REPORT_VERSION 单源于代码…
 - 分相打桩 → `video_ocr_engine/domain/prof.py`：ProfSpine 单一计时脊柱；门面 _prof_end 薄委托
-- 性能 A/B → `tools/bench.py`：run/diff/show/ab/telemetry-check；账本 bench/registry.jsonl（滚动
+- 性能 A/B → `tools/bench.py`：run/diff/show/ab/telemetry-check；账本…
 
 - 并行维度唯一：decode_backend="hybrid" 的 CPU+NVDEC 双解码，已由 decord fork 原生实现；无 dual pipeline、无 DUAL_* 环境变量（历史提及均为旧档案）
 - 引擎内部恒单通道灰度：decord 只输出 yuv420（keep_crops 且 rep_crop_format="yuv"）或 gray

@@ -35,7 +35,7 @@ class _YFrame:
         # ①轮末死亡波（gc.collect 集中析构数百帧，空闲列只有 32）；
         # ②release_all 之后到达的迟到帧（回收入**已 release 的孤儿池**，
         # 池↔帧互引成环，GC 收环时 _recycled=True 跳过释放）。实测
-        # +2.0 MiB/轮（600 块 × 3498B，B 层 cudaMalloc 追踪定位）。
+        # +2.0 MiB/轮（600 块 × 3498B，按 cudaMalloc 追踪定位）。
         # 因此列满/池已 release 时走 cudaFree 直释；解释器关闭期 CUDA
         # 已卸载的失败由 except 兜底（单块 fnb，进程退出收）。
         #

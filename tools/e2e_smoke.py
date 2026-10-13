@@ -6,9 +6,9 @@
   3. gpu_keepoff decode=auto ocr=auto rep=gray keep_crops=False（零 D2H 输出）
   4. host_trt  decode=auto ocr=auto rep=yuv force_aspect=1.5 —— 全程 raw +
      force_aspect（GPU 管线；无 TRT 时自动宿主+TRT 口径）
-  5. host_cpu  decode=cpu  ocr=cpu  rep=yuv —— 全宿主 CPU 软解 + ONNX
+  5. host_cpu  decode=cpu  ocr=cpu  rep=yuv —— 全宿主 CPU 软解 + CPU(OpenVINO)
   6. hybrid    decode=hybrid ocr=auto rep=yuv —— CPU+NVDEC 双解码生产者
-  7. gpu_onnx  decode=auto ocr=cpu  rep=yuv —— GPU 分段 + ONNX 宿主 OCR
+  7. gpu_ov    decode=auto ocr=cpu  rep=yuv —— GPU 分段 + CPU(OpenVINO) 宿主 OCR
      （GPU_PIPELINE=1 强制开启；默认门控只允许 NVDEC+TRT）
 
 用法：
@@ -47,7 +47,7 @@ CONFIGS = {
     "host_trt": dict(ocr_backend="auto", rep_crop_format="yuv", force_aspect=1.5),
     "host_cpu": dict(decode_backend="cpu", ocr_backend="cpu", rep_crop_format="yuv"),
     "hybrid": dict(decode_backend="hybrid", rep_crop_format="yuv"),
-    "gpu_onnx": dict(ocr_backend="cpu", rep_crop_format="yuv"),
+    "gpu_ov": dict(ocr_backend="cpu", rep_crop_format="yuv"),
 }
 
 
@@ -100,8 +100,6 @@ def parse_truth(path: Path):
                                 meta[k.strip()] = float(v)
                             except ValueError:
                                 meta[k.strip()] = v
-                    else:
-                        pass
                 continue
             parts = [p.strip() for p in line.split(",")]
             if len(parts) >= 3 and parts[0].lstrip("-").isdigit():
@@ -114,10 +112,9 @@ def parse_truth(path: Path):
 
 def run_once(video, roi, frames, stride, cfg, truth_meta):
     kwargs = dict(CONFIGS[cfg])
-    if truth_meta and cfg.startswith("host_trt") and "force_aspect" not in kwargs:
-        pass  # host_trt 固定 force_aspect=1.5
-    # gpu_onnx：默认门控只允许 NVDEC+TRT，实验组合需强制开关
-    forced_env = cfg == "gpu_onnx"
+    # host_trt 的 force_aspect=1.5 已写死在 CONFIGS，无需按真值头再改。
+    # gpu_ov：默认门控只允许 NVDEC+TRT，实验组合需强制开关
+    forced_env = cfg == "gpu_ov"
     old_env = os.environ.get("GPU_PIPELINE")
     if forced_env:
         os.environ["GPU_PIPELINE"] = "1"

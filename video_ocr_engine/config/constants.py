@@ -75,11 +75,11 @@ OCR_ROI_AUTOCROP_ENV: str = "OCR_ROI_AUTOCROP"  # 0 关闭宽度自适应裁切
 OCR_ROI_AUTOCROP_MARGIN_ENV: str = "OCR_ROI_AUTOCROP_MARGIN"  # 内容两侧保留余量（占 ROI 宽 %）
 OCR_ROI_AUTOCROP_MIN_GAIN_ENV: str = "OCR_ROI_AUTOCROP_MIN_GAIN"  # 裁掉比例低于此值则不裁（%）
 OCR_REORDER_WINDOW_ENV: str = "OCR_REORDER_WINDOW"  # OCR 重排窗口（段）；0=不重排
-OCR_INSTANCES_ENV: str = "OCR_INSTANCES"  # 0 关闭并行双 ONNX 实例
+OCR_INSTANCES_ENV: str = "OCR_INSTANCES"  # 0 关闭并行双 CPU(OpenVINO) 实例
 TEXT_SEP_MERGE_ENV: str = "TEXT_SEP_MERGE"  # 相似段合并分离模式
 DECODE_THREADS_ENV: str = "DECODE_THREADS"  # CPU 软解 FFmpeg 帧线程数覆盖（值型；0=自动）
 # 实验/诊断开关
-GPU_PIPELINE_ENV: str = "GPU_PIPELINE"  # 0 关闭 GPU 全驻留管线；1 强制（含 GPU 分段+ONNX 实验组合）
+GPU_PIPELINE_ENV: str = "GPU_PIPELINE"  # 0 关闭 GPU 全驻留管线；1 强制（含 GPU 分段+CPU 实验组合）
 GPU_PIPELINE_STREAM_ENV: str = (
     "GPU_PIPELINE_STREAM"  # 1 开启 decord get_batch_stream chunk 粒度流水发射（默认关，C-10）
 )
@@ -110,10 +110,10 @@ HYBRID_CPU_THREADS_ENV: str = "HYBRID_CPU_THREADS"  # CPU reader 线程数；
 #   绑核 8 逻辑核（模拟弱 CPU）不劣化：1080p -6%、标清 -35%。
 # 上限 32：再多只增加 FFmpeg 帧缓冲（1080p 约 3MB/帧）与调度开销，无吞吐
 # 收益；下限 8：保证少核机不低于 fork 原默认值。
-# 仅当 OCR 后端非 cpu（TRT）时启用；ONNX 场景按采样步长另行分档（见下）。
+# 仅当 OCR 后端非 cpu（TRT）时启用；CPU 场景按采样步长另行分档（见下）。
 DECODE_THREADS_GPU_OCR_MIN: int = 8
 DECODE_THREADS_GPU_OCR_MAX: int = 32
-# ── OCR 在 CPU（ONNX）时的解码线程分档（按 sample_stride 判段密度）──
+# ── OCR 在 CPU（OpenVINO）时的解码线程分档（按 sample_stride 判段密度）──
 # 实测（7945HX 16C32T，decode=cpu ocr=cpu，test5 3000 帧；段数/唯一文本一致）：
 #   低段密度 stride=8（339 段，解码受限）  dcd=8  2.841s → 24  2.026s（-27.8%）
 #                                        16/20/28/32 = 2.09~2.12s（平台）
@@ -128,7 +128,7 @@ DECODE_THREADS_CPU_OCR_STRIDE1_MAX: int = 12  # stride==1：逻辑核 1/3，上�
 # h264 纯 CPU 路径独档（C-67）：解码轻码吃满超线程（逻辑核 3/2 钳 24）
 # ——10 档下解码饿、全长 +17%；hevc/av1 解码重保持 12 档（24/12 反降）
 DECODE_THREADS_CPU_OCR_H264_MAX: int = 24
-# 并行双 ONNX 实例的启动门限（OCR 线程数 ≥ 此值才默认拆两个实例）
+# 并行双 CPU(OpenVINO) 实例的启动门限（OCR 线程数 ≥ 此值才默认拆两个实例）
 OCR_INSTANCES_MIN_THREADS: int = 8
 
 # ═══════════════════ 数据目录 ═══════════════════
@@ -380,7 +380,7 @@ SEG_CALIB_FRAMES: int = 50
 OTSU_FALLBACK_THRESH: int = 127
 # 解码器无法给出 fps 时的兜底帧率
 DEFAULT_FPS_FALLBACK: float = 30.0
-# OCR 引擎内部：ONNX 单批上限与 CTC 归约分块（内存峰值控制）
+# OCR 引擎内部：单批上限与 CTC 归约分块（内存峰值控制）
 OCR_OV_CHUNK: int = 16
 OCR_CTC_CHUNK: int = 64
 # TensorRT 引擎构建：默认 batch profile、输入宽 profile 与 workspace
@@ -422,8 +422,8 @@ TRT_ENGINE_SM: str = "sm89"  # 回落值（本机 RTX 4060 = Ada = sm89）
 # CPU 软解 + 物理核 ≤ CPU_CORES_SPLIT_THRESHOLD 时，OCR 线程与 decord
 # FFmpeg 线程各分 cores//2（显式分核），避免 FFmpeg 2 帧线程（fork 默认，
 # 只用 2 核）+ OCR 全核的过订阅。实测（test5，affinity 模拟，venv）：
-#   4 核 CPU+ONNX：ocrT=2/dcd=2 → 28.0s vs 现状 33.1s（-15%）
-#   8 核 CPU+ONNX：ocrT=4/dcd=4 → 17.8s vs 现状 20.7s（-14%）
+#   4 核 CPU+OpenVINO：ocrT=2/dcd=2 → 28.0s vs 现状 33.1s（-15%）
+#   8 核 CPU+OpenVINO：ocrT=4/dcd=4 → 17.8s vs 现状 20.7s（-14%）
 #   16 核：分核反而更差（12.0 vs 9.5s）→ 保持现状（OCR=全核，FFmpeg
 #   默认 2 帧线程落在 SMT 份额上）；GPU(NVDEC) 解码不抢 CPU → 保持现状。
 # 4 核 CPU+TRT 时解码可分更多核（dcd=4 → 13.2s），但 TRT 组合少核机器

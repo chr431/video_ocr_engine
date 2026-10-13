@@ -1,7 +1,7 @@
 """在线自诊断：挂死 / 崩溃时**也能**拿到现场（不依赖额外探针）。
 
 问题：RunReport 只在 `extract()` 正常返回时组装——**挂死或硬崩溃时什么都不
-输出**。代价：host 路径 hybrid+ONNX 环死锁只能靠 fork 侧 `[hybrid-stats]`
+输出**。代价：host 路径 hybrid+CPU 环死锁只能靠 fork 侧 `[hybrid-stats]`
 打印 + 一次性探针定位；decord 析构 UAF 崩溃同样无现场。
 
 本模块给出两条互补通道，共用**一个**守护线程与**一个**输出前缀：

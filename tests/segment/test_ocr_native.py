@@ -1,4 +1,4 @@
-"""OCR 推理冒烟（ONNX CPU 后端；需仓库内模型资产，无需 decord/GPU）。"""
+"""OCR 推理冒烟（CPU/OpenVINO 后端；需仓库内模型资产，无需 decord/GPU）。"""
 
 from __future__ import annotations
 

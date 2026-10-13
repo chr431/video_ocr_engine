@@ -101,6 +101,18 @@ def render_conclusions_md(entries: list) -> str:
     return "\n".join(lines)
 
 
+def _clip_agent_note(s: str, n: int = 60) -> str:
+    """注入核按词边界截断（硬切会留下半个词，如 `_driver.p`、`key=(model,typ`）。"""
+    if len(s) <= n:
+        return s
+    cut = s[:n]
+    for sep in ("；", "，", "、", "：", " ", "/"):
+        i = cut.rfind(sep)
+        if i >= n * 0.6:
+            return cut[:i] + "…"
+    return cut + "…"
+
+
 def render_agents_md(entries_tools: list, entries_conclusions: list) -> str:
     """注入核 = 宪章正文（charter.md 去 H1）+ registry 快照——永不手写。
 
@@ -132,7 +144,7 @@ def render_agents_md(entries_tools: list, entries_conclusions: list) -> str:
             % (
                 st.get("name"),
                 st.get("entry"),
-                ("：" + str(st.get("note")))[:60] if st.get("note") else "",
+                _clip_agent_note("：" + str(st.get("note"))) if st.get("note") else "",
             )
         )
     lines.append("")

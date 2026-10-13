@@ -28,7 +28,7 @@ class DeviceRef:
 
     @property
     def deferred(self) -> bool:
-        """延后裁切标记态（emit 期未裁，等待批内 autocrop）。"""
+        """未裁切态（含"本就不裁"与"待批内裁切"两态；以 sharp 是否就位区分）。"""
         return self.crop_w is None
 
     @property

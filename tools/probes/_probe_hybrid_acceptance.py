@@ -40,7 +40,7 @@ def run(vid, backend, reps=2):
 
 out={}
 for code, vid in (('h264','test6_h264'),('hevc','test6_hevc'),('av1','test6_av1')):
-    rc,_,_ = run(vid,'cpu'); rg,_,_ = run(vid,'nvdec'); rh,spans,st = run(vid,'hybrid')
+    rc,_,_ = run(vid,'cpu'); rg,_,_ = run(vid,'nvdec'); rh,_,_ = run(vid,'hybrid')
     out[code]={'cpu':round(rc),'nvdec':round(rg),'sum':round(rc+rg),'hybrid':round(rh),'pct':round(100*rh/(rc+rg),1)}
     print(code, out[code], flush=True)
 print(json.dumps(out,indent=1))

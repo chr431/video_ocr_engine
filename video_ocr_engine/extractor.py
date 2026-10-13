@@ -591,7 +591,7 @@ class FieldExtractor:
 
         边界（C-36）：**不改变任何 run 的总吞吐**（预热只是把成本提前）；
         本方法不改变 `extract()` 内部行为，也不自动触发。返回预热的引擎数
-        （0 = 需要时再建，例如非 TRT/ONNX 双实例路径）。
+        （0 = 需要时再建，例如非 TRT/CPU 双实例路径）。
         """
         spec = self._build_session_spec()
         from .pipeline.ocr_stage import warmup_engines

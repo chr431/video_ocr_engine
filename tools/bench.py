@@ -25,14 +25,14 @@ from pathlib import Path
 
 # 遥测成本门禁（**校准版**）：阈值由本机 A/A 标定得出（同档两槽、同进程
 # 交替、每槽 3 次均值、25 对：均值偏差 −0.179%、sd 1.053%、SE 0.211%
-# → 0.179+3×0.211 ≈ 0.81 → 0.85）。
+# → 0.179+3×0.211 ≈ 0.81（现役限见 PI15_LIMITS）。
 #   - 只有一条 full 可分辨下限；µs 级严格性由
 #     `tests/config/test_telemetry_cost.py` 的确定性成本守卫承担
 #     ——那里有 10⁴ 倍于墙钟的分辨力。
 #   - 判失败还需**符号多数一致**（70%），落在噪声带里的差值判"不可判定"。
 #   - 换机器/换窗口/改配对数 n 后必须 `telemetry-check --aa` 重标（SE∝1/√n）。
-#   - 实配对 full−off ≈ +0.1%（限 1.20%）；成本门禁配方 = --inner 1
-#     （A/A floor 0.50% ≪ 1.20%，3× 便宜，bench/aa_floor_curve.json）。
+#   - 实配对 full−off ≈ +0.1%（限 PI15_LIMITS["full_pct"]）；成本门禁配方 = --inner 1
+#     （A/A floor ≪ 限，3× 便宜，bench/aa_floor_curve.json）。
 PI15_LIMITS = {"full_pct": 1.20, "sign_majority": 0.70}
 #: 阈值下限（抽成常量）：取 0.20%——标定证据 |均值|+3SE =
 #: 0.291/0.209/0.274/0.198% 中，n=50 已触 0.20，地板再高会 Masking
@@ -48,7 +48,7 @@ REGISTRY = ROOT / "bench" / "registry.jsonl"
 # 视频注册表单一事实源 = tools/_measure_lib.py；经 RACELOG_VIDEO_DIR 解析。
 from _measure_lib import ROI, VIDS  # noqa: E402
 
-#: 三配置展开为 4（与 tests/golden/bench_baseline.py 同口径，可比）
+#: 配置集（与 tests/golden/bench_baseline.py 同口径，可比）
 CONFIGS = {
     "h264-gpu": dict(video="test5", decode_backend="nvdec"),
     "h264-cpu": dict(video="test5", decode_backend="cpu"),
@@ -1364,7 +1364,7 @@ def main() -> int:
         default=3,
         help="同进程模式下每槽连跑次数（取均值压噪，默认 3）。"
         "成本门禁配方（实测，aa_floor_curve.json）："
-        "判 full 成本 ≤1.2%% 用 --inner 1（floor 0.50%% ≪ 1.20%%，"
+        "判 full 成本 ≤1.2%% 用 --inner 1（floor ≪ 限，"
         "3× 便宜 178s vs ~500s）；µs 级 micro 对比（--full-limit "
         "0.2~0.3）仍用默认 inner=3 + n=50",
     )

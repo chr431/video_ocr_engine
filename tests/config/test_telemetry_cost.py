@@ -143,6 +143,13 @@ def test_environment_fingerprint_is_cached():
 
 
 def test_full_recording_path_cost_per_run():
+    """full 记录面（138 span + 计数器 + 报告）相对 off 的增量 ≤ 2ms/run。
+
+    3000 帧 run 墙钟 ~1.0s → 2ms = 0.2%；比墙钟门禁分辨力严 ~400 倍：
+    真正的插桩膨胀（例如误在 per-frame 路径加记录）会在这里亮红灯，
+    而机器噪声不会。（直方图成本单列在 8ms 宽上限那条；相位采样面
+    （checkpoint）单列在下一条。）
+    """
     import sys as _sys
     from pathlib import Path as _P
 
@@ -156,13 +163,6 @@ def test_full_recording_path_cost_per_run():
 
         _pt.fail(str(e))
 
-    """full 记录面（138 span + 计数器 + 报告）相对 off 的增量 ≤ 2ms/run。
-
-    3000 帧 run 墙钟 ~1.0s → 2ms = 0.2%；比墙钟门禁分辨力严 ~400 倍：
-    真正的插桩膨胀（例如误在 per-frame 路径加记录）会在这里亮红灯，
-    而机器噪声不会。（直方图成本单列在 8ms 宽上限那条；相位采样面
-    （checkpoint）单列在下一条。）
-    """
     # 增量口径：绝对预算在慢 CPU runner 上必超（GitHub 实测 2.3-2.6ms）。
     # 插桩膨胀的判据=full 相对 off 的增量——同一重放循环，off 档 record
     # 调用全走 no-op，差值即纯插桩成本，机器速度基本对消。

@@ -2,7 +2,7 @@
 
 从 PATH 扫描 CUDA / cuDNN / TensorRT 目录并注册到 Windows DLL 搜索路径。
 OcrEngine 初始化 TensorRT 前调用 ensure_gpu_initialized()；OcrEngine 自身
-按 engine_type 直接初始化并在失败时回退 ONNX。
+按 engine_type 直接初始化并在失败时回退 OpenVINO。
 """
 
 from __future__ import annotations

@@ -138,7 +138,7 @@ KNOBS = Registry(
             "ocr",
             ("cpu",),
             "config/constants.py:OCR_INSTANCES_ENV",
-            note="仅 ONNX 双实例路径",
+            note="仅 CPU（OpenVINO）双实例路径",
         ),
         Knob(
             "ocr.gpu_ctc",
@@ -236,7 +236,7 @@ KNOBS = Registry(
             "pipeline",
             ("gpu",),
             "gpu/streams.py:_batch_iter",
-            note="层4 排空线程（get_batch 独占线程预取深 4 批）；实测零收益"
+            note="排空线程（get_batch 独占线程预取深 4 批）；实测零收益"
             "默认关（引擎税=线程争用而非排空阻塞，同 C-10 判例）",
             env_live_only=True,
         ),  # env-live-only：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收

@@ -75,7 +75,7 @@
   type: bool
   default: True
   rationale: config/constants.py:OCR_INSTANCES_ENV
-  note: 仅 ONNX 双实例路径
+  note: 仅 CPU（OpenVINO）双实例路径
 
 - name: ocr.gpu_ctc
   env: GPU_CTC
@@ -131,7 +131,7 @@
   type: bool
   default: False
   rationale: gpu/streams.py:_batch_iter
-  note: 层4 排空线程（get_batch 独占线程预取深 4 批）；实测零收益默认关（引擎税=线程争用而非排空阻塞，同 C-10 判例）
+  note: 排空线程（get_batch 独占线程预取深 4 批）；实测零收益默认关（引擎税=线程争用而非排空阻塞，同 C-10 判例）
 
 - name: diag.profile
   env: ENGINE_PROFILE
