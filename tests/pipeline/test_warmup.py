@@ -84,8 +84,8 @@ def test_warmup_makes_next_run_hot(monkeypatch):
     except ImportError:
         pytest.skip("无 cuda-python（CI 无 GPU 环境）")
     # report 只在 telemetry≠off 时产出（extractor 只挂非空报告）——
-    # 默认 off 下本测试恒 skip 且跳因是 KeyError('report')（2026-10-12
-    # 审查轮：缺陷被 try/except 转成"环境不可用"假 skip，门禁从未跑过）。
+    # 默认 off 下本测试恒 skip 且跳因是 KeyError('report')；若被
+    # try/except 转成"环境不可用"假 skip，门禁就形同虚设。
     monkeypatch.setenv("VOE_TELEMETRY", "full")
     ex = FieldExtractor(
         vid,

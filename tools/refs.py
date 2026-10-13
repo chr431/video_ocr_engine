@@ -12,7 +12,7 @@ token 语法（宪章不变量 2）：
   BARE_SECTION     md 文本中出现裸 §N（章号仅允许 log 叙事内部，禁入基底）
   BARE_VERSION     md 文本中出现裸 x.y.z（版本只住 environment 数据或带前缀）
 
-扫描范围：substrate = charter.md + registry/*.yaml。Phase C/E 视图切换后扩面。
+扫描范围：substrate = charter.md + registry/*.yaml + 全仓 py。
 用法：
   python tools/refs.py resolve C-53
   python tools/refs.py check
@@ -81,7 +81,7 @@ class Index:
             if isinstance(entry, dict) and "id" in entry:
                 self.rules[entry["id"]] = entry
         self.historical: set[str] = set()
-        if HISTORY.is_file():  # 过渡期本地文件；出树后经档案 tag 取
+        if HISTORY.is_file():  # 本地存在则直接用，否则经档案 tag 取
             self.historical = set(
                 re.findall(r"(?m)^## (C-\d+)", HISTORY.read_text(encoding="utf-8"))
             )
@@ -147,8 +147,7 @@ class Index:
 def _substrate_files(extra: list[str]) -> list[Path]:
     """扫描基底：charter + registry + 全仓 py。
 
-    token 判定（C-/R-/decord@/archive/裸 §N）在 md 与 py 同权——注释轮
-    （2026-10-12）后 py 注释层的旧计划编号存量已清零，判据全量生效。
+    token 判定（C-/R-/decord@/archive/裸 §N）在 md 与 py 同权。
     """
     files = [CHARTER] + sorted(REGISTRY.glob("*.yaml"))
     if not CHARTER.is_file():
@@ -164,8 +163,7 @@ def scan_file(path: Path, index: Index) -> list[str]:
     """单文件扫描：token 逐一解析 + 裸 §N/裸版本检查。
 
     裸 §N 禁入范围（宪章不变量 2）：md 基底（charter/registry/视图）与
-    py 注释层一视同仁——2026-10-12 注释轮清零旧计划编号后本判据全量
-    生效（存量清零是判据收紧的前提，不是靠容忍期拖过去）。
+    py 注释层一视同仁。
     """
     errors: list[str] = []
     text = path.read_text(encoding="utf-8", errors="replace")

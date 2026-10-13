@@ -1,4 +1,4 @@
-"""C-68 修复效果测量：三码 hybrid 缺口（与 2026-10-10 矩阵同口径）。
+"""C-68 效果测量：三码 hybrid 缺口。
 
 口径：test6 同内容三码，3000 帧，TRT OCR，热池（每臂预热 1 次后 3 reps
 取中位）；GPU_PIPELINE=1。臂 = nvdec 纯 / cpu 纯 / hybrid。
@@ -53,8 +53,7 @@ for name, vid in CASES:
     r_c, _ = run(vid, "cpu")
     r_h, _ = run(vid, "hybrid")
     theo = r_g + r_c
-    # CPU 臂实得：hybrid 墙钟内 CPU 臂交付帧数（hybrid_stats 穿透略，
-    # 用缺口反解口径与 10-10 矩阵一致：实得 = 理论和比例无——直接给 hybrid
-    # 速率与缺口；臂内分率由 fork stats 在引擎 report 里，此处从略）
+    # CPU 臂实得：hybrid 墙钟内 CPU 臂交付帧数（hybrid_stats 穿透略，直接
+    # 给 hybrid 速率与缺口；臂内分率由 fork stats 在引擎 report 里，此处从略）
     print("%-5s %6.0f %6.0f %7.0f %7.0f %+6.1f%%" % (
         name, r_g, r_c, theo, r_h, (r_h - theo) / theo * 100))

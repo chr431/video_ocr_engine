@@ -1,7 +1,7 @@
 """行为缺陷修复测试。
 
-B1：同实例第二次 extract 不再带上一次的降级原因/计时/剖面。
-B3：未知 decode_backend / ocr_backend 构造期 ValueError（v1 静默兜底）。
+同实例第二次 extract 不再带上一次的降级原因/计时/剖面。
+未知 decode_backend / ocr_backend 构造期 ValueError（v1 静默兜底）。
 两个修复都是**有意行为变更**。
 """
 

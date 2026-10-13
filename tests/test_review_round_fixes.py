@@ -235,7 +235,7 @@ def _mk_session(engines=None):
 
 
 def test_injected_engines_are_stored_and_used():
-    """注入路径回归钉子：_engines 此前恒空 → worker IndexError。"""
+    """注入路径回归钉子：_engines 必须存入，否则恒空 → worker IndexError。"""
     eng = _FakeEngine()
     sess = _mk_session([eng])
     assert sess._engines == [eng], "_ocr_engines 必须存入 self._engines"

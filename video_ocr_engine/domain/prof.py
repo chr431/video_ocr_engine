@@ -60,7 +60,7 @@ class ProfSpine:
                 d[key] = d.get(key, 0.0) + elapsed
         if met:
             name = self._metric_from_profile(group, key, elapsed)
-            # P4 trace（默认关）：关闭时这条 = 一次 is-not-None 判断
+            # trace（默认关）：关闭时这条 = 一次 is-not-None 判断
             # （成本守卫背书零成本）。
             if self._trace is not None and name is not None:
                 self._trace.record(name, t0, t0 + elapsed)
@@ -71,7 +71,7 @@ class ProfSpine:
     def _metric_from_profile(self, group: str, key: str, elapsed: float) -> str | None:
         """(group, key) → 注册指标名（映射表在 domain/metrics.py，单一出处）。
 
-        返回主指标名（P4 trace 用）；未映射键返回 None。
+        返回主指标名（trace 用）；未映射键返回 None。
         """
         m = self._metrics
         name = PROFILE_GAUGES.get((group, key))

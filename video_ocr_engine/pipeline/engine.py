@@ -4,23 +4,21 @@
 （一次 run 的显式输入契约：帧区间/采样/语义快照 + 策略与源注入的回
 调），引擎据此自建 HostRunSpec / GpuRunSpec 并分发到两后端
 （host_backend / gpu_backend，lane 策略与生命周期仍在 _driver 单出处）。
-GPU→宿主回退（C10）随之收进引擎单处（此前挂在门面 `_run_pipelined_gpu`
-的尾部）。GPU 门控由门面在构建 inputs 时求值一次（其输入——rc 冻结值
+GPU→宿主回退收进引擎单处。GPU 门控由门面在构建 inputs 时求值一次（其输入——rc 冻结值
 /后端名/视频路径——均为 run 内常量，与逐次调用等价）。
 
-时序约束逐条保持（均有历史修复背书，勿扰动）：
+时序约束逐条保持（勿扰动）：
 - `on_bin_thresh` 回写即时性（宿主合并判定活读阈值）；
-- `gpu_mode_box` 单元素盒替代门面属性 `_gpu_pipeline_mode`——
-  lane 启动（会话启动**前**）写盒、SessionSpec 与报告组装读盒，
-  读写时序与旧属性一致；
+- `gpu_mode_box` 单元素盒——lane 启动（会话启动**前**）写盒、
+  SessionSpec 与报告组装读盒；
 - `backend_label` 经回调在 open **之后**才读（backend 标签由
   open 写入；构造期求值会拿到后端重置后的空标签）；
 - `yuv_output`/`color_range` 按**open 前快照**入 GPU spec（首跑 0 /
-  复用实例带上一跑值——与旧门面构建时点逐位一致）。
+  复用实例带上一跑值）。
 
 端口（FrameSource / SegmentBackend / OcrBackend）已定义；decode 侧
-以 DecordFrameSource 适配器落地打开与格式适配，driver 消费面仍为裸
-vr（端口收口属后续轮）。emit 契约为**批量签名**。
+以 DecordFrameSource 适配器落地打开与格式适配，driver 消费面为裸
+vr。emit 契约为**批量签名**。
 """
 
 from __future__ import annotations
@@ -137,14 +135,14 @@ class RunOutcome:
         )
 
     def as_tuple(self) -> tuple:
-        """与 `_run_pipelined` 返回形状逐位兼容（迁移期）。"""
+        """与 `_run_pipelined` 返回形状逐位兼容。"""
         return (self.frames, self.segments, self.texts, self.confs, self.rep_frames)
 
 
 class SegmentEngine:
     """编排唯一出处：EngineInputs 显式契约 → 选后端 → RunOutcome。
 
-    GPU 门控通过 → gpu_backend（形状不符回退宿主，C10）；否则宿主
+    GPU 门控通过 → gpu_backend（形状不符回退宿主）；否则宿主
     host_backend。生命周期单出处 `_driver.run_segment_pipeline`。
     """
 
@@ -201,7 +199,7 @@ class SegmentEngine:
         )
         res = run_gpu_pipeline(spec, ocr_engines)
         if res.fell_back_to_host:
-            # C10 接线：形状不符 → fallback_vr/engines 移交宿主 lane
+            # 形状不符 → fallback_vr/engines 移交宿主 lane
             # （reader 不 close：宿主路径复用已打开的 reader），降级透出。
             inp.degraded.append("GPU 管线形状不符，回退宿主管线")
             return self._run_host(res.fallback_engines, res.fallback_vr)

@@ -39,8 +39,7 @@ from pathlib import Path
 # 全程账本。std 档无这些键。
 # v9：`cores_avg` 收敛为回退键——cycles 来源在场（Windows）时**不再发**，
 # 仅非 Windows 回退（两个"平均核数"并存打架，读者分不清权威）。
-# 这是**删键语义**（Windows 报告里消失），消费者改读 `cores_avg_cycles`
-# （历史迁移表经 git 档案取回）。
+# 这是**删键语义**（Windows 报告里消失），消费者改读 `cores_avg_cycles`。
 # v10：full 档新增 `thr_foreign`（外来线程簇逐 TID 周期差分：decord
 # 解码池/OMP/TBB——命名线程之外的全体）与 `thr_foreign_n`、
 # `cycles_e2e.threads_foreign`。个体 TID 只用于差分，结论应下在簇级
@@ -52,8 +51,7 @@ REPORT_VERSION = 10
 #: 否则 _other 会被双重扣减。
 #: - host：consumer 线程墙钟内串行包含 decode.*（流生成器在 feed 循环内
 #:   被拉动）+ 状态机 feed（consume_feed；merge_pair/q_put_block 嵌套于
-#:   其中，不单列）。host 只产 pipeline.consumer 单键（同区间的
-#:   pipeline.decode 双键已删（历史迁移表见 git 档案）。
+#:   其中，不单列）。host 只产 pipeline.consumer 单键（不产 pipeline.decode）。
 #: - gpu：pipeline.consumer 不产出（生产者线程成本由 pipeline.decode 表达），
 #:   故无 consumer 关系；ocr 两对关系两路径同构。
 SPAN_RELATIONS: dict = {
@@ -306,7 +304,7 @@ def build_report(
 
 @dataclass(frozen=True)
 class RunReport:
-    """RunReport（schema v6）的类型化只读视图。
+    """RunReport 的类型化只读视图。
 
     序列化**唯一形态**是 build_report 产出的 dict（`meta['report']` 与
     JSON sidecar/registry 同源，schema 只增不改、REPORT_VERSION 单点）；
@@ -416,9 +414,9 @@ def finalized_report(
 ) -> dict:
     """把单次 run 的观测收敛成 RunReport（off 档返回 {}）。
 
-    自 extractor._assemble_report 下放：输入全部显式（Metrics /
+    输入全部显式（Metrics /
     ProfSpine / timing 字典 / trace 记录器 / 诊断 / 降级列表），
-    不再读门面属性。编排三段（decode/ocr/ocr_tail）由 res.timing 转
+    不读门面属性。编排三段（decode/ocr/ocr_tail）由 res.timing 转
     正样本 span；trace 派生段用近似锚点（t1=组装时刻，误差=ocr_tail+
     组装时长，dump note 有说明——真实锚点由脊柱事件提供）。
     """

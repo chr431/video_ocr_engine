@@ -1,7 +1,6 @@
 """宿主后端：宿主 lane 策略。
 
-从 extractor._run_pipelined_host 与 _host_pipeline 的三个模块级函数外提。
-语义：**算法代码只读 HostRunSpec 的显式声明字段**，不再穿透
+语义：**算法代码只读 HostRunSpec 的显式声明字段**，不穿透
 FieldExtractor 的私有属性（宿主子集有契约）；运行态只写入
 HostRunResult 与两个显式可变盒（fps 缓存 / backend 标签），由门面在
 调用前后同步。
@@ -10,7 +9,7 @@ HostRunResult 与两个显式可变盒（fps 缓存 / backend 标签），由门
 _driver.run_segment_pipeline 单出处，本模块只剩宿主侧策略——
 校准（_calibrate）、帧流（_frame_stream）、emit/合并判定（_HostLane）。
 像素与判定原语经 spec 回调注入（实现唯一出处 segmentation /
-extractor 薄层）；GPU 路径的回退经 preopened_vr 复用（C10 语义不变）。
+extractor 薄层）；GPU 路径的回退经 preopened_vr 复用。
 """
 
 from __future__ import annotations
@@ -32,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class HostRunSpec:
-    """宿主驱动的全量输入契约（取代对 FieldExtractor 私有属性的读取）。"""
+    """宿主驱动的全量输入契约（只读显式声明字段）。"""
 
     # 帧区间 / ROI / 采样
     frame_start: int
@@ -92,11 +91,10 @@ def _prof(spec, group: str, key: str, t0: float) -> None:
 
 
 def _assert_crop_expected(spec, c, roi_h: int, roi_w: int) -> None:
-    """ROI-first 输出形状不符 = 布局契约破坏 → 硬失败（2026-10-12 审查轮）。
+    """ROI-first 输出形状不符 = 布局契约破坏 → 硬失败。
 
-    旧行为是静默按全帧坐标切一刀（本意服务「旧 decord 无 roi 支持」），
-    但生产恒传 roi（构造期 ensure_roi_capable_decoder 已硬校验），
-    走到这里只会是把已裁剪数组当全帧切——空/错内容无声流进 Otsu。
+    生产恒传 roi（构造期 ensure_roi_capable_decoder 已硬校验），故形状
+    不符只会是把已裁剪数组当全帧切——空/错内容无声流进 Otsu。
     """
     if not spec.crop_is_expected(c, roi_h, roi_w):
         raise RuntimeError(
@@ -107,7 +105,7 @@ def _assert_crop_expected(spec, c, roi_h: int, roi_w: int) -> None:
 
 
 def _calibrate(spec: HostRunSpec, vr, frames, *, with_dev: bool):
-    """宿主 Otsu 校准（原 _host_calibrate；ex 读取 → spec 字段）。
+    """宿主 Otsu 校准（读 spec 字段）。
 
     stride>1 走 get_batch 等差快速路径；stride==1 走 next_roi 顺序流
     （校准帧号与后续帧流一致）。返回 (calib, th)，calib 元素
@@ -150,7 +148,7 @@ def _calibrate(spec: HostRunSpec, vr, frames, *, with_dev: bool):
 
 
 def _frame_stream(spec: HostRunSpec, frames, vr, calib, th, *, with_dev: bool):
-    """宿主帧流（原 _host_frame_stream）。
+    """宿主帧流。
 
     先产出校准帧，再按 DECODE_BATCH 批量解码。
     yield (frame_idx, crop, gray, sharp, bin, dev_info)。
@@ -280,9 +278,8 @@ class _HostLane:
         self._seg_idx += 1
 
     def similar(self, a, b) -> bool:
-        # P2c 覆盖：merge_pair 此前只有 GPU 路径产出（宿主只能从
-        # timing['decode'] 反推合并成本）。merge_similar 关闭时不计
-        # （无判定成本可量）。
+        # 宿主路径也产出 merge_pair（否则只能从 timing['decode']
+        # 反推合并成本）。merge_similar 关闭时不计（无判定成本可量）。
         if not self._spec.merge_similar:
             return False
         _t = time.perf_counter()
@@ -316,7 +313,7 @@ class _HostLane:
 
 def run_host_pipeline(spec: HostRunSpec, ocr_engines=None, preopened_vr=None) -> HostRunResult:
     """宿主驱动入口：解码∥分段∥OCR（段一闭合即把代表帧交给 OCR 会话
-    线程）。生命周期由 _driver.run_segment_pipeline 承载（P1），本模块
+    线程）。生命周期由 _driver.run_segment_pipeline 承载，本模块
     只提供宿主 lane 策略。
     """
     from ._driver import run_segment_pipeline

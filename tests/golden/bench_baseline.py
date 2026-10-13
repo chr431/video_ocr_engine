@@ -1,7 +1,7 @@
 """性能基线录制。
 
 四配置 × 3 轮（同进程顺序跑，第 1 轮含冷启动 init、2–3 轮池热），
-记录墙钟 + timing 分解 + 轮间散布。散布即 D10 双档门禁的**噪声底**依据
+记录墙钟 + timing 分解 + 轮间散布。散布即双档门禁的**噪声底**依据
 （PR 硬失败阈值 5% 的初值由此校准）。
 
 用法：python tests/golden/bench_baseline.py   # 须在 GPU 空闲时跑
@@ -20,8 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
 
-# 视频注册表单一事实源 = tools/_measure_lib.py（2026-10-12 审查轮收敛；
-# 此前的第三份硬编码拷贝被路径审计判为存量违规）
+# 视频注册表单一事实源 = tools/_measure_lib.py
 from _measure_lib import ROI, VIDS  # noqa: E402
 
 WIN = (0, 3000)

@@ -8,9 +8,9 @@
   AGENTS.md             ← 宪章 + registry 快照（注入核，预算≤6KB=宪章不变量 5）
   docs/HEALTH.md         ← registry/kpi.yaml（KPI 视图）
 
-旧 knowledge/render.py 的职责并入本文件（Phase C，制度重构）；conclusions 的
-evidence 为 commit 锚点结构，路径活性在锚点提交上验证（git cat-file），与
-"档案归 git"语义一致——树里不存在的 docs/log 路径不算悬空。
+conclusions 的 evidence 为 commit 锚点结构，路径活性在锚点提交上验证
+（git cat-file）——与"档案归 git"语义一致：树里不存在的 docs/log 路径
+不算悬空。
 """
 
 from __future__ import annotations
@@ -222,7 +222,7 @@ def render_index_md(tools: list) -> str:
     lines = [
         "# tools/ 索引（渲染产物；事实源 registry/tools.yaml）",
         "",
-        "> 分级判据与生命周期见 registry/tools.yaml 头注（裁决 18）。",
+        "> 分级判据与生命周期见 registry/tools.yaml 头注。",
         "> 历史探针不在树（git 档案，archive/pre-rework 锚点起可溯）。",
         "",
         "## 常备工具（standing，质量面=生产代码）",
@@ -272,7 +272,7 @@ def path_liveness(entries: list) -> list[str]:
 
 
 def bare_cr(rel: str) -> list[str]:
-    """视图裸 CR=0（\\r 不跟 \\n）——编码事故防线（旧 _doc_guards 职能迁此）。"""
+    """视图裸 CR=0（\\r 不跟 \\n）——编码事故防线。"""
     path = ROOT / rel
     if not path.is_file():
         return [f"{rel}: 视图缺失"]

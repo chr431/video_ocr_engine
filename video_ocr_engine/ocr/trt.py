@@ -2,7 +2,7 @@
 
 与 ONNX 路径共享 OCR 预处理与 CTC 后处理；本模块只负责 TRT 特有逻辑：
 引擎候选查找（模型目录 → 程序目录缓存）→ 反序列化校验 → 本地构建缓存
-→ CUDA 显存执行。GPU 预处理/归约/帧分析内核类已拆至
+→ CUDA 显存执行。GPU 预处理/归约/帧分析内核类在
 video_ocr_engine._gpu_kernels（本模块 re-export 保持兼容）。
 """
 
@@ -76,11 +76,10 @@ def engine_sm() -> str:
     except Exception:  # noqa: BLE001,S110 — 容忍（见上下文）
         pass  # 容忍（见上下文）
     if not probed:
-        # 只缓存成功的探测：此前失败也写缓存——
-        # 首次调用若撞上 CUDA 瞬态不可用（独显刚从省电态唤醒，
-        # _wait_cuda_ready 处理的同一实测现象），常量后缀会被缓存整个
-        # 进程 → 引擎缓存名与真实架构不符 → 后续可能触发 68~72s 全量
-        # 重建且无提示。参照 nvdec_available 的"只缓存成功"写法。
+        # 只缓存成功的探测：失败也写缓存时，首次调用若撞上 CUDA 瞬态
+        # 不可用（独显刚从省电态唤醒，_wait_cuda_ready 处理的同一现象），
+        # 常量后缀会被缓存整个进程 → 引擎缓存名与真实架构不符 → 后续可能
+        # 触发 68~72s 全量重建且无提示。参照 nvdec_available 的写法。
         log.debug("sm 探测失败，本次回落常量 %s（不缓存）", sm)
         return sm
     _ENGINE_SM_CACHE = (sm, "")
@@ -130,9 +129,8 @@ class TrtEngine:
                 #    cudaError 35 (InsufficientDriver)`，出现在**独显刚从
                 #    省电态唤醒**时（本机 4060 Laptop 空闲数秒即复现），
                 #    退避重试即可成功。
-                # 旧行为是立刻 `unlink` 掉 24MB 构建成果 → 白付 68–72s 重建；
-                # 现在连续失败也**不删**（重建路径会覆盖同名文件），
-                # 只记警告。
+                # 连续失败也**不删**（重建路径会覆盖同名文件），只记警告——
+                # 立刻 `unlink` 会白付 24MB 构建成果的 68–72s 重建。
                 last = e
                 for attempt in (1, 2, 3):
                     time.sleep(1.5 * attempt)  # 退避等独显唤醒
@@ -270,7 +268,7 @@ class TrtEngine:
         # 弃用：13.x 起每次发出 DeprecationWarning，且在把 DeprecationWarning
         # 当错误的场景（CI `-W error`）会被升级为异常，使这里被判为"引擎加载
         # 失败"→ **同名重建引擎**（实测引擎 mtime 与该次运行重合）→ 连带金标
-        # 数值漂移。改为显式 del，释放时机与旧 `with` 块出口一致。
+        # 数值漂移。改为显式 del，释放时机与 `with` 块出口一致。
         rt = trt.Runtime(logger)  # type: ignore[attr-defined]
         with open(engine_path, "rb") as f:
             self.engine = rt.deserialize_cuda_engine(f.read())
@@ -381,7 +379,7 @@ class TrtEngine:
         stream = self._ensure_stream()
         out_shape = self._prepare_shape(x.shape)
         # 输入 device buffer：按 max profile 形状预分配并复用。
-        # 直接以当前批的 numpy 内存作为 HtoD 源，去掉旧 host_in staging 拷贝：
+        # 直接以当前批的 numpy 内存作为 HtoD 源（省 host_in staging 拷贝）：
         # 预处理结果本来就是 host float32 连续数组，无需再平铺进一块固定 host buffer。
         if not x.flags.c_contiguous:
             x = np.ascontiguousarray(x)
@@ -548,8 +546,8 @@ class TrtEngine:
             self.context.execute_async_v3(stream)
             if _subdetail:
                 _m.record_span("ocr.trt_enq", time.perf_counter() - _t_enq)
-            # reduce 的 D2H 走异步 + 每子批一次流同步（原为 2 次
-            # 阻塞 cudaMemcpy = 隐式设备级同步，GPU_CTC=0/1
+            # reduce 的 D2H 走异步 + 每子批一次流同步（2 次阻塞
+            # cudaMemcpy = 隐式设备级同步会串行化；GPU_CTC=0/1
             # 文本 sha 一致守卫；此处计数供 syncs/chunk 判定）。
             # reduce 内含流同步等待（"等 GPU 干完"），作为子相位记录。
             _t_red = time.perf_counter() if _subdetail else 0.0

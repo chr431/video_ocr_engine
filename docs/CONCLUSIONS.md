@@ -9,7 +9,7 @@
 | C-01 | 并发退化真因=NVDEC 会话数；NVDEC∥CPU 聚合 1.83–1.87×，双 NVDEC 1.01–1.20× | 本机单 NVDEC 单元；同视频同负载 | 多 NVDEC 单元 GPU / 驱动调度变更 | c5d64eb:docs/log/PERFORMANCE.md#§19/21 |
 | C-02 | IO 不是并发退化原因（<1% 墙钟；页缓存全命中仍退化 1.88×） | NVMe 页缓存命中 | 冷盘/网络盘使 IO 占比抬升 | c5d64eb:docs/log/PERFORMANCE.md#§19 |
 | C-03 | 内存带宽不是并发变量（B_max 55.8 GB/s；互补退化 1.02×） | 2×16GB DDR5-6000 | 集成显存平台 / 内存减半 | c5d64eb:docs/log/PERFORMANCE.md#§20/21 |
-| C-04 | 解码后端按编码选：h264 CPU 快 ~2.9×，av1 慢 ~2.6× | fork 0.7.x；av1 见 C-31 | 并行场景重测（C-31 策略修复后） | c5d64eb:docs/log/PERFORMANCE.md#§21/§22.1；9b5b9cd:docs/log/2026-09-08-decord-0.8.1升级.md |
+| C-04 | 解码后端按编码选：h264 CPU 快 ~2.9×，av1 慢 ~2.6× | fork 0.7.x 口径 | 并行场景重测 / fork 换代 | c5d64eb:docs/log/PERFORMANCE.md#§21/§22.1；9b5b9cd:docs/log/2026-09-08-decord-0.8.1升级.md |
 | C-05 | hybrid=fork 原生（传输恒宿主输出，C-76）；收益面=TRT；ONNX 不反超→选 nvdec；可见性 2.45×；e2e 见 C-53（可见性 2.45× 为旧代口径） | 4060/16C32T；fork 0.9.8；fork ≥6da2957 | >32 核 / 残余=每臂混跑干扰 | f7c0333:docs/log/2026-09-11-hybrid差距分解.md#hybrid差距分解；e956d3a:docs/log/2026-09-13-hybrid可见性重评.md#可见性 |
 | C-07 | auto 一例试 NVDEC；批量互补须显式 `cpu` 并核验 `_backend` | — | auto 实现按 ocr_backend 分叉后复核 | c5d64eb:README.md#批量章；c5d64eb:docs/log/PERFORMANCE.md#§19 |
 | C-08 | h264 CPU 快 1.7~2.8× 但**恒 NVDEC 优先=刻意决策**；峰值走显式 cpu | 稳妥性>峰值吞吐（用户拍板） | 「NVDEC 不可用」级前提变化 | c5d64eb:docs/log/DECISIONS.md#A2；a852b86:docs/log/2026-09-09-深度性能优化.md#深度优化 |
@@ -39,7 +39,7 @@
 | C-58 | **hybrid OCR 双车道（TRT+OV）：回归已消除、无净收益**（OV=TRT 1/3）；见 C-60 | batch_test 字幕 stride=1；16C32T 三层占满 | NVDEC 纯解码部署 / 多 NVDEC 卡 / OCR 变重 | 7ce974c:docs/log/2026-09-20-批量策略与hybridOCR轮.md#批量策略轮 §3-4 |
 | C-59 | 宽 ROI 字幕：裁切文本效应=临界字形宽度彩票（C639 不翻/C781 翻），随集波动；性能真收益 −6.6~−9.0%。默认维持 | 新三国01/02；dbe=cpu+TRT；视觉+抽帧复核 | 换模型 / PAD_SMALL×裁切联调 / NVDEC 纯解码 / dbe 变更 | f442d28:docs/log/2026-09-20-裁切复测轮.md#裁切复测 |
 | C-60 | hybrid OCR 奖金池负结果：双车道只兑 −4.9%（TRT 劣化 ~28%+OV 短板）；动态分配不立项 | hevc 转码集整集 3 轮交错；阈值 5% 预注册 | OV 产能>TRT 1/2 / GPU 分离部署（解码/OCR 异卡） | 7e8d3ce:docs/log/2026-09-20-hybridOCR奖金池裁决.md#hybridOCR裁决 |
-| C-62 | **硬窗架构重做（0.9.0）：绝对帧区间+marker 分离+会话对象化+窗禁替补（win_subs 恒 0）**——根除 C-57 族。矩阵 12/12×5+哈希逐位+七套件 | fork 0.9.8；金标 D 组晚起点 5 用例；历代钉版均矩阵×5 复验 | fork 换代/窗口路径改动（matrix --repeat 5 + window 套件）/换卡/竞态再现 | e25c836:docs/log/2026-10-08-收口与窗口架构重做.md#窗口架构重做 |
+| C-62 | **硬窗架构重做（0.9.0）：绝对帧区间+marker 分离+会话对象化+窗禁替补（win_subs 恒 0）**——根除硬窗缺陷族。矩阵 12/12×5+哈希逐位+七套件 | fork 0.9.8；金标 D 组晚起点 5 用例；历代钉版均矩阵×5 复验 | fork 换代/窗口路径改动（matrix --repeat 5 + window 套件）/换卡/竞态再现 | e25c836:docs/log/2026-10-08-收口与窗口架构重做.md#窗口架构重做 |
 | C-63 | **周期/指令账本可作 A/B 判据**：QueryProcessCycleTime CV≤2.3%（墙钟 30-36%）、nvdec 守恒 0.965。边界：SMT ±16% 仍需交错；BLAS 自旋不可用；ncu 需管理员 | 本机 4060/16C32T/Win32；ncu 2026.2.0；引擎栈无自旋放大 | 换机/CPU；线程模型换代 | cf20282:docs/log/2026-10-09-周期计数测量首轮.md#周期首轮 |
 | C-64 | **周期账本产品化（report v7 + bench 判读）**：per_phase 含 cycles + cycles_e2e；ab 自动周期判读（不改退出码）。A/A：cyc:e2e 下限 1.58% vs 墙钟 2.85% | Windows；交错仍需（SMT 带）；C-63 边界全部继承 | 换机/换 CPU；周期 A/A 带漂移超 1×SE 重标；BLAS/OV 线程模型换代 | 1fd8303:docs/log/2026-10-09-账本产品化与不可判定复测.md#账本产品化 |
 | C-65 | **跨线程账本（v8）+预处理容量**：full 档逐线程占空。宿主膝点 0.5-1ms/crop 1:1 传导；GPU 臂 SM 余量 ~5× | 本机 4060/16C32T；test5 600 帧；sleep 注入 | 换机/换卡；OCR 提速（余量收窄）；真上重算法前复核膝点 | 676a036:docs/log/2026-10-09-跨线程账本与预处理容量.md#跨线程账本 |

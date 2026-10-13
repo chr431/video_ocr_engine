@@ -1,15 +1,15 @@
-"""两级标准化测试入口 —— 日常 / 发版各跑什么，一条命令（2026-10-10）。
+"""两级标准化测试入口 —— 日常 / 发版各跑什么，一条命令。
 
 动机
 ----
 测试面分散在 pytest、守卫组、金标 verify、发版清扫、版本/KPI 多处，"现在该跑哪
-些"靠记纪律段；且金标 full（72s）与 smoke（6.7s）的分层此前只写在
-AGENTS 里。本脚本把两级合规固化成一条命令，每步带计时与结果汇总：
+些"靠记纪律段；金标 full（72s）与 smoke（6.7s）的分层也在此固化。本脚本把
+两级合规固化成一条命令，每步带计时与结果汇总：
 
     python tools/check.py               # 日常（≈36s）：迭代期默认
     python tools/check.py --tier release  # 发版/合并（≈2min，含全量金标+清扫）
 
-分级依据（实测，本机 2026-10-10，见 docs/log/2026-10-10-测试减负实验轮.md）：
+分级依据（本机实测，量级参考）：
   pytest 29.3s；audit --since 秒级；金标 smoke 6.7s / full 71.9s；
   window matrix（fork 门禁，decord 侧）41.9s×5；run_fast 七套件 346s。
   telemetry-check / ab 不进两级链（只在改遥测/做 A/B 时按 rules.yaml 跑）。
@@ -123,7 +123,7 @@ def main() -> int:
             print(out[-1200:])
         elif name == "sweep" and out.strip():
             # 清扫清单即使通过也可见：落后钉版/触发词命中是发版前的决策输入，
-            # 只在失败时打印会让"通过但带清单"的输出被吞（2026-10-12 审查轮）。
+            # 只在失败时打印会让"通过但带清单"的输出被吞。
             print(out.rstrip())
     print("\n汇总：")
     for name, label, ok, dt in results:
@@ -133,7 +133,7 @@ def main() -> int:
         print("\n✗ 失败：%s" % ", ".join(failed))
         return 1
     if skipped:
-        # SKIP 不冒充通过：金标未验证这一事实必须出现在汇总末行（2026-10-12）。
+        # SKIP 不冒充通过：金标未验证这一事实必须出现在汇总末行。
         print("\n△ %s 链部分通过（跳过：%s——金标未验证）" % (args.tier, ", ".join(skipped)))
         return 0
     print("\n✓ %s 链全部通过（总 %.1fs）" % (args.tier, sum(d for _, _, _, d in results)))

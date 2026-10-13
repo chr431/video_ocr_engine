@@ -122,8 +122,7 @@ class ThreadLedger:
         import ctypes
 
         # 显式注解：mypy 面对这两个惰性字段报 "expression has type
-        # bool/WinDLL, variable has type None"——不注解则 mypy 步在 HEAD
-        # 上即为红。
+        # bool/WinDLL, variable has type None"——不注解则 mypy 报错。
         self._ntdll: "ctypes.WinDLL | None" = None  # NtQuerySystemInformation 快路径（惰性）
         self._nt_trusted: "bool | None" = None  # None=未对账 / True=NT 转正 / False=永久回退
 
@@ -610,10 +609,10 @@ class ResourceProbe:
             if dcpu_all > 0 and fa.get("cycles") is not None and fb.get("cycles") is not None:
                 f_run = (fb["cycles"] - fa["cycles"]) / dcpu_all
         out: dict = {}
-        # v10.1 出生删失修复：解码池线程常在相位中段才出生（hybrid 的
-        # CPU 臂池取决于校准走了哪条路），边界交集会把它们整体剔除
-        # （h264 hybrid 外来簇 0.3M/帧=删失假象 vs 纯臂 13.6M）。改为
-        # 携带 seen 表：本区间新出生（此前从未见过）的 TID 基线记 0。
+        # 携带 seen 表：本区间新出生（此前从未见过）的 TID 基线记 0——
+        # 否则解码池线程（常在相位中段才出生，hybrid 的 CPU 臂池取决于
+        # 校准走了哪条路）会被边界交集整体剔除
+        # （h264 hybrid 外来簇 0.3M/帧=删失假象 vs 纯臂 13.6M）。
         seen_tids: set = set()
         for (a, sa), (_b, sb) in zip(rows, rows[1:]):
             name = _b if _b not in out else "%s→%s" % (a, _b)
@@ -834,7 +833,7 @@ class NvmlSampler:
         self._th.start()
 
     def points(self) -> list:
-        """原始时间点列的只读拷贝（P4 trace 用；stop() 后仍可取）。
+        """原始时间点列的只读拷贝（trace 用；stop() 后仍可取）。
 
         行结构：(t, gpu%, nvdec%, vram_mib, sm_mhz, mem_mhz, vid_mhz,
         throttle_mask)——聚合摘要之外唯一的带时间戳序列。

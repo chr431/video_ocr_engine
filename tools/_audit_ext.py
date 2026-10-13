@@ -148,8 +148,8 @@ def check_no_import_side_effects() -> str | None:
 def check_metrics_coverage() -> str | None:
     """指标注册表：上限 + 关键现役键不丢。
 
-    v1 清单更新（2026-09-17）：pipeline.producer 已出清（全仓零产出点，
-    死键只稀释报告），以同代现役键 pipeline.consumer 顶替守卫位。
+    守卫位取现役键；无产出点的键（如 pipeline.producer）不作守卫位——
+    死键只稀释报告。
     """
     from video_ocr_engine.domain.metrics import METRICS, METRIC_CAP
 
@@ -168,7 +168,7 @@ def check_metrics_coverage() -> str | None:
 
 
 def check_rules_schema() -> str | None:
-    """规则注册表 schema-lite（R-registry-schema 的先行版；全量版 Phase D）。
+    """规则注册表 schema-lite（R-registry-schema）。
 
     enforcement ∈ {ci, local-gate, advisory}；非 advisory 须有 executor；
     advisory ≤10（宪章不变量）；每条必有 prevents（举证义务）。
@@ -223,9 +223,8 @@ def check_probe_hooks_resolve() -> str | None:
 def check_render_consistency() -> str | None:
     """渲染产物一致性 + 结论路径活性。
 
-    此前 render --check 是独立第三条命令，容易被忘（纪律段只列了两个
-    审计入口）；折进来后全量审计一次跑齐。render 顺带校验结论字段里的
-    仓库内全路径存在性（C-32 教训：包化后旧路径标签静默存活两周+）。
+    render --check 折入本审计一次跑齐（不必单独跑）；render 顺带校验结论
+    字段里的仓库内全路径存在性（C-32）。
     """
     r = subprocess.run(
         [sys.executable, str(ROOT / "tools" / "render.py"), "--check"],
@@ -246,10 +245,8 @@ def check_render_consistency() -> str | None:
 def check_decord_pin() -> str | None:
     """两仓版本口径：registry/environment.yaml 钉版须含实际安装版本。
 
-    2026-10-10 治理改革轮新增（当时对账 DEPENDENCIES.md 的 decord 行，
-    该行曾写 0.8.5 而本机已装 0.9.2）；Phase C 制度重构后事实源迁
-    registry/environment.yaml。CI 不装 decord：import 失败按环境事实
-    跳过（"装了但不一致"才是缺陷）。发版时的全量清扫见 conclusions_sweep。
+    CI 不装 decord：import 失败按环境事实跳过（"装了但不一致"才是缺陷）。
+    发版时的全量清扫见 conclusions_sweep。
     """
     try:
         import decord  # type: ignore[import-not-found]
@@ -277,7 +274,7 @@ def check_deprecation_due() -> str | None:
     """弃用到期即红（R-deprecation-due）：remove_in ≤ 当前版本而符号仍活着。
 
     符号活性按 kind 判：env → config 旋钮注册表 env 名；api → import 链取属性。
-    已移除的到期项自然通过（S0-G5 的 VOE_ENV_WINS 顺延事故由此机器兑现）。
+    已移除的到期项自然通过。
     """
     import yaml
 

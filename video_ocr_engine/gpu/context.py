@@ -1,8 +1,7 @@
 """GPU DLL 搜索路径注册。
 
 从 PATH 扫描 CUDA / cuDNN / TensorRT 目录并注册到 Windows DLL 搜索路径。
-OcrEngine 初始化 TensorRT 前调用 ensure_gpu_initialized()；旧的后端选择
-（select_backend/get_engine_type/get_setup_advice）已废弃：OcrEngine 自身
+OcrEngine 初始化 TensorRT 前调用 ensure_gpu_initialized()；OcrEngine 自身
 按 engine_type 直接初始化并在失败时回退 ONNX。
 """
 
@@ -22,11 +21,11 @@ _dll_dir_cookies: list = []  # 保持 os.add_dll_directory() 返回值存活
 def ensure_gpu_initialized() -> None:
     """延迟初始化 GPU：首次调用时扫描并加载 CUDA/cuDNN/TensorRT DLL。
 
-    加锁：此前是无锁 check-then-act——批量场景
-    （pool.run 多 worker）并发首次构建 TRT 时两线程同进
-    `_register_gpu_dlls()`，后者 `_dll_dir_cookies.clear()` 会把前者
-    注册的 `os.add_dll_directory` cookie 释放（返回值必须保活）→
-    DLL 搜索目录被注销，后续 LoadLibrary 可能失败。"""
+    加锁：无锁 check-then-act 下，批量场景（pool.run 多 worker）并发首次
+    构建 TRT 时两线程同进 `_register_gpu_dlls()`，后者
+    `_dll_dir_cookies.clear()` 会把前者注册的 `os.add_dll_directory`
+    cookie 释放（返回值必须保活）→ DLL 搜索目录被注销，后续
+    LoadLibrary 可能失败。"""
     global _gpu_initialized
     if _gpu_initialized:
         return

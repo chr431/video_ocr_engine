@@ -1,7 +1,7 @@
 """_probe_ov_version_ab.py —— OpenVINO 换代 A/B（2026.3.1 vs 2026.4.x）。
 
-口径：模型级（生产模型/形状/线程数，与 _probe_ov_cpu_ab 的 OV 侧逐字
-同参）+ 引擎级（FieldExtractor ocr=cpu，test5 2000 帧，段数/文本集 sha
+口径：模型级（生产模型/形状/线程数逐字同参）+ 引擎级（FieldExtractor
+ocr=cpu，test5 2000 帧，段数/文本集 sha
 作准确度门）。跨版本无法同进程交错（同一 site-packages 只有一个版本），
 故为顺序口径：基线版 → pip 升级 → 复测，两次均带机器状态语境列。
 """

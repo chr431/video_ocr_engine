@@ -8,7 +8,7 @@
   - ocr_num_threads：OCR 推理线程预算（少核分核）
   - decode_num_threads 的 re-export：事实源在 config.decode_caliber
 
-判定依据的实测注释随实现一并迁入（勿据直觉改判，见 docs/CONCLUSIONS.md
+判定依据的实测注释在此（勿据直觉改判，见 docs/CONCLUSIONS.md
 对应条目）。带状态的决策（codec 探测后的线程档位重开）留在
 decode/decord_source.py（打开流程的一部分）；CPU 软解线程档位的事实源
 在 config.decode_caliber（单一出处，探针与引擎同源派生）。
@@ -22,7 +22,7 @@ from video_ocr_engine.config import constants as config
 def merge_effective_mode(text_sep: str | None) -> str:
     """merge_similar 使用的分离模式：'binary' | ''（原始灰度比较）。
 
-    contrast 模式已移除（实验证实无净收益）；未知值归一
+    contrast 模式无净收益（实验证实），未知值一并归一
     到引擎默认 binary。
     """
     _m = (text_sep or "").strip().lower()
@@ -71,7 +71,7 @@ def gpu_pipeline_enabled(
       设备指针直通（NVDEC 打开失败时回退 CPU 解码分支）；cpu 显式
       选择 CPU 软解 + H2D 进 GPU 分段/OCR（CPU 解码的墙钟收益与
       零拷贝 OCR 不互斥）；hybrid 走 CPU 分支消费 hybrid 解码器交付的
-      宿主数组（双解码收益 + 零拷贝 OCR 叠加，原互斥门控已移除）。
+      宿主数组（双解码收益 + 零拷贝 OCR 叠加）。
     - TensorRT 可用且 ocr_backend ≠ cpu —— 全程 raw 才有净收益
       （GPU 分段+ONNX 实测无优势，默认走宿主管线，配置面更简）
     - cuda-python（cuda.core / cuda.bindings）可导入

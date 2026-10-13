@@ -1,6 +1,6 @@
 # tools/ 索引（渲染产物；事实源 registry/tools.yaml）
 
-> 分级判据与生命周期见 registry/tools.yaml 头注（裁决 18）。
+> 分级判据与生命周期见 registry/tools.yaml 头注。
 > 历史探针不在树（git 档案，archive/pre-rework 锚点起可溯）。
 
 ## 常备工具（standing，质量面=生产代码）

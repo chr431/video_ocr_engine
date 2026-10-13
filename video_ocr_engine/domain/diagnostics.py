@@ -17,7 +17,7 @@
 成本纪律（遥测墙钟预算内）：
 - 心跳 = 一次 int 自增 + 一次 `threading.local` 属性赋值（`tick`）。
 - 深度探针**只在停顿发生时**才调用（`qsize()` 不进稳态路径）。
-- 默认关闭（铁律 10）；`auto` 档随既有 `VOE_REPORT_FILE` opt-in 开启，
+- 默认关闭；`auto` 档随既有 `VOE_REPORT_FILE` opt-in 开启，
   不产生新的文件副作用。
 """
 
@@ -315,7 +315,7 @@ class Diagnostics:
         """时序脊柱每次收尾调用：自增 + local 赋值 + 一次环形缓冲入队。
 
         **每次都写崩溃日志**——否则文件里只剩 run_start 一行，崩溃后无从
-        归因（本模块首版就是这个缺陷，已由端到端实测抓出）。
+        归因。
         """
         if self.watchdog._th is None:
             self.watchdog.ensure_started()
@@ -340,7 +340,7 @@ def open_diagnostics(
     设计：**不新增环境旋钮**。诊断会写文件（副作用），故挂在既有
     `VOE_REPORT_FILE` 这个已注册的显式 opt-in 上——要报告文件的人，
     顺带得到同前缀的 `.journal.jsonl` 与 `.stall-N.json`。
-    停顿阈值取模块常量（`DEFAULT_STALL_S`），v1 不做旋钮化。
+    停顿阈值取模块常量（`DEFAULT_STALL_S`），不做旋钮化。
     """
     if not report_file:
         return NULL_DIAG

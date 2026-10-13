@@ -1,12 +1,11 @@
-"""轻量泄漏回归（P8，2026-09-20 稳健性轮）：多轮 extract 的 RSS/VRAM 斜率。
+"""轻量泄漏回归：多轮 extract 的 RSS/VRAM 斜率。
 
 `tools/_probe_leak_longrun.py` 的 pytest 化核心——C-55 池复活泄漏
-（旧 Y 池 +2.0 MiB/轮，修复后 +0.000）的防复发锚。
+（旧 Y 池 +2.0 MiB/轮）的防复发锚。
 
-**子进程隔离**：首版在测试进程内直接量 RSS，单跑通过、全套运行翻车
-（前序 GPU 测试的分配器保留态污染基线）——泄漏测量必须在干净进程里
-做，子进程跑 13 轮（warmup 3）回传逐轮 RSS/VRAM 序列，父进程断言。
-无视频/无 decord 环境自动 skip（CI 上不跑）。
+**子进程隔离**：泄漏测量必须在干净进程里做（测试进程内直接量 RSS 会被
+前序 GPU 测试的分配器保留态污染基线）——子进程跑 13 轮（warmup 3）回传
+逐轮 RSS/VRAM 序列，父进程断言。无视频/无 decord 环境自动 skip（CI 上不跑）。
 
 口径：decode=cpu + ocr=auto（GPU 管线 CPU 分支）——设备侧池
 （_DevBatchPool/Y pool）与宿主路径都被覆盖。斜率用中位数（首跑实测
@@ -24,14 +23,14 @@ import pytest
 
 from _paths import ROOT
 
-# 视频注册表单一事实源 = tools/_measure_lib.py（2026-10-11 收敛硬编码 ROI）
+# 视频注册表单一事实源 = tools/_measure_lib.py
 from _measure_lib import ROI as _ROI_LIB, VIDS as _VIDS_LIB  # noqa: E402
 
 VID = _VIDS_LIB["test5"]
 ROI = _ROI_LIB["test5"]
 WARMUP = 3
 MEASURE = 10
-SLOPE_CAP_MB = 1.5  # C-55 修复前是 +2.0 MiB/轮；留噪声余量
+SLOPE_CAP_MB = 1.5  # C-55 泄漏量级 +2.0 MiB/轮；留噪声余量
 
 _WORKER = r"""
 import gc, json, sys
@@ -79,11 +78,11 @@ pytestmark = pytest.mark.skipif(not _available(), reason="需要真值视频 + d
 def _slope(seq: list[float]) -> float:
     # 中位数而非均值：单轮瞬态保留（Windows 分配器，实测 +130MB 单尖峰
     # 后回落）不打穿；C-55 型单调泄漏（+2.0 MiB/轮）仍被首尾中位数差捕获。
-    # 2026-10-11 测速轮加固：**连续双尖峰**（本轮实录：末两轮 +133MB
+    # 裁掉序列顶部 2 个极值后再取中位可抗**连续双尖峰**（末两轮 +133MB
     # 持续到收尾，恰占满尾窗 4 席的半数 → 尾中位被抬 67MB → 假阳性
-    # +19MiB/轮，~1/6 复现率）在"裁掉序列顶部 2 个极值后再取中位"下
-    # 归零（实测裁后 0.18）。裁剪量 2 < 头/尾窗半宽（n/2≥3/2），单调
-    # 泄漏（每轮 +2，13 轮共 +24）远大于裁剪量，灵敏度不受损。
+    # +19MiB/轮，~1/6 复现率）；裁后归零（实测 0.18）。裁剪量 2 <
+    # 头/尾窗半宽（n/2≥3/2），单调泄漏（每轮 +2，13 轮共 +24）远大于
+    # 裁剪量，灵敏度不受损。
     import statistics
 
     srt = sorted(seq)

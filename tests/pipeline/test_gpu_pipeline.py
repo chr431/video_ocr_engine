@@ -18,8 +18,7 @@ def _make(**kwargs):
 @pytest.fixture
 def gpu_ok(monkeypatch):
     """模拟 NVDEC + TensorRT + cuda-python 可用（默认规则要求三者；
-    cuda-python 缺失曾让 CI 全红——门控 _cuda_python_available 在无 GPU
-    runner 上恒 False，2026-09-18 口径轮补 patch）。"""
+    门控 _cuda_python_available 在无 GPU runner 上恒 False，故补 patch）。"""
     monkeypatch.setattr(_gpu, "nvdec_available", lambda p: True)
     monkeypatch.setattr(_gpu, "tensorrt_available", lambda: True)
     monkeypatch.setattr(_gpu, "_cuda_python_available", lambda: True)
@@ -96,8 +95,8 @@ def test_content_range_to_crop_margin_math():
     # m = max(1, round(w * margin% / 100))、lo = max(0, first-m)、
     # hi = min(w, last+1+m)、满宽 → None（不裁）。
     #
-    # 期望值**按 config 当前余量算出，不硬编码数字** —— 余量默认值是会调的
-    # （2026-08-30 由 10 改为 20），写死会让本测试在调参时假失败。
+    # 期望值**按 config 当前余量算出，不硬编码数字** —— 余量默认值是可调的，
+    # 写死会让本测试在调参时假失败。
     ex = _make(rep_crop_format="gray")
     w = 100
     m = max(1, int(round(w * ex._ocr_autocrop_margin_pct / 100.0)))

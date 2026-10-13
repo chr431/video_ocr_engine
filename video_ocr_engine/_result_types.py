@@ -1,4 +1,4 @@
-"""引擎通用结果类型（从 extractor.py 拆出，无类依赖）。
+"""引擎通用结果类型（无类依赖）。
 
 ExtractedSegment / ExtractionResult；extractor 与 __init__ 从这里 re-export。
 """

@@ -121,7 +121,7 @@ def test_profile_mapping_targets_are_registered():
 
 
 def test_totals_n_max_cover_all_totals_keys():
-    """P2b：TOTALS 全键分诊——N/MAX/HIST 映射与 TOTALS 键集合一致。"""
+    """TOTALS 全键分诊——N/MAX/HIST 映射与 TOTALS 键集合一致。"""
     from video_ocr_engine.domain.metrics import (
         HIST_N_BUCKETS,
         PROFILE_TOTALS,

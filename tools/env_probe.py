@@ -1,6 +1,6 @@
 """环境事实源（environment provenance）：外部依赖的**唯一解析入口**。
 
-背景（2026-09-19 纪律轮）：反复发生两类事故——
+要解决的两类问题——
   ① 「找不到 ffmpeg」：路径硬编码散落 4+ 处，目录改名/迁移后无人察觉；
   ② 「用的 decord DLL 不是最新」：构建产物 → site-packages 的部署靠手工
      `cp`，改了 C++ 却忘了部署，测量结果静默用旧 DLL。
@@ -13,7 +13,7 @@
   · **部署链自动化**：`tools/env_doctor.py --deploy` 把构建产物同步到
     site-packages 并校验 md5 一致（消除手工 cp）；
   · **审计守门**：`tools/env_doctor.py --audit`（R-path-no-hardcode）
-    检查硬编码路径（新纪律：仓库内不得出现绝对路径字面量）。
+    检查硬编码路径（纪律：仓库内不得出现绝对路径字面量）。
 
 设计原则：**不引入新旋钮**（复用既有 FFMPEG_DIR / RACELOG_* env）；
 找不到就**显式失败并列出已探测的候选**，绝不静默回落。
@@ -167,7 +167,7 @@ def ffmpeg_fact() -> EnvFact:
 def decord_fact(expect_dll: Path | None = None, *, install_mode: str = "auto") -> EnvFact:
     """decord 包与其 DLL 的事实。
 
-    ``install_mode``（2026-09-19 起 decord 有正式 wheel 发布，两种形态）：
+    ``install_mode``（decord 有两种发布形态）：
       · ``"wheel"``  —— 从 GitHub Release 的 wheel 安装（**推荐/默认路径**）。
         此时 DLL 由 wheel 自带，**不该**与本地 dev 构建比对 md5——
         两者本就是不同产物（wheel 有独立的构建链与版本号）。
@@ -178,7 +178,7 @@ def decord_fact(expect_dll: Path | None = None, *, install_mode: str = "auto") -
 
     ``--deploy`` 只在 dev 形态下有意义（wheel 形态应 `pip install` 升级）。
     """
-    # ⚠️ 用 find_spec 定位而**不 import**（2026-09-19 纪律轮）：import decord
+    # ⚠️ 用 find_spec 定位而**不 import**：import decord
     # 会把 decord.dll 载入本进程并锁住，--deploy 随即无法覆盖它
     # （实测："目标 DLL 被占用"）。find_spec 只解析路径不执行包代码。
     import importlib.util

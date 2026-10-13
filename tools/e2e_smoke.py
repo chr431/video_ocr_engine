@@ -75,8 +75,7 @@ def parse_truth(path: Path):
     """Race CSV：解析 '#' 头元数据 + (frame, text) 行。
 
     roi 头（# roi=x1,y1,x2,y2, ...）必须按正则取四个整数——头部本身按
-    逗号分节，通用 kv 切分只会拿到第一个数（AGENTS.md 已警告的坑，
-    2026-09-10 在 --roi-from-truth 实测踩中并修复）。
+    逗号分节，通用 kv 切分只会拿到第一个数。
     """
     import re
 

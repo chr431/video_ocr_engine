@@ -29,7 +29,7 @@ except BackgroundLoadError as _e:  # noqa: BLE001 — 门禁语义：超阈退�
     raise SystemExit(2)
 
 # ⚠️ 若要加 FORCE_SIDE 诊断：ForcedSide() 的 env 是进程级 static 缓存，
-# 必须每臂独立子进程（2026-10-11 勘误：同进程连测三值全为首个缓存语义）。
+# 必须每臂独立子进程（同进程连测三值全为首个缓存语义）。
 CASES = [("h264", "test6_h264", 32), ("av1", "test6_av1", 24), ("hevc", "test6_hevc", 32)]
 WIN, BATCH = 3000, 300
 

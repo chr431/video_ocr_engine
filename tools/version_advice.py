@@ -4,15 +4,14 @@
   dump            导出公开 API 面 → artifacts/api_surface.json（随发版提交，
                   作为下一版对照基线）
   advice          对比上一 v-tag 的 API 面与金标 manifest → 档位建议
-  verify          实际版本增量 vs 建议档位一致（零逃生，裁决 12）
+  verify          实际版本增量 vs 建议档位一致（零逃生）
   snapshot-bench  gzip bench/registry.jsonl → bench/snapshots/v<ver>.jsonl.gz
                   （树内保留近两版，更早出树——与探针/log 同一生命周期）
   gate-manifest   跑金标 full 并落 artifacts/gates/golden.yaml（版本+钉版+指纹+
                   退出码+用时；CI 校验其版本时效，见 _audit_ext gate_manifest）
 
 判据（宪章 3）：公开 API 面 diff 非空 或 金标 manifest diff 非空 → minor；
-否则 patch。S0-G7 的教训：0.25.0 产品面仅版本号 1 行却升 minor——本工具
-让档位成为计算结果而非临场裁量。
+否则 patch。档位是计算结果而非临场裁量。
 """
 
 from __future__ import annotations

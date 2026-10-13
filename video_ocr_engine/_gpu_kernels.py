@@ -1,4 +1,4 @@
-"""GPU 内核类（从 ocr_trt.py 拆出）：显存上的预处理 / 归约 / 帧分析。
+"""GPU 内核类：显存上的预处理 / 归约 / 帧分析。
 
 GpuPreprocessor（resize+gamma+normalize+pad 内核）、GpuOutputReducer
 （vocab 维 argmax 归约）、GpuFrameAnalyzer（sharp/cluster 逐帧分析 +
@@ -21,9 +21,9 @@ log = logging.getLogger(__name__)
 def _ck_alloc(err, ptr, nbytes: int) -> int:
     """cudaMalloc 错误检查（范式同 gpu/pools._malloc_frame）。
 
-    2026-10-12 审查轮：此前丢弃 _err、仅靠 assert 兜底——`python -O` 下
-    assert 消失，失败句柄（0）会被当有效指针喂给内核（写向空页）或让
-    下游读未初始化显存。失败即抛，调用点不再需要后置 assert。
+    失败即抛：丢弃 _err 仅靠 assert 兜底时，`python -O` 下 assert 消失，
+    失败句柄（0）会被当有效指针喂给内核（写向空页）或让下游读未初始化
+    显存。调用点不再需要后置 assert。
     """
     if int(err) != 0 or not ptr:
         raise MemoryError("cudaMalloc(%d B) 失败: %s" % (nbytes, err))
@@ -50,13 +50,13 @@ _KERNEL_MODULE_CACHE: dict = {}
 # cuda.core 惰性导入（进程级一次，双检锁）。**必须锁**：两个 extract 线程
 # 同时首次导入 cuda.core 时会撞 Python 包部分初始化竞态（一个线程看到
 # sys.modules 里尚未初始化完的 cuda.core.cu13 命名空间 → `ImportError:
-# cannot import name 'Device'`）——多线程批量 extract 首次校准时真实踩到
-# （2026-09-09 nvdec∥nvdec 并发探针）。锁内成功导入一次后，后续所有
-# `from cuda.core import ...` 都命中完整的 sys.modules，天然安全。
+# cannot import name 'Device'`）——多线程批量 extract 首次校准时可复现。
+# 锁内成功导入一次后，后续所有 `from cuda.core import ...` 都命中完整的
+# sys.modules，天然安全。
 #
 # 导入成本实测 ~220ms/进程（纯 Python 模块加载，非 NVRTC）。预热线程把
 # 这段开销藏进 TRT 反序列化（~370ms）背后：TrtEngine.__init__ 开头调
-# prewarm_cuda_core()，_cuda_core() 命中前先 join。R4 路线图轮（2026-09-10）。
+# prewarm_cuda_core()，_cuda_core() 命中前先 join。
 _CUDA_CORE_LOCK = threading.Lock()
 _CUDA_CORE = None
 _CUDA_CORE_PREWARM: threading.Thread | None = None
@@ -65,11 +65,11 @@ _CUDA_CORE_PREWARM: threading.Thread | None = None
 def prewarm_cuda_core() -> None:
     """后台启动 cuda.core 导入（幂等；不阻塞调用方）。
 
-    P1-9 类竞态修复（S6 轮实测抓获）：原实现先发布 `_CUDA_CORE_PREWARM`
-    再 `start()`——两条线程同时进入时，另一侧会 join 到一个**尚未 start**
-    的 Thread，抛 `RuntimeError: cannot join thread before it is started`
-    （主线程校准建 GpuFrameAnalyzer 与 OCR worker 建 TrtEngine 天然并发）。
-    现在持锁 **先 start 再发布**，`_cuda_core()` 侧另加 ident 守卫。
+    持锁 **先 start 再发布**：先发布 `_CUDA_CORE_PREWARM` 再 `start()` 时，
+    两条线程同时进入会让另一侧 join 到一个**尚未 start** 的 Thread，抛
+    `RuntimeError: cannot join thread before it is started`（主线程校准建
+    GpuFrameAnalyzer 与 OCR worker 建 TrtEngine 天然并发）。
+    `_cuda_core()` 侧另加 ident 守卫。
     """
     global _CUDA_CORE_PREWARM
     with _CUDA_CORE_LOCK:
@@ -195,10 +195,10 @@ extern "C" __global__ void prep_gray_raw(
     float* __restrict__ out,
     int B, int src_h, int src_w,
     int dst_h, int dst_w, float gamma) {
-    // 逐项宽度裁切（P0-4 GPU 直通）：xoffs[b]/crop_ws[b] = 该帧参与 OCR 的
+    // 逐项宽度裁切（GPU 直通）：xoffs[b]/crop_ws[b] = 该帧参与 OCR 的
     // 源列区间 [xoff, xoff+crop_w)，content_ws[b] = 裁后按 dst_h/src_h 缩放
     // 的目标内容宽（host 侧按宿主 _preprocess_standard 同一 int 截断式计算）。
-    // 未裁切项 xoff=0、crop_w=src_w → 与旧全宽内核逐位一致。
+    // 未裁切项 xoff=0、crop_w=src_w → 与全宽内核逐位一致。
     int total = B * 3 * dst_h * dst_w;
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= total) return;
@@ -232,7 +232,7 @@ extern "C" __global__ void prep_gray_raw(
 """
 
     def __init__(self, stream: int | None = None, gamma: float | None = None) -> None:
-        self._gamma = gamma  # S9-2(D6)：None=每批读 env(旧语义)；注入=构造期冻结
+        self._gamma = gamma  # None=每批读 env；注入=构造期冻结
         _cc = _cuda_core()
         Buffer, Device, LaunchConfig, launch = (
             _cc.Buffer,
@@ -365,9 +365,9 @@ extern "C" __global__ void prep_gray_raw(
     def process_gray_raw(self, infos: list, out_width: int, force_aspect: float = 0.0):
         """处理 GPU 灰度帧：D2D 聚批 → GPU resize+gamma+normalize+pad。
 
-        infos: [DeviceRef, ...]（S9-3 取代 4/6 元组；见 gpu/frame_ref.py）
+        infos: [DeviceRef, ...]（见 gpu/frame_ref.py）
         ——DeviceRef.span 给出参与缩放的源列区间（未裁切 = 全宽；
-        P0-4 宽度自适应裁切的 GPU 直通，区间由 GPU col_ink + 宿主余量规则）。
+        宽度自适应裁切的 GPU 直通，区间由 GPU col_ink + 宿主余量规则）。
         force_aspect > 0：强制 OCR 输入宽 = OCR_TARGET_H × force_aspect
         （内容整体拉伸到该宽度，与宿主 _preprocess_standard 的 force_aspect
         语义一致；边界吸附用 round），此时忽略逐项裁切区间（与宿主
@@ -408,7 +408,7 @@ extern "C" __global__ void prep_gray_raw(
                 xoffs[i] = xo
                 crop_ws[i] = cwid
                 # 与宿主 _preprocess_standard 的 new_w 同式（int 截断），
-                # 未裁切项与旧全宽内核的 content_w 计算逐位一致。
+                # 未裁切项与全宽内核的 content_w 计算逐位一致。
                 content_ws[i] = max(1, int(cwid * dst_h / src_h))
         dst_w = int(out_width)
         if int(content_ws.max()) > dst_w:
@@ -571,7 +571,7 @@ extern "C" __global__ void argmax_last(
 """
 
     def __init__(self, stream: int | None = None, gamma: float | None = None) -> None:
-        self._gamma = gamma  # S9-2(D6)：None=每批读 env(旧语义)；注入=构造期冻结
+        self._gamma = gamma  # None=每批读 env；注入=构造期冻结
         _cc = _cuda_core()
         Buffer, Device, LaunchConfig, launch = (
             _cc.Buffer,
@@ -655,8 +655,8 @@ extern "C" __global__ void argmax_last(
             _ck_alloc(_err, self._idx_dev, nbytes)
             _err, self._prob_dev = cudart.cudaMalloc(nbytes)
             _ck_alloc(_err, self._prob_dev, nbytes)
-            # 水位线在两次分配都成功后写（旧版 idx 后即写：prob 失败时
-            # 尺寸声称已分配、句柄为 0，守卫永不重试——2026-10-12 审查轮）
+            # 水位线在两次分配都成功后写（idx 后即写时，prob 失败会让
+            # 尺寸声称已分配、句柄为 0，守卫永不重试）。
             self._idx_size = nbytes
 
     def reduce_into(self, preds_dev: int, out_shape: tuple, idx_host: int, prob_host: int) -> int:
@@ -678,9 +678,9 @@ extern "C" __global__ void argmax_last(
     def reduce(self, preds_dev: int, out_shape: tuple):
         """对显存中的 (B,S,C) 输出做归约，回传 (idx int32[B*S], prob f32[B*S])。
 
-        S6-c：D2H 走**异步拷贝 + 流同步**（原为 2 次阻塞 `cudaMemcpy`——
-        阻塞拷贝是隐式**设备级**同步，会顺带把生产者/分析流上在飞的
-        extract_luma/analyze 一起排干，破坏 decode∥analyze 重叠）。
+        D2H 走**异步拷贝 + 流同步**（2 次阻塞 `cudaMemcpy` 是隐式**设备级**
+        同步，会顺带把生产者/分析流上在飞的 extract_luma/analyze 一起排干，
+        破坏 decode∥analyze 重叠）。
         归约 kernel 与本拷贝同在 `self._stream`：流内次序保证 argmax 完成后
         才拷贝，故一次流同步即等价（PI-14 以 GPU_CTC=0/1 文本 sha 一致守卫）。
         """
@@ -717,11 +717,11 @@ extern "C" __global__ void analyze_gray(
     const unsigned char* __restrict__ prev,
     double* __restrict__ summary,
     int B, int H, int W, float th) {
-    // block = 一帧：256 线程分片扫描 + shared 归约（旧版每帧单线程串行
-    // 扫 H*W*9，是 GPU 分段路径的主要瓶颈）。cluster 为整数计数，逐位一致；
-    // sharp 用 int64 精确累加像素值与平方和（加法顺序无关），方差实数精确
-    // ——与宿主"严格大于保先者"的代表帧选择语义对齐；浮点归约顺序差异
-    // 曾导致近平局选帧漂移（批量时间戳 ±1s 偏移）。
+    // block = 一帧：256 线程分片扫描 + shared 归约（每帧单线程串行
+    // 扫 H*W*9 会是 GPU 分段路径的主要瓶颈）。cluster 为整数计数，逐位
+    // 一致；sharp 用 int64 精确累加像素值与平方和（加法顺序无关），方差
+    // 实数精确——与宿主"严格大于保先者"的代表帧选择语义对齐；浮点归约
+    // 顺序差异会导致近平局选帧漂移（批量时间戳 ±1s 偏移）。
     __shared__ unsigned long long s_sum[256];
     __shared__ unsigned long long s_sum2[256];
     __shared__ int s_max[256];
@@ -774,7 +774,7 @@ extern "C" __global__ void col_ink(
     const unsigned char* __restrict__ raw,
     int* __restrict__ range,   // [首列, 末列]，kernel 直接写出（无需初始化）
     int H, int W, int th) {
-    // rep 帧的「有墨迹列范围」（P0-4 GPU 直通裁切的判据输入）：每列
+    // rep 帧的「有墨迹列范围」（GPU 直通裁切的判据输入）：每列
     // g > th 的像素数 ≥ 2 才算有效列（抗孤立噪点），与宿主
     // _crop_to_content 的列判据一致。单 block 256 线程跨列分片 +
     // shared 归约；无合格列时 range = (INT_MAX, -1)（host 判 first>last
@@ -816,7 +816,7 @@ extern "C" __global__ void luma_nv12_batch(
     // 批量 luma_nv12：block = 一帧，逐位逻辑与 luma_nv12 一致（limited/
     // tv: (y-16)*255/219 → floor(x+0.5) → clip）。供 OCR worker flush
     // 批量提取 rep 帧 Y 平面——消费端每段一次 launch+sync（~100µs）
-    // 曾是 hybrid 引擎口径的消费瓶颈之一。
+    // 是 hybrid 引擎口径的消费瓶颈之一。
     int b = blockIdx.x;
     if (b >= B) return;
     const unsigned char* src = (const unsigned char*)(size_t)srcs[b];
@@ -844,7 +844,7 @@ extern "C" __global__ void col_ink_batch(
     // 批量 col_ink：block = 一帧，逻辑与 col_ink 逐位一致（每列 g>th
     // 计数 ≥2 才算合格列；无合格列 first>last）。供 OCR worker 批量
     // autocrop——把消费端每段一次的 launch+sync（~50-170µs）摊成每批
-    // 一次（hybrid 引擎内该提交开销曾吃掉 ~14% 墙钟）。
+    // 一次（hybrid 引擎内该提交开销吃掉 ~14% 墙钟）。
     int b = blockIdx.x;
     if (b >= B) return;
     const unsigned char* raw = (const unsigned char*)(size_t)bases[b];
@@ -1029,10 +1029,10 @@ extern "C" __global__ void luma_nv12(
 
         _err, self._stream = cudart.cudaStreamCreate()
         _ck(_err, "analyzer 生产流创建")
-        # 消费端专用流（2026-09-10）：content_range/sim_pair/luma_into 等
-        # 消费侧小 kernel 若排在生产者流上，其同步会等生产者在途的整批
-        # 解码侧工作 —— 生产者跑赢消费时（hybrid），每段一次的同步把消费
-        # 线程拖成全局瓶颈（实测 hybrid 引擎内 2400fps 产能被压到 2010）。
+        # 消费端专用流：content_range/sim_pair/luma_into 等消费侧小 kernel
+        # 若排在生产者流上，其同步会等生产者在途的整批解码侧工作——生产者
+        # 跑赢消费时（hybrid），每段一次的同步把消费线程拖成全局瓶颈
+        # （实测 hybrid 引擎内 2400fps 产能被压到 2010）。
         # 帧数据在 analyze_batch 的同步点已就绪，消费流无需跨流依赖。
         _err, self._stream_c = cudart.cudaStreamCreate()
         _ck(_err, "analyzer 消费流创建")
@@ -1141,7 +1141,7 @@ extern "C" __global__ void luma_nv12(
         self, raw_ptr: int, H: int, W: int, th: int, stream=None
     ) -> "tuple[int, int] | None":
         """rep 帧的「有墨迹列范围」(first, last)：每列 g>th 计数 ≥2 的
-        首/末列，判据与宿主 _crop_to_content 一致（P0-4 GPU 直通裁切）。
+        首/末列，判据与宿主 _crop_to_content 一致（GPU 直通裁切）。
 
         DtoH 仅 8 字节；无合格列（全空帧）返回 None。调用方必须保证
         raw_ptr 上的帧数据在本次同步前有效（owner 存活）。
@@ -1187,7 +1187,7 @@ extern "C" __global__ void luma_nv12(
 
         供 OCR worker flush 时批量 autocrop：每批一次 launch + 一次
         D2H + 一次 sync，取代消费端每段一次（每段 ~50-170µs 的提交
-        开销在 hybrid 引擎口径下曾吃掉 ~14% 墙钟）。调用方保证各帧
+        开销在 hybrid 引擎口径下吃掉 ~14% 墙钟）。调用方保证各帧
         数据已就绪（帧在 yield 前已经生产者流同步）且本对象存活。"""
         import numpy as np
         from cuda.bindings import runtime as cudart

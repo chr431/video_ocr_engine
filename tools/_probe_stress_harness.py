@@ -1,9 +1,8 @@
 """hybrid 死锁/性能压测 harness：每 trial 独立子进程 + 硬超时。
 
-教训（第三次同款）：ad-hoc 压测脚本自身**没有超时**、stdout 走管道被
-缓冲——一个挂死的 trial 烧掉 1543s CPU 且不可见。纪律：**任何**解码压
-测都按 _probe_upload_chain 的规格来——子进程隔离 + timeout + 进度逐行
-落文件（本脚本即该规格的通用化）。
+纪律：**任何**解码压测都按本规格来——子进程隔离 + timeout + 进度逐行
+落文件（本脚本即该规格的通用化）。ad-hoc 压测脚本若自身无超时、stdout
+走管道被缓冲，一个挂死的 trial 会烧掉大量 CPU 且不可见。
 
 用法（DECORD_LIBRARY_PATH 指向被测 fork dll）：
   python tools/_probe_stress_harness.py --cases hevc-cpu,hevc-gpu,av1-gpu --trials 4 --timeout 90
@@ -38,9 +37,7 @@ print("WALL " + str(round(time.perf_counter() - t, 2)))
 del vr, held
 """
 
-# name -> (ctx, video, extra env)。历史注：fork 4ccf889 起 CPU 产能读数
-# 收敛为滑窗持续产能（唯一口径），DECORD_CPU_RATE_SUSTAINED env 已删除
-# ——此前用该 env 区分 sustained/EWMA 臂的 -sust 后缀机制一并移除。
+# name -> (ctx, video, extra env)。CPU 产能读数=滑窗持续产能（唯一口径）。
 CASES = {
     "hevc-cpu": ("cpu", "test6_hevc.mp4", {}),
     "hevc-gpu": ("gpu", "test6_hevc.mp4", {}),

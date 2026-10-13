@@ -229,7 +229,7 @@ def test_per_phase_deltas_are_sane():
         assert "cores_avg" not in row
     else:
         assert row["cores_avg"] >= 0.0
-    # P2a：cycle 口径的核数（无 15.625ms tick 量化）；单线程忙等相位 ≈1 核，
+    # cycle 口径的核数（无 15.625ms tick 量化）；单线程忙等相位 ≈1 核，
     # 量测含主线程以外的极小开销，放宽到 (0, 2)。
     if sys.platform == "win32":  # QueryProcessCycleTime 仅 Windows
         assert 0.0 < row.get("cores_avg_cycles", 0.0) < 2.0

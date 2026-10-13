@@ -34,8 +34,7 @@ def compute_frames(spec, total: int) -> list:
 def begin_reading(vr, spec, frames: list) -> None:
     """seek 定位。
 
-    `hybrid_begin` 的化石守卫已清除——fork 读者从未实现该 API，
-    hasattr 恒 False，守卫只剩误导。
+    无需 `hybrid_begin` 守卫：fork 读者未实现该 API，hasattr 恒 False。
     """
     if spec.frame_start > 0:
         vr.seek_accurate(spec.frame_start)

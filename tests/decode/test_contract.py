@@ -185,7 +185,7 @@ def test_fork_features_match_contract_yaml():
     assert not missing_keys, f"fork 契约面缺能力: {missing_keys}"
 
     # hybrid_stats 键集：报告 v6 穿透面的超集断言（fork 可加键不可删）。
-    # gpu_arm_stall：av1 停滞根治轮（fork f071146）的监视哨键——引擎
+    # gpu_arm_stall：av1 停滞根治的监视哨键——引擎
     # _driver 依赖它在报告 hybrid 段可见（冻结自愈计数），必须进 must 集。
     stats_keys = feats.get("hybrid_stats_keys") or ()
     for must in (

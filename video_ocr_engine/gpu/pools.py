@@ -30,20 +30,19 @@ class _YFrame:
 
     def __del__(self):
         # 优先入列回收（无 CUDA 调用，任意 GC 上下文安全）。
-        # ⚠️ **放弃路径必须直释**。旧语义「列满→告警
-        # 放弃（CUDA 释放只走显式路径）」在两种真实场景下=永久泄漏：
+        # ⚠️ **放弃路径必须直释**：若列满→告警放弃（CUDA 释放只走
+        # 显式路径），两种真实场景即永久泄漏：
         # ①轮末死亡波（gc.collect 集中析构数百帧，空闲列只有 32）；
         # ②release_all 之后到达的迟到帧（回收入**已 release 的孤儿池**，
         # 池↔帧互引成环，GC 收环时 _recycled=True 跳过释放）。实测
         # +2.0 MiB/轮（600 块 × 3498B，B 层 cudaMalloc 追踪定位）。
-        # 因此列满/池已 release 时改走 cudaFree 直释；解释器关闭期 CUDA
+        # 因此列满/池已 release 时走 cudaFree 直释；解释器关闭期 CUDA
         # 已卸载的失败由 except 兜底（单块 fnb，进程退出收）。
         #
-        # **pool 引用必须保留**。让
-        # recycle() 置空 pool 以"防双入列"，结果破坏了本函数——大量池帧
-        # 是随 payload 跨线程传递、**只靠 GC 回收**的（见 gpu_backend
-        # _similar_device 注释），pool 一置空，它们的 __del__ 撞 None 被
-        # 吞掉 = 永久泄漏（实测 253 次 cudaMalloc/轮未释放、+1 MiB/轮）。
+        # **pool 引用必须保留**：若 recycle() 置空 pool 以"防双入列"，
+        # 大量池帧（随 payload 跨线程传递、**只靠 GC 回收**，见
+        # gpu_backend _similar_device 注释）的 __del__ 撞 None 被吞掉
+        # = 永久泄漏（实测 253 次 cudaMalloc/轮未释放、+1 MiB/轮）。
         # 防双入列改用 _recycled 标志位（语义等价，且不切断 GC 兜底）。
         if self._recycled:
             return
@@ -78,7 +77,7 @@ class _YFramePool:
         self._fnb = int(fnb)
         self._free: list = []
         self._lk = threading.Lock()  # acquire/_recycle/release_all 互斥
-        # （此前无锁，check-then-act 可 pop 空列表）
+        # （无锁 check-then-act 可 pop 空列表）
         self._released = False
 
     def acquire(self) -> _YFrame:
@@ -86,10 +85,10 @@ class _YFramePool:
             if self._free:
                 parked = self._free.pop()
                 # **复用换壳（泄漏根因）**：停靠对象是被
-                # __del__ 复活过的（_free 列表持有引用）——CPython 实测
-                # 复活对象的**二次死亡不再触发 __del__**，若直接把它复用
-                # （旧行为），其最终死亡既不入列也不 cudaFree = 每块永久
-                # 泄漏（实测 +2 MiB/轮）。换壳：新对象继承 ptr（新对象有
+                # __del__ 复活过的（_free 列表持有引用）——CPython 下
+                # 复活对象的**二次死亡不再触发 __del__**，直接复用会让其
+                # 最终死亡既不入列也不 cudaFree = 每块永久泄漏
+                # （实测 +2 MiB/轮）。换壳：新对象继承 ptr（新对象有
                 # 全新的 __del__ 名额），旧对象失能（ptr 清零 + 断池引用，
                 # 其 _recycled 恒 True → 死亡早退，不会误释）。
                 ptr, size = parked.ptr, parked.size
@@ -113,7 +112,7 @@ class _YFramePool:
         """入列回收（__del__ 安全路径：无任何 CUDA 调用）。
 
         返回 True=已入列；False=列满或池已 release，调用方须自行
-        cudaFree（旧版此处放弃=永久泄漏，见
+        cudaFree（放弃=永久泄漏，见
         _YFrame.__del__ 注释）。"""
         with self._lk:
             if not self._released and len(self._free) < self._MAX:

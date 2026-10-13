@@ -1,7 +1,6 @@
 """宿主 ↔ GPU 双后端在固定窗口上逐位等价门禁。
 
-这正是 v1 的 1083 vs 1042 缺的那道门：v2 起由 pytest -m gpu 承载，
-金标 --verify 之外的可独立运行等价证明。无 GPU/视频环境自动 skip。
+由 pytest -m gpu 承载，是金标 --verify 之外可独立运行的等价证明。无 GPU/视频环境自动 skip。
 """
 
 from __future__ import annotations
@@ -11,7 +10,7 @@ import os
 import pytest
 
 
-# 视频注册表单一事实源 = tools/_measure_lib.py（2026-10-11 收敛硬编码 ROI）
+# 视频注册表单一事实源 = tools/_measure_lib.py
 from _measure_lib import ROI, VIDS  # noqa: E402
 
 VID = VIDS["test5"]

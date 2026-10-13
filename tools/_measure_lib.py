@@ -1,12 +1,10 @@
-"""测量原语复用层 —— 常见实验的原语库（2026-10-11 可拓展性轮）。
+"""测量原语复用层 —— 常见实验的原语库。
 
 动机
 ----
-视频注册表（VIDS/ROI）此前在 bench.py 与 record.py 各有一份完全相同的
-拷贝，test_gpu_equivalence / test_leak_regression 再硬编码同一个 ROI
-元组，window_matrix / h264_hybrid 又各有变体——共 5 处。新建一个探针
-平均要重抄一遍"视频路径 + ROI + 预热计时 + 结果落盘"。本模块把这些
-原语收敛为单一事实源，新实验直接 import，不再复制粘贴。
+视频注册表（VIDS/ROI）与计时原语收敛为单一事实源：bench.py / record.py
+均 import 本模块，新探针直接复用"视频路径 + ROI + 预热计时 + 结果落盘"
+这一套，不复制粘贴。
 
 内容（只收已有 ≥2 个真实调用方的原语，不做前瞻抽象）：
   · VIDS / ROI          —— 视频注册表（bench.py / record.py 已接入；
@@ -17,7 +15,7 @@
                            带宽/判定复用 bench._band，单一实现）
   · quick_guard         —— 真值视频环境守卫（缺视频 → pytest.skip）
 
-纪律：新增第 3 个重复实现前必须下沉到这里（rules.yaml「测量原语复用」）。
+纪律：新增第 3 个重复实现前必须下沉到这里（adv-reuse-primitives）。
 """
 
 from __future__ import annotations
@@ -116,9 +114,8 @@ def paired_ab(
 
 
 # ── 后台负载门禁（R-perf-quiet）──────────────────────────────────────
-# 旧制度"标定/实验期间机器独占，后台任务禁止并行"是 prose（从未执行过）；
-# 本节把它变成硬门禁：性能测量启动前采样外部进程负载，超阈立即报错退出，
-# 不浪费整轮测量（同码两跑差 7.7% 的教训之一即后台噪声）。
+# 性能测量启动前采样外部进程负载，超阈立即报错退出，不浪费整轮测量
+# （同码两跑差 7.7% 即后台噪声所致）。
 
 LOAD_GATE_ERROR_HINT = "关掉后台任务后重测（R-perf-quiet）"
 
@@ -130,7 +127,7 @@ class BackgroundLoadError(RuntimeError):
 def _judge_quiet(readings, gpu_pct, cpu_pct, gpu_pct_limit=50.0):
     """判据核心（可注入假数据单测）：任一轮外部 CPU 超阈或 GPU 超阈即违规。
 
-    GPU 阈值校准（2026-10-12 实测）：桌面合成与 agent 界面常态 20-40%
+    GPU 阈值校准：桌面合成与 agent 界面常态 20-40%
     （ZCode.exe≈31% + dwm≈28%），不属"大负载"；外来计算负载（编码/训练/
     渲染作业）才会持续 >50%。CPU 按整机折算，15% ≈ 5 个满核（32LP 机）。
     """
@@ -163,7 +160,7 @@ def _prime_foreign_processes(ignore_own_tree: bool = True):
 
     ignore_own_tree=False 供负测使用：把子孙进程也当外来负载计——模拟
     "另一进程树在烧 CPU"的真实形态（pytest 起的烧核进程若按默认排除，
-    负测就会依赖桌面偶发噪声而假阴性，2026-10-12 清账轮实测）。
+    负测就会依赖桌面偶发噪声而假阴性）。
     """
     import os
 

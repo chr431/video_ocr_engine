@@ -1,8 +1,7 @@
 """骨架测试：端口协议 + SegmentEngine 注入式编排 + RunOutcome。
 
-R1（2026-09-27 门面拆解轮）起引擎吃 `EngineInputs` 显式契约（不再
-duck-type 门面）；分发断言改为 patch engine 模块的两条 lane 入口
-（run_gpu_pipeline / run_host_pipeline），语义与旧门面桩一致：
+引擎吃 `EngineInputs` 显式契约（不再 duck-type 门面）；分发断言 patch
+engine 模块的两条 lane 入口（run_gpu_pipeline / run_host_pipeline）：
 GPU 门控通过 → gpu lane；否则 host lane；回退透传见
 tests/api/test_open_vr_degraded.py::test_gpu_shape_fallback_delegates_to_host。
 """

@@ -1,7 +1,7 @@
 """_open_vr 降级路径表驱动测试。
 
-7 条 ``_degraded`` 路径此前零门面层断言（C10 回退/abort 已由
-tests/pipeline/test_driver_fallback.py 覆盖驱动层）。本文件用假 decord
+7 条 ``_degraded`` 路径在门面层零断言（回退/abort 的驱动层覆盖见
+tests/pipeline/test_driver_fallback.py）。本文件用假 decord
 模块（注入 sys.modules，CI 无 decord 也可跑）逐条驱动：
 
 NVDEC 打开失败→CPU / hybrid 打开失败→纯 GPU / codec 探测失败（CPU、
@@ -45,7 +45,7 @@ class _FakeVR:
             raise ValueError("output_format must be 'rgb', 'gray' or 'yuv420'")
         self.ctx = ctx
         self._n = 50000
-        self.decode_window_calls: list[int] = []  # C-57 谓词回归观测用
+        self.decode_window_calls: list[int] = []  # 硬窗谓词回归观测用（C-62）
 
     def __len__(self):
         return self._n
@@ -155,9 +155,9 @@ def test_color_range_read_fail_defaults_limited(fake_decord):
 
 
 def test_gpu_shape_fallback_delegates_to_host(fake_decord, monkeypatch):
-    """C10 引擎接线（R1）：run_gpu_pipeline 报形状不符 → fallback_vr/
-    engines 移交宿主 lane，降级透出（patch 面随 R1 从门面方法改到
-    pipeline.engine 的 lane 入口；GPU 门控经门面 patch 强制通过）。"""
+    """形状不符时 run_gpu_pipeline 把 fallback_vr/engines 移交宿主 lane
+    并透出降级；patch 面 = pipeline.engine 的 lane 入口（GPU 门控经门面
+    patch 强制通过）。"""
     import video_ocr_engine.pipeline.engine as eng_mod
     from video_ocr_engine.pipeline.gpu_backend import GpuRunResult
     from video_ocr_engine.pipeline.host_backend import HostRunResult
@@ -181,11 +181,11 @@ def test_gpu_shape_fallback_delegates_to_host(fake_decord, monkeypatch):
     assert captured["engines"] == ["eng"]
     assert captured["vr"] is res.fallback_vr
     assert "GPU 管线形状不符" in _degraded(ex)
-    # 门面状态同步（R1 收口到 _run_pipelined 单处）：fps 经 outcome 回写
+    # 门面状态同步（收口到 _run_pipelined 单处）：fps 经 outcome 回写
     assert ex._fps == 30.0 and outcome.fps == 30.0
 
 
-# ═════════ C-57 谓词防线回归：晚起点 × 硬窗不设窗（fork 缺陷唯一防线）═════════
+# ═════════ 硬窗谓词防线回归（C-62）：晚起点 × 硬窗不设窗（fork 缺陷唯一防线）═════════
 
 
 def test_hard_window_set_when_start_before_window(fake_decord):

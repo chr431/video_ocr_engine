@@ -1,11 +1,10 @@
-"""发版清扫 —— 铁律 9「迁移清扫」的脚本化（2026-10-10 治理改革轮）。
+"""发版清扫 —— 依赖升级/大迁移落地时核对结论前提列的脚本化。
 
 动机
 ----
-铁律 9 要求"依赖升级/大迁移落地时 grep 结论前提列、逐条复核"——此前是
-纯人肉动作，0.21.0 清扫前积了 13 条 superseded 没翻状态。本脚本把"哪些
-结论的前提钉了旧版本/哪些复评触发命中当前事件"变成一条命令的清单，
-发版（bump 版本）与 fork 换代时跑。
+依赖升级/大迁移落地时须逐条复核结论前提，否则 superseded 结论会积压不
+翻状态。本脚本把"哪些结论的前提钉了旧版本/哪些复评触发命中当前事件"变成
+一条命令的清单，发版（bump 版本）与 fork 换代时跑。
 
 判据（只列清单，不自动翻状态——翻状态要人看过证据）：
   1. 结论 premises/revisit 里的 X.Y.Z 版本钉，落后于当前引擎或 decord
@@ -67,6 +66,11 @@ def _load_entries() -> list[dict]:
     return entries
 
 
+def _tombstone_pattern(ids: set[str]) -> re.Pattern[str]:
+    """墓碑 id 匹配模式——词边界防子串误报（如解码契约用例名 DC-06 不是死者编号）。"""
+    return re.compile(r"(?<![A-Za-z0-9@-])(?:%s)\b" % "|".join(re.escape(c) for c in sorted(ids)))
+
+
 def _print_tombstone_refs() -> None:
     """墓碑引用清单（adv-comment-present-tense 的 note：出源引用复核同循该原则）。
 
@@ -75,16 +79,17 @@ def _print_tombstone_refs() -> None:
     id 本身永远可解析；本清单管"还有谁在引用死者"。
     """
     sys.path.insert(0, str(ROOT))
-    from refs import Index
+    from refs import NEGATIVE_FIXTURES, Index
 
     ix = Index()
     if not ix.historical:
         return
-    pat = re.compile("|".join(re.escape(c) for c in sorted(ix.historical)))
+    pat = _tombstone_pattern(ix.historical)
     hits: dict[str, list[str]] = {}
     for d in (ROOT_PATH / "video_ocr_engine", ROOT_PATH / "tools", ROOT_PATH / "tests"):
         for p in sorted(d.rglob("*.py")):
-            if "__pycache__" in p.parts:
+            # 守卫负测夹具整文件豁免（同 refs：夹具自带坏样例，否则自证材料被自己的检查当违规）
+            if "__pycache__" in p.parts or p.name in NEGATIVE_FIXTURES:
                 continue
             try:
                 text = io.open(p, encoding="utf-8").read()
@@ -139,7 +144,7 @@ def main() -> int:
             continue
         blob = "%s | %s" % (e.get("premises", ""), e.get("revisit", ""))
         # 钉版=显式命名空间前缀（fork/decord/wheel → decord 类；引擎/engine →
-        # engine 类）。裸 x.y.z 不算钉——2026-10-12 清账轮实测：重钉注记里的
+        # engine 类）。裸 x.y.z 不算钉——重钉注记里的时代数字会被上下文词
         # 时代数字被上下文词启发式误判成钉版（与宪章引用规则同一哲学：
         # 数字必须带命名空间，否则不可判定）。单测见 tests/registry/test_sweep_pins.py。
         for m in _PIN.finditer(blob):

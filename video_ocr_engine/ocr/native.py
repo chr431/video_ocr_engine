@@ -23,7 +23,7 @@ from video_ocr_engine.config import constants as config
 from video_ocr_engine.ocr.trt import TrtEngine
 
 # 库 import 不得改写同进程其他 OpenMP 使用方的环境。需要该优化的
-# 使用方自行在导入前设置 env（历史行为变更记录见 git 档案，金标不受影响）。
+# 使用方自行在导入前设置 env。
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ def cpu_physical_cores() -> int:  # noqa: F401  # re-export
 def auto_ocr_thread_count() -> int:
     """OCR 推理线程预算：全部物理核。
 
-    实测（16C32T，decord v0.7.9 + 旧 ORT 后端，test5 7223 帧）：
+    实测（16C32T，decord v0.7.9，test5 7223 帧）：
     解码走 NVDEC 卸载 / FFmpeg 帧线程 + filter auto（只占 SMT 份额），
     OCR 全物理核满负荷正收益；超物理核（超线程）不再提升。CPU 与 GPU
     解码后端统一使用同一预算。
@@ -73,10 +73,9 @@ def ocr_pad_floor(variant: str, fill_width: int, pad_floor_env: "int | None" = N
     下 224 是完美档、降到 0 反而变差**
     （test5 0→29 误读、test6 0→210 误读，各 7223 / 23441 帧）；仅在
     force_aspect=0（内容按原宽高比）时关闭填充更准。与 `config.
-    DEFAULT_FILL_WIDTH` 既有注释一致：force_aspect>0 时下限越大越准。
-    旧实现把
-    fill_width 放在最前，而 extractor 默认就传 224 → env 旋钮其实是死的
-    （README 自称排查陷阱之一）。
+    DEFAULT_FILL_WIDTH` 注释一致：force_aspect>0 时下限越大越准。
+    env 是"调参覆盖"语义，必须最先——否则被 extractor 的默认 224 盖住，
+    env 旋钮形同虚设。
     """
     _env = (
         pad_floor_env if pad_floor_env is not None else config.env_int(config.OCR_PAD_SMALL_ENV, 0)
@@ -94,7 +93,7 @@ def ocr_pad_floor(variant: str, fill_width: int, pad_floor_env: "int | None" = N
 
 
 def ocr_lane_prep(eng, stream: int | None = None):
-    """按车道引擎取共享 GpuPreprocessor（hybrid OCR v0.5）。
+    """按车道引擎取共享 GpuPreprocessor。
 
     TRT 车道：复用引擎自己的 GpuPreprocessor（与 TrtEngine 共享流，
     不阻塞——worker 只提交不同步，同步在 TRT 车道 collect 时发生）。
@@ -135,7 +134,7 @@ class OcrEngine:
     """PP-OCRv6 rec 原生引擎（ONNX / TensorRT 双后端）。
 
     Args:
-        variant: "v6_small"（唯一模型，v2.13 起）
+        variant: "v6_small"（唯一模型）
         engine_type: "openvino"(CPU) | "tensorrt"
         progress_cb: 构建引擎等耗时阶段的进度消息回调 (str)。
         fill_width: OCR 输入 pad 宽度下限（px）。None = 模型下限；
@@ -225,13 +224,13 @@ class OcrEngine:
                 pass  # 清理路径尽力而为（引擎可能已失效）
             self._trt = None
 
-    # ═══════════════ CPU 后端（OpenVINO 唯一，ORT 已移除）═══════════════
+    # ═══════════════ CPU 后端（OpenVINO 唯一）═══════════════
 
     def _init_ov(self, models: Path, size: str) -> None:
-        # CPU 推理引擎 = OpenVINO（模型级 2.1× 于已移除的 ORT 后端，
-        # 真值门禁三内容族零差）。输入/输出同构（(B,3,48,W)→(B,S,C) float32），
+        # CPU 推理引擎 = OpenVINO（模型级 2.1× 于 ORT，真值门禁三内容族
+        # 零差）。输入/输出同构（(B,3,48,W)→(B,S,C) float32），
         # 预处理/CTC/批切沿用 ONNX 路径。engine_type 字符串必须为
-        # "openvino"（旧 ORT 时代标识已退役）。
+        # "openvino"。
         # 直接构造 OcrEngine（未传 num_threads）时默认物理核/2：避免推理
         # 占满全部逻辑核并与解码器抢核。生产管线 SegmentPipeline.
         # _ocr_num_threads 显式传 auto_ocr_thread_count()（全物理核），
@@ -332,8 +331,8 @@ class OcrEngine:
             self._trt.synchronize()
             return preds
         # CPU 动态 batch 无上限：超大输入会让中间激活内存爆炸
-        # （MaxPool bad allocation，ORT 时代实测；OV 同理）。分片限制单批
-        # 帧数，输出形状不变。16 为历史最优（小片更快、峰值更低）。
+        # （MaxPool bad allocation 实测；OV 同理）。分片限制单批
+        # 帧数，输出形状不变。16 为实测最优（小片更快、峰值更低）。
         ov_max = config.OCR_OV_CHUNK
         _ov = getattr(self, "_ov", None)
         if _ov is not None:
@@ -384,7 +383,7 @@ class OcrEngine:
 
         hybrid OCR 双车道：设备 prep 共享后 OV 车道的输入——
         预处理由共享 GpuPreprocessor 在 GPU 上完成，本入口跳过
-        `_resize_norm`（v0 的宿主 resize 1.37ms/段是双车道回归的根因）。
+        `_resize_norm`（宿主 resize 1.37ms/段是双车道回归的根因）。
         仅 CPU 引擎（OV）有意义；TRT 引擎走 call_gpu_raw/_gpu_raw_submit。
         """
         if self._trt is not None:
@@ -414,10 +413,9 @@ class OcrEngine:
         # v6_small 对输入宽度敏感（窄图误读升高），必须有下限。
         # 优先级：**env OCR_PAD_SMALL > 用户 fill_width >
         # config.OCR_PAD_WIDTH_MIN_BY_MODEL**。
-        # ⚠️ 旧实现的顺序是 fill_width 优先，而 extractor 默认就传
+        # ⚠️ env 必须最先：若 fill_width 优先而 extractor 默认传
         # fill_width=DEFAULT_FILL_WIDTH(224) → **OCR_PAD_SMALL 永远轮不到**，
-        # README 里那个"OCR 输入 pad 宽下限覆盖"的旋钮其实是死的。
-        # env 是"调参覆盖"语义，必须能盖过构造参数，故提到最前。
+        # 该旋钮形同虚设。env 是"调参覆盖"语义，必须能盖过构造参数。
         _floor = ocr_pad_floor(self._variant, self._fill_width, self._pad_floor_env)
         max_wh = max(
             _floor / config.OCR_TARGET_H, *(float(im.shape[1]) / im.shape[0] for im in img_list)

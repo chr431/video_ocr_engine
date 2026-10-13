@@ -1,9 +1,9 @@
-"""静默机器全量补测（2026-10-11 夜）：一次跑完被会话噪声淹没的测量。
+"""静默机器全量补测：一次跑完被会话噪声淹没的测量。
 
 A. 直读供给 B=64 / B=300（批尺寸效应，同会话同口径）
-B. FORCE cpu / gpu（独立子进程——ForcedSide static 缓存勘误）+ 均衡
+B. FORCE cpu / gpu（独立子进程，规避 ForcedSide static 缓存）+ 均衡
 C. 引擎 decode 相位（span 口径）vs A —— Tier-2 残差判定
-D. 三码缺口（C-68 口径复测，0.9.3 队列修复后）
+D. 三码缺口（C-68 口径）
 """
 import json
 import os

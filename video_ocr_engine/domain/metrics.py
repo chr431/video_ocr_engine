@@ -44,8 +44,8 @@ METRIC_CAP = 96
 #: 直方图分箱：**按 2 的指数分箱**（×2 分辨率），桶号 =
 #: `math.frexp(x)[1] + HIST_EXP_BIAS`，一次 frexp 调用即得——实测
 #: 0.165µs/事件；热路径无 per-event 循环。
-#: 无界 TOTALS 键此前只有 sum/n/max 两端；"偶发长停顿 vs 持续细碎"的
-#: 形状信息需要分布。范围 2^-20≈0.95µs 到 2^11≈2048s。
+#: 无界 TOTALS 键只有 sum/n/max 两端时缺形状信息；"偶发长停顿 vs 持续细碎"
+#: 需要分布。范围 2^-20≈0.95µs 到 2^11≈2048s。
 HIST_EXP_BIAS = 20
 HIST_N_BUCKETS = 32
 #: 桶 i 的秒级下界（供 report 自述；i=0 覆盖 [0, 2^-20)）
@@ -69,9 +69,7 @@ def hist_bucket(seconds: float) -> int:
 # 注册表：命名空间 = 阶段；pi_binding 指向注册不变式。
 # 元组 = (name, kind, unit, stage, pi_binding)。
 _SEED = (
-    # ── pipeline：编排三段 + v1 现役键（迁移不丢观测）──
-    # （pipeline.producer 已出清：全仓零产出点，注册不注册都从不出现；
-    #   死键只稀释报告与 diff 视图。）
+    # ── pipeline：编排三段 + 现役键 ──
     ("pipeline.run", "span", "s", "pipeline", ""),
     ("pipeline.setup", "span", "s", "pipeline", ""),
     ("pipeline.calibrate", "span", "s", "pipeline", ""),
@@ -114,8 +112,8 @@ _SEED = (
     ("ocr.engine_init", "gauge", "s", "ocr", "PI-10"),
     ("ocr.engine_reuse", "counter", "次", "ocr", "PI-10"),
     ("ocr.infer", "span", "s", "ocr", ""),
-    # `ocr.infer` 的残差子相位：此前不可分（host 路径 _other 高达
-    # 2.8s）。三键在 **full 档**记录（TRT 调用是热路径，per-batch ×
+    # `ocr.infer` 的残差子相位（host 路径 _other 高达 2.8s）。
+    # 三键在 **full 档**记录（TRT 调用是热路径，per-batch ×
     # 数十批，std 预算付不起）：trt_enq = execute_async_v3 提交；
     # trt_reduce = argmax 规约 + D2H（含流同步，即"等 GPU 干完"）；
     # trt_concat = 多子批拼接（纯宿主）。
@@ -144,7 +142,6 @@ _SEED = (
     ("ocr.content_cols", "counter", "列", "ocr", ""),
     ("ocr.fill_pct", "gauge", "%", "ocr", ""),
     # ── emit：消费端提交 ──
-    # （emit.h2d_bytes / emit.launches 已出清：零产出点，同 pipeline.producer）
     ("emit.d2h_bytes", "counter", "B", "emit", "PI-14"),
     ("emit.d2h_calls", "counter", "次", "emit", "PI-9"),
     ("emit.syncs", "counter", "次", "emit", "PI-8"),
@@ -162,7 +159,6 @@ _SEED = (
     ("emit.d2h_n", "counter", "次", "emit", ""),
     ("emit.d2h_max", "gauge", "s", "emit", ""),
     ("emit.d2h_hist", "histogram", "次", "emit", ""),
-    # （pools.high_water / frame_batch.* 已出清：零产出点。）
 )
 
 
@@ -200,8 +196,8 @@ METRICS = MetricRegistry(
 # row 为普通 tuple，splat 丢 Literal——cast 只还类型不改运行时
 
 # ── 单一计时脊柱 ─────────────────────────────────────────────────────
-# 编排三段与 Protocol 边界的既有计时点（`_prof_end(group, key, t0)`）直接
-# 映射为注册指标名——后端不再自建字典，13 个细粒度相位零改动迁入。
+# 编排三段与 Protocol 边界的计时点（`_prof_end(group, key, t0)`）直接
+# 映射为注册指标名——13 个细粒度相位。
 PROFILE_SPANS = {
     # 有界（每次 run ≤ ~200 次）：非 off 档即逐次采样
     ("producer", "open_and_fps"): "pipeline.setup",

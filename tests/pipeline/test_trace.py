@@ -1,11 +1,11 @@
-"""P4 实验性 trace/timeline（VOE_TRACE_FILE）的守卫。
+"""实验性 trace/timeline（VOE_TRACE_FILE）的守卫。
 
 两条红线：
 1. **关闭零成本（结构性）**：旋钮默认空 → extractor 不建 recorder，
    `_prof_end` 尾部只多一次 is-not-None 判断。该判断的运行期成本由
    `tests/config/test_telemetry_cost.py` 的 std 档 ≤2ms/run 守卫背书
    （trace 代码在场但关闭，守卫原样通过）。
-2. **开启成本宽上限**（用户裁决放宽，非 std 预算）：~2.3k 事件的记录
+2. **开启成本宽上限**（宽松值，非 std 档严格预算）：~2.3k 事件的记录
    必须毫秒级；上限取防病理回退的宽松值。
 """
 
@@ -53,7 +53,7 @@ def test_record_cost_loose_cap():
     """开启成本：2300 事件（真实 run 量级）的记录须 ~1ms 级。
 
     上限 50ms = 实测的数十倍，只为抓"误把昂贵调用塞进 record"的病理
-    回退——本路径的严格成本不归 std 档 2ms 预算管（用户裁决放宽）。
+    回退——本路径的严格成本不归 std 档 2ms 预算管（放宽）。
     """
     cost = 0.0
     for _ in range(4):  # 首轮预热，取末轮

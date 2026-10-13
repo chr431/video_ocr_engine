@@ -1,7 +1,7 @@
-"""P4 护栏：相位/遥测键注册表一致性（静态 AST 扫描）。
+"""相位/遥测键注册表一致性护栏（静态 AST 扫描）。
 
-防两类历史漂移（证据：「P2c 对齐」系列——宿主缺 'open' 边界、CPU 解码
-分支零打桩、merge_pair 只在 GPU 路径产出）：
+防两类漂移（如宿主缺 'open' 边界、CPU 解码分支零打桩、
+merge_pair 只在 GPU 路径产出）：
 
 1. 新增 ``prof_end`` 键未进 ``domain/metrics.py`` 映射表 → 指标静默缺席
    （profile 字典有、telemetry 没有，diff 读数对不上）；
@@ -63,7 +63,7 @@ PHASE_KEYS_BY_MODULE: dict[str, set[tuple[str, str]]] = {
 }
 
 # L1 资源边界 checkpoint：驱动合一后由 _driver.py 单点发出
-# （旧两后端各发一份时的「宿主缺 open」漂移即 P2c 所修）。
+# （避免两后端各发一份时的「宿主缺 open」漂移）。
 CHECKPOINTS_BY_MODULE: dict[str, set[str]] = {
     "video_ocr_engine/pipeline/_driver.py": {"open", "calibrate", "decode", "ocr"},
 }
@@ -104,7 +104,7 @@ def _collect(path: Path) -> tuple[set[tuple[str, str]], set[str]]:
         if name in ("_prof", "prof_end", "_prof_end", "tick"):
             # _prof(spec, group, key, t0) / prof_end(group, key, t0) /
             # tick(group, key, t0)——tick 是 gpu/device.DevHooks 的同义
-            # 脊柱（P9 后设备侧经由它转发 prof_end）
+            # 脊柱（设备侧经由它转发 prof_end）
             gi, ki = (1, 2) if name == "_prof" else (0, 1)
             if (
                 len(args) > ki

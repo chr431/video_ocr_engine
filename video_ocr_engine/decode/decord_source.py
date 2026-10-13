@@ -1,18 +1,16 @@
 """DecordFrameSource —— decord 解码后端的打开与格式适配（FrameSource 端
-口的 decord 适配器，R1 2026-09-27 自 extractor 门面下放）。
+口的 decord 适配器）。
 
-S3-2 定义 FrameSource 端口时预留的 `decode/decord_source.py` 至此真正
-落地：本模块持有"按 decode_backend 打开解码器"的完整决策树
+本模块持有"按 decode_backend 打开解码器"的完整决策树
 （auto/nvdec/cpu/hybrid + 降级链 + codec 探测重开 + hybrid 硬窗谓词）
 与输出格式适配（yuv420/gray、luma 提取四件套、color_range 记忆）。
-语义要点来自 S0 冻结的 decoder_contract.yaml（DC-01..10）——尤其
+语义要点见 decoder_contract.yaml（DC-01..10）——尤其
 roi_format（ROI-first 是引擎性能地基）与 color_range（决定 Y 平面展开）。
 
 门面 `_open_vr` = `source.open()` + 四字段状态同步（backend/codec/
 color_range/yuv_output 回写 `ex._*`，保住既有读点与探针/测试 patch 面）；
-driver 消费面本轮仍为裸 vr（`open()` 返回 reader 本体，零驱动侧改动），
-FrameSource 协议面（len/fps/codec/batch/close）以薄委托形式先行接线，
-端口收口（driver 直接消费 source）属后续轮次。
+driver 消费面为裸 vr（`open()` 返回 reader 本体），FrameSource 协议面
+（len/fps/codec/batch/close）以薄委托形式接线。
 """
 
 from __future__ import annotations
@@ -37,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 
 def ensure_roi_capable_decoder() -> None:
-    """构造期校验解码器支持 ROI-first 输出（DESIGN-REVIEW C8）。
+    """构造期校验解码器支持 ROI-first 输出。
 
     无 `_CAPI_VideoReaderSetRoi` 的 decord（如 PyPI 版）会让引擎静默按
     **整帧**处理（roi 参数被忽略、校准阈值与分段数据尺寸错位、merge 因
@@ -45,8 +43,8 @@ def ensure_roi_capable_decoder() -> None:
     decord 未安装时不在此拦截（保持"构造不依赖 decord"的测试约定），
     由 extract() 打开解码器时自然报错。
 
-    R4 起契约面优先：fork ≥0.8.5 用 features()['roi_first'] 断言
-    （DC-01）；无契约面的 decord 回退 hasattr 结构性探测，行为不变。
+    契约面优先：fork ≥0.8.5 用 features()['roi_first'] 断言
+    （DC-01）；无契约面的 decord 回退 hasattr 结构性探测。
     """
     try:
         import decord.video_reader as _vr_mod
@@ -90,7 +88,7 @@ class DecordFrameSource:
         self._roi = tuple(roi)
         self._decode_backend = decode_backend
         self.yuv_output = yuv_output
-        self._degraded = degraded  # 与门面共享的降级原因列表（D3）
+        self._degraded = degraded  # 与门面共享的降级原因列表
         self._frame_start = frame_start
         self._frame_end = frame_end
         # (codec|None) -> int|None：codec 感知 CPU 软解线程档位（事实源
@@ -103,7 +101,7 @@ class DecordFrameSource:
         self.codec = ""
         self.color_range = 0
 
-    # ── FrameSource 协议面（薄委托；driver 本轮仍消费裸 vr）─────────
+    # ── FrameSource 协议面（薄委托；driver 消费裸 vr）─────────────
     def __len__(self) -> int:
         return len(self._require_open())
 
@@ -128,7 +126,7 @@ class DecordFrameSource:
             raise RuntimeError("DecordFrameSource.open() 尚未调用")
         return self._vr
 
-    # ── 打开决策树（原 extractor._open_vr，行为逐位保持）─────────────
+    # ── 打开决策树 ───────────────────────────────────────────────
     def open(self):
         """按 decode_backend 打开解码器（auto/cpu/nvdec/hybrid）。
 
@@ -156,11 +154,11 @@ class DecordFrameSource:
         backend = (self._decode_backend or "auto").lower()
         vr = None
         label = "CPU"
-        # ⚠️ auto 恒为 NVDEC 优先是**刻意决策**（2026-09-10 重申，勿再改）：
+        # ⚠️ auto 恒为 NVDEC 优先是**刻意决策**（勿改）：
         # 本机强多核下实测 h264 CPU 软解确比 NVDEC 快 1.7~2.8×，但 auto 不
         # 据此分流——弱 CPU 上 h264 软解可能慢于 NVDEC，且 CPU 解码必然
         # 引入资源争用与整机功耗上升，NVDEC 稳妥优先。峰值吞吐差异留给
-        # 用户显式 decode_backend="cpu"。见 CONCLUSIONS C-07/C-08/C-33。
+        # 用户显式 decode_backend="cpu"。见 C-08。
         if backend in ("auto", "nvdec", "hybrid"):
             try:
                 from decord import gpu as _g
@@ -168,9 +166,9 @@ class DecordFrameSource:
                 vr = self._open_reader(_g(0), roi_kw)
                 label = "GPU"
             except Exception as e:  # noqa: BLE001
-                # 保留异常文本（2026-09-19 审查轮）：此前吞掉原始异常，
-                # 「驱动/权限不可用」与「代码 bug 导致打开失败」在
-                # auto 路径下完全无法区分，性能回归静默发生。
+                # 保留异常文本：吞掉原始异常会让「驱动/权限不可用」与
+                # 「代码 bug 导致打开失败」在 auto 路径下完全无法区分，
+                # 性能回归静默发生。
                 vr = None
                 self._degraded.append("NVDEC 打开失败，回退 CPU: %r" % (e,))
                 logger.warning("NVDEC 解码不可用，回退 CPU: %r", e, exc_info=True)
@@ -183,11 +181,11 @@ class DecordFrameSource:
                 self.codec = str(vr.get_codec() or "").lower()
             except Exception:  # noqa: BLE001
                 # 探测失败=线程档位按默认 h264 走（hevc/av1 实测差
-                # 4~13%）——记降级原因（2026-09-19 审查轮）。
+                # 4~13%）——记降级原因。
                 self.codec = ""
                 self._degraded.append("codec 探测失败，解码线程档位按默认")
                 logger.debug("codec 探测失败", exc_info=True)
-            # codec 感知线程档位（2026-09-10 实测表，见 decode_num_threads）：
+            # codec 感知线程档位（实测表见 decode_num_threads）：
             # hevc/av1 在 FFmpeg9 下的帧线程扩展性与 h264 分化（hevc
             # stride=1 到 32 线程仍在涨、av1 stride=8 最优 48），通用档位
             # 按最常见 h264 设定，打开后读 codec、档位不同则重开一次
@@ -201,7 +199,7 @@ class DecordFrameSource:
                 self.codec = str(vr.get_codec() or "").lower()
             except Exception:  # noqa: BLE001
                 # 探测失败=线程档位按默认 h264 走（hevc/av1 实测差
-                # 4~13%）——记降级原因（2026-09-19 审查轮）。
+                # 4~13%）——记降级原因。
                 self.codec = ""
                 self._degraded.append("codec 探测失败，解码线程档位按默认")
                 logger.debug("codec 探测失败", exc_info=True)
@@ -210,10 +208,9 @@ class DecordFrameSource:
         # 并列）：速率比例分界 + 两端连续扫掠（fork 原生 hybrid ctx）。
         # NVDEC 可用即包装（GPU 全驻留管线开启时由其 CPU 分支消费宿主数组，
         # 与 NVDEC 路径合并编排；关闭时走宿主管线，行为不变）。
-        # **stride>1 已解禁**（原门控要求 stride==1，理由是 next_roi 的
-        # 顺序交付语义）：next_roi 现按 sample_stride 推进，且 stride>1 时
+        # **stride>1 可行**：next_roi 按 sample_stride 推进，且 stride>1 时
         # 宿主校准与主循环都走 get_batch 等差快速路径、不碰 next_roi。
-        # 编码（含 AV1）不再回退——v3 的速率比例分界已实测：CPU 慢于
+        # 编码（含 AV1）不回退——速率比例分界实测：CPU 慢于
         # NVDEC 的 HEVC/AV1 场景与纯 NVDEC 持平不退化，CPU 快于 NVDEC 的
         # h264 场景显著更快；尊重用户显式选择。NVDEC 不可用时上面已回退
         # CPU 并警告；初始化失败回退纯 GPU 不致命。
@@ -225,11 +222,11 @@ class DecordFrameSource:
             # 恒选宿主输出（依据 C-76；与 cpu() 同布局）——gpu-out
             # （hybrid_gpu，帧驻留显存）的解码器内上载中转实测 −13% 流
             # 交付；宿主帧 + OCR 会话上传 crop 走 cpu 后端同通路。
-            # R4 契约协商（DC-03）：hybrid ctx 是显式 decode_backend 选择，
+            # 契约协商（DC-03）：hybrid ctx 是显式 decode_backend 选择，
             # 缺能力=配置错误而非环境波动——契约面在时**在降级 try 之外**
             # 显式拒绝（放 try 内会被 except 吞成静默回退纯 GPU，恰好抹掉
-            # 本要提供的诊断）。契约面不在时保持既有 try-open 降级（旧
-            # fork wheel 兼容，行为不变）。
+            # 本要提供的诊断）。契约面不在时保持 try-open 降级（旧
+            # fork wheel 兼容）。
             _contract = probe_contract()
             if _contract is not None:
                 _contract.require(
@@ -248,9 +245,9 @@ class DecordFrameSource:
                     # hevc=32 / av1=24，恰为各码实测最优：h264lg 16→24
                     # −5.9%（3/3）、24→32 再 −4.8%（3/3）；hevc 16→24
                     # −4.4%（3/3）、24→32 持平；av1 16→24 −12.8%（3/3）但
-                    # 32 反向 +5.1%（dav1d 过订阅）。旧"逻辑核//2 钳 [8,16]"
-                    # 是项目层 hybrid 时代残留（早轮只测到 16 为止），三码
-                    # 全劣 4~13%。decode-only 口径 24T 已饱和、32T 无增益，
+                    # 32 反向 +5.1%（dav1d 过订阅）。「逻辑核//2 钳 [8,16]」
+                    # 三码全劣 4~13%，不采用。decode-only 口径 24T 已饱和、
+                    # 32T 无增益，
                     # 但引擎消费节奏（OCR/分段线程与解码共存）顶点更高——
                     # 档位以引擎口径为准。复评触发：decord 再换代 / 核数
                     # 格局变化。
@@ -264,22 +261,21 @@ class DecordFrameSource:
                 # 输出与 cpu() 逐位一致（fork hybrid 文档口径）。
                 _hctx = _hy(0)
                 vr = self._open_reader(_hctx, roi_kw, num_threads=_ct)
-                # 硬窗界（越窗修复）：短窗时声明消费上限，fork
+                # 硬窗界：短窗时声明消费上限，fork
                 # 的 demux 与 GOP 派工在窗缘硬停——窗口外一个包都不读
                 # （实测 w3000 曾把全片 7761 包喂进两臂）。设窗条件 = 窗口
                 # < 全长，且（start < 窗长 **或** fork 契约面带
                 # `window_seek_safe`）。
-                # 晚起点谓词（start < 窗长）是历史防线：fork 曾有两
-                # 个晚起点+seek_acc+硬窗缺陷——①GOP 粒度 × 锚点前缀预算
-                # 算术（尾帧截断）；②seek 首锚会话的僵尸 kick 跨 reset 存活
-                # （ResetRouting 漏清 pending_kicks_，单 GOP 首帧重复/末帧
-                # 被挤）。两者均已修复（根因链与矩阵 12/12 证据见 git 档案），
+                # 晚起点谓词（start < 窗长）：fork 的两个晚起点+seek_acc+
+                # 硬窗缺陷（①GOP 粒度 × 锚点前缀预算算术致尾帧截断；
+                # ②seek 首锚会话的僵尸 kick 跨 reset 存活——ResetRouting
+                # 漏清 pending_kicks_，单 GOP 首帧重复/末帧被挤）已修复；
                 # 契约键 `window_seek_safe` = ②的机器宣告；旧 fork 无此键
-                # → 谓词保留，行为不变。
+                # → 谓词保留。
                 _sdw = getattr(vr, "set_decode_window", None)
                 if _contract is not None and not _contract.has("hard_decode_window"):
-                    # R4：契约面在而硬窗能力缺 → 显式记降级（getattr 裸探测
-                    # 留给无契约面的旧 fork，行为不变）
+                    # 契约面在而硬窗能力缺 → 显式记降级（getattr 裸探测
+                    # 留给无契约面的旧 fork）
                     self._degraded.append(
                         "decord 契约面无硬窗能力（hard_decode_window），短窗全片供料"
                     )
@@ -312,7 +308,7 @@ class DecordFrameSource:
         return decode_num_threads(codec, sample_stride=1, ocr_on_gpu=True)
 
     def _open_reader(self, ctx, roi_kw: dict, num_threads=None):
-        """按当前输出格式打开 decord reader（原 extractor._open_decord_reader）。
+        """按当前输出格式打开 decord reader。
 
         yuv420 仅在 fork ≥0.7.10 可用：旧 DLL 会抛 ValueError，此时
         回退 gray（分段/OCR 不变，仅代表帧预览退化灰度）并重置标志。
@@ -343,9 +339,9 @@ class DecordFrameSource:
         try:
             self.color_range = int(vr.get_color_range() or 0)
         except Exception:  # noqa: BLE001
-            # 失败按 limited 处理但**记录**（2026-09-19 审查轮）：full
+            # 失败按 limited 处理但**记录**：full
             # range 流被当 limited 会错误拉伸 Y → 分段阈值/OCR 像素静默
-            # 改变，此前 meta['color_range']=0 与"真的是 limited"不可分。
+            # 改变；不记录则 meta['color_range']=0 与"真的是 limited"不可分。
             self.color_range = 0
             self._degraded.append("color_range 读取失败，按 limited 处理")
 
@@ -368,7 +364,7 @@ class DecordFrameSource:
         return _gray_batch_out(crops, out)
 
     def crop_is_expected(self, c: np.ndarray, roi_h: int, roi_w: int) -> bool:
-        """ROI-first 输出尺寸是否符合当前输出格式（旧路径全帧则 False）。"""
+        """ROI-first 输出尺寸是否符合当前输出格式（全帧则 False）。"""
         if self.yuv_output:
             return c.ndim == 2 and c.shape[0] == roi_h + (roi_h + 1) // 2 and (c.shape[1] == roi_w)
         return c.shape[0] == roi_h and c.shape[1] == roi_w
