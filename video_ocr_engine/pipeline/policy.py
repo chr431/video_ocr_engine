@@ -103,6 +103,17 @@ def gpu_pipeline_enabled(
             return False
         if not _gp.tensorrt_available():
             return False
+    if backend == "hybrid" and not forced:
+        # 宿主驻留解码不进 GPU lane（C-83 实测，2026-10-14）：hybrid 交付
+        # 宿主数组，GPU lane 的逐帧 H2D + 设备侧分段/OCR 预处理相对宿主
+        # lane 是纯亏——3×2 矩阵（test5，3 对交错，段数逐位不变 1090）
+        # 宿主 lane 快 5.2%（h264）、11.6%（hevc）、17.4%（av1）。
+        # 判定轴不是"帧在哪解码"：同矩阵里 nvdec（显存帧）走宿主 lane 也
+        # 快 6.2%——本机（16C32T + 4060M）宿主 lane 普遍更便宜，GPU lane
+        # 的每批设备同步成本高于省下的 H2D。cpu 解码两 lane 打平（±2%
+        # 噪声内），维持原判。GPU_PIPELINE=1 仍可强制（实验/金标 A 组
+        # p1 用例依赖该出口）。
+        return False
     if backend == "cpu":
         # CPU 解码分支不依赖 NVDEC：跳过 nvdec 探测（避免无谓的
         # GPU reader 试开；TRT 可用性已由上方门控确认）。

@@ -46,7 +46,22 @@ _GATE_CASES = [
         {"rep_crop_format": "gray", "decode_backend": "cpu"},
         True,
     ),
-    ("hybrid_enabled", {}, {}, {"rep_crop_format": "gray", "decode_backend": "hybrid"}, True),
+    # hybrid 交付宿主数组 → 宿主 lane（C-83 实测：GPU lane 的逐帧 H2D 是纯亏，
+    # 宿主 lane 快 5.2%~17.4%；GPU_PIPELINE=1 可强制走原 GPU lane）
+    (
+        "hybrid_host_lane_by_default",
+        {},
+        {},
+        {"rep_crop_format": "gray", "decode_backend": "hybrid"},
+        False,
+    ),
+    (
+        "hybrid_forced_gpu_lane",
+        {},
+        {"GPU_PIPELINE": "1"},
+        {"rep_crop_format": "gray", "decode_backend": "hybrid"},
+        True,
+    ),
     (
         "nvdec_unavailable",
         {"nvdec_available": lambda p: False},
