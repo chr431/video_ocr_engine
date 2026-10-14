@@ -479,3 +479,12 @@
   evidence:
   - commit: 916e7dc
     note: 五件套落地 + C-83 nvdec 子结论推翻复核（4 视频交错 A/B）；探针 _scratch/_probe_{lane_residency,neutral_analyze,inject_timing,calib_break,decode_iso,nvdec_hold,getbatch_roi,batch_histo}.py；fork 配套 4a959f8
+- id: C-85
+  conclusion: '**hybrid 达成率偏低是双瓶颈叠加：① fork 供水份额自锁（rg 读数被断流/发射阻塞稀释 → f→1 → 少派工 → 更长断流）；② 默认宿主 lane 的消费端预处理是单线程关键路径**。①的取证链（test6_h264 全片 + 飞行记录）：供水份额 6.1%（1470 帧/5 GOP）隐含 rg 读数 ~200fps，而 NVDEC busy 口径 1461fps——land 折环被「GPU 解完自己的 GOP → 等按序发射（rdy 满）→ 交付停 → 尾折稀 → 断流期折环冻结」循环压崩；hevc/av1 因 CPU 臂慢、GPU 轮转间隔短而读数健康（2053/1794）。修复 = PickFeedSide 供料干涸豁免（宿主包队列空 && cuvid pkt 队列空时改取 NVDEC 服务速率 busy_gpu_pics/busy_gpu_us——硬件服务时间代理，与派工/发射完全解耦；不可用 UndecodedBacklog 判空，它含已解未发射存货恒>0）：份额 6.1%→26.2%（理论 23.5%）。②的取证：hybrid(宿主 lane) ocr.preprocess 8.7s + merge_pair 3.8s 全落消费线程，> 两臂供给理想 6.4s（臂级速率和：CPU 软解 2810fps + NVDEC 942fps）——供给再快也吃不完；GPU lane 设备侧预处理 0.06s 把消费税清零。**翻签**：hybrid 默认走 GPU lane（test6_h264 全片 7.2s vs 宿主 lane 8.12s，段数逐位一致 8340；同口径 nvdec 三码 GPU lane 已快 4.6~6.7%），C-83 的「宿主 lane 普遍更便宜」判据在 C-84 五件套后失效；GPU_PIPELINE=0 显式回宿主 lane。附：端到端速率和「理想」在 OCR 重叠负载下失真（cpu 9.3s 与 nvdec 25.4s 速率和理想 6.56s），达成率口径必须用臂级解码速率（h264 臂级理想 6.39s，GPU-lane hybrid 7.2s = 89%）'
+  status: active
+  premises: 引擎 0.26.2+；fork 0.9.8+供料干涸豁免（md5 9dc0170d1f84）；RTX 4060M/32LP；test6_h264/hevc/av1 全片 23970 帧；TRT OCR
+  revisit: NVDEC 硬件换代（服务速率口径变化）/ land 折环口径重构 / kick 成本变化（份额提升后换侧 kick 4→20 次，实测无净损）
+  evidence:
+  - commit: TBD-C85
+  - note: 终测（3 轮同轮交错，段数全 8340）：h264 hybrid 7.37s（vs 最快单后端 cpu 9.43 快 28.0%，臂级达成率 87%）、hevc 8.67s（vs nvdec 11.88 快 37.1%，90%）、av1 9.13s（vs nvdec 14.22 快 55.7%，87%）
+    note: 翻签 + 豁免配套；取证探针 _scratch/_probe_achie_ab.py + 飞行记录 decord_hybrid_flight.log；fork 侧 budget.cc（busy 口径豁免）/pools.cc+hybrid_threaded_decoder.h（rg_peak 峰值记忆，保留供诊断）

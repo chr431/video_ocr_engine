@@ -103,17 +103,15 @@ def gpu_pipeline_enabled(
             return False
         if not _gp.tensorrt_available():
             return False
-    if backend == "hybrid" and not forced:
-        # 宿主驻留解码不进 GPU lane（C-83 实测，2026-10-14）：hybrid 交付
-        # 宿主数组，GPU lane 的逐帧 H2D + 设备侧分段/OCR 预处理相对宿主
-        # lane 是纯亏——3×2 矩阵（test5，3 对交错，段数逐位不变 1090）
-        # 宿主 lane 快 5.2%（h264）、11.6%（hevc）、17.4%（av1）。
-        # 判定轴不是"帧在哪解码"：同矩阵里 nvdec（显存帧）走宿主 lane 也
-        # 快 6.2%——本机（16C32T + 4060M）宿主 lane 普遍更便宜，GPU lane
-        # 的每批设备同步成本高于省下的 H2D。cpu 解码两 lane 打平（±2%
-        # 噪声内），维持原判。GPU_PIPELINE=1 仍可强制（实验/金标 A 组
-        # p1 用例依赖该出口）。
-        return False
+    # hybrid 不再排除（C-85 翻签，2026-10-14）：C-83 时代的判据「宿主
+    # lane 普遍更便宜」建立在 GPU lane 尚带五项结构性开销之上；C-84 五
+    # 件套落地后 lane 矩阵反转（nvdec+TRT：GPU lane 快 4.6~6.7%），且
+    # hybrid 混跑的消费端宿主预处理是单线程关键路径（test6_h264 全片
+    # ocr.preprocess 8.7s > 两臂供给理想 6.4s），GPU lane（设备侧预处理
+    # 0.06s）把它清零——hybrid+GPU lane 7.2s vs 宿主 lane 8.12s（同机
+    # 交错，段数逐位一致 8340）。注意 hybrid 经此走 **CPU 解码分支**消费
+    # 宿主数组（H2D 批上传），NVDEC 臂帧同样交付宿主——逐帧 H2D 成本
+    # 已被 C-84 的批量化吸收。GPU_PIPELINE=0 仍可显式回宿主 lane。
     if backend == "cpu":
         # CPU 解码分支不依赖 NVDEC：跳过 nvdec 探测（避免无谓的
         # GPU reader 试开；TRT 可用性已由上方门控确认）。
