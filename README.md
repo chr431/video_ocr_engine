@@ -164,6 +164,20 @@ ex.extract()         # 首个 extract 的引擎初始化成本大幅下降
 GPU 管线的现状描述（渲染视图）见 [AGENTS.md](AGENTS.md) 与
 `registry/architecture.yaml`。
 
+### 性能参考（2026-10-14，RTX 4060M / 16C32T / TRT OCR）
+
+test6 全片（23970 帧，1080p，字幕 ROI 106×33，`tools/bench.py run` 3 轮中位）：
+
+| 编码 | nvdec | cpu | hybrid | 最快 |
+|---|---|---|---|---|
+| h264 | 25.4s | 8.85s | **8.12s** | hybrid |
+| hevc | 11.6s | 22.4s | **8.22s** | hybrid |
+| av1 | 13.9s | 17.6s | **8.63s** | hybrid |
+
+长片三编码一律 hybrid 最快（C-05/C-53）；NVDEC+TRT 的零拷贝管线在采样窗口
+内的短跑与逐段对比上与宿主 lane 等效或更快（C-84）。数字高度依赖硬件与
+片源——自测请用 `tools/bench.py`（交错配对口径，内置后台负载与 GPU 时钟门禁）。
+
 ## 环境变量钩子
 
 > 构造参数已覆盖绝大多数用法；环境变量仅在**批量调优/诊断**时使用。

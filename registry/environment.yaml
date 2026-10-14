@@ -40,7 +40,7 @@ runtime_notes:
     - TRT 引擎与构建版本不兼容（旧产物不可加载）；加载失败自动删缓存重建，不静默回退；FP32 首建约 1 分钟，FP16 慢 2.2× 且推理无提升；GPTuner 在 Windows 不可用
   decord:
     - 无 NVIDIA GPU 自动回退 CPU 软解；强制 CPU 用 decode_backend="cpu" 构造参数
-    - h264 NVDEC 是本机硬件天花板（三码 NVDEC 982/2103/1749 fps）——h264 峰值走 CPU 软解或显式 hybrid
+    - h264 NVDEC 是本机硬件天花板（test6 全片 23970 帧引擎口径三码 NVDEC 942/2074/1724 fps，2026-10-14 r84 复测）——h264 峰值走 CPU 软解或显式 hybrid
     - fork 能力 floors（步长快速路径/env 透传/hybrid 原生/SetRoi 深银行）唯一住本表 dependency_floors
   models:
     - assets/ocr_models/PP-OCRv6_rec_small.onnx（fp16 权重版，唯一分发模型）+ ppocrv6_dict.txt；_models_dir() 支持 frozen（_MEIPASS）/源码树/wheel（data-files）三布局
