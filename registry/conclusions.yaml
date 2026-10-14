@@ -486,5 +486,6 @@
   revisit: NVDEC 硬件换代（服务速率口径变化）/ land 折环口径重构 / kick 成本变化（份额提升后换侧 kick 4→20 次，实测无净损）
   evidence:
   - commit: 415b26c
-  - note: 终测（3 轮同轮交错，段数全 8340）：h264 hybrid 7.37s（vs 最快单后端 cpu 9.43 快 28.0%，臂级达成率 87%）、hevc 8.67s（vs nvdec 11.88 快 37.1%，90%）、av1 9.13s（vs nvdec 14.22 快 55.7%，87%）
     note: 翻签 + 豁免配套；fork 侧 ae80b27（干涸豁免+rg_peak）；取证探针 _scratch/_probe_achie_ab.py + 飞行记录 decord_hybrid_flight.log；fork 侧 budget.cc（busy 口径豁免）/pools.cc+hybrid_threaded_decoder.h（rg_peak 峰值记忆，保留供诊断）
+  - note: 终测（3 轮同轮交错，段数全 8340）：h264 hybrid 7.37s（vs 最快单后端 cpu 9.43 快 28.0%，臂级达成率 87%）、hevc 8.67s（vs nvdec 11.88 快 37.1%，90%）、av1 9.13s（vs nvdec 14.22 快 55.7%，87%）
+  - note: 帧级混合 lane 裁决（同日追加）：「CPU 臂帧走宿主 lane、NVDEC 臂帧走 GPU lane」结构上不可能快过现状——CPU 臂占 94% 帧数，其宿主预处理（~0.36ms/帧）将回归 OCR worker 单线程段（下限 ~8.2s > 现状 7.37s）；且分段需双数据面（宿主 win3 vs 设备 analyze 逐位一致风险）。混合 lane 能省的仅 NVDEC 臂 6% 帧的 H2D+prep ≈0.3s。附带实测 hybrid_gpu ctx（NVDEC 臂帧驻留显存）+GPU lane = 7.58/7.76s——CPU 臂帧改走 fork 上载中转，中转税 > 免掉的 D2D，慢 ~3%。现状 hybrid(0)+GPU lane 为三变体最优
