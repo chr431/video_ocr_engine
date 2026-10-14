@@ -98,21 +98,16 @@ DEBUG_BOUNDS_ENV: str = "DEBUG_BOUNDS"  # 1 打印分段边界调试信息
 HYBRID_CPU_THREADS_ENV: str = "HYBRID_CPU_THREADS"  # CPU reader 线程数；
 # 0=自动时与 cpu 后端同一 codec 感知策略（extractor._decode_num_threads）。
 
-# ── hybrid 硬窗下限（引擎侧 workaround；fork 泵派工对窗缘的敏感性）──
-# 现象（实测 h264 test5/3000 帧窗，段数逐位不变 1090）：窗长正好等于请求
-# 长度时 fork 泵进入 Pop 饿死路径，`alloc_seq` 记 `PiHHHHHHHWW` —— 每次
-# 饿死强制派工头部 GOP，而该分支按"哪侧有未解码积压"派侧（CPU 臂恒有
-# 积压）→ 8 个 GOP 判给 NVDEC 臂，CPU 臂 busy 仅 0.26s/3.16s（92% 闲置，
-# rc_now 实测 3840fps 完全可用）→ hybrid 供给掉到 NVDEC 水平。
-# 窗长加大即恢复速率派工（全 'W'）。阈值随机器状态漂移（静置 ≥35s 的
-# "冷态"首跑比连续负载的"暖态"更易触发），故取**冷态**阈值的上界：
-#   冷态实测（静置 35s/轮，各 2 轮，3000 帧请求）：窗 4500 病态 → 6000
-#   健康（h264/hevc）→ av1 需 9000；暖态阈值更低（h264 3900 即健康）。
-# 故下限取 9000 帧。代价实测可忽略：臂 busy 合计 2.12s（窗 6000）vs
-# 2.13s（无窗）—— 窗只影响 demux 读取量与派工，不额外解码；而效果是
-# h264 test5 3.14s → 1.74s（−45%）、test6_h264 3.33s → 1.62s（−51%）、
-# av1 2.50s → 1.96~2.04s。fork 侧把饿死派工路径改回速率判据后本下限可撤。
-HYBRID_WINDOW_MIN: int = 9000  # 硬窗下限（帧）：短请求也至少开这么大
+# ── hybrid 硬窗下限（引擎侧 workaround；仅对**未修复派工的旧构建**生效）──
+# 现象（实测 h264 test5/3000 帧窗，段数逐位不变 1090）：窗长贴近请求边界
+# 时 fork 泵进 Pop 饿死路径，整窗 GOP 在速率可测之前被盲派（CPU 臂 92%
+# 闲置）→ hybrid 供给掉到 NVDEC 档（引擎内 3.14s vs 纯 nvdec 3.59s）。
+# 规避 = 窗长垫到下限；代价是过度解码（紧窗 3289 帧 → 下限窗 4900 帧，
+# 混跑 wall 1.66s → 2.04s）。
+# fork 侧已于 2026-10-14 治本（熟前挂起 + 速率派工，fork 6363996），并以
+# 契约键 `starve_hold_rate_dispatch` 机器宣告：**有该键即撤下限**（窗长 =
+# 请求长，decord_source 单点判据），无该键（旧 DLL）按下限垫。
+HYBRID_WINDOW_MIN: int = 9000  # 硬窗下限（帧）：仅未宣告派工修复的构建使用
 # ═══════════════════ CPU 软解线程预算（按 OCR 是否在 GPU 分档）═══════════════
 # 背景：引擎不显式传 num_threads 时，CPU 解码线程数由 decord fork 的
 # DECORD_FFMPEG_THREAD_COUNT 决定（fork 源码 src/video/video_reader.cc）——

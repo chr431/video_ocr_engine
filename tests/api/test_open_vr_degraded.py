@@ -201,6 +201,26 @@ def test_hard_window_set_when_start_before_window(fake_decord):
     assert vr.decode_window_calls == [9000]  # max(3000, HYBRID_WINDOW_MIN=9000)
 
 
+def test_hard_window_tight_when_dispatch_contract_present(fake_decord):
+    """契约键 `starve_hold_rate_dispatch`（熟前挂起 + 速率派工的机器宣告）
+    → 撤下限：窗长 = 请求长（过度解码最小；实测紧窗 3289 帧 vs 下限窗
+    4900 帧）。旧构建无该键 → 按 C-82 垫下限 9000。"""
+    import decord as _d  # 夹具注入的假模块
+
+    _d.CONTRACT_VERSION = 1
+    _d.features = lambda: {
+        "roi_first": True,
+        "hybrid_ctx": True,
+        "hard_decode_window": True,
+        "window_seek_safe": True,
+        "starve_hold_rate_dispatch": True,
+    }
+    ex = _make(decode_backend="hybrid", frame_start=0, frame_end=3000)
+    vr = ex._open_vr()
+    assert ex._backend == "decord/hybrid"
+    assert vr.decode_window_calls == [3000]
+
+
 def test_hard_window_short_request_uses_floor(fake_decord):
     """短请求（1500 帧）：窗长取下限 9000（短窗即使加余量也不健康——
     1500 帧请求在窗 2400 下仍落饿死派工路径，冷态阈值实测 6000~9000）。"""

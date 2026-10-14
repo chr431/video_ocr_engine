@@ -289,11 +289,18 @@ class DecordFrameSource:
                     and (_seek_safe or self._frame_start < (self._frame_end - self._frame_start))
                     and self._frame_end - self._frame_start < len(vr)
                 ):
-                    # 窗长 = max(请求长, HYBRID_WINDOW_MIN)：窗缘贴近请求边界
-                    # 会让 fork 泵落 Pop 饿死派工路径、把 GOP 系统性判给
-                    # NVDEC 臂（实测供给 −45%~−51%；见 constants 注释）。
+                    # 窗长：fork 带 `starve_hold_rate_dispatch`（熟前挂起 +
+                    # 速率派工，2026-10-14）时 = 请求长——派工已不依赖窗
+                    # 缘，窗只承担"不越窗读"，越贴越省过度解码（实测紧窗
+                    # 3289 帧 vs 下限窗 4900 帧，混跑 wall 1.66s vs 2.04s）。
+                    # 旧构建无该保证：窗长贴近请求边界会整窗盲派（GOP 判给
+                    # NVDEC 臂，供给 −45%），按下限 9000 帧规避（C-82）。
                     _win_len = self._frame_end - self._frame_start
-                    _sdw(min(len(vr), max(_win_len, config.HYBRID_WINDOW_MIN)))
+                    _dispatch_fixed = _contract is not None and _contract.has(
+                        "starve_hold_rate_dispatch"
+                    )
+                    _win = _win_len if _dispatch_fixed else max(_win_len, config.HYBRID_WINDOW_MIN)
+                    _sdw(min(len(vr), _win))
                 self.backend_label = "decord/hybrid"
                 logger.info(
                     "混合解码开启(原生): codec=%s ctx=hybrid cpuT=%d",
