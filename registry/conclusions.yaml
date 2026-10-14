@@ -461,7 +461,7 @@
     note: 引擎侧下限 HYBRID_WINDOW_MIN=9000（constants/decord_source）+ 金标 33/33 逐位、C-62 硬窗位级 5/5、check daily 绿；取证探针 _scratch/_probe_{window_exact_worker,cold_window_exact,engine_hybrid_worker}.py
 - id: C-83
   conclusion: '**hybrid 显存驻留（gpu-out）相对宿主输出的残余亏空 = 上载级的 CPU 争用（≈+9%），不是拷贝带宽**——引擎四格（test5/3000 帧/紧窗/段数逐位不变）：纯 CPU 臂 host 1.69-1.74s vs gpu 1.90-1.91s（+10.6%）；纯 GPU 臂两模式无差（3.66s，零拷贝成立）；混合态 host 1.614 vs gpu 1.782-1.814（+9.4%，3 对交错）。逐项排除：拷贝量（ROI 单帧 5.3KB ≈5µs）、冲刷粒度（积攒窗 0/4/20ms 无差）、流语义
-    （非阻塞流+事件保序后中性）、消费侧逐帧 D2D 批装配（纯 GPU 臂无差即反证）。亏空表现为 CPU 臂 busy 0.87→0.94s——上载线程与 32 个 FFmpeg 解码线程争核。附带结论（已裁决并落地）：**驻留位置不是 lane 判定轴**——3×2 矩阵（test5/3000 帧/3 对交错）hybrid 宿主 lane −5.2%、nvdec（显存帧）宿主 lane −6.2%、cpu 两 lane 打平；跨码 hybrid 宿主 lane −11.6%（hevc）/−17.4%（av1），段数逐位不变。本机（16C32T+4060M）宿主 lane 普遍更便宜（GPU lane 每批设备同步成本 > 省下的 H2D）。政策：hybrid 默认宿主 lane（2026-10-14，commit 6b7dcad），GPU_PIPELINE=1 保留强制出口；nvdec 维持 GPU lane（宿主 lane 的 6.2% 收益留待复评，涉及 NVDEC 直通设计面）'
+    （非阻塞流+事件保序后中性）、消费侧逐帧 D2D 批装配（纯 GPU 臂无差即反证）。亏空表现为 CPU 臂 busy 0.87→0.94s——上载线程与 32 个 FFmpeg 解码线程争核。附带结论（已裁决并落地）：**驻留位置不是 lane 判定轴**——3×2 矩阵（test5/3000 帧/3 对交错）hybrid 宿主 lane −5.2%、nvdec（显存帧）宿主 lane −6.2%、cpu 两 lane 打平；跨码 hybrid 宿主 lane −11.6%（hevc）/−17.4%（av1），段数逐位不变。本机（16C32T+4060M）宿主 lane 普遍更便宜（GPU lane 每批设备同步成本 > 省下的 H2D）。政策：hybrid 默认宿主 lane（2026-10-14，commit 6b7dcad），GPU_PIPELINE=1 保留强制出口。**nvdec 复核（4 片 3 码 × 3 对，12/12 符号一致）**：即便在 GPU lane 唯一能全程零拷贝的组合（nvdec+TRT）里宿主 lane 仍全胜——test5 h264 −6.2%、test6_h264 −5.6%、hevc −3.5%、av1 −1.7%（收益随解码变快而缩小 = lane 差是"设备侧同步 vs 主存往返"之比）。故本机不存在宿主 lane 更劣的实测组合；nvdec 默认翻 lane 涉及"NVDEC 直通/raw OCR"设计面与默认解码路径，留待用户裁决'
   status: active
   premises: 引擎 0.26.2；fork 0.9.8+熟前挂起（6363996）；RTX 4060M/32LP；h264 test5；TRT OCR
   revisit: 上载路径重构（CPU 臂直写 pinned 免中转）/ 内核数格局变化 / GPU lane 放行条件裁决
@@ -470,3 +470,4 @@
     note: 取证探针 _scratch/_probe_engine_{4cell,hybrid_ab}.py + _probe_upload_nonblocking_ab.py；fork 侧配套 6363996（熟前挂起）与 3e5a503（上载流非阻塞+事件保序，实测中性）
   - commit: 6b7dcad
     note: lane×驻留矩阵裁决与政策落地（hybrid 默认宿主 lane，1.62→1.501s）；探针 _scratch/_probe_lane_residency.py
+  - note: nvdec+TRT 跨三码复核（同日，同上探针）：宿主 lane 全胜 12/12（−1.7%~−6.2%），零拷贝未构成优势
