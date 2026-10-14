@@ -57,5 +57,5 @@
 
 ## 结论
 
-- active 51 条（源 registry/conclusions.yaml）；表=docs/CONCLUSIONS.md；死档经 git 档案取回。
+- active 52 条（源 registry/conclusions.yaml）；表=docs/CONCLUSIONS.md；死档经 git 档案取回。
 
