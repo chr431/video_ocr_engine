@@ -485,6 +485,6 @@
   premises: 引擎 0.26.2+；fork 0.9.8+供料干涸豁免（md5 9dc0170d1f84）；RTX 4060M/32LP；test6_h264/hevc/av1 全片 23970 帧；TRT OCR
   revisit: NVDEC 硬件换代（服务速率口径变化）/ land 折环口径重构 / kick 成本变化（份额提升后换侧 kick 4→20 次，实测无净损）
   evidence:
-  - commit: TBD-C85
+  - commit: 415b26c
   - note: 终测（3 轮同轮交错，段数全 8340）：h264 hybrid 7.37s（vs 最快单后端 cpu 9.43 快 28.0%，臂级达成率 87%）、hevc 8.67s（vs nvdec 11.88 快 37.1%，90%）、av1 9.13s（vs nvdec 14.22 快 55.7%，87%）
     note: 翻签 + 豁免配套；取证探针 _scratch/_probe_achie_ab.py + 飞行记录 decord_hybrid_flight.log；fork 侧 budget.cc（busy 口径豁免）/pools.cc+hybrid_threaded_decoder.h（rg_peak 峰值记忆，保留供诊断）
