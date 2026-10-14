@@ -461,10 +461,12 @@
     note: 引擎侧下限 HYBRID_WINDOW_MIN=9000（constants/decord_source）+ 金标 33/33 逐位、C-62 硬窗位级 5/5、check daily 绿；取证探针 _scratch/_probe_{window_exact_worker,cold_window_exact,engine_hybrid_worker}.py
 - id: C-83
   conclusion: '**hybrid 显存驻留（gpu-out）相对宿主输出的残余亏空 = 上载级的 CPU 争用（≈+9%），不是拷贝带宽**——引擎四格（test5/3000 帧/紧窗/段数逐位不变）：纯 CPU 臂 host 1.69-1.74s vs gpu 1.90-1.91s（+10.6%）；纯 GPU 臂两模式无差（3.66s，零拷贝成立）；混合态 host 1.614 vs gpu 1.782-1.814（+9.4%，3 对交错）。逐项排除：拷贝量（ROI 单帧 5.3KB ≈5µs）、冲刷粒度（积攒窗 0/4/20ms 无差）、流语义
-    （非阻塞流+事件保序后中性）、消费侧逐帧 D2D 批装配（纯 GPU 臂无差即反证）。亏空表现为 CPU 臂 busy 0.87→0.94s——上载线程与 32 个 FFmpeg 解码线程争核。附带结论：hybrid + GPU lane 本身劣于宿主 lane（3 对交错 1.620 vs 1.502s，−7.3%，符号 3/3，帧本在宿主、逐帧上载为纯亏），政策面建议多码复核后裁决放行条件'
+    （非阻塞流+事件保序后中性）、消费侧逐帧 D2D 批装配（纯 GPU 臂无差即反证）。亏空表现为 CPU 臂 busy 0.87→0.94s——上载线程与 32 个 FFmpeg 解码线程争核。附带结论（已裁决并落地）：**驻留位置不是 lane 判定轴**——3×2 矩阵（test5/3000 帧/3 对交错）hybrid 宿主 lane −5.2%、nvdec（显存帧）宿主 lane −6.2%、cpu 两 lane 打平；跨码 hybrid 宿主 lane −11.6%（hevc）/−17.4%（av1），段数逐位不变。本机（16C32T+4060M）宿主 lane 普遍更便宜（GPU lane 每批设备同步成本 > 省下的 H2D）。政策：hybrid 默认宿主 lane（2026-10-14，commit 6b7dcad），GPU_PIPELINE=1 保留强制出口；nvdec 维持 GPU lane（宿主 lane 的 6.2% 收益留待复评，涉及 NVDEC 直通设计面）'
   status: active
   premises: 引擎 0.26.2；fork 0.9.8+熟前挂起（6363996）；RTX 4060M/32LP；h264 test5；TRT OCR
   revisit: 上载路径重构（CPU 臂直写 pinned 免中转）/ 内核数格局变化 / GPU lane 放行条件裁决
   evidence:
   - commit: 592b3c9
     note: 取证探针 _scratch/_probe_engine_{4cell,hybrid_ab}.py + _probe_upload_nonblocking_ab.py；fork 侧配套 6363996（熟前挂起）与 3e5a503（上载流非阻塞+事件保序，实测中性）
+  - commit: 6b7dcad
+    note: lane×驻留矩阵裁决与政策落地（hybrid 默认宿主 lane，1.62→1.501s）；探针 _scratch/_probe_lane_residency.py
