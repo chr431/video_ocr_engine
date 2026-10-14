@@ -505,3 +505,11 @@
   evidence:
   - note: 复现与机制分解探针 _scratch/_probe_batch_vs_next.py（next_roi vs batch1/64/250）、_probe_batch_vs_next_scan.py（ROI 尺寸 x 格式 x ctx 扫描）、_probe_roi_direct_equiv.py（三路互证等效性）；fork 侧 6d3b0bf
   - note: 等效性（三路互证：A=get_batch(roi) / B=逐帧 next_roi / C=全帧批 numpy 裁剪）：3 码 x cpu/gpu x gray/yuv420 x 3 ROI（108x32 奇数起点超集 / 108x32 偶数 / 300x200）= 36 组合 A==B==C 逐字节一致；fork 七套件 --full 全 PASS（gpu/formats/md5/stream/stride/lockstep/window）+ smoke_release ALL PASS + python unittests 61 passed；引擎金标 33/33 逐位一致、C-62 硬窗位级 ALL PASS x5、check daily 绿
+- id: C-88
+  conclusion: '**fork 热路径审计（同步/阻塞/多次拷贝全仓清单）七项落地的兑现格局：fork 自身基准口径大赚（cpu/h264 +41%），引擎生产口径中性**。核心兑现项 = NV12 输出帧存储池化：全帧 yuv420 下此前每帧一次 2.8MB 裸 malloc/free——Windows 大块分配走 VirtualAlloc、free 后不可复用，每帧全量首触缺页税，快码流下 filter 单线程因此成为 CPU 臂关键路径（hevc/av1 解码慢，filter 被解码重叠掩盖，故只 +0.8%/+3.6%）。fork decode-only 全片 5 轮：cpu 1386→1951（h264，+41%）/841→1028（hevc）/996→1178（av1）；同轮交错 A/B（DLL 级切换 DECORD_LIBRARY_PATH，N=12000×3 轮）对上一提交归因 +31.9%/+0.8%/+3.6%。**引擎口径中性（三重验证）**：①引擎默认 gray 输出走 DLPack 零拷贝、不经输出池；②全片 e2e A/B（三码×三后端×3 轮）全部在 ±2% 噪声带内；③yuv 模式（唯一 NV12 消费路径）同中性——引擎 ROI 108x32 的 NV12 帧仅 5KB，无大块分配税（该税随 ROI 尺寸线性，只在全帧/大 ROI 显形）。段数逐位一致（e2e 全臂 + yuv 模式全臂）。其余六项（AVFrame/AVPacket 线程本地池启用+回收先 unref——上游 2019 禁用正因回收不 unref 钉住像素内存；CPU 路径空 buffer_queue ping-pong 旁路；Pop notify_all 等待者门控；improc 每帧 cuCtxGetCurrent+全局锁线程本地化；纹理注册表跨 Start 清空；hybrid 泵排空判定 O(#GOPs) 扫描游标化）均为去废/正确性向，引擎口径亦在噪声内。**附带事实**：cpu 列修正后 hybrid_gpu 的 decode-only h264 从旧表 +7% 领先翻为 −7% 落后纯 cpu——h264 单臂软解已快过两臂中转税（hevc/av1 仍 +18%/+51%）；引擎 e2e 口径（OCR 与解码重叠）hybrid 仍三码最优（C-85 不变，本轮全片 A/B 复核 ±2% 内）。未落地项及理由见审计清单：C2/C3（Pop/FeedStep 批量取帧，合并发射锁序风险>收益）、D1（next_roi 设备 yuv420 同步 D2H，无引擎调用方）、A4（全流 sync 换事件等待=加固非收益）、B5 深改（谓词锁串叠仅饱和态）'
+  status: active
+  premises: fork 0.9.8+热路径七项（cb58589）；RTX 4060M/32LP；decode-only=全帧 yuv420 批 250（fork README 口径）；引擎=gray ROI 108x32 + TRT + GPU lane
+  revisit: 引擎 ROI 放大后输出池税在引擎口径显形（那时重估）/ filter 线程扩容（转换扇出池）使 cpu 列再上台阶 / hybrid_gpu 中转税重估（cpu 列提速后差距拉大）
+  evidence:
+  - note: A/B 探针 _scratch/_ab_decode.py（decode-only，DLL 级同轮交错）+ _ab_engine.py（引擎 e2e 全片，段数一致性门）；fork 侧 cb58589（storage_pool OnRecycle 钩子/ffmpeg_common 池 16+unref/threaded_decoder 输出池+配对旁路+notify 门控/improc_dyn 线程本地化/cuda_texture Clear/pump.cc fed_confirm_idx_ 游标+迟到包回撤）
+  - note: 门禁：fork 七套件 --full + smoke + unittests 61 全过；引擎金标 33/33、C-62 ×3、check daily 绿；README 性能表按 2026-10-15 口径重测（两语言版同步，表注含池化归因）
