@@ -162,7 +162,7 @@ def test_env_name_constants_frozen():
     import video_ocr_engine.config.constants as config
 
     names = sorted(n for n in dir(config) if n.endswith("_ENV"))
-    assert len(names) == 22  # OCR_CPU_BACKEND 随 ORT 移除删除
+    assert len(names) == 20  # GPU_PIPELINE_STREAM/DRAINER 随拉流预读（C-84）删除
     # 名字快照（附录 C 全表的键集合 + SEG_MERGE_DENSE_GATE_ENV）
     assert names == sorted(
         [
@@ -179,13 +179,11 @@ def test_env_name_constants_frozen():
             "SEG_MERGE_DENSE_GATE_ENV",
             "DECODE_THREADS_ENV",
             "GPU_PIPELINE_ENV",
-            "GPU_PIPELINE_STREAM_ENV",
             "GPU_CTC_ENV",
             "ENGINE_PROFILE_ENV",
             "TRT_SUBPROBE_ENV",
             "DEBUG_BOUNDS_ENV",
             "HYBRID_CPU_THREADS_ENV",
-            "GPU_PIPELINE_DRAINER_ENV",
             "TRT_FP16_ENV",
             "TRT_DEFER_SYNC_ENV",
         ]

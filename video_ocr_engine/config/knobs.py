@@ -215,31 +215,9 @@ KNOBS = Registry(
             "config/constants.py:GPU_PIPELINE_ENV",
             note="三态：未设 None=规则 / falsy 关 / truthy 强制 / 非法=关（非 None）",
         ),
-        Knob(
-            "pipeline.gpu_stream",
-            "GPU_PIPELINE_STREAM_ENV",
-            "GPU_PIPELINE_STREAM",
-            "bool",
-            False,
-            "pipeline",
-            ("gpu",),
-            "config/constants.py:GPU_PIPELINE_STREAM_ENV",
-            note="C-10 判零收益，opt-in",
-            env_live_only=True,
-        ),  # env-live-only：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
-        Knob(
-            "pipeline.gpu_drainer",
-            "GPU_PIPELINE_DRAINER_ENV",
-            "GPU_PIPELINE_DRAINER",
-            "bool",
-            False,
-            "pipeline",
-            ("gpu",),
-            "gpu/streams.py:_batch_iter",
-            note="排空线程（get_batch 独占线程预取深 4 批）；实测零收益"
-            "默认关（引擎税=线程争用而非排空阻塞，同 C-10 判例）",
-            env_live_only=True,
-        ),  # env-live-only：消费者调用期直读 env；digest 收 resolve 期 env 实值；override 拒收
+        # （pipeline.gpu_stream / pipeline.gpu_drainer 两旋钮随
+        # GPU_PIPELINE_STREAM/DRAINER_ENV 一并移除：拉流预读（C-84）
+        # 从校准期启动即为其零收益（C-10）的根因修复，变体路径不复存在）
         # ── diag ──
         Knob(
             "diag.profile",

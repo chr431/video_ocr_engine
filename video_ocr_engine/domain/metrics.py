@@ -108,6 +108,10 @@ _SEED = (
     ("segment.merge_pair_max", "gauge", "s", "segment", "PI-1"),
     ("segment.merge_pair_hist", "histogram", "次", "segment", "PI-1"),
     ("segment.merges", "counter", "次", "segment", ""),
+    # 边界对投机命中/未命中（C-84）：命中 = 消费端零 GPU 交互；未命中 =
+    # 合并链使提问对更旧，走同步兜底。命中率是投机有效性的直接读数。
+    ("segment.spec_pair_hit", "counter", "次", "segment", ""),
+    ("segment.spec_pair_miss", "counter", "次", "segment", ""),
     # ── ocr ──
     ("ocr.engine_init", "gauge", "s", "ocr", "PI-10"),
     ("ocr.engine_reuse", "counter", "次", "ocr", "PI-10"),

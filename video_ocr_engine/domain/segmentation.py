@@ -347,6 +347,74 @@ class SegmentStateMachine:
             self._on_emit(seg, self._rep_payload, 1.0)
 
 
+class BoundaryPairPlanner:
+    """SegmentStateMachine 的 merge 无关投影（GPU lane 投机预计算用）。
+
+    状态机的分段几何不依赖合并决策：边界判定（cluster 分数 ≥ C）与段内
+    代表帧选择（sharp 严格大于保先者、段首帧打底）只消费 (fi, sharp,
+    cluster) 流；合并只改 segs 列表内容与 last_rep 的推进，不改 _s 与
+    _set_rep 的几何推进。本类按同一几何逐帧推进，在每个闭合边界产出
+    「上一段代表帧 → 本段代表帧」对。
+
+    状态机真正提问的对是 (last_emitted_rep, closing_rep)：上一边界发射时
+    last_emitted_rep == 上一段代表帧 == 本类产出的对（命中，直接用预计算
+    标量）；上一边界被合并时 last_emitted_rep 更旧 → 本类的对与提问不同
+    （未命中，消费端走同步兜底路径）。两条路径读同一内核的同一标量数学
+    ——命中与兜底的结果逐位相同，投机只改「何时算」，不改「算出什么」。
+
+    载荷随帧原样保留（GPU lane = DeviceRef，持有即保活底层设备缓冲，
+    供生产者侧批内多对内核直接取 ptr）。跨批引用的上一段代表帧由本类
+    持有的 payload 保活——与消费端状态机持有 rep payload 的保活口径
+    对称，各至多 2 个批 owner。
+    """
+
+    def __init__(self, C: float) -> None:
+        self._C = C
+        self._started = False
+        self._rep_fi = -1
+        self._rep_sharp = -1.0
+        self._rep_payload = None
+        self._prev_fi = -1  # 上一闭合段的代表帧（发射与否无关）
+        self._prev_payload = None
+
+    def feed(self, fi: int, sharp: float, cluster: float, payload) -> "tuple | None":
+        """喂一帧（分数语义与 SegmentStateMachine.feed 相同：第 k 帧的
+        cluster = 与 k-1 帧的 win3 分数）。返回本帧闭合边界上的投机对
+        ((prev_fi, prev_payload), (rep_fi, rep_payload))；首段/无边界
+        返回 None。"""
+        if not self._started:
+            self._started = True
+            self._rep_fi = fi
+            self._rep_sharp = sharp
+            self._rep_payload = payload
+            return None
+        if cluster >= self._C:
+            pair = None
+            if self._prev_fi >= 0:
+                pair = (
+                    (self._prev_fi, self._prev_payload),
+                    (self._rep_fi, self._rep_payload),
+                )
+            self._prev_fi = self._rep_fi
+            self._prev_payload = self._rep_payload
+            self._rep_fi = fi
+            self._rep_sharp = sharp
+            self._rep_payload = payload
+            return pair
+        if sharp > self._rep_sharp:
+            self._rep_fi = fi
+            self._rep_sharp = sharp
+            self._rep_payload = payload
+        return None
+
+    def finish(self) -> "tuple | None":
+        """流末尾段闭合的投机对（SegmentStateMachine.finish 的投影）；
+        无第二段（segs 恒空，状态机短路不提问）返回 None。"""
+        if not self._started or self._prev_fi < 0:
+            return None
+        return ((self._prev_fi, self._prev_payload), (self._rep_fi, self._rep_payload))
+
+
 # ═══════════════════ 4. 裁切与预处理 ═══════════════════
 
 

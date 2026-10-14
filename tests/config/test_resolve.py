@@ -18,15 +18,15 @@ ENV_NAMES = KNOBS.env_names()
 # ── env 契约：v1 风格旋钮名 + 新增旋钮 ───────────────────────────
 def test_env_contract_covers_all_v1_knobs():
     v1_names = {getattr(config, n) for n in dir(config) if n.endswith("_ENV")}
-    assert len(v1_names) == 22  # OCR_CPU_BACKEND 随 ORT 移除删除
+    assert len(v1_names) == 20  # GPU_PIPELINE_STREAM/DRAINER 随拉流预读（C-84）删除
     assert set(ENV_NAMES) >= v1_names  # v1 全部迁入，一个不丢
     # 新增三个：telemetry 三档 + 报告 sidecar + 实验性时间线
     assert set(ENV_NAMES) - v1_names == {"VOE_TELEMETRY", "VOE_REPORT_FILE", "VOE_TRACE_FILE"}
 
 
 def test_knob_registry_shape():
-    # 22 v1 旋钮 + VOE_TELEMETRY / VOE_REPORT_FILE / VOE_TRACE_FILE
-    assert len(KNOBS.knobs) == 25
+    # 20 v1 旋钮 + VOE_TELEMETRY / VOE_REPORT_FILE / VOE_TRACE_FILE
+    assert len(KNOBS.knobs) == 23
     for k in KNOBS.knobs:
         assert k.rationale_id, k.name  # 每个旋钮有依据锚点
 

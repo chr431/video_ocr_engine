@@ -119,20 +119,6 @@
   rationale: config/constants.py:GPU_PIPELINE_ENV
   note: 三态：未设 None=规则 / falsy 关 / truthy 强制 / 非法=关（非 None）
 
-- name: pipeline.gpu_stream
-  env: GPU_PIPELINE_STREAM
-  type: bool
-  default: False
-  rationale: config/constants.py:GPU_PIPELINE_STREAM_ENV
-  note: C-10 判零收益，opt-in
-
-- name: pipeline.gpu_drainer
-  env: GPU_PIPELINE_DRAINER
-  type: bool
-  default: False
-  rationale: gpu/streams.py:_batch_iter
-  note: 排空线程（get_batch 独占线程预取深 4 批）；实测零收益默认关（引擎税=线程争用而非排空阻塞，同 C-10 判例）
-
 - name: diag.profile
   env: ENGINE_PROFILE
   type: bool

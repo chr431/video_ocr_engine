@@ -76,6 +76,12 @@ class _GpuRunCtx:
         "prev_holder",
         "prev_ptr",
         "calib_n",
+        "pair_cache",
+        "pull_q",
+        "pull_err",
+        "pull_stop",
+        "pull_thread",
+        "pull_roi",
     )
 
     def __init__(self) -> None:
@@ -95,6 +101,15 @@ class _GpuRunCtx:
         self.prev_holder: Any | None = None
         self.prev_ptr = 0
         self.calib_n = 0
+        # 边界对投机缓存（C-84）：生产者侧预计算 (fi_a,fi_b)→(mad,chg,win3)，
+        # 消费端 similar() 命中直取、未命中走同步兜底；帧流启动前清空重建
+        self.pair_cache: dict = {}
+        # 拉流预读线程（C-84，_gpu_pull_start 填充/收口）
+        self.pull_q: Any = None
+        self.pull_err: list = []
+        self.pull_stop: Any = None
+        self.pull_thread: Any = None
+        self.pull_roi: tuple = ()
 
 
 def _gpu_fill_prev(analyzer, prev_buf, base, B, fnb, first_src) -> None:
@@ -117,8 +132,152 @@ def _gpu_fill_prev(analyzer, prev_buf, base, B, fnb, first_src) -> None:
     cudart.cudaMemcpyAsync(prev_buf, first_src, fnb, _d2d, analyzer._stream)
 
 
+def _gpu_analyzer_prewarm_start():
+    """后台预热 GpuFrameAnalyzer，返回 (thread, holder) 句柄。
+
+    构造的固定成本（冷进程实测 ~0.43s：cuda.core 导入 0.233 + 首次
+    Device 上下文 0.093 + 模块导入 0.107；cubin 磁盘缓存命中后编译
+    ~0）默认全落在校准相位——GPU lane 对宿主 lane 的墙钟差（nvdec
+    +TRT，2026-10-14 实测 3.52 vs 3.30s）主项即此（C-84）。从
+    run_gpu_pipeline 入口启动本线程，把构造藏进 reader 打开
+    （open_and_fps ~0.4-0.6s）背后；失败静默（holder 空）——校准回退
+    内联构造，行为不变。线程内构造与 OCR worker 的 TrtEngine 初始化
+    并发安全（cuda.core 导入有双检锁；primary ctx retain 与
+    cuModuleLoadData 均线程安全）。"""
+    import threading
+
+    holder: list = []
+
+    def _build() -> None:
+        try:
+            from video_ocr_engine.ocr.trt import GpuFrameAnalyzer
+
+            holder.append(GpuFrameAnalyzer())
+        except BaseException:  # noqa: S110 — 预热失败回退内联构造（见上）
+            pass
+
+    t = threading.Thread(target=_build, daemon=True, name="voe-analyzer-prewarm")
+    t.start()
+    return (t, holder)
+
+
+def _gpu_analyzer_prewarm_take(warm) -> "Any | None":
+    """取回预热产物（join 等待完成）；未启动/失败返回 None。"""
+    if warm is None:
+        return None
+    t, holder = warm
+    t.join()
+    return holder[0] if holder else None
+
+
+def _spec_pairs_flush(analyzer, ctx, pairs: list, th: int, use_bin: int) -> None:
+    """投机对批量落账：一次 launch + 一次 D2H + 一次流同步，结果写
+    ctx.pair_cache[(fi_a, fi_b)] = (mad, chg, win3)。空表直接返回。
+
+    调用点在批 sums 同步之后（规划器需要 sharp/cluster 值）、批 yield
+    之前（消费端见到该批时缓存必须就绪）。"""
+    if not pairs:
+        return
+    res = analyzer.compare_pairs_batch(
+        [p[0][1].ptr for p in pairs],
+        [p[1][1].ptr for p in pairs],
+        ctx.src_h,
+        ctx.src_w,
+        th,
+        bool(use_bin),
+        stream=analyzer._stream,
+    )
+    cache = ctx.pair_cache
+    for pair, row in zip(pairs, res):
+        cache[(pair[0][0], pair[1][0])] = (int(row[0]), int(row[1]), int(row[2]))
+
+
+def _gpu_pull_start(ctx: "_GpuRunCtx", hooks: DevHooks, vr, frames: list, calib_n: int) -> None:
+    """拉流预读线程（C-84）：校准期即启动的唯一 get_batch 调用者。
+
+    动机：解码/分析/校准的串行链上，analyzer 冷构造等待（~0.2s，
+    _gpu_analyzer_prewarm_start 已把大头藏进后台但校准仍要等尾段）与
+    解码器冷启动原本全部串行落在墙钟上。本线程从校准相位就开始拉流
+    （校准批 → 主批 → 队列），analyzer 等待期间解码器已全速跑批——
+    预读深度 GPU_PIPELINE_PULL_DEPTH 批（VRAM ~1.5MB，fork 侧批缓冲
+    池化后无 cudaMalloc/Free 抖动）。
+
+    线程纪律：get_batch 全部调用恒在此线程（reader 单线程不变量）；
+    主批不传 roi（SetRoi 已在 open 生效，逐批传 roi 触发 fork 池深
+    重算，实测 hybrid −9%）；校准批传 roi（既有语义）。校准/消费/
+    回退各路径经 ctx.pull_q 交付，_gpu_pull_stop 统一收口。
+    """
+    import queue as _queue
+    import threading as _threading
+
+    from video_ocr_engine.domain.resources import register_thread
+
+    DECODE_BATCH = config.GPU_PIPELINE_DECODE_BATCH
+    q: "_queue.Queue" = _queue.Queue(maxsize=config.GPU_PIPELINE_PULL_DEPTH)
+    err: list = []
+    stop = _threading.Event()
+
+    def _put(item) -> None:
+        while not stop.is_set():
+            try:
+                q.put(item, timeout=0.2)
+                return
+            except _queue.Full:
+                continue
+
+    def _pull() -> None:
+        try:
+            _put((0, vr.get_batch(frames[:calib_n], roi=ctx.pull_roi)))
+            for bstart in range(calib_n, len(frames), DECODE_BATCH):
+                _t_dec = time.perf_counter()
+                nds = vr.get_batch(frames[bstart : bstart + DECODE_BATCH])
+                hooks.tick("producer", "decode_batch", _t_dec)
+                _put((bstart, nds))
+        except BaseException as e:
+            err.append(e)
+        finally:
+            _put(None)
+
+    t = _threading.Thread(target=_pull, daemon=True, name="voe-decode-pull")
+    t.start()
+    register_thread("pull", t)
+    ctx.pull_q = q
+    ctx.pull_err = err
+    ctx.pull_stop = stop
+    ctx.pull_thread = t
+
+
+def _gpu_pull_stop(ctx: "_GpuRunCtx") -> None:
+    """拉流线程收口（stop_consume / 回退 / 释放路径统一调用）。
+
+    先置停再排空队列：线程的 put 循环见停即退，在途 get_batch 至多
+    一个批的解码时长；join 带超时（卡解码时不无限等，daemon 兜底——
+    回退宿主路径复用 reader，超时告警暴露竞态风险而非静默）。
+    """
+    t = getattr(ctx, "pull_thread", None)
+    if t is None:
+        return
+    ctx.pull_stop.set()
+    q = ctx.pull_q
+    while q is not None:
+        try:
+            q.get_nowait()
+        except Exception:
+            break
+    t.join(2.0)
+    if t.is_alive():
+        logger.warning(
+            "拉流预读线程 2s 内未退出（在途 get_batch 卡住？）——回退路径"
+            "复用 reader 存在竞态风险，请排查解码停滞"
+        )
+    ctx.pull_thread = None
+    ctx.pull_q = None
+
+
 def _gpu_release_partial(ctx: _GpuRunCtx) -> None:
     """释放尚未进入主消费循环的设备资源（池 / 校准缓冲 / 分析器）。"""
+    # 拉流线程先收口：回退宿主路径会复用 reader，在途拉流必须停止
+    _gpu_pull_stop(ctx)
     ctx.calib_owner = None
     ctx.calib_nds = None
     ctx.calib_base = 0
@@ -142,22 +301,45 @@ def _gpu_release_partial(ctx: _GpuRunCtx) -> None:
 
 
 def _gpu_prepare_calibration(
-    hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list, *, on_gpu: bool, yuv: bool, roi: tuple
+    hooks: DevHooks,
+    ctx: "_GpuRunCtx",
+    vr,
+    frames: list,
+    *,
+    on_gpu: bool,
+    yuv: bool,
+    roi: tuple,
+    warm=None,
 ) -> "tuple[bool, int]":
     """GPU 管线校准：解码校准帧 + 逐帧直方图 Otsu（阈值取中位数）。
 
     填充 ctx（analyzer/pool/calib_owner/calib_nds/calib_base/calib_gray/
     src_h/src_w/fnb/calib_n）并写 hooks 阈值盒。返回 (ok, th)；
     False = 帧形状不符（GPU 分段不支持），调用方回退宿主管线。
+    warm = 预热线线句柄（run_gpu_pipeline 入口启动，见
+    _gpu_analyzer_prewarm_start）：命中即免内联构造。
     """
     from cuda.bindings import runtime as cudart
     from video_ocr_engine.ocr.trt import GpuFrameAnalyzer
 
-    ctx.analyzer = analyzer = GpuFrameAnalyzer()
     calib_n = ctx.calib_n = min(config.SEG_CALIB_FRAMES, len(frames))
+    # ── 拉流预读线程（C-84）：校准期即启动——首个 get_batch 含解码器
+    # 冷启动，与 analyzer 预热等待并行；此后主批持续预读（深度
+    # GPU_PIPELINE_PULL_DEPTH），消费端的分析/规划器等待全部与解码
+    # 重叠。reader 单线程纪律：get_batch 全部调用恒在此线程。
+    ctx.pull_roi = roi
+    _gpu_pull_start(ctx, hooks, vr, frames, calib_n)
+    ctx.analyzer = analyzer = _gpu_analyzer_prewarm_take(warm) or GpuFrameAnalyzer()
+    _first = ctx.pull_q.get()  # 校准批（线程首产物）
+    if ctx.pull_err:
+        _gpu_pull_stop(ctx)
+        raise ctx.pull_err[0]
+    if _first is None:
+        _gpu_pull_stop(ctx)
+        raise RuntimeError("拉流预读线程未产出校准批（异常：%r）" % (ctx.pull_err or None,))
     if on_gpu:
         # ── NVDEC：decord 设备批直通（校准批同样不落 RAM）──
-        ctx.calib_nds = vr.get_batch(frames[:calib_n], roi=roi)
+        ctx.calib_nds = _first[1]
         calib_base, calib_shape = _ndarray_device_ptr(ctx.calib_nds)
         ctx.calib_base = calib_base
         if yuv:
@@ -182,7 +364,7 @@ def _gpu_prepare_calibration(
         ctx.prev_ptr = calib_base  # 灰色模式：上一批/校准末帧 device 指针
     else:
         # ── CPU 解码：校准批 asnumpy → 宿主灰度 → H2D ──
-        ctx.calib_nds = vr.get_batch(frames[:calib_n], roi=roi)
+        ctx.calib_nds = _first[1]
         crops = ctx.calib_nds.asnumpy()
         if yuv:
             if crops.ndim != 3:
@@ -232,21 +414,39 @@ def _gpu_prepare_calibration(
 
 
 def _gpu_frame_stream_nvdec(
-    hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list, *, yuv: bool, roi: tuple, th: int
+    hooks: DevHooks,
+    ctx: "_GpuRunCtx",
+    vr,
+    frames: list,
+    *,
+    yuv: bool,
+    roi: tuple,
+    th: int,
+    C: float = 0.0,
+    merge_on: bool = False,
+    use_bin: int = 0,
 ):
-    """NVDEC 设备批直通帧流：yield (frame_idx, dev, sharp, cluster)。
+    """NVDEC 设备批直通帧流：yield 批列表 [ (fi, sharp, kwargs), ... ]。
 
     dev 元组 gray=(nds,yptr,H,W) / yuv=(nds,nv12ptr,rows,W)；sharp/cluster
     由 analyze_batch（win3 分数）产出。prev 缓冲经 ctx 跨批衔接
     （prev_holder 保活 decord NDArray，防解码池复用）。
-    """
+
+    merge_on 且 gray 时启用边界对投机预计算（C-84）：规划器按状态机的
+    merge 无关几何逐帧推进，每批的边界对一次多对内核 + 拼车 D2H（在
+    sums 同步后、yield 前的一次独立同步内完成），消费端 similar() 命中
+    缓存即零 GPU 交互。yuv 的 gray 驻留在单块 _luma_dev 缓冲（每批
+    extract_luma 覆盖），跨批投机读不到稳定数据 → 不投机，保持逐对
+    同步路径。"""
     from cuda.bindings import runtime as cudart
+    from video_ocr_engine.domain.segmentation import BoundaryPairPlanner
 
     DECODE_BATCH = config.GPU_PIPELINE_DECODE_BATCH
     _d2d = cudart.cudaMemcpyKind.cudaMemcpyDeviceToDevice
     limited = hooks.limited
     analyzer = ctx.analyzer
     assert analyzer is not None  # 生命周期：prepare_calibration 已填
+    planner = BoundaryPairPlanner(C) if (merge_on and not yuv) else None
 
     def _analyze_batch(gray_base, prev_single, B, H, W):
         fnb = H * W
@@ -254,20 +454,47 @@ def _gpu_frame_stream_nvdec(
         _gpu_fill_prev(analyzer, prev_buf, gray_base, B, fnb, prev_single)
         return analyzer.analyze_batch(gray_base, prev_buf, B, H, W, th), fnb
 
+    def _walk(k0, base, sums, B, stride, dev_h, dev_w, owner, items, pairs, step=1):
+        """批内逐帧：规划器喂料（投机对收集）+ 消费项组装。
+
+        step = 帧号步进：校准批按 frames[k] 编号（step=stride，stride>1
+        时 k0+k 是索引而非帧号——金标契约）；主批维持既有 k0+k 口径
+        （step=1，历史已录向量）。"""
+        for k in range(B):
+            fi = k0 + k * step
+            sharp = float(sums[k, 0])
+            cluster = float(sums[k, 1])
+            dev = DeviceRef(ptr=base + k * stride, h=dev_h, w=dev_w, owner=owner)
+            if planner is not None:
+                pr = planner.feed(fi, sharp, cluster, dev)
+                if pr is not None:
+                    pairs.append(pr)
+            items.append((fi, sharp, {"payload": (fi, dev, sharp), "cluster": cluster}))
+
     # ── 校准帧整批分析（yuv 已在外部提取 Y → calib_gray）──
     B = ctx.calib_n
     sums, fnb = _analyze_batch(ctx.calib_gray, ctx.calib_gray, B, ctx.src_h, ctx.src_w)
     rows = ctx.src_h + (ctx.src_h + 1) // 2
-    for k in range(B):
-        cur = ctx.calib_base + k * (rows * ctx.src_w if yuv else fnb)
-        yield (
-            frames[k],
-            DeviceRef(ptr=cur, h=(rows if yuv else ctx.src_h), w=ctx.src_w, owner=ctx.calib_nds),
-            float(sums[k, 0]),
-            float(sums[k, 1]),
-        )
-        ctx.prev_holder = ctx.calib_nds
-        ctx.prev_ptr = cur
+    items: list = []
+    pairs: list = []
+    _calib_step = (frames[1] - frames[0]) if len(frames) > 1 else 1
+    _walk(
+        frames[0],
+        ctx.calib_base,
+        sums,
+        B,
+        (rows * ctx.src_w if yuv else fnb),
+        (rows if yuv else ctx.src_h),
+        ctx.src_w,
+        ctx.calib_nds,
+        items,
+        pairs,
+        step=_calib_step,
+    )
+    _spec_pairs_flush(analyzer, ctx, pairs, th, use_bin)
+    ctx.prev_holder = ctx.calib_nds  # 保住前一 decord NDArray（防解码池复用）
+    ctx.prev_ptr = ctx.calib_base + (B - 1) * (rows * ctx.src_w if yuv else fnb)
+    yield items
     # yuv：末帧 Y 存入单帧缓冲（extract_luma 复用主缓冲会覆盖，
     # 下一批开始前必须已有独立副本）。注：_ensure_prev 首次按
     # 64*fnb 分配且批尺寸恒定 → prev_front 指针后续稳定不重分配。
@@ -280,70 +507,20 @@ def _gpu_frame_stream_nvdec(
         )
         have_prev_front = True
 
-    # chunk 粒度流水发射（decord get_batch_stream）：后台预取
-    # 下一批，解码完成即交付 —— 消费（extract_luma/analyze）与
-    # 解码重叠。GPU_PIPELINE_STREAM 默认关（实测零收益，C-10）。
-    _use_stream = config.env_bool(config.GPU_PIPELINE_STREAM_ENV, default=False) and hasattr(
-        vr, "get_batch_stream"
-    )
-
+    # ── 主批消费：拉流预读队列（C-84；校准期已开跑，解码器领先
+    # 消费端至多 GPU_PIPELINE_PULL_DEPTH 批）。逐项 (bstart, nds)，
+    # 哨兵 None；错误槽非空即重抛。旧的 GPU_PIPELINE_STREAM /
+    # GPU_PIPELINE_DRAINER 环境变体（C-10 零收益判例）被本默认结构
+    # 取代移除——预读从校准期启动是其零收益的根因修复。
     def _batch_iter():
-        if _use_stream:
-            for s0, nds in vr.get_batch_stream(frames[ctx.calib_n :], roi=roi, batch=DECODE_BATCH):
-                yield s0, nds
-            return
-        # ── 排空线程（GPU_PIPELINE_DRAINER，默认关，见下）──
-        # get_batch 独占一线程预取（深 4 批），生产者的 analyze/sync 不再
-        # 阻塞解码排空——decode.batch 引擎税的构成为"生产者分析期间无人
-        # 拉动解码，fork 侧银行反压停转"。线程安全性：get_batch 全部调用
-        # 恒在此线程（decord Push/pump 单线程不变量保持）；calibrate 的
-        # next_roi 在此流启动前已结束。
-        # 默认关：实测零收益（引擎税源于线程争用而非排空阻塞，与
-        # C-10 流水发射同判）；留旋钮供复评。
-        _drainer_on = config.env_bool(config.GPU_PIPELINE_DRAINER_ENV, default=False)
-        bstarts = range(ctx.calib_n, len(frames), DECODE_BATCH)
-        if not _drainer_on:
-            for bstart in bstarts:
-                # roi 不随批传：打开 reader 时 SetRoi 已生效；hybrid 原生
-                # 路径每次 get_batch 传 roi 会触发 fork 侧 SetRoi/池深重算
-                # （实测 hybrid av1 2487→2264 fps，-9%；
-                # archive/pre-rework:tools/_probe_roi_decode.py 已证 CPU 路径两种传法等价）。
-                _t_dec = time.perf_counter()
-                nds = vr.get_batch(frames[bstart : bstart + DECODE_BATCH])
-                hooks.tick("producer", "decode_batch", _t_dec)
-                yield bstart, nds
-            return
-        import queue as _queue
-        import threading as _threading
-
-        _q: "_queue.Queue" = _queue.Queue(maxsize=4)
-        _err: list = []
-
-        def _drain() -> None:
-            try:
-                for bstart in bstarts:
-                    bend = min(bstart + DECODE_BATCH, len(frames))
-                    _t_dec = time.perf_counter()
-                    nds = vr.get_batch(frames[bstart:bend])
-                    hooks.tick("producer", "decode_batch", _t_dec)
-                    _q.put((bstart, nds))
-            except BaseException as e:
-                _err.append(e)
-            finally:
-                _q.put(None)
-
-        _dt = _threading.Thread(target=_drain, daemon=True, name="voe-decode-drainer")
-        _dt.start()
-        # v8 线程账本登记：设备侧排放排空线程
-        from video_ocr_engine.domain.resources import register_thread
-
-        register_thread("drain", _dt)
         while True:
-            item = _q.get()
+            item = ctx.pull_q.get()
             if item is None:
-                if _err:
-                    raise _err[0]
+                if ctx.pull_err:
+                    raise ctx.pull_err[0]
                 return
+            if ctx.pull_err:
+                raise ctx.pull_err[0]
             yield item
 
     for bstart, nds in _batch_iter():
@@ -374,33 +551,59 @@ def _gpu_frame_stream_nvdec(
                 prev_front, gray_base + (B - 1) * fnb, fnb, _d2d, analyzer._stream
             )
             have_prev_front = True
-        # stream 模式 bstart 即首帧号；seq 模式 bstart 是
-        # frames 下标 → 统一转帧号
-        f0 = bstart if _use_stream else frames[bstart]
-        for k in range(B):
-            cur = base + k * (rows * W if yuv else fnb)
-            yield (
-                f0 + k,
-                DeviceRef(ptr=cur, h=rows, w=W, owner=nds),
-                float(sums[k, 0]),
-                float(sums[k, 1]),
-            )
-            ctx.prev_holder = nds
-            ctx.prev_ptr = cur
+        # 拉流线程交付的 bstart 是 frames 下标 → 帧号
+        f0 = frames[bstart]
+        items = []
+        pairs = []
+        _walk(
+            f0,
+            base,
+            sums,
+            B,
+            (rows * W if yuv else fnb),
+            (rows if yuv else H),
+            W,
+            nds,
+            items,
+            pairs,
+        )
+        _spec_pairs_flush(analyzer, ctx, pairs, th, use_bin)
+        ctx.prev_holder = nds
+        ctx.prev_ptr = base + (B - 1) * (rows * W if yuv else fnb)
+        yield items
         if yuv:
             have_prev_front = True
+    if planner is not None:
+        # 流末尾段闭合的投机对（消费端 machine.finish() 的提问对象）
+        fp = planner.finish()
+        if fp is not None:
+            _spec_pairs_flush(analyzer, ctx, [fp], th, use_bin)
 
 
 def _gpu_frame_stream_cpu(
-    hooks: DevHooks, ctx: "_GpuRunCtx", vr, frames: list, *, yuv: bool, roi: tuple, th: int
+    hooks: "DevHooks",
+    ctx: "_GpuRunCtx",
+    vr,
+    frames: list,
+    *,
+    yuv: bool,
+    roi: tuple,
+    th: int,
+    C: float = 0.0,
+    merge_on: bool = False,
+    use_bin: int = 0,
 ):
     """CPU 解码帧流：get_batch → 宿主灰度 → H2D → analyze。
 
     每批缓冲从池取（引用归零归还）；上一批末帧作本批 analyze
     的 prev（fill_prev 读取期间由 prev_owner 保活）。analyze
     同步返回后本批帧指针即可交付（H2D/kernel 均已完成）。
-    """
+
+    yield 批列表 [ (fi, sharp, kwargs), ... ]。merge_on 时启用边界对
+    投机（C-84）——本分支设备内容恒为灰度（yuv 仅指输入着色，灰度已
+    在宿主算好 H2D），池缓冲由 payload owner 保活，投机指针稳定。"""
     from cuda.bindings import runtime as cudart
+    from video_ocr_engine.domain.segmentation import BoundaryPairPlanner
 
     DECODE_BATCH = config.GPU_PIPELINE_DECODE_BATCH
     _d2d = cudart.cudaMemcpyKind.cudaMemcpyDeviceToDevice
@@ -415,29 +618,51 @@ def _gpu_frame_stream_cpu(
     assert calib_owner is not None
     calib_n = ctx.calib_n
     src_h, src_w = ctx.src_h, ctx.src_w
+    planner = BoundaryPairPlanner(C) if merge_on else None
+
+    def _walk(k0, base, sums, B, owner, items, pairs, step=1):
+        # step 语义同 nvdec 流：校准批 = frames[k]（金标契约），主批 = k0+k
+        for k in range(B):
+            fi = k0 + k * step
+            sharp = float(sums[k, 0])
+            cluster = float(sums[k, 1])
+            dev = DeviceRef(ptr=base + k * fnb, h=src_h, w=src_w, owner=_CpuFrameRef(owner, k))
+            if planner is not None:
+                pr = planner.feed(fi, sharp, cluster, dev)
+                if pr is not None:
+                    pairs.append(pr)
+            items.append((fi, sharp, {"payload": (fi, dev, sharp), "cluster": cluster}))
+
     prev_buf = analyzer._ensure_prev(max(calib_n, DECODE_BATCH) * fnb)
     # ── 校准帧整批分析（校准批已在外部 H2D → calib_owner）──
     _gpu_fill_prev(analyzer, prev_buf, calib_owner.ptr, calib_n, fnb, calib_owner.ptr)
     sums = analyzer.analyze_batch(calib_owner.ptr, prev_buf, calib_n, src_h, src_w, th)
-    for k in range(calib_n):
-        yield (
-            frames[k],
-            DeviceRef(
-                ptr=calib_owner.ptr + k * fnb, h=src_h, w=src_w, owner=_CpuFrameRef(calib_owner, k)
-            ),
-            float(sums[k, 0]),
-            float(sums[k, 1]),
-        )
+    items: list = []
+    pairs: list = []
+    _calib_step = (frames[1] - frames[0]) if len(frames) > 1 else 1
+    _walk(frames[0], calib_owner.ptr, sums, calib_n, calib_owner, items, pairs, step=_calib_step)
+    _spec_pairs_flush(analyzer, ctx, pairs, th, use_bin)
+    yield items
     prev_owner = calib_owner  # 上一批缓冲（fill_prev 读取期间保活）
     prev_ptr = calib_owner.ptr + (calib_n - 1) * fnb
-    for bstart in range(calib_n, len(frames), DECODE_BATCH):
+    # ── 主批：拉流预读队列（C-84；calibrate 已启动线程，本循环只做
+    # 宿主灰度 + H2D + analyze——与拉流线程的解码重叠）──
+    while True:
+        _item = ctx.pull_q.get()
+        if _item is None:
+            if ctx.pull_err:
+                raise ctx.pull_err[0]
+            break
+        if ctx.pull_err:
+            raise ctx.pull_err[0]
+        bstart, nds = _item
         bend = min(bstart + DECODE_BATCH, len(frames))
         B = bend - bstart
         # CPU 解码分支也打桩（decode.*/stream_analyze）。键语义与宿主
         # 路径对齐：decode_batch = get_batch + asnumpy（宿主同款）；
-        # gray_batch = 灰度转换。
+        # gray_batch = 灰度转换。get_batch 时间在拉流线程侧，此处
+        # span 只含 asnumpy。
         _t_dec = time.perf_counter()
-        nds = vr.get_batch(frames[bstart:bend], roi=roi)
         crops = nds.asnumpy()
         hooks.tick("producer", "decode_batch", _t_dec)
         if yuv:
@@ -459,12 +684,15 @@ def _gpu_frame_stream_cpu(
         _gpu_fill_prev(analyzer, prev_buf, base, B, fnb, prev_ptr)
         sums = analyzer.analyze_batch(base, prev_buf, B, src_h, src_w, th)
         hooks.tick("producer", "stream_analyze", _t_an)
-        for k in range(B):
-            yield (
-                frames[bstart + k],
-                DeviceRef(ptr=base + k * fnb, h=src_h, w=src_w, owner=_CpuFrameRef(owner, k)),
-                float(sums[k, 0]),
-                float(sums[k, 1]),
-            )
+        items = []
+        pairs = []
+        _walk(frames[bstart], base, sums, B, owner, items, pairs)
+        _spec_pairs_flush(analyzer, ctx, pairs, th, use_bin)
+        yield items
         prev_owner = owner  # noqa: F841  # 保活：下批 fill_prev 读 prev_ptr（旧 owner 设备内存）期间不得回收
         prev_ptr = base + (B - 1) * fnb
+    if planner is not None:
+        # 流末尾段闭合的投机对（消费端 machine.finish() 的提问对象）
+        fp = planner.finish()
+        if fp is not None:
+            _spec_pairs_flush(analyzer, ctx, [fp], th, use_bin)

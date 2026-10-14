@@ -886,10 +886,10 @@ extern "C" __global__ void sim_pair(
     // out[2]=差异图 max 3×3 窗口和（稠密簇门，与 _cluster_win3 同一语义）。
     // use_bin=1 按二值化域（阈值穿越 ⇔ |0-255| 差），否则按原始灰度域：
     // MAD 在两种域下分别累加「穿越数」与「|Δ| 整数和」，**不共用**——宿主
-    // binary 域的 mean 是 255×穿越数/n（见 _similar_device 换算），非 binary
-    // 域是 |Δ| 均值，混用会使 off 模式的 mean 判据整体失真。
+    // binary 域的 mean 是 255×穿越数/n（见 gpu_backend.similar 换算），非
+    // binary 域是 |Δ| 均值，混用会使 off 模式的 mean 判据整体失真。
     // 与宿主 _segments_similar（binary text_sep / raw）语义一一对应：整数
-    // 精确累加（与 numpy 的 float32 均值仅差末位舍入，见 _similar_device）。
+    // 精确累加（与 numpy 的 float32 均值仅差末位舍入，见 gpu_backend.similar）。
     // win3 与宿主 _cluster_win3 逐位一致：**每个像素都作窗口中心**求 3×3
     // 和（越界按 0）取 max —— 只在变化点上求会漏：8 邻域全变而中心未变时
     // 宿主得 8、只在变化点求只得 5，两管线在阈值处即可分出不同判定。
@@ -943,6 +943,74 @@ extern "C" __global__ void sim_pair(
         out[0] = s_mad[0];
         out[1] = (double)s_chg[0];
         out[2] = (double)s_max[0];
+    }
+}
+
+extern "C" __global__ void sim_pair_multi(
+    const long long* __restrict__ as,   // P 个 a 帧基址（不要求连续）
+    const long long* __restrict__ bs,   // P 个 b 帧基址
+    double* __restrict__ out,           // (P, 3)：逐对 [mad, chg, win3]
+    int n, int th, int use_bin, int W, int H, int P) {
+    // 批量 sim_pair（block = 一对）：逐像素数学与 sim_pair 逐位一致
+    // （同一段函数体的指针参数化拷贝，改任何一侧必须同步另一侧）。
+    // 供生产者侧边界对投机预计算：P 对一次 launch + 一次 D2H + 一次
+    // 流同步，取代消费端逐边界 launch+sync（千次量级的提交/同步开销
+    // 是 GPU lane 对宿主 lane 亏损的主项，C-84）。
+    int p = blockIdx.x;
+    if (p >= P) return;
+    const unsigned char* a = (const unsigned char*)(size_t)as[p];
+    const unsigned char* b = (const unsigned char*)(size_t)bs[p];
+    double* o = out + (size_t)p * 3;
+    __shared__ double s_mad[256];
+    __shared__ unsigned long long s_chg[256];
+    __shared__ int s_max[256];
+    int t = threadIdx.x;
+    double mad = 0.0;
+    unsigned long long chg = 0;
+    int maxc = 0;
+    for (int q = t; q < n; q += 256) {
+        int dchg;
+        if (use_bin) {
+            dchg = ((a[q] > th) != (b[q] > th)) ? 1 : 0;
+            mad += dchg;
+        } else {
+            int d = abs((int)a[q] - (int)b[q]);
+            mad += d;
+            dchg = d > 10 ? 1 : 0;
+        }
+        chg += dchg;
+        int y = q / W;
+        int x = q - y * W;
+        int y0 = y > 0 ? y - 1 : 0;
+        int y1 = y + 1 < H ? y + 1 : H - 1;
+        int x0 = x > 0 ? x - 1 : 0;
+        int x1 = x + 1 < W ? x + 1 : W - 1;
+        int s3 = 0;
+        for (int yy = y0; yy <= y1; yy++) {
+            int row = yy * W;
+            for (int xx = x0; xx <= x1; xx++) {
+                int r = row + xx;
+                s3 += use_bin
+                    ? (((a[r] > th) != (b[r] > th)) ? 1 : 0)
+                    : ((abs((int)a[r] - (int)b[r]) > 10) ? 1 : 0);
+            }
+        }
+        if (s3 > maxc) maxc = s3;
+    }
+    s_mad[t] = mad; s_chg[t] = chg; s_max[t] = maxc;
+    __syncthreads();
+    for (int s = 128; s > 0; s >>= 1) {
+        if (t < s) {
+            s_mad[t] += s_mad[t + s];
+            s_chg[t] += s_chg[t + s];
+            if (s_max[t + s] > s_max[t]) s_max[t] = s_max[t + s];
+        }
+        __syncthreads();
+    }
+    if (t == 0) {
+        o[0] = s_mad[0];
+        o[1] = (double)s_chg[0];
+        o[2] = (double)s_max[0];
     }
 }
 
@@ -1000,6 +1068,10 @@ extern "C" __global__ void luma_nv12(
     _rangeb_size: int
     _luma_b_dev: "int | None"
     _luma_b_size: int
+    _pairp_dev: "int | None"
+    _pairp_size: int
+    _pairo_dev: "int | None"
+    _pairo_size: int
 
     def __init__(self) -> None:
         Device = _cuda_core().Device
@@ -1013,6 +1085,7 @@ extern "C" __global__ void luma_nv12(
                 "luma_nv12",
                 "luma_nv12_batch",
                 "sim_pair",
+                "sim_pair_multi",
                 "col_ink",
                 "col_ink_batch",
             ),
@@ -1022,6 +1095,7 @@ extern "C" __global__ void luma_nv12(
         self._kernel_luma = self._mod.get_kernel("luma_nv12")
         self._kernel_luma_b = self._mod.get_kernel("luma_nv12_batch")
         self._kernel_sim = self._mod.get_kernel("sim_pair")
+        self._kernel_sim_m = self._mod.get_kernel("sim_pair_multi")
         self._kernel_ink = self._mod.get_kernel("col_ink")
         self._kernel_ink_b = self._mod.get_kernel("col_ink_batch")
         from cuda.bindings import runtime as cudart
@@ -1065,6 +1139,8 @@ extern "C" __global__ void luma_nv12(
             "_ptrb_dev",
             "_rangeb_dev",
             "_luma_b_dev",
+            "_pairp_dev",
+            "_pairo_dev",
         ):
             ptr = getattr(self, attr, None)
             if ptr:
@@ -1076,6 +1152,7 @@ extern "C" __global__ void luma_nv12(
         self._luma_size = 0
         self._ptrb_size = self._rangeb_size = 0
         self._luma_b_size = 0
+        self._pairp_size = self._pairo_size = 0
         for attr in ("_stream", "_stream_c"):
             s = getattr(self, attr, None)
             if s is not None and getattr(self, "_owns_stream", False):
@@ -1385,6 +1462,85 @@ extern "C" __global__ void luma_nv12(
         )
         _ck(cudart.cudaStreamSynchronize(s), "sim_pair D2H 同步")
         return int(out[0]), int(out[1]), int(out[2])
+
+    def compare_pairs_batch(
+        self,
+        a_ptrs: "list[int]",
+        b_ptrs: "list[int]",
+        H: int,
+        W: int,
+        th: int,
+        use_bin: bool,
+        stream=None,
+    ) -> "np.ndarray":
+        """P 对帧差异标量（sim_pair 的批量版，逐位一致）：返回 (P,3)
+        float64（mad_sum / changed / win3_max）。
+
+        供生产者侧边界对投机预计算：P 对一次 launch + 一次 D2H + 一次
+        流同步，把消费端逐边界的 launch+sync 摊成每批一次。调用方保证
+        各帧数据在同步前有效（payload owner 保活）。stream 生产者传
+        analyzer._stream（与 analyze_batch 同流次序）。"""
+        import numpy as np
+        from cuda.bindings import runtime as cudart
+        from cuda.core import Buffer, LaunchConfig, launch
+
+        s = self._stream if stream is None else stream
+        P = len(a_ptrs)
+        in_nbytes = 2 * P * 8
+        out_nbytes = P * 3 * 8
+        if getattr(self, "_pairp_size", 0) < in_nbytes:
+            if getattr(self, "_pairp_dev", None) is not None:
+                cudart.cudaFree(self._pairp_dev)
+            _err, self._pairp_dev = cudart.cudaMalloc(in_nbytes)
+            _ck_alloc(_err, self._pairp_dev, in_nbytes)
+            self._pairp_size = in_nbytes
+        if getattr(self, "_pairo_size", 0) < out_nbytes:
+            if getattr(self, "_pairo_dev", None) is not None:
+                cudart.cudaFree(self._pairo_dev)
+            _err, self._pairo_dev = cudart.cudaMalloc(out_nbytes)
+            _ck_alloc(_err, self._pairo_dev, out_nbytes)
+            self._pairo_size = out_nbytes
+        arr = np.array([int(p) for p in a_ptrs] + [int(p) for p in b_ptrs], dtype=np.int64)
+        _ck(
+            cudart.cudaMemcpyAsync(
+                self._pairp_dev,
+                arr.ctypes.data,
+                in_nbytes,
+                cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
+                s,
+            ),
+            "sim_pair 批指针 H2D",
+        )
+        assert (
+            self._pairp_dev is not None and self._pairo_dev is not None
+        )  # mypy 收窄（上方分支/既有分配保证）
+        launch(
+            s,
+            LaunchConfig(grid=P, block=256),
+            self._kernel_sim_m,
+            Buffer.from_handle(self._pairp_dev, in_nbytes),
+            Buffer.from_handle(self._pairp_dev + P * 8, in_nbytes),
+            Buffer.from_handle(self._pairo_dev, out_nbytes),
+            np.int32(H * W),
+            np.int32(int(th)),
+            np.int32(1 if use_bin else 0),
+            np.int32(W),
+            np.int32(H),
+            np.int32(P),
+        )
+        out: np.ndarray = np.empty((P, 3), dtype=np.float64)
+        _ck(
+            cudart.cudaMemcpyAsync(
+                out.ctypes.data,
+                self._pairo_dev,
+                out_nbytes,
+                cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost,
+                s,
+            ),
+            "sim_pair 批 D2H",
+        )
+        _ck(cudart.cudaStreamSynchronize(s), "sim_pair 批 D2H 同步")
+        return out
 
     def analyze_batch(
         self, raw_ptr: int, prev_ptr: int, B: int, H: int, W: int, th: float

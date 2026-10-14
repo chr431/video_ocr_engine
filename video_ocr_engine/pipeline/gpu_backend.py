@@ -10,17 +10,15 @@ autocropper 与 y_pool 为**构造注入**——会话启动前/生产者线程�
 
 生命周期（open→fps→会话→校准→消费→收尾）上收到
 _driver.run_segment_pipeline 单出处，本模块只剩 GPU 侧策略
-（_GpuLane）：设备侧校准、生产者线程+队列帧流、DeviceRef emit、
-sim_pair 合并判定，以及形状不符回退宿主。
+（_GpuLane）：设备侧校准、内联帧流生成器、DeviceRef emit、
+sim_pair 合并判定（投机缓存命中 → 宿主标量），以及形状不符回退宿主。
 """
 
 from __future__ import annotations
 
 import logging
-import threading
 import time
 from dataclasses import dataclass, field
-from queue import Empty, Full, Queue
 from typing import Any, Callable
 
 import numpy as np
@@ -31,7 +29,6 @@ from ..gpu.frame_ref import DeviceRef
 
 logger = logging.getLogger(__name__)
 
-_PRODUCER_JOIN_TIMEOUT = 5.0
 _KEEP_CROPS_WINDOW = 16  # keep_crops 的 D2H 并批窗口（段数计）
 
 
@@ -155,10 +152,11 @@ class _GpuLane:
     progress_verb = "GPU分段"
     debug_tag = "GB"
 
-    def __init__(self, spec: GpuRunSpec) -> None:
+    def __init__(self, spec: GpuRunSpec, warm=None) -> None:
         from ..gpu.streams import _gpu_release_partial  # 设备侧机制（规范位置 gpu/streams.py）
 
         self._spec = spec
+        self._warm = warm  # 预热线句柄（run_gpu_pipeline 入口启动，calibrate 取回）
         self._release = _gpu_release_partial
         # 惰性装配字段（after_open/after_calibrate 前置装配；驱动顺序保证
         # run 期恒非 None——mypy 按 Any 容忍，勿在装配前调用）
@@ -171,12 +169,8 @@ class _GpuLane:
         self._yuv = spec.yuv_output
         self._limited = spec.color_range != 1
         self._th = 0
-        # 生产者线程 / 队列 / 错误槽
-        self._producer: Any = None
-        self._producer_q: Queue | None = None
+        # 帧流（内联生成器；C-84 去生产者线程后无队列/线程态）
         self._stream: Any = None
-        self.producer_stop = threading.Event()
-        self.producer_err: list = []
         # 消费侧运行态
         self._session: Any = None
         self._put_ocr: Any = None
@@ -232,6 +226,7 @@ class _GpuLane:
             on_gpu=self._on_gpu,
             yuv=self._yuv,
             roi=(x1, y1, x2 + 1, y2 + 1),
+            warm=self._warm,
         )
         self._th = th
         return ok, th
@@ -281,10 +276,19 @@ class _GpuLane:
         if self._spec.metrics.enabled:
             self._spec.metrics.counter("segment.merges", self._merge_hits)
 
-    # ── 帧流：生产者线程 + 队列，包成生成器交统一驱动消费 ──────────
+    # ── 帧流：生成器内联消费（与宿主 lane 同构）──────────────────────
     def frame_items(self, spec, vr, frames, ocr_session):
+        """帧流直通：流生成器在消费线程内联拉动（C-84）。
+
+        曾为「生产者线程 + 队列」结构（解码与消费重叠）；消费端投机化后
+        消费者只剩 ~µs/帧（合并判定命中零 GPU 交互，consume_feed 实测
+        0.017s/3000 帧），重叠收益已不存在，而独立 Python 线程的 GIL
+        争用反而拖慢解码拉动（decode.batch 实测 +240ms/3000 帧，
+        nvdec+TRT test5：队列结构 2.98s vs 内联 2.7x s，与宿主 lane
+        同水位）。OCR 会话本就有独立 worker/infer 线程，OCR∥解码重叠
+        不受影响。流 yield 批列表（streams.py），此处摊平逐帧交付。
+        """
         self._raw_ready = ocr_session.raw_ready
-        self._producer_q = Queue(maxsize=max(8, spec.buffer_size))
         x1, y1, x2, y2 = spec.roi
         self._stream = self._stream_fn[0 if self._on_gpu else 1](
             self._hooks,
@@ -294,75 +298,25 @@ class _GpuLane:
             yuv=self._yuv,
             roi=(x1, y1, x2 + 1, y2 + 1),
             th=self._th,
+            C=spec.C,
+            merge_on=spec.merge_similar,
+            use_bin=1 if spec.merge_effective_mode() == "binary" else 0,
         )
-        self._producer = threading.Thread(target=self._producer_loop, daemon=True)
-        self._producer.start()
-        # v8 线程账本登记：GPU 生产者线程（解码供料）
-        from video_ocr_engine.domain.resources import register_thread
-
-        register_thread("producer", self._producer)
-        while True:
-            try:
-                item = self._producer_q.get(timeout=0.2)
-            except Empty:
-                # 解码停滞/等待期间保持取消响应。
-                spec.cancel()
-                continue
-            if item is None:
-                break
-            if self.producer_err:
-                raise RuntimeError(
-                    f"GPU 解码生产者失败: {self.producer_err[0]!r}"
-                ) from self.producer_err[0]
-            fi, dev, sharp, cluster = item
-            yield fi, sharp, dict(payload=(fi, dev, sharp), cluster=float(cluster))
-
-    def _put_q(self, item) -> bool:
-        # 生产者侧背压：FULL 重试等待正是"OCR 消费不动生产者"的直接证据。
-        spec = self._spec
-        q = self._producer_q
-        assert q is not None  # frame_items 先于 producer 线程启动装配
-        _t_put = time.perf_counter()
-        try:
-            while not self.producer_stop.is_set():
-                try:
-                    q.put(item, timeout=0.2)
-                    return True
-                except Full:
-                    continue
-            return False
-        finally:
-            if spec.prof_end is not None:
-                spec.prof_end("producer", "q_put_block", _t_put)
-
-    def _producer_loop(self) -> None:
-        try:
-            for item in self._stream:
-                if not self._put_q(item):
-                    return
-        except BaseException as e:
-            # BaseException 而非 Exception（与 gpu/streams.py 排空线程对齐）：
-            # 逃逸的 BaseException 会让 producer_err 恒空 → 消费循环见哨兵即
-            # 正常收尾 → run 报成功但帧数静默截断。
-            self.producer_err.append(e)
-        finally:
-            self._put_q(None)
+        for batch in self._stream:
+            for fi, sharp, kw in batch:
+                yield fi, sharp, kw
 
     def after_stream(self) -> None:
-        self._producer.join()
-        if self.producer_err:
-            raise RuntimeError(
-                f"GPU 解码生产者失败: {self.producer_err[0]!r}"
-            ) from self.producer_err[0]
+        # 帧流内联消费后无后台线程：生成器耗尽即全部完成
+        return
 
     def stop_consume(self) -> None:
-        self.producer_stop.set()  # 任何退出路径都叫停 producer
+        from ..gpu.streams import _gpu_pull_stop
+
+        # 任何退出路径都收口拉流预读线程（消费早停时其 put 循环见停即退；
+        # 正常收尾时线程已随哨兵退出，此调用为幂等 no-op）
+        _gpu_pull_stop(self._ctx)
         self._resolve_keep_crops()  # 尾窗收口（rep_crops 必须完整）
-        if self._producer is not None:
-            try:
-                self._producer.join(_PRODUCER_JOIN_TIMEOUT)
-            except BaseException:
-                logger.debug("producer.join 清理忽略异常", exc_info=True)
 
     # ── 代表帧交付 / 合并判定（消费线程内）────────────────────────
     def emit(self, seg, rep, frac) -> None:
@@ -455,14 +409,51 @@ class _GpuLane:
         return spec.content_range_to_crop(rng[0], rng[1], ctx.src_w)
 
     def similar(self, a, b) -> bool:
-        """merge_similar 判定：GPU sim_pair（整数精确）。"""
-        return self._similar_device(a[1], b[1])
+        """merge_similar 判定（整数精确）。
 
-    def _similar_device(self, a_dev, b_dev) -> bool:
+        投机缓存命中（C-84）→ 宿主标量判定，零 GPU 交互：生产者侧已按
+        状态机的 merge 无关几何（BoundaryPairPlanner）把「上一段代表帧
+        →本段代表帧」对批量预计算（同 sim_pair 内核、同指针，结果逐位
+        相同）。未命中（上一边界被合并 → 状态机问的是更旧的
+        last_emitted_rep）→ 原同步路径兜底，语义不变。"""
+        spec = self._spec
+        if not (spec.merge_similar and a[1] is not None and b[1] is not None):
+            return False
+        _t_cmp = time.perf_counter()
+        _MET = spec.metrics
+        hit = self._ctx.pair_cache.pop((a[0], b[0]), None)
+        if hit is not None:
+            mad, chg, win3 = hit
+            if _MET.enabled:
+                _MET.counter("segment.spec_pair_hit")
+        else:
+            if _MET.enabled:
+                _MET.counter("segment.spec_pair_miss")
+            mad, chg, win3 = self._similar_device_scalars(a[1], b[1])
+        n = self._ctx.src_h * self._ctx.src_w
+        use_bin = spec.merge_effective_mode() == "binary"
+        mean = 255.0 * mad / n if use_bin else mad / n
+        # 稠密簇门：win3 由 sim_pair 设备侧算出，与宿主 _cluster_win3 逐位
+        # 一致（同一 3×3 邻域定义）；两侧共用 dense_gate_hit + similar_decision，
+        # 否则 C-32「GPU 为宿主逐位镜像」的契约在阈值处破。
+        _dec = similar_decision(
+            mean,
+            chg,
+            spec.merge_similar_threshold,
+            spec.merge_max_changed_pixels,
+            dense=dense_gate_hit(win3, spec.merge_dense_gate),
+        )
+        if _dec:
+            self._merge_hits += 1  # 逐段计数改为局部累加，run 末一次上报
+        if spec.prof_end is not None:
+            # 合并判定的全开销（命中=宿主标量；未命中=launch+D2H+同步）
+            spec.prof_end("producer", "merge_pair", _t_cmp)
+        return _dec
+
+    def _similar_device_scalars(self, a_dev, b_dev) -> "tuple[int, int, int]":
+        """兜底路径：GPU sim_pair 的三标量（未投机/yuv/合并链未命中）。"""
         spec = self._spec
         ctx = self._ctx
-        if not (spec.merge_similar and a_dev is not None and b_dev is not None):
-            return False
         use_bin = 1 if spec.merge_effective_mode() == "binary" else 0
         ya = yb = None
         if self._yuv and self._on_gpu:
@@ -488,8 +479,7 @@ class _GpuLane:
         else:
             ap, bp = int(a_dev.ptr), int(b_dev.ptr)
         try:
-            _t_cmp = time.perf_counter()
-            mad, chg, win3 = ctx.analyzer.compare_pair(
+            return ctx.analyzer.compare_pair(
                 ap,
                 bp,
                 ctx.src_h,
@@ -498,10 +488,6 @@ class _GpuLane:
                 use_bin,
                 stream=ctx.analyzer._stream_c,
             )
-            if spec.prof_end is not None:
-                # 合并判定的提交开销（每段边界一次 grid=1 launch+sync，
-                # 消费线程内串行——批量化收益的判据）
-                spec.prof_end("producer", "merge_pair", _t_cmp)
         finally:
             # 合并判定的池帧显式归还（不再依赖 GC 时机；payload 携带的池帧
             # 仍由 __del__ 入列回收——owner 生命周期跨线程，无法在此收口）
@@ -509,21 +495,6 @@ class _GpuLane:
                 ctx.y_pool.recycle(ya)
             if yb is not None:
                 ctx.y_pool.recycle(yb)
-        n = ctx.src_h * ctx.src_w
-        mean = 255.0 * mad / n if use_bin else mad / n
-        # 稠密簇门：win3 由 sim_pair 设备侧算出，与宿主 _cluster_win3 逐位
-        # 一致（同一 3×3 邻域定义）；两侧共用 dense_gate_hit + similar_decision，
-        # 否则 C-32「GPU 为宿主逐位镜像」的契约在阈值处破。
-        _dec = similar_decision(
-            mean,
-            chg,
-            spec.merge_similar_threshold,
-            spec.merge_max_changed_pixels,
-            dense=dense_gate_hit(win3, spec.merge_dense_gate),
-        )
-        if _dec:
-            self._merge_hits += 1  # 逐段计数改为局部累加，run 末一次上报
-        return _dec
 
     def _emit_ocr(self, idx, r_frame, r_dev, frac, r_sharp) -> None:
         from cuda.bindings import runtime as cudart
@@ -604,9 +575,13 @@ def run_gpu_pipeline(spec: GpuRunSpec, ocr_engines=None) -> GpuRunResult:
     """GPU 驱动门入口。
 
     生命周期由 _driver.run_segment_pipeline 承载；本模块提供
-    GPU lane 策略：设备侧校准 → 生产者线程（解码+GPU analyze 与主线程
-    分段/OCR 重叠）→ 消费循环 → 清理；形状不符回退宿主。
+    GPU lane 策略：设备侧校准 → 内联帧流生成器（解码+GPU analyze 与
+    OCR worker/infer 线程重叠）→ 消费循环 → 清理；形状不符回退宿主。
+    入口先启动 analyzer 预热线（构造 ~0.43s/冷进程，藏进 reader 打开
+    背后，见 _gpu_analyzer_prewarm_start）。
     """
     from ._driver import run_segment_pipeline
+    from ..gpu.streams import _gpu_analyzer_prewarm_start
 
-    return run_segment_pipeline(spec, GpuRunResult(), _GpuLane(spec), ocr_engines)
+    warm = _gpu_analyzer_prewarm_start()
+    return run_segment_pipeline(spec, GpuRunResult(), _GpuLane(spec, warm), ocr_engines)

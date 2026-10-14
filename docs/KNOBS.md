@@ -19,8 +19,6 @@
 | `segment.text_sep_merge` | `TEXT_SEP_MERGE` | str | `binary` | config/constants.py:TEXT_SEP_MERGE_ENV |
 | `segment.merge_dense_gate` | `SEG_MERGE_DENSE_GATE` | int | `5` | C-38 |
 | `pipeline.gpu` | `GPU_PIPELINE` | bool|none | `None` | config/constants.py:GPU_PIPELINE_ENV |
-| `pipeline.gpu_stream` | `GPU_PIPELINE_STREAM` | bool | `False` | config/constants.py:GPU_PIPELINE_STREAM_ENV |
-| `pipeline.gpu_drainer` | `GPU_PIPELINE_DRAINER` | bool | `False` | gpu/streams.py:_batch_iter |
 | `diag.profile` | `ENGINE_PROFILE` | bool | `False` | config/constants.py:ENGINE_PROFILE_ENV |
 | `diag.subprobe` | `TRT_SUBPROBE` | bool | `False` | config/constants.py:TRT_SUBPROBE_ENV |
 | `diag.bounds_debug` | `DEBUG_BOUNDS` | bool | `False` | config/constants.py:DEBUG_BOUNDS_ENV |

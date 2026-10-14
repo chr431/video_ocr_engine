@@ -41,7 +41,7 @@ class _YFrame:
         #
         # **pool 引用必须保留**：若 recycle() 置空 pool 以"防双入列"，
         # 大量池帧（随 payload 跨线程传递、**只靠 GC 回收**，见
-        # gpu_backend _similar_device 注释）的 __del__ 撞 None 被吞掉
+        # gpu_backend _similar_device_scalars 注释）的 __del__ 撞 None 被吞掉
         # = 永久泄漏（实测 253 次 cudaMalloc/轮未释放、+1 MiB/轮）。
         # 防双入列改用 _recycled 标志位（语义等价，且不切断 GC 兜底）。
         if self._recycled:
