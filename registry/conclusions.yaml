@@ -521,3 +521,10 @@
   evidence:
   - note: 诊断探针（_scratch 现场内联）：fork 交付三码×{gpu,host,hybg}、FORCE_SHARE 扫描（CPU 份额口径 0.30/0.35/0.42 全劣）、solo nvdec ROI 三码（915/2028/1683）、hybrid_stats busy/交付对照、open/read/close 分解（close 仅 0.034-0.041s）；引擎 e2e A/B 5 轮（DLL 级交错）+ 全量 span 分解；fork 侧 d535f45
   - note: 门禁：fork 七套件 --full + smoke + unittests 61 全过；引擎金标 33/33、C-62 硬窗位级 ×3、ROI 直投三路互证 36 组合逐位一致、check daily 绿
+- id: C-90
+  conclusion: '**fork 侧性能优化空间已用测量穷尽关闭：三条硬顶=NVDEC 硬件解码率、FFmpeg 32 线程软解率、两臂速率和；本轮两项候选实测均为负结果（已撤销），C-87/88/89 后热路径无可测增益项**。①延迟 unmap 探测化（解析线程每帧 FlushDeferred 的全流同步 → cudaEventQuery + 有界 pending，撤销前实测）：cap=6 时 NVCUVID 并发映射数触硬限（cuvidMapVideoFrame64 返回 205，map 失败），cap=2 可跑但三码 solo 交付零变化（918/2031/1686 vs 916/2028/1683）——**证伪「解析线程同步是 busy-交付差值本体」假设**；该差值即 NVDEC 硬件解码率（h264 916 / hevc 2028 / av1 1683 全片稳定，与 NVIDIA 1080p 各码比率吻合，全帧与 ROI 同值=转换内核大小无关）。已整体撤销（无增益不落地复杂度+映射数陷阱；cudaEventQuery 垫片扩展一并回退）。②转换扇出池（DECORD_CONVERT_WORKERS=2/4，cpu 全帧 yuv420）：h264 1940/1784 vs 基线 1951（负）、hevc 持平、av1 1095/1062 vs 1097（4 worker 负 3%）——EmitOrdered 持 reorder_mu_ 睡背压把全部 worker 串行化（审计 A9/B6 所指），fan-out 结构性无收益，维持默认关。③复核确认 fork hybrid(0) 交付=臂率和理想（h264 6.35 vs 臂临界 6.31s；hevc/av1 的 GPU 臂在臂内≈solo 上限 −1~5%），in-hybrid GPU 臂交付与 solo 差 ≤5%（合并/发射税已压平）。**剩余清单全部为 µs 级或冷路径**（审计 C2/C3 每帧锁批量化：供给已在理想故不落墙钟；C9/B11 seek churn：引擎每 run ~1 次 seek；C5 批量收割：每帧一次零等待驱动调用；A6 池余量：抖动向非速率向）。**hybrid 距理论的最后杠杆在引擎侧头尾（C-89 revisit 已记：pre-run 0.276 + 尾部 0.445s），与 fork 无关**'
+  status: active
+  premises: fork 0.9.8+d535f45（C-89 后）；RTX 4060M/32LP；solo=全片 ROI gray get_batch(250)；扇出扫描=全帧 yuv420 全片
+  revisit: NVDEC 硬件换代（916/2028/1683 三顶变化时全部重估）/ EmitOrdered 重排-背压解耦重构后扇出重试 / WDDM→TCC/Linux（探测化路径重估）
+  evidence:
+  - note: 负结果取证（本轮内联探针）：延迟 unmap cap=6 映射失败实录（CUDA 205）+ cap=2 三码零变化；DECORD_CONVERT_WORKERS 2/4 全帧扫描；solo 三码 ×3 轮稳定性；实验代码整体 git checkout 撤销（fork 保持 d535f45，重建后核心五套件 + 金标 33/33 + check daily 复验绿）
