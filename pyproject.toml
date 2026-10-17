@@ -116,5 +116,7 @@ follow_imports = "skip"
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = ["decord", "decord.*", "cuda", "cuda.*", "psutil", "psutil.*", "tensorrt", "tensorrt_bindings", "tensorrt_bindings.*"]
+# PIL 只出现在 truth_build 的 sheets（工具运行时依赖，CI lint 面不装）；Pillow 不随
+# 包分发 py.typed，故按"无 stubs 的第三方按 Any 容忍"处理。
+module = ["decord", "decord.*", "cuda", "cuda.*", "psutil", "psutil.*", "tensorrt", "tensorrt_bindings", "tensorrt_bindings.*", "PIL", "PIL.*"]
 ignore_missing_imports = true

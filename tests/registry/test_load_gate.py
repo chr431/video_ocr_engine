@@ -7,6 +7,9 @@ import sys
 import time
 from pathlib import Path
 
+import psutil
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 
@@ -62,7 +65,10 @@ def test_gpu_window_detail_shares_samples_with_verdict(monkeypatch) -> None:
     assert "70" in m._format_gpu_window(vals)
 
 
-def _burn(_: object) -> None:
+def _burn() -> None:
+    # 必须零参：mp.Process(target=_burn) 不传 args；带必填参数会让子进程
+    # 立即 TypeError 退出，负测于是"没有负载也断言有负载"——本地靠桌面噪声
+    # 假通过，安静 CI 上必红（实测两次 CI 红即此因）。
     t0 = time.time()
     while time.time() - t0 < 12:
         sum(i * i for i in range(10000))
@@ -83,6 +89,7 @@ def test_gate_catches_real_load() -> None:
         q.start()
     try:
         raised: BackgroundLoadError | None = None
+        os_saw_load = False
         deadline = time.time() + 10.0
         while time.time() < deadline:
             try:
@@ -96,7 +103,13 @@ def test_gate_catches_real_load() -> None:
             except BackgroundLoadError as e:
                 raised = e
                 break
-            time.sleep(0.5)
+            # 前提自证：若连系统口径都看不到负载（容器 CPU 计数受限），
+            # 那是环境不满足负测前提，应显式 SKIP，而不是冒充"门禁失效"。
+            if psutil.cpu_percent(interval=0.2) > 20.0:
+                os_saw_load = True
+            time.sleep(0.3)
+        if raised is None and not os_saw_load:
+            pytest.skip("系统口径看不到烧核负载（容器 CPU 计数受限）——负测前提不成立")
         assert raised is not None, "4 核烧核在场而门禁始终判静（负测失效）"
         assert "元凶" in str(raised) or "CPU" in str(raised)
     finally:
