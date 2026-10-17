@@ -140,7 +140,12 @@ def _judge_quiet(readings, gpu_pct, cpu_pct, gpu_pct_limit=50.0):
 
 
 def _gpu_util():
-    """GPU 利用率（%）；无 nvidia-smi/超时=环境事实，返回 0 跳过该判据。"""
+    """GPU 利用率单次读数（%）；无 nvidia-smi/超时=环境事实，返回 0。
+
+    ⚠️ 这是**瞬时**读数：本机实测桌面合成为主时单点可在 8%~73% 间震荡
+    （30 点：min 8 / p50 21 / max 73），与任务管理器（滑动平均口径，
+    稳定 <25%）不一致。判据不得直接用单点——见 `_gpu_util_window`。
+    """
     import subprocess as _sp
 
     try:
@@ -153,6 +158,53 @@ def _gpu_util():
         return float(r.stdout.strip().splitlines()[0])
     except Exception:  # 无卡/无工具/超时=环境事实
         return 0.0
+
+
+def _gpu_window_detail(samples: int = 5, interval: float = 0.5):
+    """GPU 窗口采样一次，返回 (均值或 -1, 明细列)。
+
+    单次采样供判据与错误消息共用——两处各采一次会让"报出的均值"与
+    "判失败的均值"不是同一份数据（诊断与判据必须同源）。
+    """
+    import statistics as _st
+    import time as _t
+
+    vals = []
+    for i in range(max(1, samples)):
+        vals.append(_gpu_util())
+        if i < samples - 1:
+            _t.sleep(interval)
+    if all(v <= 0.0 for v in vals):
+        return -1.0, vals  # 全零 = 无工具/无卡（不可用，≠ 空闲）
+    return _st.fmean(vals), vals
+
+
+def _gpu_util_window(samples: int = 5, interval: float = 0.5) -> float:
+    """GPU 利用率**窗口均值**（滑动平均滤波）：多采样取均值，非单点非取大。
+
+    为什么：`nvidia-smi` 的 utilization.gpu 是瞬时量（见 `_gpu_util`），
+    单点读数会被桌面合成的**瞬时爆发**（合成器刷帧、界面重绘）打成 50%+
+    假红——实测本轮三次单点 52/57/59% 被拒，而同期任务管理器口径稳定
+    <25%。取窗口均值即把"瞬时爆发"（一两点高）与"持续负载"（整窗高）分开：
+      - 单点爆发：窗口内 1 点 73%、余 8~20% → 均值 ~20% → 过（正确——
+        它不是持续负载，不污染测量）；
+      - 持续负载：整窗 60%+ → 均值 60%+ → 红（正确——编码/训练作业）。
+    与 CPU 侧"3 轮各 1s 采样"同构：判的是**持续**，不是瞬时。
+    无 nvidia-smi/超时=环境事实，该窗记为不可用（返回 -1，跳过该判据）。
+    """
+    return _gpu_window_detail(samples, interval)[0]
+
+
+def _format_gpu_window(vals: list) -> str:
+    """窗口明细的可读串（错误消息用；数据来自判据同一次采样）。"""
+    import statistics as _st
+
+    if not vals or all(v <= 0.0 for v in vals):
+        return "不可用"
+    return "均值 %.0f%%（明细 %s）" % (
+        _st.fmean(vals),
+        "/".join("%.0f" % v for v in vals),
+    )
 
 
 def _prime_foreign_processes(ignore_own_tree: bool = True):
@@ -199,6 +251,9 @@ def assert_machine_quiet(
 
     外部 CPU 按进程求和折算整机百分比（psutil 的 cpu_percent 是单核归一）；
     本进程与子进程不计入（测量自身的负载不是"后台"）。
+    GPU 取**窗口均值**（`_gpu_util_window`，滑动平均滤波）——瞬时单点会
+    被桌面合成爆发打成假红（实测口径见该函数注）；不可用（无 nvidia-smi）
+    时不判 GPU（环境事实，不冒充"空闲"）。
     """
     import time as _t
 
@@ -219,10 +274,16 @@ def assert_machine_quiet(
             except psutil.Error:  # 进程消失=正常竞态
                 continue
         readings.append((total / ncpu, sorted(top, reverse=True)))
-    gpu_pct = _gpu_util() if gpu else 0.0
+    # GPU 与 CPU 采样并行代价高（nvidia-smi 子进程 ~40ms/次）；串行窗口
+    # 5×0.5s ≈ 2.5s，门禁总时长 ~5.5s——在"省一整轮测量"面前可忽略。
+    # 判据与错误消息共用同一次窗口采样（明细列随均值一起返回）。
+    gpu_pct, gpu_vals = _gpu_window_detail() if gpu else (0.0, [])
+    if gpu_pct < 0.0:  # 不可用：跳过 GPU 判据（≠ 空闲）
+        gpu_pct = 0.0
     bad = _judge_quiet(readings, gpu_pct, cpu_pct, gpu_pct_limit)
     if bad:
         detail = "；".join("%s=%.0f%%" % (n, c) for c, n in readings[-1][1][:5])
         raise BackgroundLoadError(
-            "后台负载超阈（%s）——%s。元凶：%s" % (bad, LOAD_GATE_ERROR_HINT, detail or "GPU")
+            "后台负载超阈（%s）——%s。元凶：%s"
+            % (bad, LOAD_GATE_ERROR_HINT, detail or ("GPU " + _format_gpu_window(gpu_vals)))
         )

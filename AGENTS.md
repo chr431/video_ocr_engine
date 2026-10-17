@@ -33,7 +33,7 @@
 - 配置常量/旋钮 → `video_ocr_engine/config/constants.py`
 - 运行报告 → `video_ocr_engine/pipeline/report.py`：RunReport schema v10（REPORT_VERSION 单源于代码…
 - 分相打桩 → `video_ocr_engine/domain/prof.py`：ProfSpine 单一计时脊柱；门面 _prof_end 薄委托
-- 性能 A/B → `tools/bench.py`：run/diff/show/ab/telemetry-check；账本…
+- 性能 A/B → `tools/bench.py`：run/diff/show/ab/telemetry-check/bulk/matrix…
 
 - 并行维度唯一：decode_backend="hybrid" 的 CPU+NVDEC 双解码，已由 decord fork 原生实现；无 dual pipeline、无 DUAL_* 环境变量（历史提及均为旧档案）
 - 引擎内部恒单通道灰度：decord 只输出 yuv420（keep_crops 且 rep_crop_format="yuv"）或 gray
@@ -50,12 +50,12 @@
 
 ## 工具与门禁（源 registry/tools.yaml + rules.yaml）
 
-- standing 20 件（质量面=生产代码）+ probes 5 个在树（近两轮）；清单=tools/INDEX.md
+- standing 22 件（质量面=生产代码）+ probes 5 个在树（近两轮）；清单=tools/INDEX.md
 - 合规链 `python tools/check.py`（daily / --tier release）；A/B `python tools/bench.py ab`；
   金标 `python tests/golden/record.py --verify`；清扫 `python tools/conclusions_sweep.py --strict`；
   版本 `python tools/version_advice.py advice|verify`；性能测量启动前自动过 R-perf-quiet 负载门禁。
 
 ## 结论
 
-- active 56 条（源 registry/conclusions.yaml）；表=docs/CONCLUSIONS.md；死档经 git 档案取回。
+- active 63 条（源 registry/conclusions.yaml）；表=docs/CONCLUSIONS.md；死档经 git 档案取回。
 

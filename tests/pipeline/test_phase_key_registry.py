@@ -24,11 +24,14 @@ from _paths import ROOT
 # ── 注册表（唯一允许的键集声明处；改键先改这里）──────────────────────
 # 路径相对仓库根；只列「有键」的模块——新模块带键而未声明 = 失败。
 PHASE_KEYS_BY_MODULE: dict[str, set[tuple[str, str]]] = {
+    # setup_pre = open 收口 → OCR 会话启动段（C-89"构造/会话"成本的常驻
+    # 仪表；此前该区间无 span，冷/热池 engine_init 差 4 个量级无从读数）。
     "video_ocr_engine/pipeline/_driver.py": {
         ("producer", "calib_total"),
         ("producer", "consume_feed"),
         ("producer", "consumer_total"),
         ("producer", "open_and_fps"),
+        ("producer", "setup_pre"),
     },
     "video_ocr_engine/pipeline/host_backend.py": {
         ("producer", "bin_batch"),
@@ -111,6 +114,15 @@ def _collect(path: Path) -> tuple[set[tuple[str, str]], set[str]]:
                 and isinstance(args[ki], ast.Constant)
             ):
                 keys.add((args[gi].value, args[ki].value))
+        elif name == "end":
+            # ProfSpine.end(group, key, t0) 直调（extractor 的 setup 收口；
+            # 脊柱构造后只能整体调，无 prof_end 转发壳）
+            if (
+                len(args) >= 2
+                and isinstance(args[0], ast.Constant)
+                and isinstance(args[1], ast.Constant)
+            ):
+                keys.add((args[0].value, args[1].value))
     return keys, checkpoints
 
 

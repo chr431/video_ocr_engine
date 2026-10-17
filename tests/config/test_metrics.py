@@ -198,6 +198,41 @@ def test_registry_cap():
     assert len(METRICS.names()) <= METRIC_CAP * 0.8
 
 
+def test_gate_bindings_have_pi_limits_and_diag_do_not():
+    """P1-5：gate 族 ↔ PI_LIMITS 一一对应（防"标了门禁却没阈值"的悬空）。
+
+    两向：
+      - gate 的每个键必须在 PI_LIMITS 有条目（否则 bench 判退出码时
+        `_health_gate` 取不到限值 → 红旗不可判定）；
+      - diag 族不得出现在 PI_LIMITS（被 bench 判失败却无标定 = 假门禁）。
+    历史散文把 PI-1/5/8/9/13/14 都描述成守卫，实际从未有执行体——本
+    测试把该隐式事实固化成显式分类。
+    """
+    from video_ocr_engine.domain.metrics import METRICS
+    from video_ocr_engine.pipeline.report import PI_LIMITS
+
+    specs = {n: METRICS.spec(n) for n in METRICS.names()}
+    # gate 的 PI 号必须都有阈值（含跨键共用：PI-10 的 engine_init/reuse）
+    gate_pis = {
+        s.pi_binding.split(":", 1)[1] for s in specs.values() if s.pi_binding.startswith("gate:")
+    }
+    assert gate_pis <= set(PI_LIMITS), (
+        "gate 族 PI 无阈值（bench 无法判定）：%s；补 PI_LIMITS 或改回 diag"
+        % (gate_pis - set(PI_LIMITS))
+    )
+    diag_pis = {
+        s.pi_binding.split(":", 1)[1] for s in specs.values() if s.pi_binding.startswith("diag:")
+    }
+    assert not (diag_pis & set(PI_LIMITS)), (
+        "诊断族 PI 出现在 PI_LIMITS（无标定却被 bench 判失败）：%s" % (diag_pis & set(PI_LIMITS))
+    )
+    # 反向：PI_LIMITS 里的 PI 至少有一个 gate 键（防加了阈值没人用）
+    for pi in PI_LIMITS:
+        assert any(s.pi_binding == "gate:%s" % pi for s in specs.values()), (
+            "PI_LIMITS[%s] 无对应 gate 指标——阈值悬空" % pi
+        )
+
+
 # ── snapshot drain 语义（看门狗取快照不得排干桶）─────────────────
 
 

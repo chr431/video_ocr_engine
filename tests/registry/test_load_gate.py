@@ -25,6 +25,43 @@ def test_judge_table() -> None:
     assert _judge_quiet([(3.0, [])], 32.0, 15.0) is None  # 桌面合成常态不算负载
 
 
+def test_gpu_window_mean_separates_spike_from_sustained(monkeypatch) -> None:
+    """滑动平均滤波的判据本体（负测夹具注入读数列）：
+
+    单点爆发（1 高 + 4 低）→ 窗均值低 → 过；持续负载（整窗高）→ 红。
+    这是"门禁不误报但能抓到真负载"的机器可判形式；实测背景：nvidia-smi
+    瞬时读数 8%~73% 震荡，任务管理器口径稳定 <25%（本轮三次单点
+    52/57/59% 假红即由此而来）。
+    """
+    import _measure_lib as m
+
+    # (a) 单点尖峰：均值必须被压到限下（不误报）
+    spike = iter([73.0, 8.0, 12.0, 10.0, 9.0])
+    monkeypatch.setattr(m, "_gpu_util", lambda: next(spike))
+    assert m._gpu_util_window(samples=5, interval=0.0) < 50.0
+    # (b) 持续负载：整窗高 → 均值高（抓得住）
+    hi = iter([61.0, 62.0, 60.0, 63.0, 61.0])
+    monkeypatch.setattr(m, "_gpu_util", lambda: next(hi))
+    assert m._gpu_util_window(samples=5, interval=0.0) >= 50.0
+    # (c) 全零 = 不可用（≠ 空闲）：返回负值哨兵
+    monkeypatch.setattr(m, "_gpu_util", lambda: 0.0)
+    assert m._gpu_util_window(samples=3, interval=0.0) < 0.0
+
+
+def test_gpu_window_detail_shares_samples_with_verdict(monkeypatch) -> None:
+    """判据与错误消息必须同源：_gpu_window_detail 返回的明细就是均值的原始列。"""
+    import statistics
+
+    import _measure_lib as m
+
+    seq = iter([10.0, 70.0, 20.0, 30.0, 40.0])
+    monkeypatch.setattr(m, "_gpu_util", lambda: next(seq))
+    mean, vals = m._gpu_window_detail(samples=5, interval=0.0)
+    assert vals == [10.0, 70.0, 20.0, 30.0, 40.0]
+    assert mean == statistics.fmean(vals)
+    assert "70" in m._format_gpu_window(vals)
+
+
 def _burn(_: object) -> None:
     t0 = time.time()
     while time.time() - t0 < 12:

@@ -68,27 +68,43 @@ def hist_bucket(seconds: float) -> int:
 
 # 注册表：命名空间 = 阶段；pi_binding 指向注册不变式。
 # 元组 = (name, kind, unit, stage, pi_binding)。
+#
+# pi_binding 分两族（P1-5 消歧，2026-10-15）：
+#   `gate:<PI-N>` = 门禁族：阈值在 pipeline/report.py 的 PI_LIMITS，
+#                   bench ab/diff 判退出码、正负测各一条（tests/pipeline/
+#                   test_report.py）。现仅 PI-3/PI-10。
+#   `diag:<PI-N>` = 诊断族：只进 bench 归因展示表（diff/ab 逐指标），
+#                   无阈值、不进退出码。保留 PI-N 标签（历史出处与检索
+#                   锚点），但标签≠门禁承诺——历史散文把它们当守卫描述
+#                   过，实际从未有执行体。
+# 升族规则：diagnostic→gate 须先在 PI_LIMITS 加条目并补正/负测；
+# 否则留在诊断族，不得口头承诺。
 _SEED = (
     # ── pipeline：编排三段 + 现役键 ──
     ("pipeline.run", "span", "s", "pipeline", ""),
     ("pipeline.setup", "span", "s", "pipeline", ""),
+    # 编排外固定开销：open 收口 → OCR 会话启动段（C-89"构造/会话"成本；
+    # 冷/热池 engine_init 差 4 个量级，此前无任何 span 覆盖该区间）。
+    # 与 pipeline.setup（=open_and_fps 口径）不重叠，两键相加 = 编排前
+    # 固定开销全量。
+    ("pipeline.setup_pre", "span", "s", "pipeline", ""),
     ("pipeline.calibrate", "span", "s", "pipeline", ""),
     ("pipeline.decode", "span", "s", "pipeline", ""),
     ("pipeline.consumer", "span", "s", "pipeline", ""),
     ("pipeline.ocr", "span", "s", "pipeline", ""),
     ("pipeline.ocr_tail", "span", "s", "pipeline", ""),
-    ("pipeline.q_get_wait", "gauge", "s", "pipeline", "PI-5"),
-    ("pipeline.q_put_block", "gauge", "s", "pipeline", "PI-5"),
+    ("pipeline.q_get_wait", "gauge", "s", "pipeline", "diag:PI-5"),
+    ("pipeline.q_put_block", "gauge", "s", "pipeline", "diag:PI-5"),
     # 背压分诊（非 off 档即有）：总时长只说明"堵了多久"，次数与单次最长
     # 才区分"偶发长停顿"与"持续细碎互锁"——前者查尾帧，后者查调度。
     # 同一分诊口径推广到**全部无界 TOTALS 键**（consume_feed/emit.*/
     # merge_pair），映射表在 PROFILE_TOTALS_N/_MAX。
-    ("pipeline.q_get_wait_n", "counter", "次", "pipeline", "PI-5"),
-    ("pipeline.q_get_wait_max", "gauge", "s", "pipeline", "PI-5"),
-    ("pipeline.q_get_wait_hist", "histogram", "次", "pipeline", "PI-5"),
-    ("pipeline.q_put_block_n", "counter", "次", "pipeline", "PI-5"),
-    ("pipeline.q_put_block_max", "gauge", "s", "pipeline", "PI-5"),
-    ("pipeline.q_put_block_hist", "histogram", "次", "pipeline", "PI-5"),
+    ("pipeline.q_get_wait_n", "counter", "次", "pipeline", "diag:PI-5"),
+    ("pipeline.q_get_wait_max", "gauge", "s", "pipeline", "diag:PI-5"),
+    ("pipeline.q_get_wait_hist", "histogram", "次", "pipeline", "diag:PI-5"),
+    ("pipeline.q_put_block_n", "counter", "次", "pipeline", "diag:PI-5"),
+    ("pipeline.q_put_block_max", "gauge", "s", "pipeline", "diag:PI-5"),
+    ("pipeline.q_put_block_hist", "histogram", "次", "pipeline", "diag:PI-5"),
     ("pipeline.consume_feed", "span", "s", "pipeline", ""),
     ("pipeline.consume_feed_n", "counter", "次", "pipeline", ""),
     ("pipeline.consume_feed_max", "gauge", "s", "pipeline", ""),
@@ -100,21 +116,21 @@ _SEED = (
     ("decode.luma_batch", "span", "s", "decode", ""),
     ("decode.sharp_batch", "span", "s", "decode", ""),
     ("decode.binarize_batch", "span", "s", "decode", ""),
-    ("decode.stream_analyze", "span", "s", "decode", "PI-13"),
+    ("decode.stream_analyze", "span", "s", "decode", "diag:PI-13"),
     # ── segment ──
     ("segment.segments", "counter", "段", "segment", ""),
-    ("segment.merge_pair", "span", "s", "segment", "PI-1"),
-    ("segment.merge_pair_n", "counter", "次", "segment", "PI-1"),
-    ("segment.merge_pair_max", "gauge", "s", "segment", "PI-1"),
-    ("segment.merge_pair_hist", "histogram", "次", "segment", "PI-1"),
+    ("segment.merge_pair", "span", "s", "segment", "diag:PI-1"),
+    ("segment.merge_pair_n", "counter", "次", "segment", "diag:PI-1"),
+    ("segment.merge_pair_max", "gauge", "s", "segment", "diag:PI-1"),
+    ("segment.merge_pair_hist", "histogram", "次", "segment", "diag:PI-1"),
     ("segment.merges", "counter", "次", "segment", ""),
     # 边界对投机命中/未命中（C-84）：命中 = 消费端零 GPU 交互；未命中 =
     # 合并链使提问对更旧，走同步兜底。命中率是投机有效性的直接读数。
     ("segment.spec_pair_hit", "counter", "次", "segment", ""),
     ("segment.spec_pair_miss", "counter", "次", "segment", ""),
     # ── ocr ──
-    ("ocr.engine_init", "gauge", "s", "ocr", "PI-10"),
-    ("ocr.engine_reuse", "counter", "次", "ocr", "PI-10"),
+    ("ocr.engine_init", "gauge", "s", "ocr", "gate:PI-10"),
+    ("ocr.engine_reuse", "counter", "次", "ocr", "gate:PI-10"),
     ("ocr.infer", "span", "s", "ocr", ""),
     # `ocr.infer` 的残差子相位（host 路径 _other 高达 2.8s）。
     # 三键在 **full 档**记录（TRT 调用是热路径，per-batch ×
@@ -137,20 +153,20 @@ _SEED = (
     ("ocr.preproc_resize", "span", "s", "ocr", ""),
     ("ocr.ctc_decode", "span", "s", "ocr", ""),
     ("ocr.chunks", "counter", "chunk", "ocr", ""),
-    ("ocr.sub_chunks", "counter", "子批", "ocr", "PI-3"),
-    ("ocr.syncs", "counter", "次", "ocr", "PI-3"),
-    ("ocr.syncs_per_chunk", "gauge", "次/chunk", "ocr", "PI-3"),
+    ("ocr.sub_chunks", "counter", "子批", "ocr", "gate:PI-3"),
+    ("ocr.syncs", "counter", "次", "ocr", "gate:PI-3"),
+    ("ocr.syncs_per_chunk", "gauge", "次/chunk", "ocr", "gate:PI-3"),
     # 填充率：pad 宽是 rec 模型的计算宽度，content 是真实内容宽度
     ("ocr.rows", "counter", "行", "ocr", ""),
     ("ocr.padded_cols", "counter", "列", "ocr", ""),
     ("ocr.content_cols", "counter", "列", "ocr", ""),
     ("ocr.fill_pct", "gauge", "%", "ocr", ""),
     # ── emit：消费端提交 ──
-    ("emit.d2h_bytes", "counter", "B", "emit", "PI-14"),
-    ("emit.d2h_calls", "counter", "次", "emit", "PI-9"),
-    ("emit.syncs", "counter", "次", "emit", "PI-8"),
-    ("emit.keep_crops_d2h", "counter", "次", "emit", "PI-9"),
-    ("emit.keep_crops_batched", "counter", "次", "emit", "PI-9"),
+    ("emit.d2h_bytes", "counter", "B", "emit", "diag:PI-14"),
+    ("emit.d2h_calls", "counter", "次", "emit", "diag:PI-9"),
+    ("emit.syncs", "counter", "次", "emit", "diag:PI-8"),
+    ("emit.keep_crops_d2h", "counter", "次", "emit", "diag:PI-9"),
+    ("emit.keep_crops_batched", "counter", "次", "emit", "diag:PI-9"),
     ("emit.autocrop", "span", "s", "emit", ""),
     ("emit.autocrop_n", "counter", "次", "emit", ""),
     ("emit.autocrop_max", "gauge", "s", "emit", ""),
@@ -205,6 +221,12 @@ METRICS = MetricRegistry(
 PROFILE_SPANS = {
     # 有界（每次 run ≤ ~200 次）：非 off 档即逐次采样
     ("producer", "open_and_fps"): "pipeline.setup",
+    # 编排外固定开销：open 收口 → OCR 会话启动段（driver 内单点）。
+    # 覆盖 C-89 定位的"构造/会话"成本——此前该区间无任何 span（冷进程
+    # engine_init 0.52s vs 热池 35µs，4 个量级差无从读数）。与
+    # pipeline.setup（=open_and_fps 口径）互补不重叠，两键相加 =
+    # 编排前固定开销全量。
+    ("producer", "setup_pre"): "pipeline.setup_pre",
     ("producer", "calib_total"): "pipeline.calibrate",
     ("producer", "consumer_total"): "pipeline.consumer",
     ("producer", "decode_batch"): "decode.batch",

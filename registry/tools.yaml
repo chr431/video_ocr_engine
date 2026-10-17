@@ -28,12 +28,15 @@
 - id: _run_with_switchinterval.py
   tier: standing
   why: 竞态复现基建（worker 型）
+- id: _truth_format.py
+  tier: standing
+  why: 自有真值格式 truth.v1（JSONL，逐帧 state=read/inferred/unknown）+ RVTL 兼容 shim（唯一允许知道 RVTL 头的模块）
 - id: _worker_lib.py
   tier: standing
   why: 子进程 worker 公共库
 - id: bench.py
   tier: standing
-  why: R-ab-interleave/R-threshold-resolvable 执行体；账本 registry.jsonl
+  why: R-ab-interleave/R-threshold-resolvable 执行体；账本 registry.jsonl + 标定账本 aa_calibration.jsonl；bulk（多文件批量视图）/matrix（旋钮交互屏）
 - id: bench_hybrid.py
   tier: standing
   why: hybrid 批量基准（bench 家族）
@@ -67,6 +70,9 @@
 - id: render.py
   tier: standing
   why: R-render-consistency 执行体（七视图统一渲染）
+- id: truth_build.py
+  tier: standing
+  why: 视觉真值获取链（代表帧→样张→收数/一致面→产出真值；守卫 tests/test_truth_build.py，含"坏行不得静默丢弃"负测）
 - id: _probe_c68_gap.py
   tier: probe
   why: 近两轮（0.25.x/0.26.x）在用取证

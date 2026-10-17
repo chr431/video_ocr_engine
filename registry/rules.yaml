@@ -222,13 +222,13 @@
   negative: "协议内建（SKIP 显式报 partial，不冒充通过）"
 
 - id: R-ab-interleave
-  statement: 性能 A/B 必须交错——bench ab 臂序逐对轮转+GPU 时钟门禁+--aa 标定阈值；hybrid 对照臂=目标码最快纯解码臂（C-53 口径）
+  statement: 性能 A/B 必须交错——bench ab 臂序逐对轮转+GPU 时钟门禁+--aa 标定阈值（标定落账本 bench/aa_calibration.jsonl，每次 ab 启动自动比对机器指纹与带宽漂移）；改变 GPU 负载的旋钮对比须 --no-clock-gate 或用 bench matrix（门禁会把处理效应误判为干扰）；hybrid 对照臂=目标码最快纯解码臂（C-53 口径）
   enforcement: local-gate
   executor: tools/bench.py
-  prevents: S0-C5（同码两跑差 7.7%）、C-53 错基线判 -46.5%
+  prevents: S0-C5（同码两跑差 7.7%）、C-53 错基线判 -46.5%、门禁剔除轻负载臂致 A/B 不可判（C-92）
   since: 2026-09-17
-  env: "GPU + 机器安静（assert_machine_quiet）"
-  negative: "协议内建（交错 + 逐对轮转 + 符号一致性；判读门槛纯函数单测见 tests/test_bench_cycles.py）"
+  env: "GPU + 机器安静（assert_machine_quiet；GPU 判据取窗口均值，抑桌面合成瞬时尖峰）"
+  negative: "协议内建（交错 + 逐对轮转 + 符号一致性；判读门槛与矩阵效应纯函数单测见 tests/test_bench_cycles.py；负载门禁负测见 tests/registry/test_load_gate.py）"
 
 - id: R-threshold-resolvable
   statement: 门禁阈值 ≥ 本机可分辨下限——先 --aa 标定（阈值=|均值偏差|+3×SE）；µs 级严格性交确定性成本守卫
@@ -275,6 +275,33 @@
   since: 2026-09-17
   env: "机器安静（重放测量；负载门禁前置）"
   negative: "tests/config/test_telemetry_cost.py"
+
+- id: R-health-gate
+  statement: health 红旗必须判失败——bench ab/diff 读报告 health 段，任一臂任一 PI 失败即退出 1（判据本体在 report.PI_LIMITS，bench 只接线不复制阈值）；--no-verdict 只豁免墙钟判定不豁免红旗
+  enforcement: local-gate
+  executor: tools/bench.py#_health_gate
+  prevents: PI 判据恒绿（registry 3599 份报告 health 失败 0 次——只打印不判失败=装饰）
+  since: 2026-10-15
+  env: "GPU + 机器安静（bench 前置负载门禁）"
+  negative: tests/test_bench_cycles.py
+
+- id: R-pi-threshold-basis
+  statement: PI 门禁阈值须带标定依据（实测最大值×余量倍数写进 PI_LIMITS 注释）且 gate/diag 分族显式——gate 族必须有 PI_LIMITS 条目与正负测，未升族的键只进归因表不进退出码
+  enforcement: ci
+  executor: tests/config/test_metrics.py#test_gate_bindings_have_pi_limits_and_diag_do_not
+  prevents: 阈值悬空（6 个 PI 标签被散文当守卫描述、实际从未有执行体）
+  since: 2026-10-15
+  env: "无（注册表对账）"
+  negative: tests/config/test_metrics.py
+
+- id: R-truth-unknown-marked
+  statement: 视觉真值链只在与引擎读数一致的帧上自动放行；未读出（看不清）与分歧帧一律记为「未知」并进审查面，禁止用连续性或物理推断把未知填成数字——「不知道」与「错」是两种东西，混同会把审查面算小、把错误藏进已放行面。**充分性边界（C-95）**：一致性是必要条件不是充分条件——盲读协议下同一模型仍有 8 例"一致且都错"，故连续性/多读投票若参与放行，必须作为**显式声明的推断阶段**记录，不得混进"直读"面
+  enforcement: local-gate
+  executor: tools/truth_build.py#cmd_emit
+  prevents: test4_truth 事后判「完全不可用」（12 个「混合段」是坏真值假象而非分段缺陷）；同族 OCR 模型当生成器共享系统性混淆且不报错，故需异源读者 + 可报错的失败形态
+  since: 2026-10-16
+  env: "本机（视觉子代理 + 真实视频语料；交叉读数取自 engine.csv）"
+  negative: tests/test_truth_build.py
 
 # ── advisory：方向性提醒（10 席已满额；满额即"自动化或删除"） ─────────
 # 无执行体的文化条款住这里；满额即"自动化或删除"。每条 prevent 仍是真实事故。

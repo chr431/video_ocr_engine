@@ -14,8 +14,9 @@
 | `_probe_stress_harness.py` | 压测基建（adv-stress-harness 规格） |
 | `_probe_window_matrix.py` | R-window-gate 执行体（矩阵门禁，默认 --repeat 5） |
 | `_run_with_switchinterval.py` | 竞态复现基建（worker 型） |
+| `_truth_format.py` | 自有真值格式 truth.v1（JSONL，逐帧 state=read/inferred/unknown）+ RVTL 兼容 shim（唯一允许知道 RVTL 头的模块） |
 | `_worker_lib.py` | 子进程 worker 公共库 |
-| `bench.py` | R-ab-interleave/R-threshold-resolvable 执行体；账本 registry.jsonl |
+| `bench.py` | R-ab-interleave/R-threshold-resolvable 执行体；账本 registry.jsonl + 标定账本 aa_calibration.jsonl；bulk（多文件批量视图）/matrix（旋钮交互屏） |
 | `bench_hybrid.py` | hybrid 批量基准（bench 家族） |
 | `check.py` | R-check-tiers 执行体（两级合规链） |
 | `conclusions_sweep.py` | R-conclusions-sweep 执行体（发版清扫 --strict） |
@@ -26,6 +27,7 @@
 | `probe_decode_rates.py` | 各后端解码速率基准（bench 家族） |
 | `refs.py` | R-refs-resolve 执行体（引用解析器） |
 | `render.py` | R-render-consistency 执行体（七视图统一渲染） |
+| `truth_build.py` | 视觉真值获取链（代表帧→样张→收数/一致面→产出真值；守卫 tests/test_truth_build.py，含"坏行不得静默丢弃"负测） |
 | `version_advice.py` | R-version-tag/R-version-advice 执行体（API 面 dump/档位判据/verify/金标 manifest/bench 快照） |
 
 ## 在树探针（probe，近两轮；超出即出树）

@@ -709,6 +709,11 @@ class FieldExtractor:
         run 内常量）；GPU→宿主回退在引擎单处处理。lane 结果的状态
         同步（fps 缓存经盒读写；其余为本次 run 的输出）收口在此——
         伪造 `_run_pipelined` 的测试（返回 RunOutcome）不受同步影响。
+
+        编排外固定开销的量在 driver 内（`producer.setup_pre`：open 收口 →
+        OCR 会话启动段，C-89 定位的"构造/会话"部分）。本方法自身极薄
+        （纯 dataclass 装配，实测 µs 级，见 pipeline.setup_pre 无第二个
+        样本），不在此处加桩。
         """
         inp = EngineInputs(
             frame_start=self._frame_start,

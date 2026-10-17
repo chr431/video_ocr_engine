@@ -105,7 +105,19 @@ def _derive_other_spans(spans: dict, gauges: dict, path: str) -> dict:
     return out
 
 
-#: PI 守卫阈值（散文 → 指标名 + 阈值）
+#: PI 守卫阈值（散文 → 指标名 + 阈值）。
+#: 标定口径（P1-5，2026-10-15 实测，bench/pi_calib.json）：这些是**量值**
+#: 判据不是配对差分判据，故不适用 `_limit_from_band` 的 |均值|+3SE 规则
+#: （那是差分量专属）。改用"实测最大值 × 余量"，余量倍数写死在注释里
+#: 供复核：
+#:   PI-10 热池 engine_init：本机实测 max 6.5e-05s（13 热轮，冷轮
+#:     0.49–0.56s 不判——冷启动付 3 位数是既有事实）。0.1s = 1538× 余量。
+#:     留这么宽是因它防的是"池没复用"级别的回退（整引擎重建），不是 µs
+#:     抖动——误报代价（挡住有效 A/B）远大于漏报代价（ab 墙钟判据会抓到）。
+#:   PI-3 syncs/chunk：实测恒 1.0（sub_chunks=1 per chunk，窗口 600/3000/
+#:     6000 三档同）。限 3.0 = 3× 余量。该值>1 会直接伤 GPU 流水
+#:     （每 chunk 一次流同步=批次碎裂），故余量收得比 PI-10 紧。
+#: 复核触发：任一侧换引擎/换卡（池行为或同步路径改变）后重跑实测。
 PI_LIMITS = {
     "PI-3": ("ocr.syncs_per_chunk", 3.0, "次/chunk"),
     "PI-10": ("ocr.engine_init", 0.1, "s"),
@@ -176,7 +188,8 @@ def health(snap: dict, *, counters: dict | None = None) -> dict:
     """PI 阈值的机器判定：只判"本次 run 能自证"的两条。
 
     PI-10 只在**池热**时判（同进程第 2 次及以后；`ocr.engine_reuse>0`）——
-    冷启动付 0.31–0.42s 是既有事实，不是回归。
+    冷启动付 0.49–0.56s（本轮实测）是既有事实，不是回归。判据阈值与标定
+    实测见 PI_LIMITS 注释（P1-5）。
     """
     gauges = snap.get("gauges", {})
     counters = counters if counters is not None else snap.get("counters", {})

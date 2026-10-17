@@ -38,7 +38,7 @@ stages:
     note: ProfSpine 单一计时脊柱；门面 _prof_end 薄委托
   - name: 性能 A/B
     entry: tools/bench.py
-    note: run/diff/show/ab/telemetry-check；账本 bench/registry.jsonl（滚动，不入库）
+    note: run/diff/show/ab/telemetry-check/bulk/matrix；账本 bench/registry.jsonl + 标定账本 bench/aa_calibration.jsonl（滚动，不入库）
 
 facts:
   - 并行维度唯一：decode_backend="hybrid" 的 CPU+NVDEC 双解码，已由 decord fork 原生实现；无 dual pipeline、无 DUAL_* 环境变量（历史提及均为旧档案）

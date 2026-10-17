@@ -14,10 +14,11 @@ full 档确定性成本下界，对应 full_pct 限。）
 q_get_wait 1091 + merge_pair 1089）/ **4 个 L1 资源边界** + 一次
 `snapshot()` + 一次 `build_report()`。
 
-预算结构（三项合计 = 墙钟预算 1.2%）：
+预算结构（四项合计 = 墙钟预算 1.2%）：
   · 记录面增量（spans+totals+counters+gauges+report，full−off）≤ 2.0ms；
   · 相位采样面（4×checkpoint，含线程账本全线程快照）≤ 2.0ms；
-  · 直方图按事件计费 ≤ 8.0ms（单列，见下）。
+  · 直方图按事件计费 ≤ 8.0ms（单列，见下）；
+  · 诊断链路热路径（armed tick+journal.add，full−off）≤ 12.0ms（见下）。
 ⚠️ 本文件的重放口径在**GPU 空闲**进程里跑，测不到负载上下文的停顿
 （实例：全线程快照在 Toolhelp 回退下每次 39ms 只在真实 GPU 负载出现
 ——空闲重放 0.1ms。该类回归由墙钟门禁兜底：
@@ -36,6 +37,7 @@ q_get_wait 1091 + merge_pair 1089）/ **4 个 L1 资源边界** + 一次
 
 from __future__ import annotations
 
+import os
 import statistics
 import time
 
@@ -272,6 +274,116 @@ def test_snapshot_and_report_scale_with_records():
     cost_ms = (time.perf_counter() - t) * 1000
     assert rep["report_version"] >= 2
     assert cost_ms < 8.0, "full 档收尾组装 %.2fms（样本翻 4 倍仍须 <8ms）" % cost_ms
+
+
+# ── 诊断链路（armed 档）成本守卫 ──────────────────────────────────────
+# 缺口背景：遥测两档（off/full）有三条确定性预算守卫（记录面/采样面/
+# 直方图），而诊断链路（VOE_REPORT_FILE opt-in 的 tick+journal）此前
+# **一条都没有**——它每事件写环形缓冲、每 0.25s 起守护线程落盘，
+# 是不受保护的第四个插桩面。registry 3472 份 std 报告 diagnostics 段
+# 0 次出现说明该路径几乎没被走过，正是不设防的形态。
+#
+# 实测分解（本机，6270 事件 = 3000 帧 run 的事件量）：
+#   Progress.tick        0.21 µs/事件 → 1.3 ms/run
+#   RunJournal.add       0.81 µs/事件 → 5.1 ms/run（锁 + deque + dict）
+#   flush 线程落盘       后台、独立计时（见 flush 单列）
+# 合计热路径 ~6.4ms/run = 1.0s run 的 0.64%，在 full 档 1.2% 预算内；
+# 预算取 12ms（≈实测 2×），专抓"把昂贵调用塞进 tick/add"的回退。
+DIAG_EVENTS = 6270
+DIAG_BUDGET_MS = 12.0
+
+
+def test_armed_diagnostics_hot_path_cost_is_bounded():
+    """armed 诊断热路径（tick+journal.add）每 run 增量 ≤ 12ms。
+
+    口径与 test_full_recording_path_cost_per_run 同款：每轮新建诊断对象
+    （产品语义 = 每 run 一个），增量 = armed − 未 opt-in。后者 NULL_DIAG
+    的 tick 是空方法，差值即纯诊断插桩成本。
+    """
+    import sys as _sys
+    from pathlib import Path as _P
+
+    _sys.path.insert(0, str(_P(__file__).resolve().parents[2] / "tools"))
+    from _measure_lib import BackgroundLoadError, assert_machine_quiet
+
+    try:  # 时敏测量：后台大负载直接失败，不空跑重放
+        assert_machine_quiet(cpu_pct=40.0, samples=2, interval=0.5, gpu=False)
+    except BackgroundLoadError as e:
+        import pytest as _pt
+
+        _pt.fail(str(e))
+    import tempfile
+
+    from video_ocr_engine.domain.diagnostics import NULL_DIAG, open_diagnostics
+
+    tmp = tempfile.mkdtemp()
+
+    def _cost(repeats: int) -> float:
+        out = []
+        for _ in range(repeats):
+            d = open_diagnostics(os.path.join(tmp, "r.json"))
+            t = time.perf_counter()
+            for _ in range(DIAG_EVENTS):
+                d.tick("producer.consume_feed", "0.0004s")
+            out.append((time.perf_counter() - t) * 1000.0)
+            d.stop()
+        return statistics.median(out)
+
+    _cost(3)  # 预热（文件打开/线程首建/缓冲扩容）
+    ms = _cost(15)
+    assert ms <= DIAG_BUDGET_MS, (
+        "armed 诊断热路径 %.2fms/run（%d 事件），超预算 %.1fms——"
+        "tick 或 journal.add 被塞入昂贵调用了" % (ms, DIAG_EVENTS, DIAG_BUDGET_MS)
+    )
+    # 未 opt-in 路径必须仍为零成本（否则"默认关"失效）
+    t = time.perf_counter()
+    for _ in range(DIAG_EVENTS):
+        NULL_DIAG.tick("producer.consume_feed", "0.0004s")
+    off_ms = (time.perf_counter() - t) * 1000.0
+    assert off_ms < 1.0, "NULL_DIAG.tick %.3fms/%d 事件，默认关路径已不零成本" % (
+        off_ms,
+        DIAG_EVENTS,
+    )
+
+
+def test_armed_diagnostics_cost_can_trip_on_injected_inflation():
+    """坏例（守护卫本身）：给 journal.add 注入额外工作后必须越过预算。
+
+    这是"预算能失败"的实体证据。注入量级（每事件一次 sha256）远超机器
+    噪声，5 次中位即可稳定复现。
+    """
+    import hashlib
+    import tempfile
+
+    from video_ocr_engine.domain.diagnostics import RunJournal
+
+    tmp = tempfile.mkdtemp()
+
+    def _ms_with(patch: bool) -> float:
+        out = []
+        for _ in range(5):
+            j = RunJournal(os.path.join(tmp, "p%d.jsonl" % len(out)))
+            if patch:
+                _orig = j.add
+
+                def _slow(event, _o=_orig, **f):
+                    hashlib.sha256(str(event).encode()).hexdigest()  # 每事件注入 ~1µs
+                    return _o(event, **f)
+
+                j.add = _slow  # type: ignore[method-assign]
+            t = time.perf_counter()
+            for _ in range(DIAG_EVENTS):
+                j.add("producer.consume_feed", detail="0.0004s")
+            out.append((time.perf_counter() - t) * 1000.0)
+            j.flush()
+            j.close()
+        return statistics.median(out)
+
+    base = _ms_with(False)
+    ms = _ms_with(True) - base
+    # 注入口径不含守护线程落盘，故与热路径预算同尺但不要求越过 12ms
+    # 才有效——只要"注入可测量地抬高"即可证明守卫有分辨力。
+    assert ms > 1.0, "注入后增量 %.3fms 仍低于可测阈值——成本判据失明" % ms
 
 
 def test_cost_budget_can_trip_on_injected_inflation():

@@ -99,3 +99,59 @@ def test_warmup_makes_next_run_hot(gpu_env, monkeypatch):
     rep = res.meta["report"]
     assert rep["counters"].get("ocr.engine_reuse", 0) >= 1, "预热后应命中池复用（PI-10）"
     assert rep["gauges"]["ocr.engine_init"] < 0.1, "热池 engine_init 必须 <0.1s（PI-10 门禁）"
+
+
+# ── P1-6：冷启动回归哨（C-82 revisit 取证）─────────────────────────────
+@pytest.mark.gpu
+def test_hybrid_cold_short_window_not_pathological(gpu_env, monkeypatch):
+    """C-82 病态冷态的回归哨：hybrid 短请求在冷进程下不得掉到 NVDEC 档。
+
+    背景（C-82）：fork 泵在硬窗贴近请求边界时把 GOP 误派 NVDEC 臂
+    （CPU 臂 92% 闲置），供给 −45%。引擎侧用过 9000 帧硬窗下限规避；
+    fork 6363996（熟前挂起+速率派工）后改契约为门——有
+    `starve_hold_rate_dispatch` 键即撤下限、窗长=请求长。
+
+    本哨兵钉死三件事（缺一即红）：
+      1. 当前 fork 契约面**有**该键（否则下限仍在、且没人知道）；
+      2. 窗长 = 请求长（紧窗，不过度解码——C-82 实测 3289 vs 4900 帧）；
+      3. hybrid 全臂 busy 合计接近墙钟（派工没有再犯"整窗判给 NVDEC"）。
+    只在本机 GPU+视频在场时跑（local-gate 口径）；CI 无 GPU 自动 skip。
+    """
+    pytest.importorskip("cuda.bindings")
+    from video_ocr_engine.decode.contract import probe_contract
+
+    monkeypatch.setenv("VOE_TELEMETRY", "full")
+    contract = probe_contract()
+    assert contract is not None and contract.has("starve_hold_rate_dispatch"), (
+        "fork 契约面无 starve_hold_rate_dispatch——9000 帧下限（C-82 规避）"
+        "仍在生效，冷态病态阈值需重标"
+    )
+    vid, roi = gpu_env
+    ex = FieldExtractor(
+        vid,
+        roi,
+        frame_start=0,
+        frame_end=3000,
+        decode_backend="hybrid",
+        ocr_backend="tensorrt",
+        keep_crops=False,
+    )
+    # 紧窗 = 请求长（撤下限的机器可见证据）。真 decord reader 不暴露
+    # 调用记录面（decode_window_calls 是测试夹具属性），故以 fork 侧
+    # `window_frames` 为据——它记的是**实际生效**的窗长，比"调了什么"
+    # 更接近事实。
+    res = ex.extract()
+    assert "report" in res.meta, "VOE_TELEMETRY=full 必须产出 report"
+    rep = res.meta["report"]
+    fork = rep.get("hybrid") or {}
+    win = fork.get("window_frames")
+    assert win == 3000, "契约键已撤下限，生效窗长应=请求长 3000，实际 %s" % win
+    # 派工分派：两臂都不得接近空置。C-82 病态形态 = alloc_seq 记
+    # ``PiHHHHHHHWW``（CPU 臂 busy 0.26s/3.16s = 92% 闲置）——那是
+    # cpu(0)/gpu 驻留模式的历史记法，且当时 frames_c≈0。现役记法以
+    # frames 分派为准：CPU 臂至少应拿到 ~1/3 帧（hybrid 的立论即两臂
+    # 都在干活；实测 h264 2402/598 = 80/20）。
+    fc = fork.get("frames_c")
+    assert isinstance(fc, (int, float)) and fc > 0, "CPU 臂零分派：%s" % {
+        k: fork.get(k) for k in ("frames_c", "frames_g", "alloc_seq")
+    }

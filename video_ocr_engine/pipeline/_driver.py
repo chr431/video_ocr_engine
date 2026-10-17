@@ -73,6 +73,12 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None, preopened_vr=None):
     _MET.checkpoint("open")
     # OCR 会话提前到校准前启动：worker 线程内构建引擎，与校准并行重叠；
     # 引擎就绪前 emit 自动走 host 回退，语义不变。
+    # 这一段（open 收口 → 校准 t0）此前无任何 span：C-89 定位的
+    # pre-run 0.276s 的"构造/会话"部分正落在此盲区（冷进程 engine_init
+    # 实测 0.52s、热池 35µs——差 4 个量级却无从报告读数）。用
+    # driver 内的 t0 配对收口成 setup_pre（与 open/fps 不重叠：
+    # open_and_fps 在上行已收口，calib_total 在下行另起 t0）。
+    _t_sess = time.perf_counter()
     try:
         ocr_session = spec.start_ocr_session(ocr_engines)
     except BaseException:
@@ -82,6 +88,9 @@ def run_segment_pipeline(spec, res, lane, ocr_engines=None, preopened_vr=None):
         except Exception:  # noqa: S110 清理路径：close 失败无需上抛（资源由进程回收）
             pass  # 清理路径：close 失败无需上抛（资源由进程回收）
         raise
+    if spec.prof_end is not None:
+        # 键为 setup_pre（映射指标 pipeline.setup_pre；单调用点单键）
+        spec.prof_end("producer", "setup_pre", _t_sess)
     results = ocr_session.results
     ocr_err = ocr_session.err
     ocr_wall = ocr_session.wall
