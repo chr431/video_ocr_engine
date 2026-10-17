@@ -294,11 +294,12 @@ DIAG_BUDGET_MS = 12.0
 
 
 def test_armed_diagnostics_hot_path_cost_is_bounded():
-    """armed 诊断热路径（tick+journal.add）每 run 增量 ≤ 12ms。
+    """armed 诊断热路径（tick+journal.add）每 run 增量 ≤ max(12ms, 40×空调用基线)。
 
     口径与 test_full_recording_path_cost_per_run 同款：每轮新建诊断对象
     （产品语义 = 每 run 一个），增量 = armed − 未 opt-in。后者 NULL_DIAG
-    的 tick 是空方法，差值即纯诊断插桩成本。
+    的 tick 是空方法，差值即纯诊断插桩成本；同一空调用同时充当机器速度基线，
+    使判据不随 CI runner 变慢而假红。
     """
     import sys as _sys
     from pathlib import Path as _P
@@ -330,10 +331,29 @@ def test_armed_diagnostics_hot_path_cost_is_bounded():
         return statistics.median(out)
 
     _cost(3)  # 预热（文件打开/线程首建/缓冲扩容）
+
+    def _null_cost(repeats: int) -> float:
+        """同调用形状的空实现基线（NULL_DIAG.tick 只 return None）。
+
+        绝对毫秒预算绑死机器速度：本机 6.4ms、CI runner 12.3-12.8ms（实测两次红），
+        机器慢 2× 即假红。改为以空调用为基线按倍数给预算——40× 在本机恰等于原
+        12ms（≈1.9µs/事件），慢机上同比例放大；插桩被塞入昂贵调用仍会越线。
+        """
+        out = []
+        for _ in range(repeats):
+            t = time.perf_counter()
+            for _ in range(DIAG_EVENTS):
+                NULL_DIAG.tick("producer.consume_feed", "0.0004s")
+            out.append((time.perf_counter() - t) * 1000.0)
+        return statistics.median(out)
+
+    _null_cost(3)
     ms = _cost(15)
-    assert ms <= DIAG_BUDGET_MS, (
-        "armed 诊断热路径 %.2fms/run（%d 事件），超预算 %.1fms——"
-        "tick 或 journal.add 被塞入昂贵调用了" % (ms, DIAG_EVENTS, DIAG_BUDGET_MS)
+    null_ms = max(_null_cost(15), 0.2)  # 下限防计时器粒度把分母压到 0
+    budget = max(DIAG_BUDGET_MS, 40.0 * null_ms)
+    assert ms <= budget, (
+        "armed 诊断热路径 %.2fms/run（%d 事件），超预算 %.1fms（空调用基线 %.2fms）——"
+        "tick 或 journal.add 被塞入昂贵调用了" % (ms, DIAG_EVENTS, budget, null_ms)
     )
     # 未 opt-in 路径必须仍为零成本（否则"默认关"失效）
     t = time.perf_counter()
